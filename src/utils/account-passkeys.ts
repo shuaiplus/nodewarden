@@ -12,6 +12,7 @@ import type {
   WebAuthnPrfDecryptionOption,
 } from '../types';
 import { base64UrlToBytes, bytesToBase64Url } from './passkey';
+import { getConfiguredWebAuthnAllowedOrigins } from './origins';
 
 const ACCOUNT_PASSKEY_TOKEN_TYPE = 'nodewarden.account-passkey.challenge.v1';
 const ACCOUNT_PASSKEY_TOKEN_TTL_MS = 17 * 60 * 1000;
@@ -30,6 +31,44 @@ interface AccountPasskeyTokenPayload {
 
 function textBytes(value: string): Uint8Array {
   return new TextEncoder().encode(value);
+}
+
+function hexByte(value: number): string {
+  return value.toString(16).padStart(2, '0');
+}
+
+function dotNetGuidBytesToUuid(bytes: Uint8Array): string | null {
+  if (bytes.length !== 16) return null;
+  return [
+    [bytes[3], bytes[2], bytes[1], bytes[0]].map(hexByte).join(''),
+    [bytes[5], bytes[4]].map(hexByte).join(''),
+    [bytes[7], bytes[6]].map(hexByte).join(''),
+    [bytes[8], bytes[9]].map(hexByte).join(''),
+    Array.from(bytes.slice(10, 16)).map(hexByte).join(''),
+  ].join('-');
+}
+
+function uuidToDotNetGuidBytes(value: string): Uint8Array | null {
+  const match = String(value || '').trim().match(
+    /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i
+  );
+  if (!match) return null;
+  const hex = match.slice(1).join('');
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 16; i += 1) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return new Uint8Array([
+    bytes[3], bytes[2], bytes[1], bytes[0],
+    bytes[5], bytes[4],
+    bytes[7], bytes[6],
+    bytes[8], bytes[9],
+    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+  ]);
+}
+
+function normalizeWebAuthnBase64(value: unknown): string {
+  return String(value || '').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 async function importHmacKey(secret: string): Promise<CryptoKey> {
@@ -121,33 +160,22 @@ export function getAccountPasskeyRpConfig(request: Request, env: Env): { rpId: s
   const configuredRpId = String(env.WEBAUTHN_RP_ID || '').trim();
   const rpId = configuredRpId || url.hostname;
   const rpName = String(env.WEBAUTHN_RP_NAME || '').trim() || DEFAULT_RP_NAME;
-  const configuredOrigins = String(env.WEBAUTHN_ALLOWED_ORIGINS || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const configuredOrigins = getConfiguredWebAuthnAllowedOrigins(env);
   const origins = new Set<string>([url.origin, ...configuredOrigins]);
-  const requestOrigin = request.headers.get('Origin');
-  if (
-    requestOrigin
-    && (
-      requestOrigin.startsWith('chrome-extension://')
-      || requestOrigin.startsWith('moz-extension://')
-      || requestOrigin.startsWith('safari-web-extension://')
-    )
-  ) {
-    origins.add(requestOrigin);
-  }
   return { rpId, rpName, origins: Array.from(origins) };
 }
 
 export function userIdToWebAuthnUserId(userId: string): Uint8Array {
-  return textBytes(userId);
+  return uuidToDotNetGuidBytes(userId) || textBytes(userId);
 }
 
 export function userHandleToUserId(userHandle: string | undefined): string | null {
   if (!userHandle) return null;
   try {
-    const decoded = new TextDecoder().decode(base64UrlToBytes(userHandle));
+    const bytes = base64UrlToBytes(userHandle);
+    const officialGuid = dotNetGuidBytesToUuid(bytes);
+    if (officialGuid) return officialGuid;
+    const decoded = new TextDecoder().decode(bytes);
     return decoded.trim() || null;
   } catch {
     return null;
@@ -209,17 +237,17 @@ export function normalizeRegistrationResponse(raw: unknown): RegistrationRespons
   const clientDataJSON = response.clientDataJSON || response.clientDataJson;
   if (!input.id || !input.rawId || !clientDataJSON || !response.attestationObject) return null;
   return {
-    id: String(input.id),
-    rawId: String(input.rawId),
+    id: normalizeWebAuthnBase64(input.id),
+    rawId: normalizeWebAuthnBase64(input.rawId),
     type: 'public-key',
     authenticatorAttachment: input.authenticatorAttachment,
     clientExtensionResults: input.clientExtensionResults || input.extensions || {},
     response: {
-      attestationObject: String(response.attestationObject),
-      clientDataJSON: String(clientDataJSON),
-      authenticatorData: response.authenticatorData ? String(response.authenticatorData) : undefined,
+      attestationObject: normalizeWebAuthnBase64(response.attestationObject),
+      clientDataJSON: normalizeWebAuthnBase64(clientDataJSON),
+      authenticatorData: response.authenticatorData ? normalizeWebAuthnBase64(response.authenticatorData) : undefined,
       transports: Array.isArray(response.transports) ? response.transports.map(String) as AuthenticatorTransportFuture[] : undefined,
-      publicKey: response.publicKey ? String(response.publicKey) : undefined,
+      publicKey: response.publicKey ? normalizeWebAuthnBase64(response.publicKey) : undefined,
       publicKeyAlgorithm: typeof response.publicKeyAlgorithm === 'number' ? response.publicKeyAlgorithm : undefined,
     },
   };
@@ -232,16 +260,16 @@ export function normalizeAuthenticationResponse(raw: unknown): AuthenticationRes
   const clientDataJSON = response.clientDataJSON || response.clientDataJson;
   if (!input.id || !input.rawId || !clientDataJSON || !response.authenticatorData || !response.signature) return null;
   return {
-    id: String(input.id),
-    rawId: String(input.rawId),
+    id: normalizeWebAuthnBase64(input.id),
+    rawId: normalizeWebAuthnBase64(input.rawId),
     type: 'public-key',
     authenticatorAttachment: input.authenticatorAttachment,
     clientExtensionResults: input.clientExtensionResults || input.extensions || {},
     response: {
-      authenticatorData: String(response.authenticatorData),
-      clientDataJSON: String(clientDataJSON),
-      signature: String(response.signature),
-      userHandle: response.userHandle ? String(response.userHandle) : undefined,
+      authenticatorData: normalizeWebAuthnBase64(response.authenticatorData),
+      clientDataJSON: normalizeWebAuthnBase64(clientDataJSON),
+      signature: normalizeWebAuthnBase64(response.signature),
+      userHandle: response.userHandle ? normalizeWebAuthnBase64(response.userHandle) : undefined,
     },
   };
 }

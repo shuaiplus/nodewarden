@@ -68,7 +68,7 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     if (!clientIdentifier) {
       return errorResponse('Client IP is required', 403);
     }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier);
+    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
     sendPasswordRateLimit = new RateLimitService(env.DB);
     const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
     if (!sendPasswordCheck.allowed) {
@@ -142,7 +142,7 @@ export async function handleAccessSendFile(
     if (!clientIdentifier) {
       return errorResponse('Client IP is required', 403);
     }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier);
+    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
     sendPasswordRateLimit = new RateLimitService(env.DB);
     const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
     if (!sendPasswordCheck.allowed) {
@@ -290,18 +290,26 @@ export async function handleDownloadSendFile(
   }
 
   const storage = new StorageService(env.DB);
-  const object = await getBlobObject(env, getSendFileObjectKey(sendId, fileId));
-  if (!object) {
-    return errorResponse('Send file not found', 404);
-  }
   const send = await storage.getSend(sendId);
-  const data = send ? parseStoredSendData(send) : {};
-  const fileName = typeof data.fileName === 'string' ? data.fileName : fileId;
+  if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
+    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  }
+  const data = parseStoredSendData(send);
+  const expectedFileId = typeof data.id === 'string' ? data.id : null;
+  if (!expectedFileId || expectedFileId !== fileId) {
+    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  }
 
   const firstUse = await storage.consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
   }
+
+  const object = await getBlobObject(env, getSendFileObjectKey(sendId, fileId));
+  if (!object) {
+    return errorResponse('Send file not found', 404);
+  }
+  const fileName = typeof data.fileName === 'string' ? data.fileName : fileId;
 
   return new Response(object.body, {
     headers: {
@@ -320,7 +328,7 @@ export async function issueSendAccessToken(
   passwordHashB64?: string | null,
   password?: string | null,
   rateLimit?: RateLimitService,
-  sendPasswordLimitIpKey?: string
+  clientIdentifier?: string
 ): Promise<{ token: string } | { error: Response }> {
   const jwt = getSafeJwtSecret(env);
   if (!jwt.ok) {
@@ -360,10 +368,13 @@ export async function issueSendAccessToken(
             Object: 'error',
           },
         },
-        400
+        501
       ),
     };
   }
+
+  const sendPasswordLimitIpKey =
+    rateLimit && clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
 
   if (send.passwordHash) {
     if (rateLimit && sendPasswordLimitIpKey) {

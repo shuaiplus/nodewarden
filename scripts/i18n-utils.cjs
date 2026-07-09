@@ -13,6 +13,7 @@ const localeFiles = [
   ['zh-TW', 'zh-TW.ts', 'zhTW', 'Traditional Chinese'],
   ['ru', 'ru.ts', 'ru', 'Russian'],
   ['es', 'es.ts', 'es', 'Spanish'],
+  ['fi', 'fi.ts', 'fi', 'Finnish'],
 ];
 
 function readLocale(fileName, variableName) {

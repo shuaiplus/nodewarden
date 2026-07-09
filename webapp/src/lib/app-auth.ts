@@ -27,6 +27,7 @@ import {
   unlockOfflineVaultWithMasterKey,
 } from '@/lib/offline-auth';
 import { probeNodeWardenService } from '@/lib/network-status';
+import { setWebsiteIconsEnabled } from '@/lib/website-icon-settings';
 import type { AccountPasskeyPrfOption, AppPhase, Profile, SessionState, TokenSuccess, WebBootstrapResponse } from '@/lib/types';
 
 export interface PendingTotp {
@@ -51,6 +52,7 @@ export type JwtUnsafeReason = 'missing' | 'too_short';
 export interface BootstrapAppResult {
   defaultKdfIterations: number;
   registrationInviteRequired?: boolean;
+  websiteIconsEnabled: boolean;
   jwtWarning: { reason: JwtUnsafeReason; minLength: number } | null;
   session: SessionState | null;
   profile: Profile | null;
@@ -61,6 +63,7 @@ export interface BootstrapAppResult {
 export interface InitialAppBootstrapState {
   defaultKdfIterations: number;
   registrationInviteRequired?: boolean;
+  websiteIconsEnabled: boolean;
   jwtWarning: { reason: JwtUnsafeReason; minLength: number } | null;
   session: SessionState | null;
   phase: AppPhase;
@@ -229,10 +232,11 @@ function readWindowBootstrap(): WebBootstrapResponse {
   return raw && typeof raw === 'object' ? raw : {};
 }
 
-function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialAppBootstrapState, 'defaultKdfIterations' | 'registrationInviteRequired' | 'jwtWarning'> {
+function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialAppBootstrapState, 'defaultKdfIterations' | 'registrationInviteRequired' | 'websiteIconsEnabled' | 'jwtWarning'> {
   const defaultKdfIterations = Number(boot.defaultKdfIterations || 600000);
   const registrationInviteRequired =
     typeof boot.registrationInviteRequired === 'boolean' ? boot.registrationInviteRequired : undefined;
+  const websiteIconsEnabled = boot.websiteIconsEnabled !== false;
   const jwtUnsafeReason = boot.jwtUnsafeReason || null;
   const jwtWarning = jwtUnsafeReason
     ? {
@@ -244,6 +248,7 @@ function normalizeBootstrapResponse(boot: WebBootstrapResponse): Pick<InitialApp
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    websiteIconsEnabled,
     jwtWarning,
   };
 }
@@ -304,7 +309,8 @@ function resolveUnauthenticatedPhase(registrationInviteRequired: boolean | undef
 }
 
 export function readInitialAppBootstrapState(): InitialAppBootstrapState {
-  const { defaultKdfIterations, registrationInviteRequired, jwtWarning } = normalizeBootstrapResponse(readWindowBootstrap());
+  const { defaultKdfIterations, registrationInviteRequired, websiteIconsEnabled, jwtWarning } = normalizeBootstrapResponse(readWindowBootstrap());
+  setWebsiteIconsEnabled(websiteIconsEnabled);
   const session = loadSession();
   const hasInviteCode = !!readInviteCodeFromUrl();
   const unauthenticatedPhase = hasInviteCode ? 'register' : 'login';
@@ -312,6 +318,7 @@ export function readInitialAppBootstrapState(): InitialAppBootstrapState {
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    websiteIconsEnabled,
     jwtWarning,
     session,
     phase: jwtWarning ? 'login' : session ? 'locked' : resolveUnauthenticatedPhase(registrationInviteRequired, unauthenticatedPhase),
@@ -323,12 +330,15 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
   const normalizedBoot = normalizeBootstrapResponse(remoteBoot);
   const defaultKdfIterations = normalizedBoot.defaultKdfIterations || initial.defaultKdfIterations;
   const registrationInviteRequired = normalizedBoot.registrationInviteRequired ?? initial.registrationInviteRequired;
+  const websiteIconsEnabled = normalizedBoot.websiteIconsEnabled !== false;
+  setWebsiteIconsEnabled(websiteIconsEnabled);
   const jwtWarning = normalizedBoot.jwtWarning ?? initial.jwtWarning;
 
   if (jwtWarning) {
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      websiteIconsEnabled,
       jwtWarning,
       session: null,
       profile: null,
@@ -341,6 +351,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      websiteIconsEnabled,
       jwtWarning: null,
       session: null,
       profile: null,
@@ -353,6 +364,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
     return {
       defaultKdfIterations,
       registrationInviteRequired,
+      websiteIconsEnabled,
       jwtWarning: null,
       session: loaded,
       profile: cachedProfile,
@@ -364,6 +376,7 @@ export async function bootstrapAppSession(initial: InitialAppBootstrapState = re
   return {
     defaultKdfIterations,
     registrationInviteRequired,
+    websiteIconsEnabled,
     jwtWarning: null,
     session: loaded,
     profile: null,

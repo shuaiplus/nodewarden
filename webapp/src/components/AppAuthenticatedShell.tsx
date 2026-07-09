@@ -1,4 +1,4 @@
-import { ArrowUpDown, Check, ChevronDown, Clock3, Cloud, FileClock, Folder as FolderIcon, Globe2, KeyRound, Lock, LogOut, MonitorSmartphone, Send as SendIcon, Settings as SettingsIcon, ShieldUser, SlidersHorizontal, Users } from 'lucide-preact';
+import { ArrowUpDown, Check, ChevronDown, Clock3, Cloud, FileClock, Folder as FolderIcon, KeyRound, Lock, LogOut, MonitorSmartphone, Send as SendIcon, Settings as SettingsIcon, ShieldUser, SlidersHorizontal, Users } from 'lucide-preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Link } from 'wouter';
@@ -56,10 +56,11 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
   const isLogRoute = props.location === '/logs';
   const isAdmin = isAdminProfile(props.profile);
   const vaultActive = props.location === '/vault' || props.location === '/vault/totp';
-  const settingsActive = props.location === props.settingsAccountRoute || props.location === '/settings/domain-rules';
-  const dataActive = props.location === '/backup' || props.isImportRoute;
   const deviceManagementActive = props.location === DEVICE_MANAGEMENT_ROUTE || props.location === LEGACY_DEVICE_MANAGEMENT_ROUTE;
-  const managementActive = props.location === '/admin' || deviceManagementActive || props.location === '/logs';
+  const settingsActive = props.location === '/settings' || props.location === props.settingsAccountRoute || props.location === '/settings/domain-rules' || deviceManagementActive;
+  const flatSettingsActive = settingsActive && !deviceManagementActive;
+  const dataActive = props.location === '/backup' || props.isImportRoute;
+  const managementActive = props.location === '/admin' || props.location === '/logs';
   const [navLayoutMode, setNavLayoutMode] = useState<NavLayoutMode>(readNavLayoutMode);
   const [navLayoutPickerOpen, setNavLayoutPickerOpen] = useState(false);
   const navLayoutPickerRef = useRef<HTMLDivElement | null>(null);
@@ -175,13 +176,12 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
       {renderSideLink('/vault', props.location === '/vault', <KeyRound size={16} />, t('nav_vault_items'))}
       {renderSideLink('/vault/totp', props.location === '/vault/totp', <Clock3 size={16} />, t('txt_verification_code'))}
       {renderSideLink('/sends', props.location === '/sends', <SendIcon size={16} />, t('nav_sends'))}
-      {renderSideLink(props.settingsAccountRoute, props.location === props.settingsAccountRoute, <SettingsIcon size={16} />, t('nav_account_settings'))}
-      {renderSideLink('/settings/domain-rules', props.location === '/settings/domain-rules', <Globe2 size={16} />, t('nav_domain_rules'))}
+      {renderSideLink('/settings', flatSettingsActive, <SettingsIcon size={16} />, t('txt_settings'))}
+      {renderSideLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, <MonitorSmartphone size={16} />, t('nav_device_management'))}
       {isAdmin && renderSideLink('/backup', props.location === '/backup', <Cloud size={16} />, t('nav_backup_strategy'))}
       {renderSideLink(props.importRoute, props.isImportRoute, <ArrowUpDown size={16} />, t('nav_import_export'))}
       {isAdmin && renderSideLink('/admin', props.location === '/admin', <Users size={16} />, t('nav_admin_panel'))}
       {isAdmin && renderSideLink('/logs', props.location === '/logs', <FileClock size={16} />, t('nav_log_center'))}
-      {renderSideLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, <MonitorSmartphone size={16} />, t('nav_device_management'))}
     </>
   );
 
@@ -206,6 +206,7 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
         <>
           {renderSubLink(props.settingsAccountRoute, props.location === props.settingsAccountRoute, t('nav_account_settings'))}
           {renderSubLink('/settings/domain-rules', props.location === '/settings/domain-rules', t('nav_domain_rules'))}
+          {renderSubLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, t('nav_device_management'))}
         </>
       )}
       {renderNavGroup(
@@ -226,7 +227,6 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
         <>
           {isAdmin && renderSubLink('/admin', props.location === '/admin', t('nav_admin_panel'))}
           {isAdmin && renderSubLink('/logs', props.location === '/logs', t('nav_log_center'))}
-          {renderSubLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, t('nav_device_management'))}
         </>
       )}
     </>

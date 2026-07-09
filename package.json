@@ -1,6 +1,6 @@
 {
   "name": "nodewarden",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Minimal Bitwarden-compatible server running on Cloudflare Workers",
   "author": "shuaiplus",
   "license": "LGPL-3.0",

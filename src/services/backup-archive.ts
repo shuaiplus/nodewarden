@@ -1,4 +1,4 @@
-import { zipSync, unzipSync } from 'fflate';
+import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
@@ -28,10 +28,11 @@ const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
 // Prefer store-only ZIP entries over heavier compression to keep exports reliable.
 const BACKUP_TEXT_COMPRESSION_LEVEL = 0;
 const BACKUP_JSON_INDENT = 2;
-const MAX_BACKUP_ARCHIVE_BYTES = 64 * 1024 * 1024;
+export const MAX_BACKUP_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_ARCHIVE_ENTRY_COUNT = 10_000;
 const MAX_BACKUP_EXTRACTED_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_DB_JSON_BYTES = 32 * 1024 * 1024;
+const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
 
 export interface BackupManifest {
   formatVersion: 1;
@@ -186,6 +187,61 @@ function validateArchiveSize(bytes: Uint8Array): void {
   }
 }
 
+function isSafeBackupPathSegment(value: string): boolean {
+  if (!value || value.length > MAX_BACKUP_PATH_SEGMENT_LENGTH) return false;
+  if (value === '.' || value === '..') return false;
+  return /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+export function isSafeBackupAttachmentBlobName(value: unknown): boolean {
+  const normalized = String(value ?? '').trim();
+  const parts = normalized.split('/');
+  return parts.length === 2 && parts.every(isSafeBackupPathSegment);
+}
+
+function isSafeBackupAttachmentEntryName(value: string): boolean {
+  if (!value.startsWith('attachments/') || !value.endsWith('.bin')) return false;
+  const relative = value.slice('attachments/'.length, -'.bin'.length);
+  return isSafeBackupAttachmentBlobName(relative);
+}
+
+function validateBackupEntryName(name: string): void {
+  const normalized = String(name || '').trim();
+  if (normalized !== name || !normalized) {
+    throw new Error('Backup archive contains an invalid file name');
+  }
+  if (normalized.includes('\\') || normalized.includes('\0') || normalized.startsWith('/') || normalized.includes('//')) {
+    throw new Error(`Backup archive contains an unsafe file name: ${normalized}`);
+  }
+  if (normalized !== 'manifest.json' && normalized !== 'db.json' && !isSafeBackupAttachmentEntryName(normalized)) {
+    throw new Error(`Backup archive contains an unsupported file: ${normalized}`);
+  }
+}
+
+function createBackupUnzipFilter(): (file: UnzipFileInfo) => boolean {
+  let entryCount = 0;
+  let totalOriginalBytes = 0;
+  return (file: UnzipFileInfo): boolean => {
+    entryCount += 1;
+    if (entryCount > MAX_BACKUP_ARCHIVE_ENTRY_COUNT) {
+      throw new Error('Backup archive contains too many files');
+    }
+    validateBackupEntryName(file.name);
+    const originalSize = Number(file.originalSize);
+    if (!Number.isFinite(originalSize) || originalSize < 0) {
+      throw new Error(`Backup archive contains an invalid file size: ${file.name}`);
+    }
+    if (file.name === 'db.json' && originalSize > MAX_BACKUP_DB_JSON_BYTES) {
+      throw new Error('Backup archive database payload is too large');
+    }
+    totalOriginalBytes += originalSize;
+    if (totalOriginalBytes > MAX_BACKUP_EXTRACTED_BYTES) {
+      throw new Error('Backup archive expands beyond the current restore limit');
+    }
+    return true;
+  };
+}
+
 function getRequiredZipEntries(db: BackupPayload['db']): string[] {
   const entries: string[] = [];
   for (const row of db.attachments) {
@@ -223,8 +279,11 @@ export function parseBackupArchive(
   validateArchiveSize(bytes);
   let zipped: Record<string, Uint8Array>;
   try {
-    zipped = unzipSync(bytes);
-  } catch {
+    zipped = unzipSync(bytes, { filter: createBackupUnzipFilter() });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Backup archive ')) {
+      throw error;
+    }
     throw new Error('Invalid backup archive');
   }
 
@@ -235,6 +294,7 @@ export function parseBackupArchive(
 
   let totalExtractedBytes = 0;
   for (const entry of entryNames) {
+    validateBackupEntryName(entry);
     const entryBytes = zipped[entry];
     totalExtractedBytes += entryBytes.byteLength;
     if (entry === 'db.json' && entryBytes.byteLength > MAX_BACKUP_DB_JSON_BYTES) {
@@ -368,7 +428,7 @@ export function validateBackupPayloadContents(
   for (const row of attachmentRows) {
     const id = String(row.id || '').trim();
     const cipherId = String(row.cipher_id || '').trim();
-    if (!id || !cipherId || !cipherIds.has(cipherId)) {
+    if (!id || !cipherId || !isSafeBackupPathSegment(id) || !isSafeBackupPathSegment(cipherId) || !cipherIds.has(cipherId)) {
       throw new Error('Backup archive contains an invalid attachment row');
     }
     const attachmentPath = `attachments/${cipherId}/${id}.bin`;
@@ -382,9 +442,10 @@ export function validateBackupPayloadContents(
   for (const row of accountPasskeyRows) {
     const id = String(row.id || '').trim();
     const userId = String(row.user_id || '').trim();
+    const purpose = row.purpose == null ? 'login' : String(row.purpose || '').trim();
     const credentialId = String(row.credential_id || '').trim();
     const publicKey = String(row.public_key || '').trim();
-    if (!id || !userIds.has(userId) || !credentialId || !publicKey) {
+    if (!id || !userIds.has(userId) || !credentialId || !publicKey || (purpose !== 'login' && purpose !== 'twoFactor')) {
       throw new Error('Backup archive contains an invalid account passkey row');
     }
     if (accountPasskeyIds.has(id)) throw new Error(`Backup archive contains duplicate account passkey id: ${id}`);
@@ -433,7 +494,7 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT token, user_id, device_identifier, expires_at FROM trusted_two_factor_device_tokens WHERE expires_at >= ? ORDER BY user_id ASC, device_identifier ASC, expires_at DESC', date.getTime()),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);

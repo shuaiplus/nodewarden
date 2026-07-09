@@ -124,6 +124,10 @@ export enum CipherType {
   SecureNote = 2,
   Card = 3,
   Identity = 4,
+  SSHKey = 5,
+  BankAccount = 6,
+  DriversLicense = 7,
+  Passport = 8,
 }
 
 export interface CipherLoginUri {
@@ -156,6 +160,52 @@ export interface CipherSshKey {
   publicKey: string;
   privateKey: string;
   keyFingerprint: string;
+}
+
+export interface CipherBankAccount {
+  bankName: string | null;
+  nameOnAccount: string | null;
+  accountType: string | null;
+  accountNumber: string | null;
+  routingNumber: string | null;
+  branchNumber: string | null;
+  pin: string | null;
+  swiftCode: string | null;
+  iban: string | null;
+  bankContactPhone: string | null;
+  [key: string]: any;
+}
+
+export interface CipherDriversLicense {
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  dateOfBirth: string | null;
+  licenseNumber: string | null;
+  issuingCountry: string | null;
+  issuingState: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  issuingAuthority: string | null;
+  licenseClass: string | null;
+  [key: string]: any;
+}
+
+export interface CipherPassport {
+  surname: string | null;
+  givenName: string | null;
+  dateOfBirth: string | null;
+  sex: string | null;
+  birthPlace: string | null;
+  nationality: string | null;
+  issuingCountry: string | null;
+  passportNumber: string | null;
+  passportType: string | null;
+  nationalIdentificationNumber: string | null;
+  issuingAuthority: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  [key: string]: any;
 }
 
 export interface CipherIdentity {
@@ -208,6 +258,9 @@ export interface Cipher {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount?: CipherBankAccount | null;
+  driversLicense?: CipherDriversLicense | null;
+  passport?: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;
@@ -547,6 +600,9 @@ export interface CipherResponse {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount: CipherBankAccount | null;
+  driversLicense: CipherDriversLicense | null;
+  passport: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;

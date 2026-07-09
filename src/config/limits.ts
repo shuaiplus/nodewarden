@@ -62,6 +62,9 @@
     // Refresh-token grant budget per IP per minute.
     // refresh_token 授权每 IP 每分钟请求配额。
     refreshTokenRequestsPerMinute: 30,
+    // Passwordless/auth-request creation budget per IP/email/device per minute.
+    // 免密/设备审批请求创建接口每 IP/邮箱/设备每分钟配额。
+    authRequestRequestsPerMinute: 5,
     // Fixed window size for API rate limiting in seconds.
     // API 限流固定窗口大小（秒）。
     apiWindowSeconds: 60,

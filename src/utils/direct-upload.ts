@@ -19,6 +19,8 @@ interface ParseDirectUploadOptions {
   fileNameMismatchMessage?: string;
 }
 
+const MULTIPART_FORMDATA_OVERHEAD_BYTES = 256 * 1024;
+
 export function buildDirectUploadUrl(request: Request, path: string, token: string): string {
   const version = '2023-11-03';
   const expiresAt = '2099-12-31T23:59:59Z';
@@ -32,6 +34,10 @@ export function getSafeJwtSecret(env: Env): string | null {
     return null;
   }
   return secret;
+}
+
+export function getMultipartRequestMaxBytes(maxFileSize: number): number {
+  return maxFileSize + MULTIPART_FORMDATA_OVERHEAD_BYTES;
 }
 
 function parseContentLength(request: Request): number | null {
@@ -59,6 +65,10 @@ export async function parseDirectUploadPayload(
   const contentType = request.headers.get('content-type') || '';
 
   if (contentType.includes('multipart/form-data')) {
+    const declaredSize = parseContentLength(request);
+    if (declaredSize !== null && declaredSize > getMultipartRequestMaxBytes(maxFileSize)) {
+      return errorResponse(tooLargeMessage, 413);
+    }
     const formData = await request.formData();
     const file = formData.get('data') as File | null;
     if (!file) {

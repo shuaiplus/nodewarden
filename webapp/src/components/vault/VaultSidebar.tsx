@@ -3,6 +3,7 @@ import type { RefObject } from 'preact';
 import {
   Archive,
   ArrowUpDown,
+  BookUser,
   Check,
   Copy,
   CreditCard,
@@ -10,7 +11,9 @@ import {
   FolderPlus,
   FolderX,
   Globe,
+  IdCard,
   KeyRound,
+  Landmark,
   LayoutGrid,
   Pencil,
   ShieldUser,
@@ -117,8 +120,17 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'card' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'card' })}>
           <CreditCard size={14} className="tree-icon" /> <span className="tree-label">{t('txt_card')}</span>
         </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'bank' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'bank' })}>
+          <Landmark size={14} className="tree-icon" /> <span className="tree-label">{t('txt_bank_account')}</span>
+        </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'identity' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'identity' })}>
           <ShieldUser size={14} className="tree-icon" /> <span className="tree-label">{t('txt_identity')}</span>
+        </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'license' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'license' })}>
+          <IdCard size={14} className="tree-icon" /> <span className="tree-label">{t('txt_drivers_license')}</span>
+        </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'passport' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'passport' })}>
+          <BookUser size={14} className="tree-icon" /> <span className="tree-label">{t('txt_passport')}</span>
         </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'note' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'note' })}>
           <StickyNote size={14} className="tree-icon" /> <span className="tree-label">{t('txt_note')}</span>

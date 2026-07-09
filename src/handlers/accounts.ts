@@ -42,6 +42,9 @@ function looksLikeEncString(value: string): boolean {
  */
 function validateKdfParams(kdfType: number | undefined, kdfIterations: number | undefined, kdfMemory?: number | undefined, kdfParallelism?: number | undefined): string | null {
   const type = kdfType ?? 0;
+  if (type !== 0 && type !== 1) {
+    return 'KDF type must be PBKDF2-SHA256 or Argon2id';
+  }
   if (type === 0) {
     // PBKDF2-SHA256: minimum 100 000 iterations
     if (typeof kdfIterations === 'number' && kdfIterations < 100_000) {
@@ -448,7 +451,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
   }
 
   const rateLimit = new RateLimitService(env.DB);
-  const minuteBudget = await rateLimit.consumeBudgetWithWindow(
+  const minuteBudget = await rateLimit.consumeStrictBudgetWithWindow(
     `${clientIdentifier}:password-hint`,
     LIMITS.rateLimit.passwordHintRequestsPerMinute,
     60
@@ -470,7 +473,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     );
   }
 
-  const hourlyBudget = await rateLimit.consumeBudgetWithWindow(
+  const hourlyBudget = await rateLimit.consumeStrictBudgetWithWindow(
     `${clientIdentifier}:password-hint-hour`,
     LIMITS.rateLimit.passwordHintRequestsPerHour,
     60 * 60
@@ -734,6 +737,11 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const nextKdfParallelism = body.kdfParallelism ?? readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
   const kdfErr = validateKdfParams(nextKdf, nextKdfIterations, nextKdfMemory, nextKdfParallelism);
   if (kdfErr) return errorResponse(kdfErr, 400);
+  const shouldUpdateHint = typeof body.masterPasswordHint === 'string' || body.masterPasswordHint === null;
+  const nextMasterPasswordHint = shouldUpdateHint ? normalizeMasterPasswordHint(body.masterPasswordHint) : undefined;
+  if (nextMasterPasswordHint && nextMasterPasswordHint.length > 120) {
+    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
+  }
 
   user.masterPasswordHash = await auth.hashPasswordServer(newMasterPasswordHash, user.email);
   if (nextKey) user.key = nextKey;
@@ -743,8 +751,8 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   if (typeof nextKdfIterations === 'number') user.kdfIterations = nextKdfIterations;
   if (typeof nextKdfMemory === 'number') user.kdfMemory = nextKdfMemory;
   if (typeof nextKdfParallelism === 'number') user.kdfParallelism = nextKdfParallelism;
-  if (typeof body.masterPasswordHint === 'string' || body.masterPasswordHint === null) {
-    user.masterPasswordHint = body.masterPasswordHint;
+  if (shouldUpdateHint) {
+    user.masterPasswordHint = nextMasterPasswordHint ?? null;
   }
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
@@ -808,6 +816,18 @@ function yubiKeyResponse(user: User): Record<string, unknown> {
     Key5: user.yubikeyKey5,
     Nfc: !!user.yubikeyNfc,
     Object: 'twoFactorYubiKey',
+  };
+}
+
+function deviceVerificationSettingsResponse(user: User): Record<string, unknown> {
+  const enabled = user.verifyDevices !== false;
+  return {
+    Enabled: enabled,
+    enabled,
+    VerifyDevices: enabled,
+    verifyDevices: enabled,
+    Object: 'deviceVerificationSettings',
+    object: 'deviceVerificationSettings',
   };
 }
 
@@ -883,6 +903,58 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   if (!verified) return errorResponse('User verification failed.', 400);
 
   return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+}
+
+// POST /api/two-factor/get-device-verification-settings
+export async function handleGetDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
+  void request;
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  return jsonResponse(deviceVerificationSettingsResponse(user));
+}
+
+// PUT/POST /api/two-factor/device-verification-settings
+export async function handlePutDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const rawEnabled = body.enabled ?? body.Enabled ?? body.verifyDevices ?? body.VerifyDevices;
+  if (typeof rawEnabled !== 'boolean') {
+    return errorResponse('enabled must be true or false', 400);
+  }
+
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'secret', 'Secret']);
+  const verified = await verifyUserSecret(auth, user, secret);
+  if (!verified) return errorResponse('User verification failed.', 400);
+
+  user.verifyDevices = rawEnabled;
+  user.updatedAt = new Date().toISOString();
+  await storage.saveUser(user);
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: 'account.verify_devices.update',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: {
+      verifyDevices: user.verifyDevices,
+      source: 'two-factor.device-verification-settings',
+      ...auditRequestMetadata(request),
+    },
+  });
+
+  return jsonResponse(deviceVerificationSettingsResponse(user));
 }
 
 // PUT/POST /api/two-factor/authenticator
@@ -1089,16 +1161,8 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
-  const key = normalizeTotpSecret(readBodyString(body, ['key', 'Key']));
-  const userVerificationToken = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
   const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  let verified = false;
-  if (key && userVerificationToken) {
-    verified = await verifyTotpUserVerificationToken(env, user, key, userVerificationToken);
-  }
-  if (!verified) {
-    verified = await verifyUserSecret(auth, user, secret);
-  }
+  const verified = await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {

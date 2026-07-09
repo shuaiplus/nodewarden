@@ -109,6 +109,7 @@ import {
   isKnownDevice as getKnownStoredDevice,
   isKnownDeviceByEmail as getKnownStoredDeviceByEmail,
   saveTrustedTwoFactorDeviceToken as saveStoredTrustedDeviceToken,
+  rotateDeviceSessionStamp as rotateStoredDeviceSessionStamp,
   touchDeviceLastSeen as touchStoredDeviceLastSeen,
   upsertDevice as saveStoredDevice,
   updateDeviceName as updateStoredDeviceName,
@@ -759,6 +760,10 @@ export class StorageService {
 
   async getDevice(userId: string, deviceIdentifier: string): Promise<Device | null> {
     return findStoredDevice(this.db, userId, deviceIdentifier);
+  }
+
+  async rotateDeviceSessionStamp(userId: string, deviceIdentifier: string, sessionStamp: string): Promise<boolean> {
+    return rotateStoredDeviceSessionStamp(this.db, userId, deviceIdentifier, sessionStamp);
   }
 
   async updateDeviceKeys(

@@ -69,18 +69,22 @@ export async function handleAdminListUsers(
 
   const storage = new StorageService(env.DB);
   const users = await storage.getAllUsers();
-  return jsonResponse({
-    data: users.map(user => ({
+  const data = await Promise.all(users.map(async user => {
+    const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+    return {
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
       status: user.status,
-      twoFactorEnabled: !!user.totpSecret || Boolean(user.yubikeyKey1 || user.yubikeyKey2 || user.yubikeyKey3 || user.yubikeyKey4 || user.yubikeyKey5),
+      twoFactorEnabled: !!user.totpSecret || Boolean(user.yubikeyKey1 || user.yubikeyKey2 || user.yubikeyKey3 || user.yubikeyKey4 || user.yubikeyKey5) || hasTwoFactorPasskey,
       creationDate: user.createdAt,
       revisionDate: user.updatedAt,
       object: 'user',
-    })),
+    };
+  }));
+  return jsonResponse({
+    data,
     object: 'list',
     continuationToken: null,
   });
@@ -183,6 +187,9 @@ export async function handleAdminClearAuditLogs(
   }
   const storage = new StorageService(env.DB);
   const deleted = await storage.clearAuditLogs();
+  await writeAuditLog(storage, actorUser.id, 'admin.audit.clear', 'auditLog', null, {
+    deleted,
+  }, request);
   return jsonResponse({ object: 'auditLogClear', deleted });
 }
 

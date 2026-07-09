@@ -228,6 +228,7 @@ export default function App() {
     hint: null,
   });
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState(initialInviteCode);
+  const [hashPathRaw, setHashPathRaw] = useState(() => (typeof window !== 'undefined' ? window.location.hash || '' : ''));
   const [unlockPassword, setUnlockPassword] = useState('');
   const [pendingTotp, setPendingTotp] = useState<PendingTotp | null>(null);
   const [pendingTotpMode, setPendingTotpMode] = useState<'login' | 'unlock' | null>(null);
@@ -295,15 +296,16 @@ export default function App() {
   }, [pushToast]);
 
   useEffect(() => {
-    const syncInviteFromUrl = () => {
+    const syncUrlState = () => {
       setInviteCodeFromUrl(readInviteCodeFromUrl());
+      setHashPathRaw(window.location.hash || '');
     };
-    syncInviteFromUrl();
-    window.addEventListener('hashchange', syncInviteFromUrl);
-    window.addEventListener('popstate', syncInviteFromUrl);
+    syncUrlState();
+    window.addEventListener('hashchange', syncUrlState);
+    window.addEventListener('popstate', syncUrlState);
     return () => {
-      window.removeEventListener('hashchange', syncInviteFromUrl);
-      window.removeEventListener('popstate', syncInviteFromUrl);
+      window.removeEventListener('hashchange', syncUrlState);
+      window.removeEventListener('popstate', syncUrlState);
     };
   }, []);
 
@@ -1165,7 +1167,6 @@ export default function App() {
       const key = await encryptSessionUserKeyForAuthRequest(session, authRequest);
       await respondToAuthRequest(authedFetch, authRequest.id, {
         key,
-        masterPasswordHash: null,
         deviceIdentifier: getCurrentDeviceIdentifier(),
         requestApproved: true,
       });
@@ -1862,7 +1863,6 @@ export default function App() {
     await pendingAuthRequestsQuery.refetch();
   };
 
-  const hashPathRaw = typeof window !== 'undefined' ? window.location.hash || '' : '';
   const hashPath = hashPathRaw.startsWith('#') ? hashPathRaw.slice(1) : hashPathRaw;
   const hashPathOnly = String(hashPath || '').split('?')[0].split('#')[0];
   const trimmedHashPath = hashPathOnly.replace(/^\/+/, '').replace(/\/+$/, '');
@@ -2120,8 +2120,14 @@ export default function App() {
       const hash = await deriveCurrentMasterPasswordHash(masterPassword);
       return backupActions.downloadRemoteBackup(hash, destinationId, path, onProgress);
     },
-    onInspectRemoteBackup: backupActions.inspectRemoteBackup,
-    onDeleteRemoteBackup: backupActions.deleteRemoteBackup,
+    onInspectRemoteBackup: async (masterPassword: string, destinationId: string, path: string) => {
+      const hash = await deriveCurrentMasterPasswordHash(masterPassword);
+      return backupActions.inspectRemoteBackup(hash, destinationId, path);
+    },
+    onDeleteRemoteBackup: async (masterPassword: string, destinationId: string, path: string) => {
+      const hash = await deriveCurrentMasterPasswordHash(masterPassword);
+      return backupActions.deleteRemoteBackup(hash, destinationId, path);
+    },
     onRestoreRemoteBackup: async (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => {
       const hash = await deriveCurrentMasterPasswordHash(masterPassword);
       return backupActions.restoreRemoteBackup(hash, destinationId, path, replaceExisting);

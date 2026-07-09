@@ -122,6 +122,16 @@ function readBodyValue(body: Record<string, string>, names: string[]): string | 
   return undefined;
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
+  const subjectHash = await sha256Hex(`${grantType}:${String(subject || '').trim() || 'unknown'}`);
+  return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
+}
+
 async function getStoredYubicoCredentials(storage: StorageService, env: Env): Promise<YubicoApiCredentials | null> {
   const fromEnv = yubicoCredentialsFromEnv(env);
   if (fromEnv) return fromEnv;
@@ -161,6 +171,30 @@ function withWebRefreshCookie(request: Request, response: Response, refreshToken
     statusText: response.statusText,
     headers,
   });
+}
+
+async function revokePresentedAccessTokenSession(request: Request, env: Env, storage: StorageService): Promise<void> {
+  const authHeader = request.headers.get('Authorization');
+  if (!authHeader) return;
+
+  const auth = new AuthService(env);
+  const verified = await auth.verifyAccessTokenWithUser(authHeader);
+  if (!verified) return;
+
+  const deviceIdentifier = String(verified.payload.did || '').trim();
+  if (deviceIdentifier) {
+    const nextSessionStamp = generateUUID();
+    await storage.rotateDeviceSessionStamp(verified.user.id, deviceIdentifier, nextSessionStamp);
+    await storage.deleteRefreshTokensByDevice(verified.user.id, deviceIdentifier);
+    AuthService.invalidateDeviceCache(verified.user.id, deviceIdentifier);
+    return;
+  }
+
+  verified.user.securityStamp = generateUUID();
+  verified.user.updatedAt = new Date().toISOString();
+  await storage.saveUser(verified.user);
+  await storage.deleteRefreshTokensByUserId(verified.user.id);
+  AuthService.invalidateUserCache(verified.user.id);
 }
 
 function buildPreloginResponse(
@@ -319,13 +353,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const twoFactorToken = readBodyValue(body, ['twoFactorToken', 'TwoFactorToken']);
     const twoFactorProvider = readBodyValue(body, ['twoFactorProvider', 'TwoFactorProvider']);
     const twoFactorRemember = readBodyValue(body, ['twoFactorRemember', 'TwoFactorRemember']);
-    const loginIdentifier = clientIdentifier;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
     if (!email || !passwordHash) {
       // Bitwarden clients expect OAuth-style error fields.
       return identityErrorResponse('Email and password are required', 'invalid_request', 400);
     }
+    const loginIdentifier = await loginRateLimitKey(clientIdentifier, grantType, email);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
     const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
@@ -584,7 +618,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       : baseResponse;
 
   } else if (grantType === 'webauthn') {
-    const loginIdentifier = clientIdentifier;
+    const token = String(body.token || '').trim();
+    const loginIdentifier = await loginRateLimitKey(clientIdentifier, grantType, token || 'missing-token');
     const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
     if (!loginCheck.allowed) {
       return identityErrorResponse(
@@ -594,7 +629,6 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const token = String(body.token || '').trim();
     let deviceResponse: unknown = body.deviceResponse;
     if (typeof deviceResponse === 'string') {
       try {
@@ -712,11 +746,12 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const scope = body.scope;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
-    const loginIdentifier = clientIdentifier;
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);
     if (!parmValid) {
       return identityErrorResponse('Parameter error', 'invalid_request', 400);
     }
+    const uid = clientId.slice(5);
+    const loginIdentifier = await loginRateLimitKey(clientIdentifier, grantType, uid);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
     const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
@@ -728,7 +763,6 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const uid = clientId.slice(5);
     const user = await storage.getUserById(uid);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
@@ -871,7 +905,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       passwordHashB64,
       password,
       rateLimit,
-      `${clientIdentifier}:send-password`
+      clientIdentifier
     );
     if ('error' in result) {
       return result.error;
@@ -1010,6 +1044,11 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
 // RFC 7009 allows returning 200 even if token is unknown.
 export async function handleRevocation(request: Request, env: Env): Promise<Response> {
   const storage = new StorageService(env.DB);
+  try {
+    await revokePresentedAccessTokenSession(request, env, storage);
+  } catch {
+    // RFC 7009 revocation is best-effort and should not reveal token state.
+  }
 
   let body: Record<string, string>;
   const contentType = request.headers.get('content-type') || '';

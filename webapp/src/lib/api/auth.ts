@@ -89,11 +89,29 @@ function clearRememberTwoFactorToken(): void {
   localStorage.removeItem(TOTP_REMEMBER_TOKEN_KEY);
 }
 
+function hasTwoFactorChallenge(error: TokenError): boolean {
+  const providers = error.TwoFactorProviders ?? error.CustomResponse?.TwoFactorProviders;
+  const providers2 = error.TwoFactorProviders2 ?? error.CustomResponse?.TwoFactorProviders2;
+  if (Array.isArray(providers)) return providers.length > 0;
+  if (providers && typeof providers === 'object') return Object.keys(providers as Record<string, unknown>).length > 0;
+  if (Array.isArray(providers2)) return providers2.length > 0;
+  if (providers2 && typeof providers2 === 'object') return Object.keys(providers2 as Record<string, unknown>).length > 0;
+  return providers != null || providers2 != null;
+}
+
 export function loadSession(): SessionState | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<SessionState> & Partial<PersistedSessionState>;
+    if (parsed.email && (parsed.accessToken || parsed.refreshToken)) {
+      const authMode = parsed.authMode === 'web-cookie' ? 'web-cookie' : 'token';
+      saveSession({ email: parsed.email, authMode });
+      return {
+        email: parsed.email,
+        authMode,
+      };
+    }
     if (parsed.authMode === 'web-cookie' && parsed.email) {
       return {
         email: parsed.email,
@@ -106,13 +124,7 @@ export function loadSession(): SessionState | null {
         authMode: 'token',
       };
     }
-    if (!parsed.accessToken || !parsed.refreshToken || !parsed.email) return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken: parsed.refreshToken,
-      email: parsed.email,
-      authMode: 'token',
-    };
+    return null;
   } catch {
     return null;
   }
@@ -280,7 +292,7 @@ export async function loginWithPassword(
   const json = (await parseJson<TokenSuccess & TokenError>(resp)) || {};
   if (resp.ok) {
     saveRememberTwoFactorToken((json as TokenSuccess).TwoFactorToken);
-  } else if (rememberedToken) {
+  } else if (rememberedToken && hasTwoFactorChallenge(json)) {
     clearRememberTwoFactorToken();
   }
   if (!resp.ok) return json;
@@ -390,6 +402,7 @@ export async function revokeCurrentSession(session: SessionState | null): Promis
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {}),
       ...(session?.authMode === 'web-cookie' ? { [WEB_SESSION_HEADER]: '1' } : {}),
     },
     body: body.toString(),

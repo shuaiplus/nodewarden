@@ -6,7 +6,7 @@ import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events'
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
 import { StorageService } from '../services/storage';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { readKnownDeviceProbe } from '../utils/device';
+import { readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 
 const PERMANENT_TRUST_EXPIRES_AT_MS = Date.UTC(2099, 11, 31, 23, 59, 59);
@@ -123,6 +123,85 @@ async function readJsonBody(request: Request): Promise<any> {
 
 function parseDeviceName(value: unknown): string {
   return String(value || '').trim().slice(0, 128);
+}
+
+function parseDeviceType(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+// POST /api/devices
+export async function handleRegisterDevice(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await readJsonBody(request);
+  if (!body) return errorResponse('Invalid request payload', 400);
+
+  const identifier = normalizeIdentifier(body.identifier ?? body.Identifier ?? body.deviceIdentifier ?? body.DeviceIdentifier);
+  const name = parseDeviceName(body.name ?? body.Name ?? body.deviceName ?? body.DeviceName) || 'Unknown device';
+  const type = parseDeviceType(body.type ?? body.Type ?? body.deviceType ?? body.DeviceType);
+  if (!identifier || type == null) return errorResponse('Device identifier and type are required', 400);
+
+  const storage = new StorageService(env.DB);
+  await storage.upsertDevice(userId, identifier, name, type, undefined, parseKeysBody(body));
+
+  const pushToken = String(body.pushToken ?? body.PushToken ?? '').trim();
+  if (pushToken) {
+    const device = await storage.getDevice(userId, identifier);
+    const pushUuid = device?.pushUuid || generateUUID();
+    const updated = await storage.updateDevicePushToken(userId, identifier, pushUuid, pushToken);
+    if (updated) {
+      await registerMobilePushDevice(env, {
+        userId,
+        deviceIdentifier: identifier,
+        type,
+        pushUuid,
+        pushToken,
+      });
+    }
+  }
+
+  const device = await storage.getDevice(userId, identifier);
+  if (!device) return errorResponse('Device registration failed', 500);
+  await writeAuditEvent(storage, {
+    actorUserId: userId,
+    action: 'device.register',
+    category: 'device',
+    level: 'info',
+    targetType: 'device',
+    targetId: identifier,
+    metadata: auditRequestMetadata(request),
+  });
+  return jsonResponse(buildDeviceResponse(device));
+}
+
+// POST /api/devices/lost-trust
+export async function handleReportLostTrust(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await readJsonBody(request) || {};
+  const deviceInfo = readAuthRequestDeviceInfo(
+    {
+      deviceIdentifier: String(body.identifier ?? body.Identifier ?? body.deviceIdentifier ?? body.DeviceIdentifier ?? ''),
+      deviceName: String(body.name ?? body.Name ?? body.deviceName ?? body.DeviceName ?? ''),
+      deviceType: String(body.type ?? body.Type ?? body.deviceType ?? body.DeviceType ?? ''),
+    },
+    request
+  );
+  if (!deviceInfo.deviceIdentifier) return errorResponse('Please provide a device identifier', 400);
+
+  const storage = new StorageService(env.DB);
+  await writeAuditEvent(storage, {
+    actorUserId: userId,
+    action: 'device.lost_trust',
+    category: 'device',
+    level: 'warn',
+    targetType: 'device',
+    targetId: deviceInfo.deviceIdentifier,
+    metadata: {
+      deviceIdentifier: deviceInfo.deviceIdentifier,
+      deviceType: deviceInfo.deviceType,
+      ...auditRequestMetadata(request),
+    },
+  });
+  return new Response(null, { status: 200 });
 }
 
 // GET /api/devices/knowndevice

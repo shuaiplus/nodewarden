@@ -142,6 +142,86 @@ export interface CipherSshKey {
   decFingerprint?: string;
 }
 
+export interface CipherBankAccount {
+  bankName?: string | null;
+  nameOnAccount?: string | null;
+  accountType?: string | null;
+  accountNumber?: string | null;
+  routingNumber?: string | null;
+  branchNumber?: string | null;
+  pin?: string | null;
+  swiftCode?: string | null;
+  iban?: string | null;
+  bankContactPhone?: string | null;
+  decBankName?: string;
+  decNameOnAccount?: string;
+  decAccountType?: string;
+  decAccountNumber?: string;
+  decRoutingNumber?: string;
+  decBranchNumber?: string;
+  decPin?: string;
+  decSwiftCode?: string;
+  decIban?: string;
+  decBankContactPhone?: string;
+  [key: string]: unknown;
+}
+
+export interface CipherDriversLicense {
+  firstName?: string | null;
+  middleName?: string | null;
+  lastName?: string | null;
+  dateOfBirth?: string | null;
+  licenseNumber?: string | null;
+  issuingCountry?: string | null;
+  issuingState?: string | null;
+  issueDate?: string | null;
+  expirationDate?: string | null;
+  issuingAuthority?: string | null;
+  licenseClass?: string | null;
+  decFirstName?: string;
+  decMiddleName?: string;
+  decLastName?: string;
+  decDateOfBirth?: string;
+  decLicenseNumber?: string;
+  decIssuingCountry?: string;
+  decIssuingState?: string;
+  decIssueDate?: string;
+  decExpirationDate?: string;
+  decIssuingAuthority?: string;
+  decLicenseClass?: string;
+  [key: string]: unknown;
+}
+
+export interface CipherPassport {
+  surname?: string | null;
+  givenName?: string | null;
+  dateOfBirth?: string | null;
+  sex?: string | null;
+  birthPlace?: string | null;
+  nationality?: string | null;
+  issuingCountry?: string | null;
+  passportNumber?: string | null;
+  passportType?: string | null;
+  nationalIdentificationNumber?: string | null;
+  issuingAuthority?: string | null;
+  issueDate?: string | null;
+  expirationDate?: string | null;
+  decSurname?: string;
+  decGivenName?: string;
+  decDateOfBirth?: string;
+  decSex?: string;
+  decBirthPlace?: string;
+  decNationality?: string;
+  decIssuingCountry?: string;
+  decPassportNumber?: string;
+  decPassportType?: string;
+  decNationalIdentificationNumber?: string;
+  decIssuingAuthority?: string;
+  decIssueDate?: string;
+  decExpirationDate?: string;
+  [key: string]: unknown;
+}
+
 export interface CipherField {
   type?: number | string | null;
   name?: string | null;
@@ -175,6 +255,9 @@ export interface Cipher {
   card?: CipherCard | null;
   identity?: CipherIdentity | null;
   sshKey?: CipherSshKey | null;
+  bankAccount?: CipherBankAccount | null;
+  driversLicense?: CipherDriversLicense | null;
+  passport?: CipherPassport | null;
   secureNote?: { type?: number | null } | null;
   passwordHistory?: CipherPasswordHistoryEntry[] | null;
   fields?: CipherField[] | null;
@@ -197,6 +280,8 @@ export interface Send {
   key?: string | null;
   maxAccessCount?: number | null;
   accessCount?: number;
+  password?: string | null;
+  authType?: number | null;
   disabled?: boolean;
   revisionDate?: string;
   expirationDate?: string | null;
@@ -225,6 +310,7 @@ export interface SendDraft {
   expirationDays: string;
   maxAccessCount: string;
   password: string;
+  hasPassword?: boolean;
   disabled: boolean;
 }
 
@@ -276,6 +362,40 @@ export interface VaultDraft {
   sshPrivateKey: string;
   sshPublicKey: string;
   sshFingerprint: string;
+  bankName: string;
+  bankNameOnAccount: string;
+  bankAccountType: string;
+  bankAccountNumber: string;
+  bankRoutingNumber: string;
+  bankBranchNumber: string;
+  bankPin: string;
+  bankSwiftCode: string;
+  bankIban: string;
+  bankContactPhone: string;
+  licenseFirstName: string;
+  licenseMiddleName: string;
+  licenseLastName: string;
+  licenseDateOfBirth: string;
+  licenseNumber: string;
+  licenseIssuingCountry: string;
+  licenseIssuingState: string;
+  licenseIssueDate: string;
+  licenseExpirationDate: string;
+  licenseIssuingAuthority: string;
+  licenseClass: string;
+  passportSurname: string;
+  passportGivenName: string;
+  passportDateOfBirth: string;
+  passportSex: string;
+  passportBirthPlace: string;
+  passportNationality: string;
+  passportIssuingCountry: string;
+  passportNumber: string;
+  passportType: string;
+  passportNationalIdentificationNumber: string;
+  passportIssuingAuthority: string;
+  passportIssueDate: string;
+  passportExpirationDate: string;
   customFields: VaultDraftField[];
 }
 
@@ -294,6 +414,8 @@ export interface WebBootstrapResponse {
   jwtUnsafeReason?: 'missing' | 'too_short' | null;
   jwtSecretMinLength?: number;
   registrationInviteRequired?: boolean;
+  webAuthnAllowedOrigins?: string[];
+  websiteIconsEnabled?: boolean;
 }
 
 export interface YubiKeyOtpSettings {
@@ -338,6 +460,11 @@ export interface TokenError {
   error?: string;
   error_description?: string;
   TwoFactorProviders?: unknown;
+  TwoFactorProviders2?: unknown;
+  CustomResponse?: {
+    TwoFactorProviders?: unknown;
+    TwoFactorProviders2?: unknown;
+  };
 }
 
 export interface AccountPasskeyCredential {

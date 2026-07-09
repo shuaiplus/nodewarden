@@ -18,6 +18,8 @@ import {
   handleUpdateDeviceToken,
   handleUpdateDeviceWebPushAuth,
   handleClearDeviceToken,
+  handleRegisterDevice,
+  handleReportLostTrust,
 } from './handlers/devices';
 
 function devicesPath(pattern: string): RegExp {
@@ -33,8 +35,13 @@ export async function handleAuthenticatedDeviceRoute(
 ): Promise<Response | null> {
   if (path === '/api/devices' || path === '/devices') {
     if (method === 'GET') return handleGetDevices(request, env, userId);
+    if (method === 'POST') return handleRegisterDevice(request, env, userId);
     if (method === 'DELETE') return handleDeleteAllDevices(request, env, userId);
     return null;
+  }
+
+  if ((path === '/api/devices/lost-trust' || path === '/devices/lost-trust') && method === 'POST') {
+    return handleReportLostTrust(request, env, userId);
   }
 
   if (path === '/api/devices/authorized' || path === '/devices/authorized') {

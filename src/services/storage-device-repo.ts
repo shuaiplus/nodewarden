@@ -97,6 +97,20 @@ export async function touchDeviceLastSeen(
   return Number(result.meta.changes ?? 0) > 0;
 }
 
+export async function rotateDeviceSessionStamp(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  sessionStamp: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db
+    .prepare('UPDATE devices SET session_stamp = ?, updated_at = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(sessionStamp, now, userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
 export async function updateDeviceKeys(
   db: D1Database,
   userId: string,

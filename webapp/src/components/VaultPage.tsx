@@ -12,23 +12,26 @@ import {
   cardListSubtitle,
   FOLDER_SORT_STORAGE_KEY,
   VAULT_SORT_STORAGE_KEY,
+  bankAccountListSubtitle,
   cipherTypeKey,
   cipherTypeLabel,
   createEmptyDraft,
   creationTimeValue,
   draftFromCipher,
+  driversLicenseListSubtitle,
   buildCipherDuplicateSignatures,
   firstCipherUri,
   firstPasskeyCreationTime,
   isCipherVisibleInArchive,
   isCipherVisibleInNormalVault,
   isCipherVisibleInTrash,
+  passportListSubtitle,
   sortTimeValue,
   type DuplicateDetectionMode,
   type SidebarFilter,
   type VaultSortMode,
 } from '@/components/vault/vault-page-helpers';
-import { calcTotpNow } from '@/lib/crypto';
+import { calcTotpNow, type TotpCodeResult } from '@/lib/crypto';
 import { computeSshFingerprint, generateDefaultSshKeyMaterial } from '@/lib/ssh';
 import { ChevronLeft } from 'lucide-preact';
 import type { Cipher, CustomFieldType, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
@@ -106,7 +109,7 @@ export default function VaultPage(props: VaultPageProps) {
   const [renameFolderName, setRenameFolderName] = useState('');
   const [pendingDeleteFolder, setPendingDeleteFolder] = useState<Folder | null>(null);
   const [deleteAllFoldersOpen, setDeleteAllFoldersOpen] = useState(false);
-  const [totpLive, setTotpLive] = useState<{ code: string; remain: number } | null>(null);
+  const [totpLive, setTotpLive] = useState<TotpCodeResult | null>(null);
   const [hiddenFieldVisibleMap, setHiddenFieldVisibleMap] = useState<Record<number, boolean>>({});
   const [attachmentQueue, setAttachmentQueue] = useState<File[]>([]);
   const [removedAttachmentIds, setRemovedAttachmentIds] = useState<Record<string, boolean>>({});
@@ -308,10 +311,21 @@ export default function VaultPage(props: VaultPageProps) {
       const name = String(cipher.decName || cipher.name || '');
       const username = String(cipher.login?.decUsername || '');
       const uri = firstCipherUri(cipher);
+      const typedText = [
+        cipher.bankAccount?.decBankName,
+        cipher.bankAccount?.decNameOnAccount,
+        cipher.bankAccount?.decAccountNumber,
+        cipher.driversLicense?.decLicenseNumber,
+        cipher.driversLicense?.decFirstName,
+        cipher.driversLicense?.decLastName,
+        cipher.passport?.decPassportNumber,
+        cipher.passport?.decGivenName,
+        cipher.passport?.decSurname,
+      ].filter(Boolean).join('\n');
       const cipherId = String(cipher.id || '').trim();
       meta.set(cipher.id, {
         name,
-        searchText: `${cipherId}\n${cipherId.replace(/-/g, '')}\n${name}\n${username}\n${uri}`.toLowerCase(),
+        searchText: `${cipherId}\n${cipherId.replace(/-/g, '')}\n${name}\n${username}\n${uri}\n${typedText}`.toLowerCase(),
         firstUri: uri,
         typeKey: cipherTypeKey(Number(cipher.type || 1)),
         sortTime: sortTimeValue(cipher),
@@ -405,7 +419,36 @@ export default function VaultPage(props: VaultPageProps) {
       return !!meta?.searchText.includes(searchQuery);
     });
 
+    // Pre-compute group min name for duplicates group ordering
+    const groupMinName = new Map<string, string>();
+    if (sidebarFilter.kind === 'duplicates' && duplicateSignatureInfo) {
+      for (const cipher of next) {
+        const gk = (duplicateSignatureInfo.byId.get(cipher.id) || [])
+          .filter(s => (duplicateSignatureInfo.counts.get(s) || 0) >= 2)
+          .sort()[0] || '';
+        if (!gk) continue;
+        const name = cipherMetaById.get(cipher.id)?.name || '';
+        const cur = groupMinName.get(gk);
+        if (!cur || nameCollator.compare(name, cur) < 0) groupMinName.set(gk, name);
+      }
+    }
+
     next.sort((a, b) => {
+      // Duplicates view: group by color, sort A-Z within each group
+      if (sidebarFilter.kind === 'duplicates' && duplicateSignatureInfo) {
+        const gk = (id: string) => (duplicateSignatureInfo.byId.get(id) || [])
+          .filter(s => (duplicateSignatureInfo.counts.get(s) || 0) >= 2)
+          .sort()[0] || '';
+        const gA = gk(a.id), gB = gk(b.id);
+        if (gA !== gB) return !gA ? 1 : !gB ? -1 : nameCollator.compare(
+          groupMinName.get(gA) || '', groupMinName.get(gB) || ''
+        ) || (gA < gB ? -1 : 1);
+        return nameCollator.compare(
+          cipherMetaById.get(a.id)?.name || '',
+          cipherMetaById.get(b.id)?.name || ''
+        ) || String(a.id || '').localeCompare(String(b.id || ''));
+      }
+
       const metaA = cipherMetaById.get(a.id);
       const metaB = cipherMetaById.get(b.id);
       if (sortMode === 'edited') {
@@ -542,6 +585,9 @@ const folderName = useCallback((id: string | null | undefined): string => {
     if (Number(cipher.type || 1) === 3) {
       return cardListSubtitle(cipher);
     }
+    if (Number(cipher.type || 1) === 6) return bankAccountListSubtitle(cipher);
+    if (Number(cipher.type || 1) === 7) return driversLicenseListSubtitle(cipher);
+    if (Number(cipher.type || 1) === 8) return passportListSubtitle(cipher);
     return cipherTypeLabel(Number(cipher.type || 1));
   }, [cipherMetaById]);
 
@@ -1032,6 +1078,20 @@ const folderName = useCallback((id: string | null | undefined): string => {
     }
     setSelectedMap(map);
   }, [filteredCiphers, duplicateSignatureInfo, duplicateMode]);
+  const handleSelectUniqueFromDuplicates = useCallback(() => {
+    const map: Record<string, boolean> = {};
+    const seen = new Set<number>();
+    for (const cipher of filteredCiphers) {
+      const groupIndex = duplicateGroupIndexById.get(cipher.id);
+      if (groupIndex === undefined) continue;
+      if (seen.has(groupIndex)) {
+        map[cipher.id] = true;
+      } else {
+        seen.add(groupIndex);
+      }
+    }
+    setSelectedMap(map);
+  }, [filteredCiphers, duplicateGroupIndexById]);
   const handleSelectAll = useCallback(() => {
     const map: Record<string, boolean> = {};
     for (const cipher of filteredCiphers) map[cipher.id] = true;
@@ -1146,6 +1206,7 @@ const folderName = useCallback((id: string | null | undefined): string => {
           onSyncVault={handleSyncVault}
           onOpenBulkDelete={handleOpenBulkDelete}
           onSelectDuplicates={handleSelectDuplicates}
+          onSelectUniqueFromDuplicates={handleSelectUniqueFromDuplicates}
           onSelectAll={handleSelectAll}
           onToggleCreateMenu={handleToggleCreateMenu}
           onStartCreate={startCreate}

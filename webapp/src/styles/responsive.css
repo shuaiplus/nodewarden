@@ -427,6 +427,20 @@
     min-width: max(100%, 190px);
   }
 
+  .list-head .mobile-duplicate-toolbar {
+    @apply flex min-w-0 items-center gap-1.5;
+    flex: none;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap {
+    max-width: 130px;
+    flex-shrink: 0;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap .mobile-vault-filter-trigger {
+    @apply w-full;
+  }
+
   .toolbar.actions {
     @apply justify-end overflow-visible pb-0.5;
     flex-wrap: unset;
