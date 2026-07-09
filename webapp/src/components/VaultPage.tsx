@@ -1078,6 +1078,20 @@ const folderName = useCallback((id: string | null | undefined): string => {
     }
     setSelectedMap(map);
   }, [filteredCiphers, duplicateSignatureInfo, duplicateMode]);
+  const handleSelectUniqueFromDuplicates = useCallback(() => {
+    const map: Record<string, boolean> = {};
+    const seen = new Set<number>();
+    for (const cipher of filteredCiphers) {
+      const groupIndex = duplicateGroupIndexById.get(cipher.id);
+      if (groupIndex === undefined) continue;
+      if (seen.has(groupIndex)) {
+        map[cipher.id] = true;
+      } else {
+        seen.add(groupIndex);
+      }
+    }
+    setSelectedMap(map);
+  }, [filteredCiphers, duplicateGroupIndexById]);
   const handleSelectAll = useCallback(() => {
     const map: Record<string, boolean> = {};
     for (const cipher of filteredCiphers) map[cipher.id] = true;
@@ -1192,6 +1206,7 @@ const folderName = useCallback((id: string | null | undefined): string => {
           onSyncVault={handleSyncVault}
           onOpenBulkDelete={handleOpenBulkDelete}
           onSelectDuplicates={handleSelectDuplicates}
+          onSelectUniqueFromDuplicates={handleSelectUniqueFromDuplicates}
           onSelectAll={handleSelectAll}
           onToggleCreateMenu={handleToggleCreateMenu}
           onStartCreate={startCreate}
