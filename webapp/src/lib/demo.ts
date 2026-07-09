@@ -383,6 +383,143 @@ export const DEMO_CIPHERS: Cipher[] = [
       decFingerprint: 'SHA256:demoNodeWardenFingerprint',
     },
   },
+  // --- Duplicate detection demo pairs (exact, login-site, login-credentials, password) ---
+  {
+    id: 'cipher-dup-exact-a',
+    type: 1,
+    folderId: 'folder-work',
+    favorite: false,
+    name: 'Internal VPN',
+    decName: 'Internal VPN',
+    creationDate: '2026-04-10T08:00:00.000Z',
+    revisionDate: '2026-04-28T10:00:00.000Z',
+    login: {
+      username: 'vpn-user',
+      password: 'vpn-secret-2026', // gitguardian:ignore
+      decUsername: 'vpn-user',
+      decPassword: 'vpn-secret-2026', // gitguardian:ignore
+      uris: [{ uri: 'https://vpn.internal.example.com', decUri: 'https://vpn.internal.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-exact-b',
+    type: 1,
+    folderId: 'folder-work',
+    favorite: false,
+    name: 'Internal VPN',
+    decName: 'Internal VPN',
+    creationDate: '2026-03-15T08:00:00.000Z',
+    revisionDate: '2026-04-30T10:00:00.000Z',
+    login: {
+      username: 'vpn-user',
+      password: 'vpn-secret-2026', // gitguardian:ignore
+      decUsername: 'vpn-user',
+      decPassword: 'vpn-secret-2026', // gitguardian:ignore
+      uris: [{ uri: 'https://vpn.internal.example.com', decUri: 'https://vpn.internal.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-site-a',
+    type: 1,
+    folderId: 'folder-devops',
+    favorite: false,
+    name: 'AWS Console',
+    decName: 'AWS Console',
+    creationDate: '2026-03-01T08:00:00.000Z',
+    revisionDate: '2026-04-25T09:00:00.000Z',
+    login: {
+      username: 'aws-admin',
+      password: 'aws-secure-password', // gitguardian:ignore
+      decUsername: 'aws-admin',
+      decPassword: 'aws-secure-password', // gitguardian:ignore
+      uris: [{ uri: 'https://console.aws.amazon.com', decUri: 'https://console.aws.amazon.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-site-b',
+    type: 1,
+    folderId: 'folder-devops',
+    favorite: false,
+    name: 'Amazon Web Services',
+    decName: 'Amazon Web Services',
+    creationDate: '2026-02-20T08:00:00.000Z',
+    revisionDate: '2026-04-20T09:00:00.000Z',
+    login: {
+      username: 'aws-admin',
+      password: 'aws-secure-password', // gitguardian:ignore
+      decUsername: 'aws-admin',
+      decPassword: 'aws-secure-password', // gitguardian:ignore
+      uris: [{ uri: 'https://console.aws.amazon.com', decUri: 'https://console.aws.amazon.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-cred-a',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Personal Blog',
+    decName: 'Personal Blog',
+    creationDate: '2026-01-10T08:00:00.000Z',
+    revisionDate: '2026-04-15T10:00:00.000Z',
+    login: {
+      username: 'my-account@example.com',
+      password: 'shared-credential', // gitguardian:ignore
+      decUsername: 'my-account@example.com',
+      decPassword: 'shared-credential', // gitguardian:ignore
+      uris: [{ uri: 'https://blog.example.com', decUri: 'https://blog.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-cred-b',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Forum Account',
+    decName: 'Forum Account',
+    creationDate: '2026-01-15T08:00:00.000Z',
+    revisionDate: '2026-04-18T10:00:00.000Z',
+    login: {
+      username: 'my-account@example.com',
+      password: 'shared-credential', // gitguardian:ignore
+      decUsername: 'my-account@example.com',
+      decPassword: 'shared-credential', // gitguardian:ignore
+      uris: [{ uri: 'https://forum.example.com', decUri: 'https://forum.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-pw-a',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Old Forum',
+    decName: 'Old Forum',
+    creationDate: '2025-06-01T08:00:00.000Z',
+    revisionDate: '2026-03-01T10:00:00.000Z',
+    login: {
+      username: 'legacy-user',
+      password: 'reused-password-2020', // gitguardian:ignore
+      decUsername: 'legacy-user',
+      decPassword: 'reused-password-2020', // gitguardian:ignore
+      uris: [{ uri: 'https://old-forum.example.com', decUri: 'https://old-forum.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-pw-b',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Legacy CMS',
+    decName: 'Legacy CMS',
+    creationDate: '2025-05-10T08:00:00.000Z',
+    revisionDate: '2026-02-15T10:00:00.000Z',
+    login: {
+      username: 'cms-admin',
+      password: 'reused-password-2020', // gitguardian:ignore
+      decUsername: 'cms-admin',
+      decPassword: 'reused-password-2020', // gitguardian:ignore
+      uris: [{ uri: 'https://cms.example.com', decUri: 'https://cms.example.com', match: null }],
+    },
+  },
   {
     id: 'cipher-archived',
     type: 1,
