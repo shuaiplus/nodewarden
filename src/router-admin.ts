@@ -13,6 +13,23 @@ import {
   handleAdminClearAuditLogs,
 } from './handlers/admin';
 import { handleAdminBackupRoute } from './router-admin-backup';
+import { errorResponse } from './utils/response';
+
+function isKnownAdminPath(path: string): boolean {
+  return (
+    path === '/api/admin/users' ||
+    path === '/api/admin/logs' ||
+    path === '/api/admin/logs/settings' ||
+    path === '/api/admin/invites' ||
+    path.startsWith('/api/admin/backup') ||
+    /^\/api\/admin\/invites\/[^/]+$/i.test(path) ||
+    /^\/api\/admin\/users\/[a-f0-9-]+(?:\/status)?$/i.test(path)
+  );
+}
+
+function isActiveAdmin(user: User): boolean {
+  return user.role === 'admin' && user.status === 'active';
+}
 
 export async function handleAdminRoute(
   request: Request,
@@ -21,6 +38,13 @@ export async function handleAdminRoute(
   path: string,
   method: string
 ): Promise<Response | null> {
+  if (!isKnownAdminPath(path)) {
+    return null;
+  }
+  if (!isActiveAdmin(actorUser)) {
+    return errorResponse('Forbidden', 403);
+  }
+
   if (path === '/api/admin/users' && method === 'GET') {
     return handleAdminListUsers(request, env, actorUser);
   }

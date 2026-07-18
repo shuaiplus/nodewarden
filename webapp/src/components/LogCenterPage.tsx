@@ -129,6 +129,10 @@ function formatReason(reason: string): string {
   return translatedOrHumanized(keyFor('txt_log_reason_', reason), reason);
 }
 
+function formatTargetType(type: string): string {
+  return translatedOrHumanized(keyFor('txt_log_target_type_', type), type);
+}
+
 function formatTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
@@ -148,9 +152,14 @@ function formatMetaValueForKey(key: string, value: unknown): string {
     return translatedOrHumanized(keyFor('txt_log_trigger_', value), value);
   }
   if (key === 'type' && typeof value === 'string') {
-    return translatedOrHumanized(keyFor('txt_log_target_type_', value), value);
+    return formatTargetType(value);
   }
   return formatMetaValue(value);
+}
+
+function formatLogTarget(log: AuditLogEntry, metadata: Record<string, unknown>): string {
+  const targetEmail = typeof metadata.targetEmail === 'string' ? metadata.targetEmail : '';
+  return log.targetUserEmail || targetEmail || log.targetId || (log.targetType ? formatTargetType(log.targetType) : t('txt_dash'));
 }
 
 function iconForCategory(category: AuditLogCategory) {
@@ -550,7 +559,7 @@ export default function LogCenterPage(props: LogCenterPageProps) {
                 <div><span>{t('txt_time')}</span><strong>{formatTime(selectedLog.createdAt)}</strong></div>
                 <div><span>{t('txt_log_category')}</span><strong>{t(`txt_log_category_${selectedCategory}`)}</strong></div>
                 <div><span>{t('txt_actor')}</span><strong>{selectedLog.actorEmail || selectedLog.actorUserId || t('txt_dash')}</strong></div>
-                <div><span>{t('txt_target')}</span><strong>{selectedLog.targetUserEmail || String(selectedMetadata.targetEmail || '') || selectedLog.targetId || selectedLog.targetType || t('txt_dash')}</strong></div>
+                <div><span>{t('txt_target')}</span><strong>{formatLogTarget(selectedLog, selectedMetadata)}</strong></div>
               </div>
               <div className="log-detail-json">
                 <h4>{t('txt_metadata')}</h4>

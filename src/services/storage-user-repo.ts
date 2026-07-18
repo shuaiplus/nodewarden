@@ -23,7 +23,7 @@ function mapUserRow(row: any): User {
     securityStamp: row.security_stamp,
     role: row.role === 'admin' ? 'admin' : 'user',
     status: row.status === 'banned' ? 'banned' : 'active',
-    verifyDevices: row.verify_devices == null ? true : !!row.verify_devices,
+    verifyDevices: row.verify_devices == null ? false : !!row.verify_devices,
     totpSecret: row.totp_secret ?? null,
     totpRecoveryCode: row.totp_recovery_code ?? null,
     yubikeyKey1: row.yubikey_key1 ?? null,

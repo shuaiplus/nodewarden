@@ -1,5 +1,6 @@
 import { Env, JWTPayload, User } from '../types';
 import { verifyJWT, createJWT, createRefreshToken } from '../utils/jwt';
+import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { StorageService } from './storage';
 
 // Server-side iterations for second-layer hashing.
@@ -28,11 +29,12 @@ export type RefreshAccessTokenFailureReason =
   | 'token_not_found_or_expired'
   | 'user_missing'
   | 'user_inactive'
+  | 'security_stamp_mismatch'
   | 'device_missing'
   | 'device_session_mismatch';
 
 export type RefreshAccessTokenResult =
-  | { ok: true; accessToken: string; user: User; device: { identifier: string; sessionStamp: string } | null }
+  | { ok: true; accessToken: string; user: User; device: { identifier: string; sessionStamp: string } | null; expiresAt: number }
   | {
       ok: false;
       reason: RefreshAccessTokenFailureReason;
@@ -190,9 +192,23 @@ export class AuthService {
   }
 
   // Generate refresh token
-  async generateRefreshToken(userId: string, device?: { identifier: string; sessionStamp: string } | null): Promise<string> {
+  async generateRefreshToken(
+    user: User,
+    device?: { identifier: string; sessionStamp: string } | null,
+    clientType: string = 'other'
+  ): Promise<string> {
     const token = createRefreshToken();
-    await this.storage.saveRefreshToken(token, userId, undefined, device?.identifier ?? null, device?.sessionStamp ?? null);
+    const now = Date.now();
+    await this.storage.saveRefreshToken(
+      token,
+      user.id,
+      now + getRefreshTokenSlidingTtlMs(clientType),
+      device?.identifier ?? null,
+      device?.sessionStamp ?? null,
+      user.securityStamp,
+      clientType,
+      now + LIMITS.auth.refreshTokenAbsoluteTtlMs
+    );
     return token;
   }
 
@@ -251,25 +267,42 @@ export class AuthService {
       return { ok: false, reason: 'user_inactive', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }
 
+    if (record.securityStamp && record.securityStamp !== user.securityStamp) {
+      await this.storage.deleteRefreshToken(refreshToken);
+      return { ok: false, reason: 'security_stamp_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+    }
+    if (!record.securityStamp) {
+      await this.storage.bindRefreshTokenSecurityStamp(refreshToken, user.securityStamp);
+    }
+
     let device: { identifier: string; sessionStamp: string } | null = null;
-    if (!record.deviceIdentifier || !record.deviceSessionStamp) {
-      await this.storage.deleteRefreshToken(refreshToken);
-      return { ok: false, reason: 'device_missing', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+    if (record.deviceIdentifier) {
+      const boundDevice = await this.storage.getDevice(user.id, record.deviceIdentifier);
+      if (!boundDevice) {
+        await this.storage.deleteRefreshToken(refreshToken);
+        return { ok: false, reason: 'device_missing', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+      }
+      if (record.deviceSessionStamp && boundDevice.sessionStamp !== record.deviceSessionStamp) {
+        await this.storage.deleteRefreshToken(refreshToken);
+        return { ok: false, reason: 'device_session_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+      }
+      if (!record.deviceSessionStamp) {
+        await this.storage.bindRefreshTokenDeviceStamp(refreshToken, boundDevice.sessionStamp);
+      }
+      device = { identifier: boundDevice.deviceIdentifier, sessionStamp: boundDevice.sessionStamp };
     }
 
-    const boundDevice = await this.storage.getDevice(user.id, record.deviceIdentifier);
-    if (!boundDevice) {
-      await this.storage.deleteRefreshToken(refreshToken);
-      return { ok: false, reason: 'device_missing', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+    const now = Date.now();
+    const expiresAt = Math.min(
+      now + getRefreshTokenSlidingTtlMs(record.clientType),
+      record.absoluteExpiresAt || (now + LIMITS.auth.refreshTokenAbsoluteTtlMs)
+    );
+    const extended = await this.storage.extendRefreshTokenExpiry(refreshToken, expiresAt, now);
+    if (!extended) {
+      return { ok: false, reason: 'token_not_found_or_expired', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }
-    if (boundDevice.sessionStamp !== record.deviceSessionStamp) {
-      await this.storage.deleteRefreshToken(refreshToken);
-      return { ok: false, reason: 'device_session_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
-    }
-    device = { identifier: boundDevice.deviceIdentifier, sessionStamp: boundDevice.sessionStamp };
-
     const accessToken = await this.generateAccessToken(user, device);
-    return { ok: true, accessToken, user, device };
+    return { ok: true, accessToken, user, device, expiresAt };
   }
 
   async refreshAccessToken(

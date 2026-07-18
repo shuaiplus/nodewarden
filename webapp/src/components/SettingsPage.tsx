@@ -130,7 +130,7 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [accountPasskeys, setAccountPasskeys] = useState<AccountPasskeyCredential[]>([]);
   const [accountPasskeysLoading, setAccountPasskeysLoading] = useState(false);
   const [accountPasskeyName, setAccountPasskeyName] = useState(t('txt_account_passkey'));
-  const [accountPasskeyDirectUnlock, setAccountPasskeyDirectUnlock] = useState(false);
+  const [accountPasskeyDirectUnlock, setAccountPasskeyDirectUnlock] = useState(true);
   const [accountPasskeyPromptId, setAccountPasskeyPromptId] = useState<string | null>(null);
   const [createPasskeyDialogOpen, setCreatePasskeyDialogOpen] = useState(false);
   const [createPasskeyMasterPassword, setCreatePasskeyMasterPassword] = useState('');
@@ -144,6 +144,7 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [yubiKeyStoredKeys, setYubiKeyStoredKeys] = useState<[string, string, string, string, string]>(EMPTY_YUBIKEY_KEYS);
   const [yubiKeyNfc, setYubiKeyNfc] = useState(false);
   const [yubiKeyYubicoConfigured, setYubiKeyYubicoConfigured] = useState(false);
+  const [yubiKeyYubicoCanManage, setYubiKeyYubicoCanManage] = useState(false);
   const [yubiKeyYubicoClientId, setYubiKeyYubicoClientId] = useState('');
   const [yubiKeyYubicoSecretKey, setYubiKeyYubicoSecretKey] = useState('');
   const [yubiKeyBootstrapOtp, setYubiKeyBootstrapOtp] = useState('');
@@ -340,6 +341,7 @@ export default function SettingsPage(props: SettingsPageProps) {
     setYubiKeyStoredKeys(settings.keys);
     setYubiKeyNfc(settings.nfc);
     setYubiKeyYubicoConfigured(settings.yubicoConfigured);
+    setYubiKeyYubicoCanManage(settings.yubicoCanManage);
     setYubiKeyYubicoClientId(settings.yubicoClientId);
     setYubiKeyYubicoSecretKey(settings.yubicoSecretKey);
   }
@@ -352,6 +354,7 @@ export default function SettingsPage(props: SettingsPageProps) {
     setYubiKeyStoredKeys(EMPTY_YUBIKEY_KEYS);
     setYubiKeyNfc(false);
     setYubiKeyYubicoConfigured(false);
+    setYubiKeyYubicoCanManage(false);
     setYubiKeyYubicoClientId('');
     setYubiKeyYubicoSecretKey('');
     setYubiKeyBootstrapOtp('');
@@ -509,7 +512,7 @@ export default function SettingsPage(props: SettingsPageProps) {
     setCreatePasskeyDialogOpen(false);
     setCreatePasskeyMasterPassword('');
     setAccountPasskeyName(t('txt_account_passkey'));
-    setAccountPasskeyDirectUnlock(false);
+    setAccountPasskeyDirectUnlock(true);
   }
 
   async function submitCreatePasskeyDialog(): Promise<void> {
@@ -1010,8 +1013,7 @@ export default function SettingsPage(props: SettingsPageProps) {
             </section>
           )}
 
-          {yubiKeyYubicoConfigured && (
-            <>
+          {yubiKeyYubicoConfigured && yubiKeyYubicoCanManage && (
               <section className="settings-submodule yubikey-config-panel">
                 <div className="settings-module-head">
                   <h3>{t('txt_yubikey_validation_credentials')}</h3>
@@ -1055,7 +1057,10 @@ export default function SettingsPage(props: SettingsPageProps) {
                   </div>
                 )}
               </section>
+          )}
 
+          {yubiKeyYubicoConfigured && (
+            <>
               <ol className="settings-plain-steps">
                 <li>{t('txt_yubikey_plug_in')}</li>
                 <li>{t('txt_yubikey_select_empty_field')}</li>

@@ -1,6 +1,6 @@
 {
   "name": "nodewarden",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "Minimal Bitwarden-compatible server running on Cloudflare Workers",
   "author": "shuaiplus",
   "license": "LGPL-3.0",
@@ -58,7 +58,7 @@
     "tailwindcss": "^3.4.19",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vite": "^7.3.1",
+    "vite": "^8.1.3",
     "wrangler": "^4.105.0"
   },
   "dependencies": {

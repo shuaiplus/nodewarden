@@ -1,7 +1,7 @@
 ﻿import { useState } from 'preact/hooks';
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { createPortal } from 'preact/compat';
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzipSync, type UnzipFileInfo } from 'fflate';
 import { BlobReader, Uint8ArrayWriter, ZipReader, configure as configureZipJs } from '@zip.js/zip.js';
 import { Download, FileUp } from 'lucide-preact';
 import ConfirmDialog, { useDialogLifecycle } from '@/components/ConfirmDialog';
@@ -96,6 +96,12 @@ const COMMON_IMPORT_SOURCE_IDS: ImportSourceId[] = [
   'keepassx_csv',
 ];
 
+const MAX_IMPORT_ZIP_BYTES = 256 * 1024 * 1024;
+const MAX_IMPORT_ZIP_ENTRY_COUNT = 10_000;
+const MAX_IMPORT_TEXT_ENTRY_BYTES = 32 * 1024 * 1024;
+const MAX_IMPORT_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const MAX_IMPORT_ATTACHMENT_TOTAL_BYTES = 512 * 1024 * 1024;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
 }
@@ -171,8 +177,85 @@ function isZipPayload(bytes: Uint8Array): boolean {
   return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
+function formatMiB(bytes: number): string {
+  return String(Math.floor(bytes / (1024 * 1024)));
+}
+
+function zipEntryName(rawName: unknown): string {
+  return String(rawName || '').trim().replace(/\\/g, '/');
+}
+
+function assertSafeZipEntryName(name: string): void {
+  if (!name || name.includes('\0') || name.startsWith('/') || name.includes('//')) {
+    throw new Error(t('txt_import_zip_unsafe_file_name'));
+  }
+  const parts = name.split('/');
+  if (parts.some((part) => part === '.' || part === '..')) {
+    throw new Error(t('txt_import_zip_unsafe_file_name'));
+  }
+}
+
+function assertImportZipSize(bytes: number): void {
+  if (bytes > MAX_IMPORT_ZIP_BYTES) {
+    throw new Error(t('txt_import_zip_too_large', { size: formatMiB(MAX_IMPORT_ZIP_BYTES) }));
+  }
+}
+
+function assertImportTextFileSize(bytes: number): void {
+  if (bytes > MAX_IMPORT_TEXT_ENTRY_BYTES) {
+    throw new Error(t('txt_import_file_too_large', { size: formatMiB(MAX_IMPORT_TEXT_ENTRY_BYTES) }));
+  }
+}
+
+function assertImportEntrySize(size: number, maxBytes: number): void {
+  if (size > maxBytes) {
+    throw new Error(t('txt_import_zip_entry_too_large', { size: formatMiB(maxBytes) }));
+  }
+}
+
+function isImportTextZipCandidate(source: ImportSourceId, name: string): boolean {
+  const lower = name.toLowerCase();
+  if (source === 'onepassword_1pux') {
+    return lower.endsWith('/export.data') || lower === 'export.data' || lower.endsWith('/export.json') || lower === 'export.json' || lower.endsWith('.json');
+  }
+  return lower.endsWith('/protonpass.json') || lower === 'protonpass.json' || lower.endsWith('/export.json') || lower === 'export.json' || lower.endsWith('.json');
+}
+
+function createImportTextZipFilter(source: ImportSourceId): (file: UnzipFileInfo) => boolean {
+  let entryCount = 0;
+  let totalTextBytes = 0;
+  return (entry: UnzipFileInfo): boolean => {
+    entryCount += 1;
+    if (entryCount > MAX_IMPORT_ZIP_ENTRY_COUNT) {
+      throw new Error(t('txt_import_zip_too_many_files'));
+    }
+    const name = zipEntryName(entry.name);
+    assertSafeZipEntryName(name);
+    if (!isImportTextZipCandidate(source, name)) return false;
+
+    const originalSize = Number(entry.originalSize);
+    if (!Number.isFinite(originalSize) || originalSize < 0) {
+      throw new Error(t('txt_import_zip_entry_too_large', { size: formatMiB(MAX_IMPORT_TEXT_ENTRY_BYTES) }));
+    }
+    assertImportEntrySize(originalSize, MAX_IMPORT_TEXT_ENTRY_BYTES);
+    totalTextBytes += originalSize;
+    if (totalTextBytes > MAX_IMPORT_TEXT_ENTRY_BYTES) {
+      throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_TEXT_ENTRY_BYTES) }));
+    }
+    return true;
+  };
+}
+
 function readZipText(bytes: Uint8Array, source: ImportSourceId): string {
-  const unzipped = unzipSync(bytes);
+  assertImportZipSize(bytes.byteLength);
+  const unzippedRaw = unzipSync(bytes, { filter: createImportTextZipFilter(source) });
+  const unzipped: Record<string, Uint8Array> = {};
+  for (const [rawName, entryBytes] of Object.entries(unzippedRaw)) {
+    const name = zipEntryName(rawName);
+    assertSafeZipEntryName(name);
+    assertImportEntrySize(entryBytes.byteLength, MAX_IMPORT_TEXT_ENTRY_BYTES);
+    unzipped[name] = entryBytes;
+  }
   const fileNames = Object.keys(unzipped);
   if (!fileNames.length) throw new Error(t('txt_import_empty_zip_archive'));
 
@@ -189,10 +272,13 @@ function readZipText(bytes: Uint8Array, source: ImportSourceId): string {
 
 async function readImportText(file: File, source: ImportSourceId): Promise<string> {
   if (source !== 'onepassword_1pux' && source !== 'protonpass_json') {
+    assertImportTextFileSize(file.size);
     return file.text();
   }
+  assertImportZipSize(file.size);
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (isZipPayload(bytes)) return readZipText(bytes, source);
+  assertImportTextFileSize(bytes.byteLength);
   return new TextDecoder().decode(bytes);
 }
 
@@ -211,34 +297,77 @@ function looksLikeZipPasswordError(error: unknown): boolean {
   return message.includes('password') || message.includes('encrypted');
 }
 
+function bitwardenZipAttachmentMatch(name: string): RegExpMatchArray | null {
+  return name.match(/^attachments\/([^/]+)\/(.+)$/i);
+}
+
+function zipJsEntrySize(entry: unknown): number | null {
+  const size = Number((entry as { uncompressedSize?: unknown })?.uncompressedSize);
+  return Number.isFinite(size) && size >= 0 ? size : null;
+}
+
+function validateBitwardenZipEntries(entries: Awaited<ReturnType<ZipReader<unknown>['getEntries']>>): void {
+  if (entries.length > MAX_IMPORT_ZIP_ENTRY_COUNT) {
+    throw new Error(t('txt_import_zip_too_many_files'));
+  }
+
+  let totalAttachmentBytes = 0;
+  for (const entry of entries) {
+    if (entry.directory) continue;
+    const name = zipEntryName(entry.filename);
+    assertSafeZipEntryName(name);
+    const lower = name.toLowerCase();
+    const size = zipJsEntrySize(entry);
+    if (lower === 'data.json' && size != null) {
+      assertImportEntrySize(size, MAX_IMPORT_TEXT_ENTRY_BYTES);
+    } else if (bitwardenZipAttachmentMatch(name) && size != null) {
+      assertImportEntrySize(size, MAX_IMPORT_ATTACHMENT_BYTES);
+      totalAttachmentBytes += size;
+      if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
+        throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
+      }
+    }
+  }
+}
+
 async function readBitwardenZipPayload(
   file: File,
   passwordRaw: string
 ): Promise<{ jsonText: string; attachments: ImportAttachmentFile[] }> {
   const password = String(passwordRaw || '').trim();
+  assertImportZipSize(file.size);
   const reader = new ZipReader(new BlobReader(file), { useWebWorkers: false });
   try {
     const entries = await reader.getEntries();
     if (!entries.length) throw new Error(t('txt_import_empty_zip_archive'));
+    validateBitwardenZipEntries(entries);
 
     let jsonText = '';
+    let totalAttachmentBytes = 0;
     const attachments: ImportAttachmentFile[] = [];
     const options = password ? { password } : undefined;
 
     for (const entry of entries) {
       if (entry.directory) continue;
-      const name = String(entry.filename || '').trim().replace(/\\/g, '/');
+      const name = zipEntryName(entry.filename);
       if (!name) continue;
+      assertSafeZipEntryName(name);
 
       const bytes = await entry.getData(new Uint8ArrayWriter(), options);
       const lower = name.toLowerCase();
       if (lower === 'data.json') {
+        assertImportEntrySize(bytes.byteLength, MAX_IMPORT_TEXT_ENTRY_BYTES);
         jsonText = new TextDecoder().decode(bytes);
         continue;
       }
 
-      const attachmentMatch = name.match(/^attachments\/([^/]+)\/(.+)$/i);
+      const attachmentMatch = bitwardenZipAttachmentMatch(name);
       if (!attachmentMatch) continue;
+      assertImportEntrySize(bytes.byteLength, MAX_IMPORT_ATTACHMENT_BYTES);
+      totalAttachmentBytes += bytes.byteLength;
+      if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
+        throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
+      }
       const sourceCipherId = String(attachmentMatch[1] || '').trim() || null;
       const fileName = String(attachmentMatch[2] || '').trim() || 'attachment.bin';
       attachments.push({

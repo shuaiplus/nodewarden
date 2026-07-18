@@ -5,6 +5,11 @@ import { handleRequest } from './router';
 import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
+import {
+  isBackendRequestPath,
+  isWebVaultHidden,
+  webVaultNotFoundResponse,
+} from './web-vault-visibility';
 
 let dbInitialized = false;
 let dbInitError: string | null = null;
@@ -17,19 +22,6 @@ function normalizeRequestUrl(request: Request): Request {
 
   url.pathname = normalizedPathname;
   return new Request(url.toString(), request);
-}
-
-function isWorkerHandledPath(path: string): boolean {
-  return (
-    path.startsWith('/api/') ||
-    path.startsWith('/identity/') ||
-    path.startsWith('/icons/') ||
-    path.startsWith('/notifications/') ||
-    path.startsWith('/.well-known/') ||
-    path === '/config' ||
-    path === '/api/config' ||
-    path === '/api/version'
-  );
 }
 
 function addSearchIndexHeaders(request: Request, response: Response): Response {
@@ -55,7 +47,7 @@ async function maybeServeAsset(request: Request, env: Env): Promise<Response | n
   if (!env.ASSETS) return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
   const url = new URL(request.url);
-  if (isWorkerHandledPath(url.pathname)) return null;
+  if (isBackendRequestPath(url.pathname)) return null;
 
   const response = await env.ASSETS.fetch(request);
   return addSearchIndexHeaders(request, response);
@@ -87,9 +79,15 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     void ctx;
     const normalizedRequest = normalizeRequestUrl(request);
+    const requestPath = new URL(normalizedRequest.url).pathname;
+
+    if (isWebVaultHidden(env) && !isBackendRequestPath(requestPath)) {
+      return webVaultNotFoundResponse(normalizedRequest);
+    }
+
     const assetResponse = await maybeServeAsset(normalizedRequest, env);
     if (assetResponse) {
-      return applyCors(normalizedRequest, assetResponse);
+      return applyCors(normalizedRequest, assetResponse, env);
     }
 
     await ensureDatabaseInitialized(env);
@@ -107,11 +105,11 @@ export default {
         },
         500
       );
-      return applyCors(normalizedRequest, resp);
+      return applyCors(normalizedRequest, resp, env);
     }
 
     const resp = await handleRequest(normalizedRequest, env);
-    return applyCors(normalizedRequest, resp);
+    return applyCors(normalizedRequest, resp, env);
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

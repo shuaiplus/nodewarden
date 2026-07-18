@@ -14,11 +14,11 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, master_password_hint TEXT, master_password_hash TEXT NOT NULL, ' +
   'key TEXT NOT NULL, private_key TEXT, public_key TEXT, kdf_type INTEGER NOT NULL, ' +
   'kdf_iterations INTEGER NOT NULL, kdf_memory INTEGER, kdf_parallelism INTEGER, ' +
-  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 1, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, api_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  'security_stamp TEXT NOT NULL, role TEXT NOT NULL DEFAULT \'user\', status TEXT NOT NULL DEFAULT \'active\', verify_devices INTEGER NOT NULL DEFAULT 0, totp_secret TEXT, totp_recovery_code TEXT, yubikey_key1 TEXT, yubikey_key2 TEXT, yubikey_key3 TEXT, yubikey_key4 TEXT, yubikey_key5 TEXT, yubikey_nfc INTEGER NOT NULL DEFAULT 0, api_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'ALTER TABLE users ADD COLUMN master_password_hint TEXT',
   'ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT \'user\'',
   'ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT \'active\'',
-  'ALTER TABLE users ADD COLUMN verify_devices INTEGER NOT NULL DEFAULT 1',
+  'ALTER TABLE users ADD COLUMN verify_devices INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE users ADD COLUMN totp_secret TEXT',
   'ALTER TABLE users ADD COLUMN totp_recovery_code TEXT',
   'ALTER TABLE users ADD COLUMN yubikey_key1 TEXT',
@@ -74,11 +74,20 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'ALTER TABLE sends ADD COLUMN emails TEXT',
 
   'CREATE TABLE IF NOT EXISTS refresh_tokens (' +
-  'token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, device_identifier TEXT, device_session_stamp TEXT, ' +
+  'token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, device_identifier TEXT, device_session_stamp TEXT, security_stamp TEXT, created_at INTEGER, last_used_at INTEGER, absolute_expires_at INTEGER, client_type TEXT, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)',
   'ALTER TABLE refresh_tokens ADD COLUMN device_identifier TEXT',
   'ALTER TABLE refresh_tokens ADD COLUMN device_session_stamp TEXT',
+  'ALTER TABLE refresh_tokens ADD COLUMN security_stamp TEXT',
+  'ALTER TABLE refresh_tokens ADD COLUMN created_at INTEGER',
+  'ALTER TABLE refresh_tokens ADD COLUMN last_used_at INTEGER',
+  'ALTER TABLE refresh_tokens ADD COLUMN absolute_expires_at INTEGER',
+  'ALTER TABLE refresh_tokens ADD COLUMN client_type TEXT',
+  "UPDATE refresh_tokens SET security_stamp = (SELECT users.security_stamp FROM users WHERE users.id = refresh_tokens.user_id) WHERE security_stamp IS NULL OR security_stamp = ''",
+  "UPDATE refresh_tokens SET created_at = CAST(strftime('%s','now') AS INTEGER) * 1000 WHERE created_at IS NULL",
+  "UPDATE refresh_tokens SET last_used_at = created_at WHERE last_used_at IS NULL",
+  'UPDATE refresh_tokens SET absolute_expires_at = expires_at WHERE absolute_expires_at IS NULL',
 
   'CREATE TABLE IF NOT EXISTS invites (' +
   'code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, expires_at TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
@@ -118,6 +127,8 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'ALTER TABLE devices ADD COLUMN last_seen_at TEXT',
   'CREATE INDEX IF NOT EXISTS idx_devices_user_last_seen ON devices(user_id, last_seen_at)',
   'CREATE INDEX IF NOT EXISTS idx_devices_user_push ON devices(user_id, push_token)',
+  "UPDATE refresh_tokens SET device_session_stamp = (SELECT devices.session_stamp FROM devices WHERE devices.user_id = refresh_tokens.user_id AND devices.device_identifier = refresh_tokens.device_identifier) WHERE device_identifier IS NOT NULL AND (device_session_stamp IS NULL OR device_session_stamp = '') AND EXISTS (SELECT 1 FROM devices WHERE devices.user_id = refresh_tokens.user_id AND devices.device_identifier = refresh_tokens.device_identifier)",
+  "UPDATE refresh_tokens SET client_type = CASE WHEN EXISTS (SELECT 1 FROM devices WHERE devices.user_id = refresh_tokens.user_id AND devices.device_identifier = refresh_tokens.device_identifier AND devices.type IN (0, 1)) THEN 'mobile' WHEN EXISTS (SELECT 1 FROM devices WHERE devices.user_id = refresh_tokens.user_id AND devices.device_identifier = refresh_tokens.device_identifier AND devices.type = 14) THEN 'web' ELSE 'other' END WHERE client_type IS NULL OR client_type = ''",
 
   'CREATE TABLE IF NOT EXISTS auth_requests (' +
   'id TEXT PRIMARY KEY, user_id TEXT NOT NULL, organization_id TEXT, type INTEGER NOT NULL, request_device_identifier TEXT NOT NULL, request_device_type INTEGER NOT NULL, ' +

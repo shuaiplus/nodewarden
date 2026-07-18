@@ -492,6 +492,58 @@
   transform: translateY(-50%);
 }
 
+.offline-mode-notice {
+  @apply mb-4 flex items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm leading-relaxed;
+  background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
+  color: var(--text);
+}
+
+.offline-mode-notice svg {
+  @apply mt-0.5 shrink-0;
+  color: var(--warning);
+}
+
+.offline-mode-notice strong {
+  @apply block text-center text-[13px] font-extrabold;
+  color: color-mix(in srgb, var(--warning) 82%, var(--text));
+}
+
+.offline-mode-notice > div {
+  @apply min-w-0 flex-1;
+}
+
+.offline-shortcut-list {
+  @apply mt-2 grid gap-1.5;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.offline-shortcut-row {
+  display: contents;
+}
+
+.offline-shortcut-label {
+  @apply text-xs font-extrabold;
+  color: color-mix(in srgb, var(--warning) 76%, var(--text));
+}
+
+.offline-shortcut-value {
+  @apply flex min-w-0 flex-wrap items-center gap-1.5;
+  color: var(--muted-strong);
+}
+
+.offline-shortcut-chord {
+  @apply inline-flex items-center gap-1 whitespace-nowrap;
+}
+
+.offline-shortcut-chord kbd {
+  @apply inline-flex min-h-6 items-center rounded-md border px-1.5 font-mono text-[12px] font-bold leading-none;
+  background: color-mix(in srgb, var(--panel) 88%, var(--warning));
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--warning) 26%, transparent);
+  color: var(--text);
+}
+
 .standalone-muted {
   @apply text-left;
 }

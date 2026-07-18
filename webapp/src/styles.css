@@ -2,6 +2,8 @@
 @import './styles/base.css';
 @import './styles/auth.css';
 @import './styles/forms.css';
+@import './styles/generator.css';
+@import './styles/password-security.css';
 @import './styles/shell.css';
 @import './styles/vault.css';
 @import './styles/management.css';
@@ -424,6 +426,48 @@ h4 {
   padding: 24px;
 }
 
+.settings-home-card {
+  min-height: min(640px, calc(100dvh - 180px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-home-section {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-home-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-md);
+}
+
+.settings-home-spacer {
+  flex: 1;
+  min-height: 4px;
+}
+
+.mobile-settings-links {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.mobile-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
+}
+
 .auth-card h1,
 .standalone-title {
   font-size: 26px;
@@ -633,7 +677,7 @@ h4 {
 }
 
 .card {
-  margin-bottom: 8px;
+  margin-bottom: 10;
   padding: 14px;
 }
 

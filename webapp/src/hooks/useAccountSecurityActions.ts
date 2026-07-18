@@ -561,13 +561,18 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
       openRemoveAllDevices() {
         onSetConfirm({
           title: t('txt_remove_all_devices'),
-          message: t('txt_remove_all_devices_and_sign_out_all_sessions'),
+          message: `${t('txt_remove_all_devices_and_sign_out_all_sessions')}\n${t('txt_enter_master_password_to_continue')}`,
           danger: true,
-          onConfirm: () => {
+          requireMasterPassword: true,
+          onConfirm: (masterPassword) => {
             onSetConfirm(null);
             void (async () => {
               try {
-                await deleteAllAuthorizedDevices(authedFetch);
+                if (!profile) throw new Error(t('txt_profile_unavailable'));
+                const normalizedPassword = String(masterPassword || '');
+                if (!normalizedPassword.trim()) throw new Error(t('txt_master_password_is_required'));
+                const derived = await deriveLoginHash(profile.email, normalizedPassword, defaultKdfIterations);
+                await deleteAllAuthorizedDevices(authedFetch, derived.hash);
                 onNotify('success', t('txt_all_devices_removed'));
                 onLogoutNow();
               } catch (error) {

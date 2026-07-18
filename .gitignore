@@ -43,7 +43,7 @@ tmp/
 .tmp/
 .tmp-bitwarden-clients/
 
-nodewarden.wiki/
+nodewarden-wiki/
 wiki/
 AGENTS.md
 settings.json

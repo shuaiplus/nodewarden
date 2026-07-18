@@ -6,6 +6,8 @@ export interface Env {
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
+  // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
+  HIDE_WEB_VAULT?: string;
   // Prefer R2 when available. Optional to support KV-only deployments.
   ATTACHMENTS?: R2Bucket;
   // Optional fallback for attachment/send file storage (no credit card required).
@@ -14,11 +16,7 @@ export interface Env {
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
-  YUBICO_CLIENT_ID?: string;
-  YUBICO_SECRET_KEY?: string;
   YUBICO_VALIDATION_URLS?: string;
-  'globalSettings__yubico__clientId'?: string;
-  'globalSettings__yubico__key'?: string;
   'globalSettings__yubico__validationUrls'?: string;
 }
 
@@ -124,6 +122,10 @@ export enum CipherType {
   SecureNote = 2,
   Card = 3,
   Identity = 4,
+  SSHKey = 5,
+  BankAccount = 6,
+  DriversLicense = 7,
+  Passport = 8,
 }
 
 export interface CipherLoginUri {
@@ -156,6 +158,52 @@ export interface CipherSshKey {
   publicKey: string;
   privateKey: string;
   keyFingerprint: string;
+}
+
+export interface CipherBankAccount {
+  bankName: string | null;
+  nameOnAccount: string | null;
+  accountType: string | null;
+  accountNumber: string | null;
+  routingNumber: string | null;
+  branchNumber: string | null;
+  pin: string | null;
+  swiftCode: string | null;
+  iban: string | null;
+  bankContactPhone: string | null;
+  [key: string]: any;
+}
+
+export interface CipherDriversLicense {
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  dateOfBirth: string | null;
+  licenseNumber: string | null;
+  issuingCountry: string | null;
+  issuingState: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  issuingAuthority: string | null;
+  licenseClass: string | null;
+  [key: string]: any;
+}
+
+export interface CipherPassport {
+  surname: string | null;
+  givenName: string | null;
+  dateOfBirth: string | null;
+  sex: string | null;
+  birthPlace: string | null;
+  nationality: string | null;
+  issuingCountry: string | null;
+  passportNumber: string | null;
+  passportType: string | null;
+  nationalIdentificationNumber: string | null;
+  issuingAuthority: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  [key: string]: any;
 }
 
 export interface CipherIdentity {
@@ -208,6 +256,9 @@ export interface Cipher {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount?: CipherBankAccount | null;
+  driversLicense?: CipherDriversLicense | null;
+  passport?: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;
@@ -349,6 +400,11 @@ export interface RefreshTokenRecord {
   expiresAt: number;
   deviceIdentifier: string | null;
   deviceSessionStamp: string | null;
+  securityStamp: string | null;
+  createdAt: number | null;
+  lastUsedAt: number | null;
+  absoluteExpiresAt: number | null;
+  clientType: string | null;
 }
 
 export interface TrustedDeviceTokenSummary {
@@ -547,6 +603,9 @@ export interface CipherResponse {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount: CipherBankAccount | null;
+  driversLicense: CipherDriversLicense | null;
+  passport: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;

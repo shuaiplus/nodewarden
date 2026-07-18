@@ -5,6 +5,8 @@ import { readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/
 import { errorResponse, jsonResponse } from '../utils/response';
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
+import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
+import { LIMITS } from '../config/limits';
 
 const AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK = 0;
 const AUTH_REQUEST_TYPE_UNLOCK = 1;
@@ -94,8 +96,8 @@ function toAuthRequestResponse(request: Request, authRequest: AuthRequestRecord,
     RequestCountryName: authRequest.requestCountryName,
     key: authRequest.key,
     Key: authRequest.key,
-    masterPasswordHash: authRequest.masterPasswordHash,
-    MasterPasswordHash: authRequest.masterPasswordHash,
+    masterPasswordHash: null,
+    MasterPasswordHash: null,
     creationDate: authRequest.creationDate,
     CreationDate: authRequest.creationDate,
     responseDate: authRequest.responseDate,
@@ -131,6 +133,30 @@ async function readJsonBody(request: Request): Promise<Record<string, any> | nul
   }
 }
 
+async function enforceAuthRequestCreateRateLimit(
+  request: Request,
+  env: Env,
+  email: string,
+  deviceIdentifier: string
+): Promise<Response | null> {
+  const clientIdentifier = getClientIdentifier(request);
+  if (!clientIdentifier) return errorResponse('Client IP is required', 403);
+
+  const rateLimit = new RateLimitService(env.DB);
+  const limit = LIMITS.rateLimit.authRequestRequestsPerMinute;
+  const encodedEmail = encodeURIComponent(email || 'missing');
+  const encodedDevice = encodeURIComponent(deviceIdentifier || 'missing');
+  const budgets = await Promise.all([
+    rateLimit.consumeStrictBudget(`auth-request:ip:${clientIdentifier}`, limit),
+    rateLimit.consumeStrictBudget(`auth-request:email:${encodedEmail}`, limit),
+    rateLimit.consumeStrictBudget(`auth-request:device:${encodedDevice}`, limit),
+  ]);
+  const blocked = budgets.find((budget) => !budget.allowed);
+  if (!blocked) return null;
+
+  return errorResponse('Too many authentication requests. Try again later.', 429);
+}
+
 function readBodyValue(body: Record<string, any>, names: string[]): unknown {
   for (const name of names) {
     if (body[name] !== undefined) return body[name];
@@ -164,6 +190,8 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
   if (!email || !publicKey || !accessCode || !deviceInfo.deviceIdentifier) {
     return errorResponse('Email, public key, device identifier, and access code are required.', 400);
   }
+  const rateLimitResponse = await enforceAuthRequestCreateRateLimit(request, env, email, deviceInfo.deviceIdentifier);
+  if (rateLimitResponse) return rateLimitResponse;
   if (!isSupportedAuthRequestType(type) || type === AUTH_REQUEST_TYPE_ADMIN_APPROVAL) {
     return errorResponse('Invalid auth request type.', 400);
   }
@@ -180,6 +208,72 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
     userId: user.id,
     organizationId: null,
     type,
+    requestDeviceIdentifier: deviceInfo.deviceIdentifier,
+    requestDeviceType: deviceInfo.deviceType,
+    requestIpAddress: getClientIp(request),
+    requestCountryName: getCountryName(request),
+    responseDeviceIdentifier: null,
+    accessCode,
+    publicKey,
+    key: null,
+    masterPasswordHash: null,
+    approved: null,
+    creationDate: now,
+    responseDate: null,
+    authenticationDate: null,
+  };
+  await storage.createAuthRequest(authRequest);
+  notifyUserAuthRequest(env, user.id, authRequest.id, deviceInfo.deviceIdentifier);
+  return jsonResponse(toAuthRequestResponse(request, authRequest));
+}
+
+export async function handleCreateAdminAuthRequest(
+  request: Request,
+  env: Env,
+  userId: string,
+  userEmail: string
+): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const body = await readJsonBody(request);
+  if (!body) return errorResponse('Invalid request payload', 400);
+
+  const email = normalizeText(readBodyValue(body, ['email', 'Email']), 320).toLowerCase() || userEmail.toLowerCase();
+  const publicKey = normalizeText(readBodyValue(body, ['publicKey', 'PublicKey']), 8192);
+  const accessCode = normalizeText(readBodyValue(body, ['accessCode', 'AccessCode']), 25);
+  const requestedType = Number(readBodyValue(body, ['type', 'Type']));
+  const deviceInfo = readAuthRequestDeviceInfo(
+    {
+      deviceIdentifier: normalizeText(readBodyValue(body, ['deviceIdentifier', 'DeviceIdentifier']), 128),
+      deviceName: normalizeText(readBodyValue(body, ['deviceName', 'DeviceName']), 128),
+      deviceType: String(readBodyValue(body, ['deviceType', 'DeviceType']) ?? ''),
+    },
+    request
+  );
+
+  if (requestedType !== AUTH_REQUEST_TYPE_ADMIN_APPROVAL) {
+    return errorResponse('Invalid AuthRequestType. Expected AdminApproval.', 400);
+  }
+  if (email !== userEmail.toLowerCase()) {
+    return errorResponse('Email does not match authenticated user.', 400);
+  }
+  if (!publicKey || !accessCode || !deviceInfo.deviceIdentifier) {
+    return errorResponse('Public key, device identifier, and access code are required.', 400);
+  }
+  const rateLimitResponse = await enforceAuthRequestCreateRateLimit(request, env, email, deviceInfo.deviceIdentifier);
+  if (rateLimitResponse) return rateLimitResponse;
+
+  const user = await storage.getUserById(userId);
+  if (!user || user.status !== 'active') {
+    return errorResponse('User not found.', 404);
+  }
+
+  await storage.pruneExpiredAuthRequests();
+  const now = new Date().toISOString();
+  const authRequest: AuthRequestRecord = {
+    id: generateUUID(),
+    userId: user.id,
+    organizationId: null,
+    type: AUTH_REQUEST_TYPE_ADMIN_APPROVAL,
     requestDeviceIdentifier: deviceInfo.deviceIdentifier,
     requestDeviceType: deviceInfo.deviceType,
     requestIpAddress: getClientIp(request),
@@ -255,7 +349,6 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
 
   const approved = Boolean(readBodyValue(body, ['requestApproved', 'RequestApproved']));
   const key = normalizeText(readBodyValue(body, ['key', 'Key']), 20000);
-  const masterPasswordHash = normalizeText(readBodyValue(body, ['masterPasswordHash', 'MasterPasswordHash']), 20000) || null;
   const responseDeviceIdentifier =
     normalizeText(readBodyValue(body, ['deviceIdentifier', 'DeviceIdentifier']), 128) ||
     readActingDeviceIdentifier(request) ||
@@ -272,7 +365,7 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
     approved,
     responseDeviceIdentifier,
     key,
-    masterPasswordHash,
+    masterPasswordHash: null,
   });
   if (!updated) return errorResponse('Auth request has already been answered.', 409);
   const updatedRequest = await storage.getAuthRequestByIdForUser(id, userId);

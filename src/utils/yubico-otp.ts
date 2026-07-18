@@ -48,12 +48,6 @@ export function isYubiKeyEnabled(user: User): boolean {
   return userYubiKeyPublicIds(user).length > 0;
 }
 
-export function yubicoCredentialsFromEnv(env: Env): YubicoApiCredentials | null {
-  const clientId = String(env['globalSettings__yubico__clientId'] || env.YUBICO_CLIENT_ID || '').trim();
-  const secretKey = String(env['globalSettings__yubico__key'] || env.YUBICO_SECRET_KEY || '').trim();
-  return clientId ? { clientId, secretKey } : null;
-}
-
 function randomNonce(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -143,27 +137,25 @@ export async function requestYubicoApiCredentials(email: string, otpInput: strin
 export async function verifyYubicoOtp(
   env: Env,
   otpInput: string,
-  credentials: YubicoApiCredentials | null = yubicoCredentialsFromEnv(env)
+  credentials: YubicoApiCredentials | null
 ): Promise<boolean> {
   const otp = normalizeYubiKeyOtp(otpInput);
   if (!isYubiKeyOtp(otp)) return false;
 
   const clientId = String(credentials?.clientId || '').trim();
-  if (!clientId) return false;
+  const secretKey = String(credentials?.secretKey || '').trim();
+  if (!clientId || !secretKey) return false;
 
   const nonce = randomNonce();
-  const secretKey = String(credentials?.secretKey || '').trim();
   const params = new URLSearchParams({
     id: clientId,
     nonce,
     otp,
   });
-  if (secretKey) {
-    try {
-      params.set('h', await hmacSha1Base64(secretKey, canonicalQuery(params)));
-    } catch {
-      return false;
-    }
+  try {
+    params.set('h', await hmacSha1Base64(secretKey, canonicalQuery(params)));
+  } catch {
+    return false;
   }
 
   for (const baseUrl of validationUrls(env)) {
@@ -172,14 +164,12 @@ export async function verifyYubicoOtp(
       if (!response.ok) continue;
       const parsed = parseYubicoResponse(await response.text());
       if (parsed.otp !== otp || parsed.nonce !== nonce || parsed.status !== 'OK') continue;
-      if (secretKey) {
-        if (!parsed.h) continue;
-        const signedParams = new URLSearchParams();
-        for (const [key, value] of Object.entries(parsed)) {
-          if (key !== 'h') signedParams.set(key, value);
-        }
-        if (!constantTimeStringEquals(await hmacSha1Base64(secretKey, canonicalQuery(signedParams)), parsed.h)) continue;
+      if (!parsed.h) continue;
+      const signedParams = new URLSearchParams();
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key !== 'h') signedParams.set(key, value);
       }
+      if (!constantTimeStringEquals(await hmacSha1Base64(secretKey, canonicalQuery(signedParams)), parsed.h)) continue;
       return true;
     } catch {
       continue;

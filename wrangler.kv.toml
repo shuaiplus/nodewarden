@@ -9,7 +9,7 @@ command = "npm run build"
 binding = "ASSETS"
 directory = "./dist"
 not_found_handling = "single-page-application"
-run_worker_first = false
+run_worker_first = true
 
 [triggers]
 crons = [ "*/5 * * * *" ]

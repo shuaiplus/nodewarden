@@ -1269,3 +1269,8 @@ select.input.duplicate-mode-toolbar-select {
   @apply text-sm;
   color: var(--danger);
 }
+
+.inline-icon {
+  display: inline;
+  vertical-align: middle;
+}

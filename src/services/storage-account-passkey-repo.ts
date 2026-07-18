@@ -268,7 +268,7 @@ export async function updateAccountPasskeyEncryption(
   const result = await db
     .prepare(
       'UPDATE webauthn_credentials SET encrypted_user_key = ?, encrypted_public_key = ?, encrypted_private_key = ?, supports_prf = 1, updated_at = ? ' +
-        'WHERE user_id = ? AND credential_id = ?'
+        "WHERE user_id = ? AND credential_id = ? AND purpose = 'login'"
     )
     .bind(encryptedUserKey, encryptedPublicKey, encryptedPrivateKey, updatedAt, userId, credentialId)
     .run();

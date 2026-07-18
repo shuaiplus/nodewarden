@@ -40,6 +40,10 @@ export interface BitwardenCipherInput {
   fields?: BitwardenFieldInput[] | null;
   passwordHistory?: Array<{ password?: string | null; lastUsedDate?: string | null }> | null;
   sshKey?: Record<string, unknown> | null;
+  bankAccount?: Record<string, unknown> | null;
+  driversLicense?: Record<string, unknown> | null;
+  passport?: Record<string, unknown> | null;
+  [key: string]: unknown;
 }
 
 export interface BitwardenJsonInput {
@@ -79,6 +83,7 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
   let hasAnyExplicitFolderLink = false;
   for (const item of itemsRaw) {
     ciphers.push({
+      ...(item && typeof item === 'object' ? item as Record<string, unknown> : {}),
       id: item?.id ?? null,
       type: Number(item?.type || 1) || 1,
       name: item?.name ?? 'Untitled',
@@ -93,7 +98,7 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
             totp: item.login.totp ?? null,
             fido2Credentials: Array.isArray(item.login.fido2Credentials) ? item.login.fido2Credentials : null,
             uris: Array.isArray(item.login.uris)
-              ? item.login.uris.map((u) => ({ uri: u?.uri ?? null, match: u?.match ?? null }))
+              ? item.login.uris.map((u) => ({ ...u, uri: u?.uri ?? null, uriChecksum: u?.uriChecksum ?? null, match: u?.match ?? null }))
               : null,
           }
         : null,
@@ -114,6 +119,9 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
             .filter((x) => !!x.password)
         : null,
       sshKey: item?.sshKey ?? null,
+      bankAccount: item?.bankAccount ?? null,
+      driversLicense: item?.driversLicense ?? null,
+      passport: item?.passport ?? null,
     });
     const folderId = txt(item?.folderId);
     if (!folderId) continue;

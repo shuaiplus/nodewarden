@@ -170,6 +170,7 @@
       (function () {
         var params = new URLSearchParams(window.location.search);
         var sentSuccess = false;
+        var allowedParentOriginsPromise = null;
 
         var text = pickText(params.get("locale") || navigator.language || "en");
         document.documentElement.lang = params.get("locale") || navigator.language || "en";
@@ -227,6 +228,81 @@
           return out;
         }
 
+        function normalizeOrigin(value) {
+          if (!value) return "";
+          try {
+            var url = new URL(value);
+            if (!url.protocol || !url.host) return "";
+            return url.protocol + "//" + url.host;
+          } catch (_error) {
+            return "";
+          }
+        }
+
+        function isExtensionOrigin(origin) {
+          return (
+            origin.indexOf("chrome-extension://") === 0 ||
+            origin.indexOf("moz-extension://") === 0 ||
+            origin.indexOf("safari-web-extension://") === 0
+          );
+        }
+
+        function allowedParentOrigins() {
+          if (allowedParentOriginsPromise) return allowedParentOriginsPromise;
+          allowedParentOriginsPromise = fetch("/api/web-bootstrap", {
+            headers: { Accept: "application/json" },
+            credentials: "omit",
+          }).then(function (response) {
+            if (!response.ok) return [];
+            return response.json();
+          }).then(function (body) {
+            var origins = Array.isArray(body && body.webAuthnAllowedOrigins)
+              ? body.webAuthnAllowedOrigins
+              : [];
+            return origins.map(normalizeOrigin).filter(Boolean);
+          }).catch(function () {
+            return [];
+          });
+          return allowedParentOriginsPromise;
+        }
+
+        function trustedParentOrigin(allowedOrigins) {
+          var parent = decodeRepeated(params.get("parent"));
+          if (!parent) return "";
+          var parentOrigin = normalizeOrigin(parent);
+          if (!parentOrigin) return "";
+          if (parentOrigin === window.location.origin) {
+            return parentOrigin;
+          }
+          if (isExtensionOrigin(parentOrigin) && allowedOrigins.indexOf(parentOrigin) >= 0) {
+            return parentOrigin;
+          }
+          return "";
+        }
+
+        function safeShallowCopy(source) {
+          var copy = {};
+          if (!source || typeof source !== "object") return copy;
+          Object.keys(source).forEach(function (key) {
+            if (key === "__proto__" || key === "prototype" || key === "constructor") return;
+            copy[key] = source[key];
+          });
+          return copy;
+        }
+
+        async function postResult(message) {
+          var parentOrigin = trustedParentOrigin(await allowedParentOrigins());
+          if (parentOrigin) {
+            if (window.opener && !window.opener.closed) {
+              window.opener.postMessage(message, parentOrigin);
+            }
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(message, parentOrigin);
+            }
+          }
+          window.postMessage(message, window.location.origin);
+        }
+
         function showMessage(kind, message) {
           msgEl.textContent = String(message || "");
           msgEl.className = "msg show " + kind;
@@ -279,13 +355,13 @@
 
         function normalizeOptions(options) {
           if (!options || typeof options !== "object") throw new Error("Cannot parse data.");
-          var copy = Object.assign({}, options);
+          var copy = safeShallowCopy(options);
           copy.challenge = bytesFromBase64Url(copy.challenge);
           if (Array.isArray(copy.allowCredentials)) {
             copy.allowCredentials = copy.allowCredentials.map(function (credential) {
-              return Object.assign({}, credential, {
-                id: bytesFromBase64Url(credential.id),
-              });
+              var next = safeShallowCopy(credential);
+              next.id = bytesFromBase64Url(credential && credential.id);
+              return next;
             });
           }
           return copy;
@@ -327,11 +403,11 @@
             if (!(credential instanceof PublicKeyCredential)) {
               throw new Error("No security key was selected.");
             }
-            window.postMessage({
+            await postResult({
               command: "webAuthnResult",
               data: credentialToDataString(credential),
               remember: rememberEl.checked,
-            }, "*");
+            });
             sentSuccess = true;
             showMessage("success", text.success);
           } catch (error) {

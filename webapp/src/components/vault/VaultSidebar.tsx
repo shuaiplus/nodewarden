@@ -3,6 +3,7 @@ import type { RefObject } from 'preact';
 import {
   Archive,
   ArrowUpDown,
+  BookUser,
   Check,
   Copy,
   CreditCard,
@@ -10,15 +11,19 @@ import {
   FolderPlus,
   FolderX,
   Globe,
+  IdCard,
   KeyRound,
+  Landmark,
   LayoutGrid,
   Pencil,
   ShieldUser,
+  ShieldCheck,
   Star,
   StickyNote,
   Trash2,
   X,
 } from 'lucide-preact';
+import { Link } from 'wouter';
 import type { Folder } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { getFolderSortOptions, type SidebarFilter, type VaultSortMode } from '@/components/vault/vault-page-helpers';
@@ -92,6 +97,9 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         </div>
       )}
       <div className="sidebar-block">
+        <Link href="/security/password-health" className="tree-btn">
+          <ShieldCheck size={14} className="tree-icon" /> <span className="tree-label">{t('nav_password_security')}</span>
+        </Link>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'all' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'all' })}>
           <LayoutGrid size={14} className="tree-icon" /> <span className="tree-label">{t('txt_all_items')}</span>
         </button>
@@ -117,8 +125,17 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'card' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'card' })}>
           <CreditCard size={14} className="tree-icon" /> <span className="tree-label">{t('txt_card')}</span>
         </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'bank' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'bank' })}>
+          <Landmark size={14} className="tree-icon" /> <span className="tree-label">{t('txt_bank_account')}</span>
+        </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'identity' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'identity' })}>
           <ShieldUser size={14} className="tree-icon" /> <span className="tree-label">{t('txt_identity')}</span>
+        </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'license' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'license' })}>
+          <IdCard size={14} className="tree-icon" /> <span className="tree-label">{t('txt_drivers_license')}</span>
+        </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'passport' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'passport' })}>
+          <BookUser size={14} className="tree-icon" /> <span className="tree-label">{t('txt_passport')}</span>
         </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'note' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'note' })}>
           <StickyNote size={14} className="tree-icon" /> <span className="tree-label">{t('txt_note')}</span>

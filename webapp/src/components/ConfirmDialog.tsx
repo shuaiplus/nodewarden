@@ -87,6 +87,7 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
   const cardRef = useRef<HTMLFormElement | null>(null);
   const maskPointerStartedRef = useRef(false);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const lastTitleRef = useRef<ComponentChildren>(props.title);
   const dialogId = useMemo(() => `confirm-dialog-${++dialogIdCounter}`, []);
   const titleId = `${dialogId}-title`;
   const messageId = `${dialogId}-message`;
@@ -95,6 +96,7 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
 
   useEffect(() => {
     if (props.open) {
+      lastTitleRef.current = props.title;
       setPresent(true);
       setClosing(false);
       return;
@@ -228,7 +230,7 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
             <X size={18} />
           </button>
         )}
-        <h3 id={titleId} className="dialog-title">{props.title}</h3>
+        <h3 id={titleId} className="dialog-title">{props.open ? props.title : lastTitleRef.current}</h3>
         {hasMessage && <div id={messageId} className={`dialog-message ${props.variant === 'warning' ? 'warning' : ''}`}>{props.message}</div>}
         {props.children}
         {!props.hideConfirm && (

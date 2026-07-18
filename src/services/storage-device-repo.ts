@@ -45,7 +45,8 @@ export async function upsertDevice(
   await db
     .prepare(
       'INSERT INTO devices(user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, push_uuid, banned, banned_at, device_note, last_seen_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?) ' +
-        'ON CONFLICT(user_id, device_identifier) DO UPDATE SET name=excluded.name, type=excluded.type, session_stamp=excluded.session_stamp, ' +
+        'ON CONFLICT(user_id, device_identifier) DO UPDATE SET name=excluded.name, type=excluded.type, ' +
+        'session_stamp=CASE WHEN devices.session_stamp IS NULL OR devices.session_stamp = ? THEN excluded.session_stamp ELSE devices.session_stamp END, ' +
         'encrypted_user_key=COALESCE(excluded.encrypted_user_key, encrypted_user_key), ' +
         'encrypted_public_key=COALESCE(excluded.encrypted_public_key, encrypted_public_key), ' +
         'encrypted_private_key=COALESCE(excluded.encrypted_private_key, encrypted_private_key), ' +
@@ -66,7 +67,8 @@ export async function upsertDevice(
       existingDevice?.deviceNote ?? null,
       now,
       now,
-      now
+      now,
+      ''
     )
     .run();
 }
@@ -93,6 +95,20 @@ export async function touchDeviceLastSeen(
   const result = await db
     .prepare('UPDATE devices SET last_seen_at = ? WHERE user_id = ? AND device_identifier = ?')
     .bind(now, userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+export async function rotateDeviceSessionStamp(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  sessionStamp: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db
+    .prepare('UPDATE devices SET session_stamp = ?, updated_at = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(sessionStamp, now, userId, deviceIdentifier)
     .run();
   return Number(result.meta.changes ?? 0) > 0;
 }

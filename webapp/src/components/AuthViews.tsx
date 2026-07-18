@@ -1,8 +1,9 @@
-import { useState } from 'preact/hooks';
-import { ArrowLeft, Eye, EyeOff, KeyRound, LogIn, LogOut, Unlock, UserPlus } from 'lucide-preact';
+import { useEffect, useState } from 'preact/hooks';
+import { AlertTriangle, ArrowLeft, Eye, EyeOff, KeyRound, LogIn, LogOut, Unlock, UserPlus } from 'lucide-preact';
 import NetworkStatusBadge from '@/components/NetworkStatusBadge';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
 import { t } from '@/lib/i18n';
+import { getCurrentNetworkStatus, subscribeNetworkStatus, type NetworkStatus } from '@/lib/network-status';
 
 interface LoginValues {
   email: string;
@@ -26,6 +27,7 @@ interface AuthViewsProps {
   pendingAction: 'login' | 'passkey' | 'register' | 'unlock' | null;
   unlockReady: boolean;
   unlockPreparing: boolean;
+  sessionRefreshError?: string;
   loginValues: LoginValues;
   pendingPasskeyPasswordEmail?: string | null;
   passkeyPassword: string;
@@ -49,6 +51,7 @@ interface AuthViewsProps {
   onLogout: () => void;
   onTogglePasswordHint: () => void;
   onShowLockedPasswordHint: () => void;
+  onRetrySessionRefresh: () => void;
 }
 
 function PasswordField(props: {
@@ -81,6 +84,36 @@ function PasswordField(props: {
   );
 }
 
+function OfflineModeNotice() {
+  const [status, setStatus] = useState<NetworkStatus>(getCurrentNetworkStatus);
+
+  useEffect(() => subscribeNetworkStatus(setStatus), []);
+
+  if (status !== 'offline') return null;
+
+  return (
+    <div className="offline-mode-notice" role="alert" aria-live="assertive">
+      <div>
+        <strong>{t('txt_offline_mode_notice_title')}</strong>
+        <div className="offline-shortcut-list">
+          <div className="offline-shortcut-row">
+            <span className="offline-shortcut-label">{t('txt_offline_mode_notice_windows')}</span>
+            <span className="offline-shortcut-value">
+              <span className="offline-shortcut-chord"><kbd>Ctrl</kbd><span>+</span><kbd>F5</kbd></span>
+            </span>
+          </div>
+          <div className="offline-shortcut-row">
+            <span className="offline-shortcut-label">{t('txt_offline_mode_notice_macos')}</span>
+            <span className="offline-shortcut-value">
+              <span className="offline-shortcut-chord"><kbd>Command</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>R</kbd></span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AuthViews(props: AuthViewsProps) {
   const loginBusy = props.pendingAction === 'login';
   const passkeyBusy = props.pendingAction === 'passkey';
@@ -99,6 +132,7 @@ export default function AuthViews(props: AuthViewsProps) {
               props.onSubmitUnlock();
             }}
           >
+            <OfflineModeNotice />
             <p className="muted standalone-muted">{props.emailForLock}</p>
             <input type="text" value={props.emailForLock} autoComplete="username" readOnly hidden tabIndex={-1} aria-hidden="true" />
             <PasswordField
@@ -122,6 +156,19 @@ export default function AuthViews(props: AuthViewsProps) {
             </div>
             {props.unlockPreparing ? (
               <p className="muted standalone-muted">{t('txt_loading')}</p>
+            ) : null}
+            {props.sessionRefreshError ? (
+              <div className="offline-mode-notice" role="alert" aria-live="polite">
+                <AlertTriangle size={18} />
+                <div>
+                  <strong>{props.sessionRefreshError}</strong>
+                  <div>
+                    <button type="button" className="auth-link-btn" onClick={props.onRetrySessionRefresh}>
+                      {t('txt_refresh')}
+                    </button>
+                  </div>
+                </div>
+              </div>
             ) : null}
             <button type="submit" className="btn btn-primary full" disabled={unlockBusy || passkeyBusy || props.unlockPreparing || !props.unlockReady}>
               <Unlock size={16} className="btn-icon" />
@@ -245,6 +292,7 @@ export default function AuthViews(props: AuthViewsProps) {
             props.onSubmitLogin();
           }}
         >
+          <OfflineModeNotice />
           {passkeyPasswordPending ? (
             <>
               <p className="muted standalone-muted">{props.pendingPasskeyPasswordEmail}</p>

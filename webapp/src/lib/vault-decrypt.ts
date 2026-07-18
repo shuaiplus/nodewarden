@@ -66,6 +66,31 @@ async function decryptCipherField(
   return looksLikeCipherString(value) ? '' : value;
 }
 
+async function decryptCipherObjectFields<T extends Record<string, unknown>>(
+  source: T | null | undefined,
+  fields: readonly string[],
+  itemEnc: Uint8Array,
+  itemMac: Uint8Array,
+  userEnc: Uint8Array,
+  userMac: Uint8Array,
+  canFallbackToUserKey: boolean
+): Promise<T | null | undefined> {
+  if (!source || typeof source !== 'object') return source;
+  const next: Record<string, unknown> = { ...source };
+  for (const field of fields) {
+    const decKey = `dec${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+    next[decKey] = await decryptCipherField(
+      source[field] as string | null | undefined,
+      itemEnc,
+      itemMac,
+      userEnc,
+      userMac,
+      canFallbackToUserKey
+    );
+  }
+  return next as T;
+}
+
 async function decryptFieldWithSource(
   value: string | null | undefined,
   itemEnc: Uint8Array,
@@ -198,6 +223,42 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
           fingerprint: encryptedFingerprint || null,
           decFingerprint: await decryptCipherField(encryptedFingerprint, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
         };
+      }
+
+      if (cipher.bankAccount) {
+        nextCipher.bankAccount = await decryptCipherObjectFields(
+          cipher.bankAccount,
+          ['bankName', 'nameOnAccount', 'accountType', 'accountNumber', 'routingNumber', 'branchNumber', 'pin', 'swiftCode', 'iban', 'bankContactPhone'],
+          itemEnc,
+          itemMac,
+          userEnc,
+          userMac,
+          canFallbackToUserKey
+        );
+      }
+
+      if (cipher.driversLicense) {
+        nextCipher.driversLicense = await decryptCipherObjectFields(
+          cipher.driversLicense,
+          ['firstName', 'middleName', 'lastName', 'dateOfBirth', 'licenseNumber', 'issuingCountry', 'issuingState', 'issueDate', 'expirationDate', 'issuingAuthority', 'licenseClass'],
+          itemEnc,
+          itemMac,
+          userEnc,
+          userMac,
+          canFallbackToUserKey
+        );
+      }
+
+      if (cipher.passport) {
+        nextCipher.passport = await decryptCipherObjectFields(
+          cipher.passport,
+          ['surname', 'givenName', 'dateOfBirth', 'sex', 'birthPlace', 'nationality', 'issuingCountry', 'passportNumber', 'passportType', 'nationalIdentificationNumber', 'issuingAuthority', 'issueDate', 'expirationDate'],
+          itemEnc,
+          itemMac,
+          userEnc,
+          userMac,
+          canFallbackToUserKey
+        );
       }
 
       if (cipher.fields) {

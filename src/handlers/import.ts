@@ -17,6 +17,9 @@ interface CiphersImportRequest {
     favorite?: boolean;
     reprompt?: number;
     sshKey?: any | null;
+    bankAccount?: any | null;
+    driversLicense?: any | null;
+    passport?: any | null;
     key?: string | null;
     login?: {
       uris?: Array<{ uri: string | null; uriChecksum?: string | null; match?: number | null }> | null;
@@ -92,6 +95,12 @@ function readAliasedImportProp<T = unknown>(source: any, aliases: string[]): T |
   return undefined;
 }
 
+function normalizeOptionalId(value: unknown): string | null {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  return normalized ? normalized : null;
+}
+
 async function runBatchInChunks(db: D1Database, statements: D1PreparedStatement[], chunkSize: number): Promise<void> {
   for (let i = 0; i < statements.length; i += chunkSize) {
     const chunk = statements.slice(i, i + chunkSize);
@@ -112,9 +121,9 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
     return errorResponse('Invalid JSON', 400);
   }
 
-  const folders = importData.folders || [];
-  const ciphers = importData.ciphers || [];
-  const folderRelationships = importData.folderRelationships || [];
+  const folders = Array.isArray(importData.folders) ? importData.folders : [];
+  const ciphers = Array.isArray(importData.ciphers) ? importData.ciphers : [];
+  const folderRelationships = Array.isArray(importData.folderRelationships) ? importData.folderRelationships : [];
 
   if (folders.length + ciphers.length > LIMITS.performance.importItemLimit) {
     return errorResponse(`Import exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
@@ -128,13 +137,14 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const folderRows: Folder[] = [];
   
   for (let i = 0; i < folders.length; i++) {
+    const importedFolder = folders[i] && typeof folders[i] === 'object' ? folders[i] : null;
     const folderId = generateUUID();
     folderIdMap.set(i, folderId);
 
     const folder: Folder = {
       id: folderId,
       userId: userId,
-      name: folders[i].name,
+      name: typeof importedFolder?.name === 'string' && importedFolder.name ? importedFolder.name : 'Folder',
       createdAt: now,
       updatedAt: now,
     };
@@ -157,24 +167,31 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   // Build cipher index -> folder id mapping from relationships
   const cipherFolderMap = new Map<number, string>();
   for (const rel of folderRelationships) {
+    if (!rel || typeof rel !== 'object') continue;
     const folderId = folderIdMap.get(rel.value);
     if (folderId) {
       cipherFolderMap.set(rel.key, folderId);
     }
   }
+  const existingFolderIds = new Set((await storage.getAllFolders(userId)).map((folder) => folder.id));
 
   // Create ciphers
   const cipherRows: Cipher[] = [];
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
-    const c = ciphers[i];
-    const folderId = cipherFolderMap.get(i) || readAliasedImportProp<string | null>(c, ['folderId', 'FolderId']) || null;
+    const c = ciphers[i] && typeof ciphers[i] === 'object' ? ciphers[i] : {} as CiphersImportRequest['ciphers'][number];
+    const importedFolderId = normalizeOptionalId(readAliasedImportProp<string | null>(c, ['folderId', 'FolderId']));
+    const folderId = cipherFolderMap.get(i) || (importedFolderId && existingFolderIds.has(importedFolderId) ? importedFolderId : null);
     const sourceIdRaw = String(c?.id ?? '').trim();
     const sourceId = sourceIdRaw || null;
     const login = readAliasedImportProp<any | null>(c, ['login', 'Login']);
     const card = readAliasedImportProp<any | null>(c, ['card', 'Card']);
     const identity = readAliasedImportProp<any | null>(c, ['identity', 'Identity']);
     const secureNote = readAliasedImportProp<any | null>(c, ['secureNote', 'SecureNote']);
+    const sshKey = readAliasedImportProp<any | null>(c, ['sshKey', 'SshKey']);
+    const bankAccount = readAliasedImportProp<any | null>(c, ['bankAccount', 'BankAccount']);
+    const driversLicense = readAliasedImportProp<any | null>(c, ['driversLicense', 'DriversLicense']);
+    const passport = readAliasedImportProp<any | null>(c, ['passport', 'Passport']);
     const fields = readAliasedImportProp<any[] | null>(c, ['fields', 'Fields']);
     const passwordHistory = readAliasedImportProp<any[] | null>(c, ['passwordHistory', 'PasswordHistory']);
     const key = readAliasedImportProp<string | null>(c, ['key', 'Key']);
@@ -244,7 +261,10 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       })) || null,
       passwordHistory: passwordHistory ?? null,
       reprompt: c.reprompt ?? 0,
-      sshKey: normalizeCipherSshKeyForCompatibility((c as any).sshKey ?? null),
+      sshKey: normalizeCipherSshKeyForCompatibility(sshKey ?? null),
+      bankAccount: bankAccount ?? null,
+      driversLicense: driversLicense ?? null,
+      passport: passport ?? null,
       key: key ?? null,
       createdAt: now,
       updatedAt: now,

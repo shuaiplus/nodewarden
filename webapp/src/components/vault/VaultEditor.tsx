@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, CheckCheck, Download, Paperclip, Plus, QrCode, Refr
 import jsQR from 'jsqr';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
+import { normalizeTotpInput } from '@/lib/crypto';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';
@@ -66,6 +67,8 @@ interface WebsiteRowProps {
   onMove: (fromIndex: number, toIndex: number) => void;
   onRemove: (index: number) => void;
 }
+
+const TOTP_QR_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 function WebsiteRow(props: WebsiteRowProps) {
   const websiteMatchOptions = getWebsiteMatchOptions();
@@ -159,9 +162,9 @@ export default function VaultEditor(props: VaultEditorProps) {
   };
 
   const applyTotpQrValue = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return false;
-    props.onUpdateDraft({ loginTotp: trimmed });
+    const normalized = normalizeTotpInput(value);
+    if (!normalized) return false;
+    props.onUpdateDraft({ loginTotp: normalized });
     setTotpQrStatus(t('txt_totp_qr_scanned'));
     setTotpQrOpen(false);
     return true;
@@ -208,6 +211,14 @@ export default function VaultEditor(props: VaultEditorProps) {
 
   const handleTotpQrFile = async (file: File | null) => {
     if (!file) return;
+    if (file.type && !file.type.startsWith('image/')) {
+      setTotpQrStatus(t('txt_totp_qr_invalid_image_type'));
+      return;
+    }
+    if (file.size > TOTP_QR_IMAGE_MAX_BYTES) {
+      setTotpQrStatus(t('txt_totp_qr_image_too_large'));
+      return;
+    }
     setTotpQrBusy(true);
     setTotpQrStatus(t('txt_totp_qr_scanning'));
     let bitmap: ImageBitmap | null = null;
@@ -576,6 +587,64 @@ export default function VaultEditor(props: VaultEditorProps) {
             <span>{t('txt_fingerprint')}</span>
             <input className="input input-readonly" value={props.draft.sshFingerprint} readOnly />
           </label>
+        </div>
+      )}
+
+      {props.draft.type === 6 && (
+        <div className="card">
+          <h4>{t('txt_bank_account_details')}</h4>
+          <div className="field-grid">
+            <label className="field"><span>{t('txt_bank_name')}</span><input className="input" value={props.draft.bankName} onInput={(e) => props.onUpdateDraft({ bankName: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_name_on_account')}</span><input className="input" value={props.draft.bankNameOnAccount} onInput={(e) => props.onUpdateDraft({ bankNameOnAccount: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_account_type')}</span><input className="input" value={props.draft.bankAccountType} onInput={(e) => props.onUpdateDraft({ bankAccountType: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_account_number')}</span><input className="input" value={props.draft.bankAccountNumber} onInput={(e) => props.onUpdateDraft({ bankAccountNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_routing_number')}</span><input className="input" value={props.draft.bankRoutingNumber} onInput={(e) => props.onUpdateDraft({ bankRoutingNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_branch_number')}</span><input className="input" value={props.draft.bankBranchNumber} onInput={(e) => props.onUpdateDraft({ bankBranchNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_pin')}</span><input className="input" value={props.draft.bankPin} onInput={(e) => props.onUpdateDraft({ bankPin: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_swift_code')}</span><input className="input" value={props.draft.bankSwiftCode} onInput={(e) => props.onUpdateDraft({ bankSwiftCode: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_iban')}</span><input className="input" value={props.draft.bankIban} onInput={(e) => props.onUpdateDraft({ bankIban: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_bank_contact_phone')}</span><input className="input" value={props.draft.bankContactPhone} onInput={(e) => props.onUpdateDraft({ bankContactPhone: (e.currentTarget as HTMLInputElement).value })} /></label>
+          </div>
+        </div>
+      )}
+
+      {props.draft.type === 7 && (
+        <div className="card">
+          <h4>{t('txt_drivers_license_details')}</h4>
+          <div className="field-grid">
+            <label className="field"><span>{t('txt_first_name')}</span><input className="input" value={props.draft.licenseFirstName} onInput={(e) => props.onUpdateDraft({ licenseFirstName: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_middle_name')}</span><input className="input" value={props.draft.licenseMiddleName} onInput={(e) => props.onUpdateDraft({ licenseMiddleName: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_last_name')}</span><input className="input" value={props.draft.licenseLastName} onInput={(e) => props.onUpdateDraft({ licenseLastName: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_date_of_birth')}</span><input className="input" value={props.draft.licenseDateOfBirth} onInput={(e) => props.onUpdateDraft({ licenseDateOfBirth: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_license_number')}</span><input className="input" value={props.draft.licenseNumber} onInput={(e) => props.onUpdateDraft({ licenseNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issuing_country')}</span><input className="input" value={props.draft.licenseIssuingCountry} onInput={(e) => props.onUpdateDraft({ licenseIssuingCountry: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issuing_state')}</span><input className="input" value={props.draft.licenseIssuingState} onInput={(e) => props.onUpdateDraft({ licenseIssuingState: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issue_date')}</span><input className="input" value={props.draft.licenseIssueDate} onInput={(e) => props.onUpdateDraft({ licenseIssueDate: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_expiration_date')}</span><input className="input" value={props.draft.licenseExpirationDate} onInput={(e) => props.onUpdateDraft({ licenseExpirationDate: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issuing_authority')}</span><input className="input" value={props.draft.licenseIssuingAuthority} onInput={(e) => props.onUpdateDraft({ licenseIssuingAuthority: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_license_class')}</span><input className="input" value={props.draft.licenseClass} onInput={(e) => props.onUpdateDraft({ licenseClass: (e.currentTarget as HTMLInputElement).value })} /></label>
+          </div>
+        </div>
+      )}
+
+      {props.draft.type === 8 && (
+        <div className="card">
+          <h4>{t('txt_passport_details')}</h4>
+          <div className="field-grid">
+            <label className="field"><span>{t('txt_surname')}</span><input className="input" value={props.draft.passportSurname} onInput={(e) => props.onUpdateDraft({ passportSurname: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_given_name')}</span><input className="input" value={props.draft.passportGivenName} onInput={(e) => props.onUpdateDraft({ passportGivenName: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_date_of_birth')}</span><input className="input" value={props.draft.passportDateOfBirth} onInput={(e) => props.onUpdateDraft({ passportDateOfBirth: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_sex')}</span><input className="input" value={props.draft.passportSex} onInput={(e) => props.onUpdateDraft({ passportSex: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_birth_place')}</span><input className="input" value={props.draft.passportBirthPlace} onInput={(e) => props.onUpdateDraft({ passportBirthPlace: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_nationality')}</span><input className="input" value={props.draft.passportNationality} onInput={(e) => props.onUpdateDraft({ passportNationality: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issuing_country')}</span><input className="input" value={props.draft.passportIssuingCountry} onInput={(e) => props.onUpdateDraft({ passportIssuingCountry: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_passport_number')}</span><input className="input" value={props.draft.passportNumber} onInput={(e) => props.onUpdateDraft({ passportNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_passport_type')}</span><input className="input" value={props.draft.passportType} onInput={(e) => props.onUpdateDraft({ passportType: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_national_id_number')}</span><input className="input" value={props.draft.passportNationalIdentificationNumber} onInput={(e) => props.onUpdateDraft({ passportNationalIdentificationNumber: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issuing_authority')}</span><input className="input" value={props.draft.passportIssuingAuthority} onInput={(e) => props.onUpdateDraft({ passportIssuingAuthority: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_issue_date')}</span><input className="input" value={props.draft.passportIssueDate} onInput={(e) => props.onUpdateDraft({ passportIssueDate: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <label className="field"><span>{t('txt_expiration_date')}</span><input className="input" value={props.draft.passportExpirationDate} onInput={(e) => props.onUpdateDraft({ passportExpirationDate: (e.currentTarget as HTMLInputElement).value })} /></label>
+          </div>
         </div>
       )}
 

@@ -81,6 +81,7 @@ interface VaultListPanelProps {
   onSyncVault: () => void;
   onOpenBulkDelete: () => void;
   onSelectDuplicates: () => void;
+  onSelectUniqueFromDuplicates: () => void;
   onSelectAll: () => void;
   onToggleCreateMenu: () => void;
   onStartCreate: (type: number) => void;
@@ -319,40 +320,43 @@ export default function VaultListPanel(props: VaultListPanelProps) {
             </>
           ) : (
             <>
-              <div className="search-input-wrap">
-                {props.sidebarFilter.kind === 'duplicates' && props.isMobileLayout ? (
-                  <div className="duplicate-mode-head-menu">
+              {props.sidebarFilter.kind === 'duplicates' && props.isMobileLayout ? (
+                <div className="duplicate-mode-head-menu mobile-duplicate-toolbar">
+                  <div className="mobile-duplicate-mode-select-wrap">
                     {renderMobileFilterMenu('duplicate', t('txt_duplicate_detection_mode'), duplicateModeSelected, <Copy size={14} />, duplicateModeOptions)}
                   </div>
-                ) : (
-                  <>
-                    <input
-                      className="search-input"
-                      placeholder={t('txt_search_items_count', { count: props.totalCipherCount })}
-                      value={props.searchInput}
-                      onInput={(e) => props.onSearchInput((e.currentTarget as HTMLInputElement).value)}
-                      onCompositionStart={props.onSearchCompositionStart}
-                      onCompositionEnd={(e) => props.onSearchCompositionEnd((e.currentTarget as HTMLInputElement).value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Escape' || !props.searchInput) return;
-                        e.preventDefault();
-                        props.onClearSearch();
-                      }}
-                    />
-                    {!!props.searchInput && (
-                      <button
-                        type="button"
-                        className="search-clear-btn"
-                        aria-label={t('txt_clear_search')}
-                        title={t('txt_clear_search_esc')}
-                        onClick={props.onClearSearch}
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+                  <button type="button" className="btn btn-secondary small" onClick={props.onSelectUniqueFromDuplicates}>
+                    <Check size={14} className="btn-icon" /> {t('txt_select_duplicate_items')}
+                  </button>
+                </div>
+              ) : (
+                <div className="search-input-wrap">
+                  <input
+                    className="search-input"
+                    placeholder={t('txt_search_items_count', { count: props.totalCipherCount })}
+                    value={props.searchInput}
+                    onInput={(e) => props.onSearchInput((e.currentTarget as HTMLInputElement).value)}
+                    onCompositionStart={props.onSearchCompositionStart}
+                    onCompositionEnd={(e) => props.onSearchCompositionEnd((e.currentTarget as HTMLInputElement).value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Escape' || !props.searchInput) return;
+                      e.preventDefault();
+                      props.onClearSearch();
+                    }}
+                  />
+                  {!!props.searchInput && (
+                    <button
+                      type="button"
+                      className="search-clear-btn"
+                      aria-label={t('txt_clear_search')}
+                      title={t('txt_clear_search_esc')}
+                      onClick={props.onClearSearch}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
               {props.sidebarFilter.kind === 'duplicates' && !props.isMobileLayout && (
                 <div className="duplicate-mode-head-menu">
                   {renderMobileFilterMenu('duplicate', t('txt_duplicate_detection_mode'), duplicateModeSelected, <Copy size={14} />, duplicateModeOptions)}
@@ -387,7 +391,13 @@ export default function VaultListPanel(props: VaultListPanelProps) {
               <button type="button" className="btn btn-secondary small list-icon-btn" disabled={props.busy || props.loading} onClick={props.onSyncVault}>
                 <RefreshCw size={14} className="btn-icon" /> {t('txt_sync_vault')}
               </button>
-              {!props.isMobileLayout && props.sidebarFilter !== undefined && createMenu}
+              {props.sidebarFilter.kind === 'duplicates' && !props.isMobileLayout ? (
+                <button type="button" className="btn btn-secondary small" onClick={props.onSelectUniqueFromDuplicates}>
+                  <Check size={14} className="btn-icon" /> {t('txt_select_duplicate_items')}
+                </button>
+              ) : (
+                !props.isMobileLayout && props.sidebarFilter !== undefined && createMenu
+              )}
             </>
           )}
         </div>

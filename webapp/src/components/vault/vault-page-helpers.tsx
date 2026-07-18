@@ -1,9 +1,12 @@
 import { useMemo } from 'preact/hooks';
 import {
+  BookUser,
   CreditCard,
   FileKey2,
   Globe,
+  IdCard,
   KeyRound,
+  Landmark,
   ShieldUser,
   StickyNote,
 } from 'lucide-preact';
@@ -14,7 +17,7 @@ import { firstCipherUri, hostFromUri, websiteIconUrl } from '@/lib/website-utils
 import { normalizeEquivalentDomain } from '@shared/domain-normalize';
 import WebsiteIcon from './WebsiteIcon';
 
-export type TypeFilter = 'login' | 'card' | 'identity' | 'note' | 'ssh';
+export type TypeFilter = 'login' | 'card' | 'identity' | 'note' | 'ssh' | 'bank' | 'license' | 'passport';
 export type VaultSortMode = 'edited' | 'created' | 'name';
 export type DuplicateDetectionMode = 'exact' | 'login-site' | 'login-credentials' | 'password';
 export type SidebarFilter =
@@ -98,6 +101,32 @@ export function cardListSubtitle(cipher: Cipher): string {
   return cipherTypeLabel(3);
 }
 
+export function bankAccountListSubtitle(cipher: Cipher): string {
+  const bankName = valueOrFallback(cipher.bankAccount?.decBankName ?? cipher.bankAccount?.bankName).trim();
+  const accountType = valueOrFallback(cipher.bankAccount?.decAccountType ?? cipher.bankAccount?.accountType).trim();
+  const accountNumber = valueOrFallback(cipher.bankAccount?.decAccountNumber ?? cipher.bankAccount?.accountNumber).replace(/\D/g, '');
+  const last4 = accountNumber.length >= 4 ? accountNumber.slice(-4) : '';
+  return [bankName, accountType, last4 ? `*${last4}` : ''].filter(Boolean).join(', ') || cipherTypeLabel(6);
+}
+
+export function driversLicenseListSubtitle(cipher: Cipher): string {
+  const licenseNumber = valueOrFallback(cipher.driversLicense?.decLicenseNumber ?? cipher.driversLicense?.licenseNumber).trim();
+  const name = [
+    valueOrFallback(cipher.driversLicense?.decFirstName ?? cipher.driversLicense?.firstName).trim(),
+    valueOrFallback(cipher.driversLicense?.decLastName ?? cipher.driversLicense?.lastName).trim(),
+  ].filter(Boolean).join(' ');
+  return licenseNumber || name || cipherTypeLabel(7);
+}
+
+export function passportListSubtitle(cipher: Cipher): string {
+  const passportNumber = valueOrFallback(cipher.passport?.decPassportNumber ?? cipher.passport?.passportNumber).trim();
+  const name = [
+    valueOrFallback(cipher.passport?.decGivenName ?? cipher.passport?.givenName).trim(),
+    valueOrFallback(cipher.passport?.decSurname ?? cipher.passport?.surname).trim(),
+  ].filter(Boolean).join(' ');
+  return passportNumber || name || cipherTypeLabel(8);
+}
+
 export function CardBrandIcon({ brand }: { brand?: string | null }) {
   const display = displayCardBrand(brand);
   const key = display.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'generic';
@@ -118,7 +147,10 @@ export function getCreateTypeOptions(): TypeOption[] {
   return [
     { type: 1, label: t('txt_login') },
     { type: 3, label: t('txt_card') },
+    { type: 6, label: t('txt_bank_account') },
     { type: 4, label: t('txt_identity') },
+    { type: 7, label: t('txt_drivers_license') },
+    { type: 8, label: t('txt_passport') },
     { type: 2, label: t('txt_note') },
     { type: 5, label: t('txt_ssh_key') },
   ];
@@ -175,8 +207,7 @@ export function getWebsiteMatchOptions(): Array<{ value: number | null; label: s
   ];
 }
 
-export const TOTP_PERIOD_SECONDS = 30;
-export const TOTP_RING_RADIUS = 14;
+const TOTP_RING_RADIUS = 14;
 export const TOTP_RING_CIRCUMFERENCE = 2 * Math.PI * TOTP_RING_RADIUS;
 
 export function CreateTypeIcon({ type }: { type: number }) {
@@ -185,6 +216,9 @@ export function CreateTypeIcon({ type }: { type: number }) {
   if (type === 4) return <ShieldUser size={15} />;
   if (type === 2) return <StickyNote size={15} />;
   if (type === 5) return <KeyRound size={15} />;
+  if (type === 6) return <Landmark size={15} />;
+  if (type === 7) return <IdCard size={15} />;
+  if (type === 8) return <BookUser size={15} />;
   return <FileKey2 size={15} />;
 }
 
@@ -193,7 +227,11 @@ export function cipherTypeKey(type: number): TypeFilter {
   if (type === 3) return 'card';
   if (type === 4) return 'identity';
   if (type === 2) return 'note';
-  return 'ssh';
+  if (type === 5) return 'ssh';
+  if (type === 6) return 'bank';
+  if (type === 7) return 'license';
+  if (type === 8) return 'passport';
+  return 'note';
 }
 
 function cipherDeletedValue(cipher: Cipher): boolean {
@@ -230,6 +268,9 @@ export function cipherTypeLabel(type: number): string {
   if (type === 4) return t('txt_identity');
   if (type === 2) return t('txt_secure_note');
   if (type === 5) return t('txt_ssh_key');
+  if (type === 6) return t('txt_bank_account');
+  if (type === 7) return t('txt_drivers_license');
+  if (type === 8) return t('txt_passport');
   return t('txt_item');
 }
 
@@ -239,6 +280,9 @@ export function TypeIcon({ type }: { type: number }) {
   if (type === 4) return <ShieldUser size={18} />;
   if (type === 2) return <StickyNote size={18} />;
   if (type === 5) return <KeyRound size={18} />;
+  if (type === 6) return <Landmark size={18} />;
+  if (type === 7) return <IdCard size={18} />;
+  if (type === 8) return <BookUser size={18} />;
   return <FileKey2 size={18} />;
 }
 
@@ -355,6 +399,52 @@ export function buildCipherDuplicateSignature(cipher: Cipher): string {
           fingerprint: valueOrFallback(cipher.sshKey.decFingerprint ?? cipher.sshKey.keyFingerprint ?? cipher.sshKey.fingerprint),
         }
       : null,
+    bankAccount: cipher.bankAccount
+      ? {
+          bankName: valueOrFallback(cipher.bankAccount.decBankName ?? cipher.bankAccount.bankName),
+          nameOnAccount: valueOrFallback(cipher.bankAccount.decNameOnAccount ?? cipher.bankAccount.nameOnAccount),
+          accountType: valueOrFallback(cipher.bankAccount.decAccountType ?? cipher.bankAccount.accountType),
+          accountNumber: valueOrFallback(cipher.bankAccount.decAccountNumber ?? cipher.bankAccount.accountNumber),
+          routingNumber: valueOrFallback(cipher.bankAccount.decRoutingNumber ?? cipher.bankAccount.routingNumber),
+          branchNumber: valueOrFallback(cipher.bankAccount.decBranchNumber ?? cipher.bankAccount.branchNumber),
+          pin: valueOrFallback(cipher.bankAccount.decPin ?? cipher.bankAccount.pin),
+          swiftCode: valueOrFallback(cipher.bankAccount.decSwiftCode ?? cipher.bankAccount.swiftCode),
+          iban: valueOrFallback(cipher.bankAccount.decIban ?? cipher.bankAccount.iban),
+          bankContactPhone: valueOrFallback(cipher.bankAccount.decBankContactPhone ?? cipher.bankAccount.bankContactPhone),
+        }
+      : null,
+    driversLicense: cipher.driversLicense
+      ? {
+          firstName: valueOrFallback(cipher.driversLicense.decFirstName ?? cipher.driversLicense.firstName),
+          middleName: valueOrFallback(cipher.driversLicense.decMiddleName ?? cipher.driversLicense.middleName),
+          lastName: valueOrFallback(cipher.driversLicense.decLastName ?? cipher.driversLicense.lastName),
+          dateOfBirth: valueOrFallback(cipher.driversLicense.decDateOfBirth ?? cipher.driversLicense.dateOfBirth),
+          licenseNumber: valueOrFallback(cipher.driversLicense.decLicenseNumber ?? cipher.driversLicense.licenseNumber),
+          issuingCountry: valueOrFallback(cipher.driversLicense.decIssuingCountry ?? cipher.driversLicense.issuingCountry),
+          issuingState: valueOrFallback(cipher.driversLicense.decIssuingState ?? cipher.driversLicense.issuingState),
+          issueDate: valueOrFallback(cipher.driversLicense.decIssueDate ?? cipher.driversLicense.issueDate),
+          expirationDate: valueOrFallback(cipher.driversLicense.decExpirationDate ?? cipher.driversLicense.expirationDate),
+          issuingAuthority: valueOrFallback(cipher.driversLicense.decIssuingAuthority ?? cipher.driversLicense.issuingAuthority),
+          licenseClass: valueOrFallback(cipher.driversLicense.decLicenseClass ?? cipher.driversLicense.licenseClass),
+        }
+      : null,
+    passport: cipher.passport
+      ? {
+          surname: valueOrFallback(cipher.passport.decSurname ?? cipher.passport.surname),
+          givenName: valueOrFallback(cipher.passport.decGivenName ?? cipher.passport.givenName),
+          dateOfBirth: valueOrFallback(cipher.passport.decDateOfBirth ?? cipher.passport.dateOfBirth),
+          sex: valueOrFallback(cipher.passport.decSex ?? cipher.passport.sex),
+          birthPlace: valueOrFallback(cipher.passport.decBirthPlace ?? cipher.passport.birthPlace),
+          nationality: valueOrFallback(cipher.passport.decNationality ?? cipher.passport.nationality),
+          issuingCountry: valueOrFallback(cipher.passport.decIssuingCountry ?? cipher.passport.issuingCountry),
+          passportNumber: valueOrFallback(cipher.passport.decPassportNumber ?? cipher.passport.passportNumber),
+          passportType: valueOrFallback(cipher.passport.decPassportType ?? cipher.passport.passportType),
+          nationalIdentificationNumber: valueOrFallback(cipher.passport.decNationalIdentificationNumber ?? cipher.passport.nationalIdentificationNumber),
+          issuingAuthority: valueOrFallback(cipher.passport.decIssuingAuthority ?? cipher.passport.issuingAuthority),
+          issueDate: valueOrFallback(cipher.passport.decIssueDate ?? cipher.passport.issueDate),
+          expirationDate: valueOrFallback(cipher.passport.decExpirationDate ?? cipher.passport.expirationDate),
+        }
+      : null,
     secureNoteType: cipher.secureNote?.type ?? null,
     fields: (cipher.fields || []).map((field) => ({
       type: field.type ?? null,
@@ -427,6 +517,40 @@ export function createEmptyDraft(type: number): VaultDraft {
     sshPrivateKey: '',
     sshPublicKey: '',
     sshFingerprint: '',
+    bankName: '',
+    bankNameOnAccount: '',
+    bankAccountType: '',
+    bankAccountNumber: '',
+    bankRoutingNumber: '',
+    bankBranchNumber: '',
+    bankPin: '',
+    bankSwiftCode: '',
+    bankIban: '',
+    bankContactPhone: '',
+    licenseFirstName: '',
+    licenseMiddleName: '',
+    licenseLastName: '',
+    licenseDateOfBirth: '',
+    licenseNumber: '',
+    licenseIssuingCountry: '',
+    licenseIssuingState: '',
+    licenseIssueDate: '',
+    licenseExpirationDate: '',
+    licenseIssuingAuthority: '',
+    licenseClass: '',
+    passportSurname: '',
+    passportGivenName: '',
+    passportDateOfBirth: '',
+    passportSex: '',
+    passportBirthPlace: '',
+    passportNationality: '',
+    passportIssuingCountry: '',
+    passportNumber: '',
+    passportType: '',
+    passportNationalIdentificationNumber: '',
+    passportIssuingAuthority: '',
+    passportIssueDate: '',
+    passportExpirationDate: '',
     customFields: [],
   };
 }
@@ -489,6 +613,46 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
     draft.sshPrivateKey = cipher.sshKey.decPrivateKey || '';
     draft.sshPublicKey = cipher.sshKey.decPublicKey || '';
     draft.sshFingerprint = cipher.sshKey.decFingerprint || '';
+  }
+  if (cipher.bankAccount) {
+    draft.bankName = cipher.bankAccount.decBankName || '';
+    draft.bankNameOnAccount = cipher.bankAccount.decNameOnAccount || '';
+    draft.bankAccountType = cipher.bankAccount.decAccountType || '';
+    draft.bankAccountNumber = cipher.bankAccount.decAccountNumber || '';
+    draft.bankRoutingNumber = cipher.bankAccount.decRoutingNumber || '';
+    draft.bankBranchNumber = cipher.bankAccount.decBranchNumber || '';
+    draft.bankPin = cipher.bankAccount.decPin || '';
+    draft.bankSwiftCode = cipher.bankAccount.decSwiftCode || '';
+    draft.bankIban = cipher.bankAccount.decIban || '';
+    draft.bankContactPhone = cipher.bankAccount.decBankContactPhone || '';
+  }
+  if (cipher.driversLicense) {
+    draft.licenseFirstName = cipher.driversLicense.decFirstName || '';
+    draft.licenseMiddleName = cipher.driversLicense.decMiddleName || '';
+    draft.licenseLastName = cipher.driversLicense.decLastName || '';
+    draft.licenseDateOfBirth = cipher.driversLicense.decDateOfBirth || '';
+    draft.licenseNumber = cipher.driversLicense.decLicenseNumber || '';
+    draft.licenseIssuingCountry = cipher.driversLicense.decIssuingCountry || '';
+    draft.licenseIssuingState = cipher.driversLicense.decIssuingState || '';
+    draft.licenseIssueDate = cipher.driversLicense.decIssueDate || '';
+    draft.licenseExpirationDate = cipher.driversLicense.decExpirationDate || '';
+    draft.licenseIssuingAuthority = cipher.driversLicense.decIssuingAuthority || '';
+    draft.licenseClass = cipher.driversLicense.decLicenseClass || '';
+  }
+  if (cipher.passport) {
+    draft.passportSurname = cipher.passport.decSurname || '';
+    draft.passportGivenName = cipher.passport.decGivenName || '';
+    draft.passportDateOfBirth = cipher.passport.decDateOfBirth || '';
+    draft.passportSex = cipher.passport.decSex || '';
+    draft.passportBirthPlace = cipher.passport.decBirthPlace || '';
+    draft.passportNationality = cipher.passport.decNationality || '';
+    draft.passportIssuingCountry = cipher.passport.decIssuingCountry || '';
+    draft.passportNumber = cipher.passport.decPassportNumber || '';
+    draft.passportType = cipher.passport.decPassportType || '';
+    draft.passportNationalIdentificationNumber = cipher.passport.decNationalIdentificationNumber || '';
+    draft.passportIssuingAuthority = cipher.passport.decIssuingAuthority || '';
+    draft.passportIssueDate = cipher.passport.decIssueDate || '';
+    draft.passportExpirationDate = cipher.passport.decExpirationDate || '';
   }
   draft.customFields = (cipher.fields || []).map((field) => ({
     type: parseFieldType(field.type),

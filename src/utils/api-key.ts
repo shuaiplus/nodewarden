@@ -29,7 +29,13 @@ export async function hashApiKey(apiKey: string): Promise<string> {
 
 export async function verifyApiKey(apiKey: string, storedApiKey: string | null | undefined): Promise<boolean> {
   const stored = String(storedApiKey || '').trim();
-  if (!isStoredApiKeyHash(stored)) return false;
+  if (!stored) return false;
+
+  // Legacy NodeWarden rows stored a one-way hash. Keep them usable until the
+  // user explicitly rotates once into the Bitwarden-compatible readable form.
+  if (!isStoredApiKeyHash(stored)) {
+    return constantTimeEquals(apiKey, stored);
+  }
 
   const hashed = await hashApiKey(apiKey);
   return constantTimeEquals(hashed, stored);

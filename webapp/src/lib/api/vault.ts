@@ -513,6 +513,30 @@ async function encryptTextValue(value: string, enc: Uint8Array, mac: Uint8Array)
   return encryptBw(new TextEncoder().encode(s), enc, mac);
 }
 
+function stripDecodedObjectFields(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^dec[A-Z]/.test(key)) continue;
+    out[key] = item;
+  }
+  return out;
+}
+
+async function encryptObjectFields(
+  existing: unknown,
+  entries: Array<[string, string]>,
+  draft: VaultDraft,
+  enc: Uint8Array,
+  mac: Uint8Array
+): Promise<Record<string, unknown>> {
+  const out = stripDecodedObjectFields(existing);
+  for (const [fieldName, draftKey] of entries) {
+    out[fieldName] = await encryptTextValue(String((draft as unknown as Record<string, unknown>)[draftKey] || ''), enc, mac);
+  }
+  return out;
+}
+
 async function encryptPasswordHistory(
   entries: CipherPasswordHistoryEntry[] | null | undefined,
   enc: Uint8Array,
@@ -587,6 +611,40 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
     sshPrivateKey: '',
     sshPublicKey: '',
     sshFingerprint: '',
+    bankName: '',
+    bankNameOnAccount: '',
+    bankAccountType: '',
+    bankAccountNumber: '',
+    bankRoutingNumber: '',
+    bankBranchNumber: '',
+    bankPin: '',
+    bankSwiftCode: '',
+    bankIban: '',
+    bankContactPhone: '',
+    licenseFirstName: '',
+    licenseMiddleName: '',
+    licenseLastName: '',
+    licenseDateOfBirth: '',
+    licenseNumber: '',
+    licenseIssuingCountry: '',
+    licenseIssuingState: '',
+    licenseIssueDate: '',
+    licenseExpirationDate: '',
+    licenseIssuingAuthority: '',
+    licenseClass: '',
+    passportSurname: '',
+    passportGivenName: '',
+    passportDateOfBirth: '',
+    passportSex: '',
+    passportBirthPlace: '',
+    passportNationality: '',
+    passportIssuingCountry: '',
+    passportNumber: '',
+    passportType: '',
+    passportNationalIdentificationNumber: '',
+    passportIssuingAuthority: '',
+    passportIssueDate: '',
+    passportExpirationDate: '',
     customFields: [],
   };
 
@@ -662,6 +720,43 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
       cipher.sshKey.decFingerprint,
       cipher.sshKey.keyFingerprint || cipher.sshKey.fingerprint
     );
+  } else if (type === 6 && cipher.bankAccount) {
+    draft.bankName = plainCipherValue(cipher.bankAccount.decBankName, cipher.bankAccount.bankName);
+    draft.bankNameOnAccount = plainCipherValue(cipher.bankAccount.decNameOnAccount, cipher.bankAccount.nameOnAccount);
+    draft.bankAccountType = plainCipherValue(cipher.bankAccount.decAccountType, cipher.bankAccount.accountType);
+    draft.bankAccountNumber = plainCipherValue(cipher.bankAccount.decAccountNumber, cipher.bankAccount.accountNumber);
+    draft.bankRoutingNumber = plainCipherValue(cipher.bankAccount.decRoutingNumber, cipher.bankAccount.routingNumber);
+    draft.bankBranchNumber = plainCipherValue(cipher.bankAccount.decBranchNumber, cipher.bankAccount.branchNumber);
+    draft.bankPin = plainCipherValue(cipher.bankAccount.decPin, cipher.bankAccount.pin);
+    draft.bankSwiftCode = plainCipherValue(cipher.bankAccount.decSwiftCode, cipher.bankAccount.swiftCode);
+    draft.bankIban = plainCipherValue(cipher.bankAccount.decIban, cipher.bankAccount.iban);
+    draft.bankContactPhone = plainCipherValue(cipher.bankAccount.decBankContactPhone, cipher.bankAccount.bankContactPhone);
+  } else if (type === 7 && cipher.driversLicense) {
+    draft.licenseFirstName = plainCipherValue(cipher.driversLicense.decFirstName, cipher.driversLicense.firstName);
+    draft.licenseMiddleName = plainCipherValue(cipher.driversLicense.decMiddleName, cipher.driversLicense.middleName);
+    draft.licenseLastName = plainCipherValue(cipher.driversLicense.decLastName, cipher.driversLicense.lastName);
+    draft.licenseDateOfBirth = plainCipherValue(cipher.driversLicense.decDateOfBirth, cipher.driversLicense.dateOfBirth);
+    draft.licenseNumber = plainCipherValue(cipher.driversLicense.decLicenseNumber, cipher.driversLicense.licenseNumber);
+    draft.licenseIssuingCountry = plainCipherValue(cipher.driversLicense.decIssuingCountry, cipher.driversLicense.issuingCountry);
+    draft.licenseIssuingState = plainCipherValue(cipher.driversLicense.decIssuingState, cipher.driversLicense.issuingState);
+    draft.licenseIssueDate = plainCipherValue(cipher.driversLicense.decIssueDate, cipher.driversLicense.issueDate);
+    draft.licenseExpirationDate = plainCipherValue(cipher.driversLicense.decExpirationDate, cipher.driversLicense.expirationDate);
+    draft.licenseIssuingAuthority = plainCipherValue(cipher.driversLicense.decIssuingAuthority, cipher.driversLicense.issuingAuthority);
+    draft.licenseClass = plainCipherValue(cipher.driversLicense.decLicenseClass, cipher.driversLicense.licenseClass);
+  } else if (type === 8 && cipher.passport) {
+    draft.passportSurname = plainCipherValue(cipher.passport.decSurname, cipher.passport.surname);
+    draft.passportGivenName = plainCipherValue(cipher.passport.decGivenName, cipher.passport.givenName);
+    draft.passportDateOfBirth = plainCipherValue(cipher.passport.decDateOfBirth, cipher.passport.dateOfBirth);
+    draft.passportSex = plainCipherValue(cipher.passport.decSex, cipher.passport.sex);
+    draft.passportBirthPlace = plainCipherValue(cipher.passport.decBirthPlace, cipher.passport.birthPlace);
+    draft.passportNationality = plainCipherValue(cipher.passport.decNationality, cipher.passport.nationality);
+    draft.passportIssuingCountry = plainCipherValue(cipher.passport.decIssuingCountry, cipher.passport.issuingCountry);
+    draft.passportNumber = plainCipherValue(cipher.passport.decPassportNumber, cipher.passport.passportNumber);
+    draft.passportType = plainCipherValue(cipher.passport.decPassportType, cipher.passport.passportType);
+    draft.passportNationalIdentificationNumber = plainCipherValue(cipher.passport.decNationalIdentificationNumber, cipher.passport.nationalIdentificationNumber);
+    draft.passportIssuingAuthority = plainCipherValue(cipher.passport.decIssuingAuthority, cipher.passport.issuingAuthority);
+    draft.passportIssueDate = plainCipherValue(cipher.passport.decIssueDate, cipher.passport.issueDate);
+    draft.passportExpirationDate = plainCipherValue(cipher.passport.decExpirationDate, cipher.passport.expirationDate);
   }
 
   return draft;
@@ -983,6 +1078,10 @@ function getCipherKeyMismatchProbes(cipher: Cipher): string[] {
     cipher.identity?.title,
     cipher.identity?.firstName,
     cipher.sshKey?.privateKey,
+    cipher.bankAccount?.bankName,
+    cipher.bankAccount?.accountNumber,
+    cipher.driversLicense?.licenseNumber,
+    cipher.passport?.passportNumber,
     ...(cipher.fields || []).flatMap((field) => [field.name, field.value]),
   ];
   const probes: string[] = [];
@@ -1053,6 +1152,40 @@ function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
     [cipher.sshKey?.privateKey, cipher.sshKey?.decPrivateKey],
     [cipher.sshKey?.publicKey, cipher.sshKey?.decPublicKey],
     [cipher.sshKey?.keyFingerprint || cipher.sshKey?.fingerprint, cipher.sshKey?.decFingerprint],
+    [cipher.bankAccount?.bankName, cipher.bankAccount?.decBankName],
+    [cipher.bankAccount?.nameOnAccount, cipher.bankAccount?.decNameOnAccount],
+    [cipher.bankAccount?.accountType, cipher.bankAccount?.decAccountType],
+    [cipher.bankAccount?.accountNumber, cipher.bankAccount?.decAccountNumber],
+    [cipher.bankAccount?.routingNumber, cipher.bankAccount?.decRoutingNumber],
+    [cipher.bankAccount?.branchNumber, cipher.bankAccount?.decBranchNumber],
+    [cipher.bankAccount?.pin, cipher.bankAccount?.decPin],
+    [cipher.bankAccount?.swiftCode, cipher.bankAccount?.decSwiftCode],
+    [cipher.bankAccount?.iban, cipher.bankAccount?.decIban],
+    [cipher.bankAccount?.bankContactPhone, cipher.bankAccount?.decBankContactPhone],
+    [cipher.driversLicense?.firstName, cipher.driversLicense?.decFirstName],
+    [cipher.driversLicense?.middleName, cipher.driversLicense?.decMiddleName],
+    [cipher.driversLicense?.lastName, cipher.driversLicense?.decLastName],
+    [cipher.driversLicense?.dateOfBirth, cipher.driversLicense?.decDateOfBirth],
+    [cipher.driversLicense?.licenseNumber, cipher.driversLicense?.decLicenseNumber],
+    [cipher.driversLicense?.issuingCountry, cipher.driversLicense?.decIssuingCountry],
+    [cipher.driversLicense?.issuingState, cipher.driversLicense?.decIssuingState],
+    [cipher.driversLicense?.issueDate, cipher.driversLicense?.decIssueDate],
+    [cipher.driversLicense?.expirationDate, cipher.driversLicense?.decExpirationDate],
+    [cipher.driversLicense?.issuingAuthority, cipher.driversLicense?.decIssuingAuthority],
+    [cipher.driversLicense?.licenseClass, cipher.driversLicense?.decLicenseClass],
+    [cipher.passport?.surname, cipher.passport?.decSurname],
+    [cipher.passport?.givenName, cipher.passport?.decGivenName],
+    [cipher.passport?.dateOfBirth, cipher.passport?.decDateOfBirth],
+    [cipher.passport?.sex, cipher.passport?.decSex],
+    [cipher.passport?.birthPlace, cipher.passport?.decBirthPlace],
+    [cipher.passport?.nationality, cipher.passport?.decNationality],
+    [cipher.passport?.issuingCountry, cipher.passport?.decIssuingCountry],
+    [cipher.passport?.passportNumber, cipher.passport?.decPassportNumber],
+    [cipher.passport?.passportType, cipher.passport?.decPassportType],
+    [cipher.passport?.nationalIdentificationNumber, cipher.passport?.decNationalIdentificationNumber],
+    [cipher.passport?.issuingAuthority, cipher.passport?.decIssuingAuthority],
+    [cipher.passport?.issueDate, cipher.passport?.decIssueDate],
+    [cipher.passport?.expirationDate, cipher.passport?.decExpirationDate],
     ...(cipher.fields || []).flatMap((field) => [
       [field.name, field.decName] as [unknown, unknown],
       [field.value, field.decValue] as [unknown, unknown],
@@ -1157,6 +1290,9 @@ async function buildCipherPayload(
     identity: null,
     secureNote: null,
     sshKey: null,
+    bankAccount: null,
+    driversLicense: null,
+    passport: null,
     fields: await encryptCustomFields(draft.customFields || [], keys.enc, keys.mac),
     passwordHistory: await encryptPasswordHistory(cipher?.passwordHistory, keys.enc, keys.mac),
   };
@@ -1222,11 +1358,73 @@ async function buildCipherPayload(
   } else if (type === 5) {
     const encryptedFingerprint = await encryptTextValue(draft.sshFingerprint, keys.enc, keys.mac);
     payload.sshKey = {
+      ...stripDecodedObjectFields(cipher?.sshKey),
       privateKey: await encryptTextValue(draft.sshPrivateKey, keys.enc, keys.mac),
       publicKey: await encryptTextValue(draft.sshPublicKey, keys.enc, keys.mac),
       keyFingerprint: encryptedFingerprint,
       fingerprint: encryptedFingerprint,
     };
+  } else if (type === 6) {
+    payload.bankAccount = await encryptObjectFields(
+      cipher?.bankAccount,
+      [
+        ['bankName', 'bankName'],
+        ['nameOnAccount', 'bankNameOnAccount'],
+        ['accountType', 'bankAccountType'],
+        ['accountNumber', 'bankAccountNumber'],
+        ['routingNumber', 'bankRoutingNumber'],
+        ['branchNumber', 'bankBranchNumber'],
+        ['pin', 'bankPin'],
+        ['swiftCode', 'bankSwiftCode'],
+        ['iban', 'bankIban'],
+        ['bankContactPhone', 'bankContactPhone'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
+  } else if (type === 7) {
+    payload.driversLicense = await encryptObjectFields(
+      cipher?.driversLicense,
+      [
+        ['firstName', 'licenseFirstName'],
+        ['middleName', 'licenseMiddleName'],
+        ['lastName', 'licenseLastName'],
+        ['dateOfBirth', 'licenseDateOfBirth'],
+        ['licenseNumber', 'licenseNumber'],
+        ['issuingCountry', 'licenseIssuingCountry'],
+        ['issuingState', 'licenseIssuingState'],
+        ['issueDate', 'licenseIssueDate'],
+        ['expirationDate', 'licenseExpirationDate'],
+        ['issuingAuthority', 'licenseIssuingAuthority'],
+        ['licenseClass', 'licenseClass'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
+  } else if (type === 8) {
+    payload.passport = await encryptObjectFields(
+      cipher?.passport,
+      [
+        ['surname', 'passportSurname'],
+        ['givenName', 'passportGivenName'],
+        ['dateOfBirth', 'passportDateOfBirth'],
+        ['sex', 'passportSex'],
+        ['birthPlace', 'passportBirthPlace'],
+        ['nationality', 'passportNationality'],
+        ['issuingCountry', 'passportIssuingCountry'],
+        ['passportNumber', 'passportNumber'],
+        ['passportType', 'passportType'],
+        ['nationalIdentificationNumber', 'passportNationalIdentificationNumber'],
+        ['issuingAuthority', 'passportIssuingAuthority'],
+        ['issueDate', 'passportIssueDate'],
+        ['expirationDate', 'passportExpirationDate'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
   } else if (type === 2) {
     payload.secureNote = { type: 0 };
   }

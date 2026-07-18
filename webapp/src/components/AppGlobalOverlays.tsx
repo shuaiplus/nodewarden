@@ -12,7 +12,9 @@ export interface AppConfirmState {
   confirmText?: string;
   cancelText?: string;
   hideCancel?: boolean;
-  onConfirm: () => void;
+  /** When true, dialog shows a master-password field and passes it to onConfirm. */
+  requireMasterPassword?: boolean;
+  onConfirm: (masterPassword?: string) => void;
   onCancel?: () => void;
 }
 
@@ -63,6 +65,7 @@ function twoFactorProviderLabel(providerType: number): string {
 
 export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
   const [methodChooserOpen, setMethodChooserOpen] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
   const availableProviders = useMemo(
     () => uniqueSupportedProviders(props.pendingTotpAvailableProviders),
     [props.pendingTotpAvailableProviders]
@@ -70,10 +73,15 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
   const alternateProviders = availableProviders.filter((provider) => provider !== props.pendingTotpProviderType);
   const isYubiKeyOtp = props.pendingTotpProviderType === TWO_FACTOR_PROVIDER_YUBIKEY;
   const isWebAuthn = props.pendingTotpProviderType === TWO_FACTOR_PROVIDER_WEBAUTHN;
+  const requireMasterPassword = !!props.confirm?.requireMasterPassword;
 
   useEffect(() => {
     setMethodChooserOpen(false);
   }, [props.pendingTotpOpen, props.pendingTotpProviderType]);
+
+  useEffect(() => {
+    setConfirmPassword('');
+  }, [props.confirm?.title, props.confirm?.message, requireMasterPassword]);
 
   return (
     <>
@@ -86,9 +94,30 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
         confirmText={props.confirm?.confirmText}
         cancelText={props.confirm?.cancelText}
         hideCancel={props.confirm?.hideCancel}
-        onConfirm={() => props.confirm?.onConfirm()}
-        onCancel={props.confirm?.onCancel || props.onCancelConfirm}
-      />
+        confirmDisabled={requireMasterPassword && !confirmPassword.trim()}
+        onConfirm={() => {
+          if (requireMasterPassword && !confirmPassword.trim()) return;
+          props.confirm?.onConfirm(requireMasterPassword ? confirmPassword : undefined);
+          setConfirmPassword('');
+        }}
+        onCancel={() => {
+          setConfirmPassword('');
+          (props.confirm?.onCancel || props.onCancelConfirm)();
+        }}
+      >
+        {requireMasterPassword && (
+          <label className="field">
+            <span>{t('txt_master_password')}</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={confirmPassword}
+              onInput={(e) => setConfirmPassword((e.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+        )}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={props.pendingTotpOpen}

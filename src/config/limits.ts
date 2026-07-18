@@ -3,12 +3,14 @@
     // Access token lifetime in seconds.
     // 访问令牌有效期（秒）。
     accessTokenTtlSeconds: 7200,
-    // Refresh token lifetime in milliseconds.
-    // 刷新令牌有效期（毫秒）。
-    refreshTokenTtlMs: 365 * 24 * 60 * 60 * 1000,
-    // Grace window for previous refresh token after rotation (ms).
-    // 刷新令牌轮换后的旧令牌宽限窗口（毫秒）。
-    refreshTokenOverlapGraceMs: 30 * 60 * 1000,
+    // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
+    // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
+    refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+    refreshTokenDefaultSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+    refreshTokenMobileSlidingTtlMs: 90 * 24 * 60 * 60 * 1000,
+    // Hard upper bound for one login session, regardless of sliding refreshes.
+    // 单次登录会话的绝对最长寿命，不因滑动续期突破该上限。
+    refreshTokenAbsoluteTtlMs: 365 * 24 * 60 * 60 * 1000,
     // Refresh token random byte length.
     // 刷新令牌随机字节长度。
     refreshTokenRandomBytes: 32,
@@ -62,6 +64,12 @@
     // Refresh-token grant budget per IP per minute.
     // refresh_token 授权每 IP 每分钟请求配额。
     refreshTokenRequestsPerMinute: 30,
+    // Coarser IP budget; the per-session budget above remains the primary guard.
+    // 更宽松的 IP 总预算；主要保护仍由每个 refresh session 的预算承担。
+    refreshTokenRequestsPerIpMinute: 300,
+    // Passwordless/auth-request creation budget per IP/email/device per minute.
+    // 免密/设备审批请求创建接口每 IP/邮箱/设备每分钟配额。
+    authRequestRequestsPerMinute: 5,
     // Fixed window size for API rate limiting in seconds.
     // API 限流固定窗口大小（秒）。
     apiWindowSeconds: 60,
@@ -156,3 +164,10 @@
     cipherKeyEncryptionFeatureEnabled: true,
   },
 } as const;
+
+export function getRefreshTokenSlidingTtlMs(clientType?: string | null): number {
+  const normalized = String(clientType || '').trim().toLowerCase();
+  if (normalized === 'web') return LIMITS.auth.refreshTokenWebSlidingTtlMs;
+  if (normalized === 'mobile') return LIMITS.auth.refreshTokenMobileSlidingTtlMs;
+  return LIMITS.auth.refreshTokenDefaultSlidingTtlMs;
+}

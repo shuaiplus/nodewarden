@@ -234,7 +234,7 @@
 
   .mobile-tabbar {
     @apply grid items-center gap-1.5;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     min-height: var(--mobile-tabbar-height);
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
@@ -425,6 +425,20 @@
 
   .duplicate-mode-head-menu .mobile-vault-filter-menu {
     min-width: max(100%, 190px);
+  }
+
+  .list-head .mobile-duplicate-toolbar {
+    @apply flex min-w-0 items-center gap-1.5;
+    flex: none;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap {
+    max-width: 130px;
+    flex-shrink: 0;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap .mobile-vault-filter-trigger {
+    @apply w-full;
   }
 
   .toolbar.actions {

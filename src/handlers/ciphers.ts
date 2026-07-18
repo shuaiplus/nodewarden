@@ -7,6 +7,9 @@ import {
   CipherResponse,
   CipherSecureNote,
   CipherSshKey,
+  CipherBankAccount,
+  CipherDriversLicense,
+  CipherPassport,
   Attachment,
   PasswordHistory,
 } from '../types';
@@ -254,6 +257,49 @@ function sanitizeEncryptedObject<T extends Record<string, any>>(
   return next as T;
 }
 
+const BANK_ACCOUNT_ENCRYPTED_KEYS = [
+  'bankName',
+  'nameOnAccount',
+  'accountType',
+  'accountNumber',
+  'routingNumber',
+  'branchNumber',
+  'pin',
+  'swiftCode',
+  'iban',
+  'bankContactPhone',
+] as const;
+
+const DRIVERS_LICENSE_ENCRYPTED_KEYS = [
+  'firstName',
+  'middleName',
+  'lastName',
+  'dateOfBirth',
+  'licenseNumber',
+  'issuingCountry',
+  'issuingState',
+  'issueDate',
+  'expirationDate',
+  'issuingAuthority',
+  'licenseClass',
+] as const;
+
+const PASSPORT_ENCRYPTED_KEYS = [
+  'surname',
+  'givenName',
+  'dateOfBirth',
+  'sex',
+  'birthPlace',
+  'nationality',
+  'issuingCountry',
+  'passportNumber',
+  'passportType',
+  'nationalIdentificationNumber',
+  'issuingAuthority',
+  'issueDate',
+  'expirationDate',
+] as const;
+
 function normalizeCipherForStorage(cipher: Cipher): Cipher {
   cipher.login = normalizeCipherLoginForStorage(cipher.login);
   cipher.sshKey = normalizeCipherSshKeyForCompatibility(cipher.sshKey);
@@ -374,6 +420,20 @@ export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): s
     if (sshKey.publicKey != null && !isValidEncString(sshKey.publicKey)) return 'SSH key public key must be an encrypted string.';
     const fingerprint = sshKey.keyFingerprint ?? sshKey.fingerprint;
     if (fingerprint != null && !isValidEncString(fingerprint)) return 'SSH key fingerprint must be an encrypted string.';
+  }
+
+  const typedEncryptedObjects: Array<[string, any, readonly string[]]> = [
+    ['Bank account', (cipher as any).bankAccount, BANK_ACCOUNT_ENCRYPTED_KEYS],
+    ['Drivers license', (cipher as any).driversLicense, DRIVERS_LICENSE_ENCRYPTED_KEYS],
+    ['Passport', (cipher as any).passport, PASSPORT_ENCRYPTED_KEYS],
+  ];
+  for (const [label, source, keys] of typedEncryptedObjects) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of keys) {
+      if (source[key] != null && !optionalEncStringWithin(source[key], 10000)) {
+        return `${label} ${key} must be an encrypted string.`;
+      }
+    }
   }
 
   // Validate password history — each password must be an encrypted string.
@@ -752,7 +812,20 @@ export function cipherToResponse(
     'licenseNumber',
   ]);
   const normalizedSshKey = normalizeCipherSshKeyForCompatibility((passthrough as any).sshKey ?? null);
-  const normalizedSecureNote = Number(cipher.type) === 2
+  const normalizedBankAccount = sanitizeEncryptedObject(
+    (passthrough as any).bankAccount ?? null,
+    BANK_ACCOUNT_ENCRYPTED_KEYS
+  );
+  const normalizedDriversLicense = sanitizeEncryptedObject(
+    (passthrough as any).driversLicense ?? null,
+    DRIVERS_LICENSE_ENCRYPTED_KEYS
+  );
+  const normalizedPassport = sanitizeEncryptedObject(
+    (passthrough as any).passport ?? null,
+    PASSPORT_ENCRYPTED_KEYS
+  );
+  const responseType = Number(cipher.type) || 1;
+  const normalizedSecureNote = responseType === 2
     ? normalizeCipherSecureNoteForCompatibility((passthrough as any).secureNote ?? null) ?? { type: 0 }
     : null;
   const responseAttachments = applyCipherEmbeddedAttachmentMetadata(cipher, attachments);
@@ -763,7 +836,7 @@ export function cipherToResponse(
     ...passthrough,
     // Server-computed / enforced fields (always override)
     folderId: normalizeResponseFolderId(cipher.folderId, options.validFolderIds),
-    type: Number(cipher.type) || 1,
+    type: responseType,
     organizationId: normalizeOptionalId((passthrough as any).organizationId ?? null),
     organizationUseTotp: !!((passthrough as any).organizationUseTotp ?? false),
     creationDate: createdAt,
@@ -785,6 +858,9 @@ export function cipherToResponse(
     fields: normalizeCipherFieldsForCompatibility((passthrough as any).fields),
     passwordHistory: normalizePasswordHistoryForCompatibility((passthrough as any).passwordHistory),
     sshKey: normalizedSshKey,
+    bankAccount: responseType === 6 ? normalizedBankAccount : null,
+    driversLicense: responseType === 7 ? normalizedDriversLicense : null,
+    passport: responseType === 8 ? normalizedPassport : null,
     key: responseCipherKey,
     data: typeof (passthrough as any).data === 'string' ? (passthrough as any).data : null,
     encryptedFor: (passthrough as any).encryptedFor ?? null,
@@ -880,6 +956,9 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   const createIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
   const createSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
   const createSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
+  const createBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
+  const createDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
+  const createPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
   const createPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
 
   if (createKey.present && !shouldAcceptCipherKey(createKey.value)) {
@@ -909,6 +988,9 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   cipher.identity = createIdentity.present ? (createIdentity.value ?? null) : (cipher.identity ?? null);
   cipher.secureNote = createSecureNote.present ? (createSecureNote.value ?? null) : (cipher.secureNote ?? null);
   cipher.sshKey = createSshKey.present ? (createSshKey.value ?? null) : (cipher.sshKey ?? null);
+  cipher.bankAccount = createBankAccount.present ? (createBankAccount.value ?? null) : ((cipher as any).bankAccount ?? null);
+  cipher.driversLicense = createDriversLicense.present ? (createDriversLicense.value ?? null) : ((cipher as any).driversLicense ?? null);
+  cipher.passport = createPassport.present ? (createPassport.value ?? null) : ((cipher as any).passport ?? null);
   cipher.passwordHistory = createPasswordHistory.present ? (createPasswordHistory.value ?? null) : (cipher.passwordHistory ?? null);
   const createFields = getAliasedProp(cipherData, ['fields', 'Fields']);
   cipher.fields = createFields.present ? (createFields.value ?? null) : (cipher.fields ?? null);
@@ -960,6 +1042,9 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
   const incomingSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
   const incomingSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
+  const incomingBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
+  const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
+  const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
   const incomingRevisionDate = readCipherRevisionDate(cipherData);
   const hasAttachmentMigrationMetadata = hasIncomingAttachmentMetadata(cipherData);
@@ -1008,6 +1093,9 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   cipher.card = nextType === 3 ? (incomingCard.present ? (incomingCard.value ?? null) : (existingCipher.card ?? null)) : null;
   cipher.identity = nextType === 4 ? (incomingIdentity.present ? (incomingIdentity.value ?? null) : (existingCipher.identity ?? null)) : null;
   cipher.sshKey = nextType === 5 ? (incomingSshKey.present ? (incomingSshKey.value ?? null) : (existingCipher.sshKey ?? null)) : null;
+  cipher.bankAccount = nextType === 6 ? (incomingBankAccount.present ? (incomingBankAccount.value ?? null) : ((existingCipher as any).bankAccount ?? null)) : null;
+  cipher.driversLicense = nextType === 7 ? (incomingDriversLicense.present ? (incomingDriversLicense.value ?? null) : ((existingCipher as any).driversLicense ?? null)) : null;
+  cipher.passport = nextType === 8 ? (incomingPassport.present ? (incomingPassport.value ?? null) : ((existingCipher as any).passport ?? null)) : null;
   if (incomingPasswordHistory.present) {
     cipher.passwordHistory = incomingPasswordHistory.value ?? null;
   }

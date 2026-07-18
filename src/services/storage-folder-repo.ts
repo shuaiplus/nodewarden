@@ -68,20 +68,22 @@ export async function bulkDeleteFolders(
   db: D1Database,
   userId: string,
   ids: string[],
-  sqlChunkSize: (fixedBindCount: number) => number,
+  sqlChunkSize: (fixedBindCount: number, bindCountPerItem?: number) => number,
   updateRevisionDate: (userId: string) => Promise<string>
 ): Promise<string | null> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const chunkSize = sqlChunkSize(2);
+  // Each folder ID is bound in all three compatibility predicates below.
+  const chunkSize = sqlChunkSize(2, 3);
+  const statements: D1PreparedStatement[] = [];
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
-    await db
-      .prepare(
+    statements.push(
+      db.prepare(
         `UPDATE ciphers
          SET folder_id = NULL, updated_at = ?,
              data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
@@ -93,13 +95,14 @@ export async function bulkDeleteFolders(
            )`
       )
       .bind(now, userId, ...chunk, ...chunk, ...chunk)
-      .run();
-
-    await db
-      .prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(userId, ...chunk)
-      .run();
+    );
+    statements.push(
+      db.prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
+        .bind(userId, ...chunk)
+    );
   }
+
+  await db.batch(statements);
 
   return updateRevisionDate(userId);
 }

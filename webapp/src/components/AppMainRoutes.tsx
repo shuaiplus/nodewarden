@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'preact/compat';
 import { useEffect } from 'preact/hooks';
 import { Link, Route, Switch } from 'wouter';
-import { ArrowUpDown, Cloud, FileClock, Globe2, LogOut, Settings as SettingsIcon, Shield, ShieldUser } from 'lucide-preact';
+import { ArrowUpDown, Cloud, FileClock, Globe2, LogOut, Settings as SettingsIcon, Shield, ShieldCheck, ShieldUser } from 'lucide-preact';
 import type { ImportAttachmentFile, ImportResultSummary } from '@/components/ImportPage';
 import LoadingState from '@/components/LoadingState';
 import type { AdminBackupImportResponse, AdminBackupRunResponse, AdminBackupSettings, RemoteBackupBrowserResponse } from '@/lib/api/backup';
@@ -13,6 +13,8 @@ import type { ExportRequest } from '@/lib/export-formats';
 
 const VaultPage = lazy(() => import('@/components/VaultPage'));
 const SendsPage = lazy(() => import('@/components/SendsPage'));
+const PasswordGeneratorPage = lazy(() => import('@/components/PasswordGeneratorPage'));
+const PasswordSecurityPage = lazy(() => import('@/components/PasswordSecurityPage'));
 const TotpCodesPage = lazy(() => import('@/components/TotpCodesPage'));
 const SettingsPage = lazy(() => import('@/components/SettingsPage'));
 const DomainRulesPage = lazy(() => import('@/components/DomainRulesPage'));
@@ -168,8 +170,8 @@ export interface AppMainRoutesProps {
   onRunRemoteBackup: (masterPassword: string, destinationId?: string | null) => Promise<AdminBackupRunResponse>;
   onListRemoteBackups: (destinationId: string, path: string) => Promise<RemoteBackupBrowserResponse>;
   onDownloadRemoteBackup: (masterPassword: string, destinationId: string, path: string, onProgress?: (percent: number | null) => void) => Promise<void>;
-  onInspectRemoteBackup: (destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: { hasChecksumPrefix: boolean; expectedPrefix: string | null; actualPrefix: string; matches: boolean } }>;
-  onDeleteRemoteBackup: (destinationId: string, path: string) => Promise<void>;
+  onInspectRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: { hasChecksumPrefix: boolean; expectedPrefix: string | null; actualPrefix: string; matches: boolean } }>;
+  onDeleteRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<void>;
   onRestoreRemoteBackup: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
   onRestoreRemoteBackupAllowingChecksumMismatch: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
 }
@@ -207,6 +209,26 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
 
   return (
     <Switch>
+      <Route path="/security/password-health">
+        <div className="stack">
+          {props.mobileLayout && (
+            <div className="mobile-settings-subhead">
+              <button type="button" className="btn btn-secondary small mobile-settings-back" onClick={() => props.onNavigate(props.settingsHomeRoute)}>
+                <span className="btn-icon" aria-hidden="true">{"<"}</span>
+                {t('txt_back')}
+              </button>
+            </div>
+          )}
+          <Suspense fallback={<RouteContentFallback />}>
+            <PasswordSecurityPage ciphers={props.decryptedCiphers} loading={props.ciphersLoading} />
+          </Suspense>
+        </div>
+      </Route>
+      <Route path="/generator">
+        <Suspense fallback={<RouteContentFallback />}>
+          <PasswordGeneratorPage />
+        </Suspense>
+      </Route>
       <Route path="/sends">
         <Suspense fallback={<RouteContentFallback />}>
           <SendsPage
@@ -320,43 +342,57 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
       </Route>
       <Route path="/settings">
         {props.profile ? (
-          <section className="card mobile-settings-card">
-            <div className="mobile-settings-links">
-              <Link href={props.settingsAccountRoute} className="mobile-settings-link">
-                <SettingsIcon size={18} />
-                <span>{t('nav_account_settings')}</span>
-              </Link>
-              <Link href="/settings/security/device-management" className="mobile-settings-link">
-                <Shield size={18} />
-                <span>{t('nav_device_management')}</span>
-              </Link>
-              <Link href="/settings/domain-rules" className="mobile-settings-link">
-                <Globe2 size={18} />
-                <span>{t('nav_domain_rules')}</span>
-              </Link>
-              <Link href={props.importRoute} className="mobile-settings-link">
-                <ArrowUpDown size={18} />
-                <span>{t('nav_import_export')}</span>
-              </Link>
-              {isAdmin && (
-                <Link href="/admin" className="mobile-settings-link">
-                  <ShieldUser size={18} />
-                  <span>{t('nav_admin_panel')}</span>
+          <section className="card mobile-settings-card settings-home-card">
+            <div className="settings-home-section">
+              <h3>{t('nav_group_tools')}</h3>
+              <div className="mobile-settings-links">
+                <Link href="/security/password-health" className="mobile-settings-link">
+                  <ShieldCheck size={18} />
+                  <span>{t('nav_password_security')}</span>
                 </Link>
-              )}
-              {isAdmin && (
-                <Link href="/logs" className="mobile-settings-link">
-                  <FileClock size={18} />
-                  <span>{t('nav_log_center')}</span>
+                <Link href={props.importRoute} className="mobile-settings-link">
+                  <ArrowUpDown size={18} />
+                  <span>{t('nav_import_export')}</span>
                 </Link>
-              )}
-              {isAdmin && (
-                <Link href="/backup" className="mobile-settings-link">
-                  <Cloud size={18} />
-                  <span>{t('nav_backup_strategy')}</span>
-                </Link>
-              )}
+              </div>
             </div>
+            <div className="settings-home-section">
+              <h3>{t('txt_settings')}</h3>
+              <div className="mobile-settings-links">
+                <Link href={props.settingsAccountRoute} className="mobile-settings-link">
+                  <SettingsIcon size={18} />
+                  <span>{t('nav_account_settings')}</span>
+                </Link>
+                <Link href="/settings/security/device-management" className="mobile-settings-link">
+                  <Shield size={18} />
+                  <span>{t('nav_device_management')}</span>
+                </Link>
+                <Link href="/settings/domain-rules" className="mobile-settings-link">
+                  <Globe2 size={18} />
+                  <span>{t('nav_domain_rules')}</span>
+                </Link>
+              </div>
+            </div>
+            {isAdmin && (
+              <div className="settings-home-section">
+                <h3>{t('nav_group_system_management')}</h3>
+                <div className="mobile-settings-links">
+                  <Link href="/backup" className="mobile-settings-link">
+                    <Cloud size={18} />
+                    <span>{t('nav_backup_strategy')}</span>
+                  </Link>
+                  <Link href="/admin" className="mobile-settings-link">
+                    <ShieldUser size={18} />
+                    <span>{t('nav_admin_panel')}</span>
+                  </Link>
+                  <Link href="/logs" className="mobile-settings-link">
+                    <FileClock size={18} />
+                    <span>{t('nav_log_center')}</span>
+                  </Link>
+                </div>
+              </div>
+            )}
+            <div className="settings-home-spacer" />
             <button type="button" className="btn btn-secondary mobile-settings-logout" onClick={props.onLogout}>
               <LogOut size={14} className="btn-icon" />
               {t('txt_sign_out')}

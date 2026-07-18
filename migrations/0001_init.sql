@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS users (
   security_stamp TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
-  verify_devices INTEGER NOT NULL DEFAULT 1,
+  verify_devices INTEGER NOT NULL DEFAULT 0,
   totp_secret TEXT,
   totp_recovery_code TEXT,
   api_key TEXT,
@@ -132,6 +132,11 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   expires_at INTEGER NOT NULL,
   device_identifier TEXT,
   device_session_stamp TEXT,
+  security_stamp TEXT,
+  created_at INTEGER,
+  last_used_at INTEGER,
+  absolute_expires_at INTEGER,
+  client_type TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);

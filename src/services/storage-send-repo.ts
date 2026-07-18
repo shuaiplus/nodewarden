@@ -93,9 +93,13 @@ export async function incrementSendAccessCount(db: D1Database, sendId: string): 
   const result = await db
     .prepare(
       'UPDATE sends SET access_count = access_count + 1, updated_at = ? ' +
-      'WHERE id = ? AND (max_access_count IS NULL OR access_count < max_access_count)'
+      'WHERE id = ? ' +
+      'AND disabled = 0 ' +
+      'AND (max_access_count IS NULL OR access_count < max_access_count) ' +
+      'AND (expiration_date IS NULL OR expiration_date > ?) ' +
+      'AND deletion_date > ?'
     )
-    .bind(now, sendId)
+    .bind(now, sendId, now, now)
     .run();
   return (result.meta.changes ?? 0) > 0;
 }

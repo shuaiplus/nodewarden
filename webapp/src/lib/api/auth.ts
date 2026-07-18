@@ -42,6 +42,7 @@ interface RefreshFailure {
   ok: false;
   transient: boolean;
   error: string;
+  retryAfterMs?: number;
 }
 
 interface RefreshSuccess {
@@ -89,11 +90,29 @@ function clearRememberTwoFactorToken(): void {
   localStorage.removeItem(TOTP_REMEMBER_TOKEN_KEY);
 }
 
+function hasTwoFactorChallenge(error: TokenError): boolean {
+  const providers = error.TwoFactorProviders ?? error.CustomResponse?.TwoFactorProviders;
+  const providers2 = error.TwoFactorProviders2 ?? error.CustomResponse?.TwoFactorProviders2;
+  if (Array.isArray(providers)) return providers.length > 0;
+  if (providers && typeof providers === 'object') return Object.keys(providers as Record<string, unknown>).length > 0;
+  if (Array.isArray(providers2)) return providers2.length > 0;
+  if (providers2 && typeof providers2 === 'object') return Object.keys(providers2 as Record<string, unknown>).length > 0;
+  return providers != null || providers2 != null;
+}
+
 export function loadSession(): SessionState | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<SessionState> & Partial<PersistedSessionState>;
+    if (parsed.email && (parsed.accessToken || parsed.refreshToken)) {
+      const authMode = parsed.authMode === 'web-cookie' ? 'web-cookie' : 'token';
+      saveSession({ email: parsed.email, authMode });
+      return {
+        email: parsed.email,
+        authMode,
+      };
+    }
     if (parsed.authMode === 'web-cookie' && parsed.email) {
       return {
         email: parsed.email,
@@ -106,13 +125,7 @@ export function loadSession(): SessionState | null {
         authMode: 'token',
       };
     }
-    if (!parsed.accessToken || !parsed.refreshToken || !parsed.email) return null;
-    return {
-      accessToken: parsed.accessToken,
-      refreshToken: parsed.refreshToken,
-      email: parsed.email,
-      authMode: 'token',
-    };
+    return null;
   } catch {
     return null;
   }
@@ -280,7 +293,7 @@ export async function loginWithPassword(
   const json = (await parseJson<TokenSuccess & TokenError>(resp)) || {};
   if (resp.ok) {
     saveRememberTwoFactorToken((json as TokenSuccess).TwoFactorToken);
-  } else if (rememberedToken) {
+  } else if (rememberedToken && hasTwoFactorChallenge(json)) {
     clearRememberTwoFactorToken();
   }
   if (!resp.ok) return json;
@@ -321,8 +334,8 @@ export async function loginWithAccountPasskeyAssertion(assertion: AccountPasskey
   return json;
 }
 
-function isTransientRefreshStatus(status: number): boolean {
-  return status === 0 || status === 429 || status >= 500;
+function isPermanentRefreshFailure(status: number, errorCode: string | undefined): boolean {
+  return status === 400 && (errorCode === 'invalid_grant' || errorCode === 'invalid_request');
 }
 
 export async function refreshAccessToken(session: SessionState): Promise<RefreshResult> {
@@ -334,6 +347,8 @@ export async function refreshAccessToken(session: SessionState): Promise<Refresh
   try {
     const resp = await fetch('/identity/connect/token', {
       method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         ...(session.authMode === 'web-cookie' ? { [WEB_SESSION_HEADER]: '1' } : {}),
@@ -342,15 +357,19 @@ export async function refreshAccessToken(session: SessionState): Promise<Refresh
     });
     if (!resp.ok) {
       const json = await parseJson<TokenError>(resp);
+      const retryAfterSeconds = Number(resp.headers.get('Retry-After') || 0);
       return {
         ok: false,
-        transient: isTransientRefreshStatus(resp.status),
-        error: translateServerError(json?.error_description || json?.error, t('txt_session_refresh_failed')),
+        transient: !isPermanentRefreshFailure(resp.status, json?.error),
+        error: translateServerError(json?.error_description || json?.error, t('txt_session_refresh_temporarily_unavailable')),
+        ...(Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+          ? { retryAfterMs: retryAfterSeconds * 1000 }
+          : {}),
       };
     }
     const json = await parseJson<TokenSuccess>(resp);
     if (!json?.access_token) {
-      return { ok: false, transient: false, error: t('txt_session_refresh_failed') };
+      return { ok: false, transient: true, error: t('txt_session_refresh_temporarily_unavailable') };
     }
     return { ok: true, token: json };
   } catch (error) {
@@ -388,8 +407,11 @@ export async function revokeCurrentSession(session: SessionState | null): Promis
   }
   await fetch('/identity/connect/revocation', {
     method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {}),
       ...(session?.authMode === 'web-cookie' ? { [WEB_SESSION_HEADER]: '1' } : {}),
     },
     body: body.toString(),
@@ -609,8 +631,6 @@ export async function changeMasterPassword(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       masterPasswordHash: current.hash,
-      newMasterPasswordHash,
-      key: newKey,
       authenticationData: {
         kdf: {
           kdfType: 0,
@@ -631,8 +651,6 @@ export async function changeMasterPassword(
         masterKeyWrappedUserKey: newKey,
         salt: args.email.trim().toLowerCase(),
       },
-      kdf: 0,
-      kdfIterations: current.kdfIterations,
     }),
   });
   if (!resp.ok) throw new Error('Change master password failed');
@@ -665,6 +683,7 @@ function normalizeYubiKeySettings(raw: any): YubiKeyOtpSettings {
     ],
     nfc: !!(raw?.nfc ?? raw?.Nfc),
     yubicoConfigured: !!(raw?.yubicoConfigured ?? raw?.YubicoConfigured),
+    yubicoCanManage: !!(raw?.yubicoCanManage ?? raw?.YubicoCanManage),
     yubicoClientId: String(raw?.yubicoClientId ?? raw?.YubicoClientId ?? ''),
     yubicoSecretKey: String(raw?.yubicoSecretKey ?? raw?.YubicoSecretKey ?? ''),
   };
@@ -1127,8 +1146,12 @@ export async function updateAuthorizedDeviceName(
   if (!resp.ok) throw new Error(t('txt_update_device_note_failed'));
 }
 
-export async function deleteAllAuthorizedDevices(authedFetch: AuthedFetch): Promise<void> {
-  const resp = await authedFetch('/api/devices', { method: 'DELETE' });
+export async function deleteAllAuthorizedDevices(authedFetch: AuthedFetch, masterPasswordHash: string): Promise<void> {
+  const resp = await authedFetch('/api/devices', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masterPasswordHash }),
+  });
   if (!resp.ok) throw new Error(t('txt_remove_all_devices_failed'));
 }
 
