@@ -1,158 +1,74 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { Check, Copy, Minus, Plus, RefreshCw, ShieldCheck } from 'lucide-preact';
+import { Check, Copy, Download, LoaderCircle, Minus, Plus, RefreshCw, ShieldCheck } from 'lucide-preact';
 import { copyTextToClipboard } from '@/lib/clipboard';
-import { EFFLongWordList } from '@/lib/eff-word-list';
 import { t } from '@/lib/i18n';
+import {
+  clampInteger,
+  defaultGeneratorSettings,
+  estimateStrength,
+  generateValue,
+  normalizeGeneratorSettings,
+  type EmailMode,
+  type EmailOptions,
+  type GeneratorMode,
+  type GeneratorSettings,
+  type PassphraseOptions,
+  type PasswordOptions,
+  type PinOptions,
+  type SshKeyOptions,
+  type UsernameOptions,
+} from '@/lib/password-generator';
+import { generateSshKey, type GeneratedSshKey } from '@/lib/ssh-key-generator';
 
-type GeneratorMode = 'password' | 'passphrase';
+const SETTINGS_KEY = 'nodewarden.passwordGenerator.settings.v2';
 
-interface PasswordOptions {
-  length: number;
-  uppercase: boolean;
-  lowercase: boolean;
-  numbers: boolean;
-  special: boolean;
-  minNumbers: number;
-  minSpecial: number;
-  avoidAmbiguous: boolean;
-}
-
-interface PassphraseOptions {
-  words: number;
-  separator: string;
-  capitalize: boolean;
-  includeNumber: boolean;
-}
-
-const SETTINGS_KEY = 'nodewarden.passwordGenerator.settings.v1';
-const UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
-const DIGITS = '0123456789';
-const SPECIAL = '!@#$%^&*';
-const AMBIGUOUS = new Set(['I', 'L', 'O', 'l', 'o', '0', '1']);
-
-const defaultPasswordOptions: PasswordOptions = {
-  length: 14,
-  uppercase: true,
-  lowercase: true,
-  numbers: true,
-  special: false,
-  minNumbers: 1,
-  minSpecial: 1,
-  avoidAmbiguous: false,
-};
-
-const defaultPassphraseOptions: PassphraseOptions = {
-  words: 6,
-  separator: '-',
-  capitalize: false,
-  includeNumber: false,
-};
-
-function clamp(value: unknown, minimum: number, maximum: number, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, Math.round(parsed))) : fallback;
-}
-
-function readSettings(): { mode: GeneratorMode; password: PasswordOptions; passphrase: PassphraseOptions } {
+function readSettings(): GeneratorSettings {
   try {
-    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as Partial<{ mode: GeneratorMode; password: Partial<PasswordOptions>; passphrase: Partial<PassphraseOptions> }>;
-    return {
-      mode: stored.mode === 'passphrase' ? 'passphrase' : 'password',
-      password: {
-        ...defaultPasswordOptions,
-        ...stored.password,
-        length: clamp(stored.password?.length, 5, 128, defaultPasswordOptions.length),
-        minNumbers: clamp(stored.password?.minNumbers, 0, 9, defaultPasswordOptions.minNumbers),
-        minSpecial: clamp(stored.password?.minSpecial, 0, 9, defaultPasswordOptions.minSpecial),
-      },
-      passphrase: {
-        ...defaultPassphraseOptions,
-        ...stored.passphrase,
-        words: clamp(stored.passphrase?.words, 3, 20, defaultPassphraseOptions.words),
-        separator: String(stored.passphrase?.separator ?? defaultPassphraseOptions.separator).slice(0, 1),
-      },
-    };
+    const current = localStorage.getItem(SETTINGS_KEY);
+    if (current) return normalizeGeneratorSettings(JSON.parse(current));
+
+    // Preserve compatible options for users upgrading from the original generator.
+    const legacy = JSON.parse(localStorage.getItem('nodewarden.passwordGenerator.settings.v1') || '{}');
+    return normalizeGeneratorSettings(legacy);
   } catch {
-    return { mode: 'password', password: defaultPasswordOptions, passphrase: defaultPassphraseOptions };
+    return defaultGeneratorSettings;
   }
-}
-
-function randomIndex(length: number): number {
-  const range = 0x1_0000_0000;
-  const upperBound = Math.floor(range / length) * length;
-  const buffer = new Uint32Array(1);
-  do crypto.getRandomValues(buffer); while (buffer[0] >= upperBound);
-  return buffer[0] % length;
-}
-
-function pick(characters: string): string {
-  return characters[randomIndex(characters.length)];
-}
-
-function shuffle(value: string[]): string[] {
-  for (let index = value.length - 1; index > 0; index -= 1) {
-    const next = randomIndex(index + 1);
-    [value[index], value[next]] = [value[next], value[index]];
-  }
-  return value;
-}
-
-function filtered(characters: string, avoidAmbiguous: boolean): string {
-  return avoidAmbiguous ? characters.split('').filter((character) => !AMBIGUOUS.has(character)).join('') : characters;
-}
-
-function generatePassword(options: PasswordOptions): string {
-  const sets: Array<{ chars: string; minimum: number }> = [];
-  if (options.uppercase) sets.push({ chars: filtered(UPPERCASE, options.avoidAmbiguous), minimum: 1 });
-  if (options.lowercase) sets.push({ chars: filtered(LOWERCASE, options.avoidAmbiguous), minimum: 1 });
-  if (options.numbers) sets.push({ chars: filtered(DIGITS, options.avoidAmbiguous), minimum: options.minNumbers });
-  if (options.special) sets.push({ chars: SPECIAL, minimum: options.minSpecial });
-  if (!sets.length) sets.push({ chars: filtered(LOWERCASE, options.avoidAmbiguous), minimum: 1 });
-
-  const minimumLength = sets.reduce((total, set) => total + set.minimum, 0);
-  const length = Math.max(options.length, minimumLength, 5);
-  const allCharacters = sets.map((set) => set.chars).join('');
-  const characters = sets.flatMap((set) => Array.from({ length: set.minimum }, () => pick(set.chars)));
-  while (characters.length < length) characters.push(pick(allCharacters));
-  return shuffle(characters).join('');
-}
-
-function generatePassphrase(options: PassphraseOptions): string {
-  const words = Array.from({ length: options.words }, () => EFFLongWordList[randomIndex(EFFLongWordList.length)]);
-  if (options.capitalize) {
-    for (let index = 0; index < words.length; index += 1) words[index] = words[index][0].toUpperCase() + words[index].slice(1);
-  }
-  if (options.includeNumber) words[randomIndex(words.length)] += String(randomIndex(10));
-  return words.join(options.separator);
-}
-
-function strengthLabel(mode: GeneratorMode, value: string): { label: string; score: number } {
-  const score = mode === 'password' ? Math.min(4, Math.max(1, Math.floor(value.length / 5))) : Math.min(4, Math.max(1, Math.floor(value.split(/[-_. ]/).filter(Boolean).length / 2)));
-  return { score, label: t(['txt_password_strength_weak', 'txt_password_strength_fair', 'txt_password_strength_good', 'txt_password_strength_strong'][score - 1]) };
 }
 
 export default function PasswordGeneratorPage() {
   const initial = useMemo(readSettings, []);
-  const [mode, setMode] = useState<GeneratorMode>(initial.mode);
-  const [passwordOptions, setPasswordOptions] = useState<PasswordOptions>(initial.password);
-  const [passphraseOptions, setPassphraseOptions] = useState<PassphraseOptions>(initial.passphrase);
+  const [settings, setSettings] = useState<GeneratorSettings>(initial);
   const [seed, setSeed] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [sshKey, setSshKey] = useState<GeneratedSshKey | null>(null);
+  const [sshKeyError, setSshKeyError] = useState('');
+  const [sshKeyLoading, setSshKeyLoading] = useState(false);
 
-  const generated = useMemo(
-    () => (mode === 'password' ? generatePassword(passwordOptions) : generatePassphrase(passphraseOptions)),
-    [mode, passwordOptions, passphraseOptions, seed]
-  );
-  const strength = useMemo(() => strengthLabel(mode, generated), [generated, mode]);
+  const generated = useMemo(() => settings.mode === 'sshKey' ? sshKey?.fingerprint || '' : generateValue(settings), [settings, seed, sshKey]);
+  const strength = useMemo(() => estimateStrength(settings.mode, generated), [generated, settings.mode]);
+  const strengthLabel = strength
+    ? t(['txt_password_strength_weak', 'txt_password_strength_fair', 'txt_password_strength_good', 'txt_password_strength_strong'][strength - 1])
+    : '';
 
   useEffect(() => {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ mode, password: passwordOptions, passphrase: passphraseOptions }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
       // The generator remains fully usable when browser storage is unavailable.
     }
-  }, [mode, passwordOptions, passphraseOptions]);
+  }, [settings]);
+
+  useEffect(() => {
+    if (settings.mode !== 'sshKey') return;
+    let cancelled = false;
+    setSshKeyLoading(true);
+    setSshKeyError('');
+    void generateSshKey({ ...settings.sshKey, comment: '' })
+      .then((value) => { if (!cancelled) setSshKey(value); })
+      .catch(() => { if (!cancelled) { setSshKey(null); setSshKeyError(t('txt_generator_ssh_error')); } })
+      .finally(() => { if (!cancelled) setSshKeyLoading(false); });
+    return () => { cancelled = true; };
+  }, [settings.mode, settings.sshKey.type, settings.sshKey.rsaLength, seed]);
 
   const regenerate = () => {
     setCopied(false);
@@ -160,17 +76,49 @@ export default function PasswordGeneratorPage() {
   };
 
   const copy = async () => {
-    await copyTextToClipboard(generated, { onSuccess: () => setCopied(true), onError: () => setCopied(false) });
+    const value = settings.mode === 'sshKey' && sshKey ? publicKeyWithComment(sshKey.publicKey, settings.sshKey.comment) : generated;
+    await copyTextToClipboard(value, { onSuccess: () => setCopied(true), onError: () => setCopied(false) });
     window.setTimeout(() => setCopied(false), 1600);
   };
 
-  const changePasswordOption = <K extends keyof PasswordOptions>(key: K, value: PasswordOptions[K]) => {
-    setPasswordOptions((current) => ({ ...current, [key]: value }));
+  const changeMode = (mode: GeneratorMode) => {
+    setSettings((current) => ({ ...current, mode }));
     setCopied(false);
   };
 
+  const changePasswordOption = <K extends keyof PasswordOptions>(key: K, value: PasswordOptions[K]) => {
+    setSettings((current) => ({ ...current, password: { ...current.password, [key]: value } }));
+    setCopied(false);
+  };
+
+  const changeCharacterType = (key: 'uppercase' | 'lowercase' | 'numbers' | 'special', checked: boolean) => {
+    const enabled = ['uppercase', 'lowercase', 'numbers', 'special'].filter((item) => settings.password[item as 'uppercase']);
+    if (!checked && enabled.length === 1 && enabled[0] === key) return;
+    changePasswordOption(key, checked);
+  };
+
   const changePassphraseOption = <K extends keyof PassphraseOptions>(key: K, value: PassphraseOptions[K]) => {
-    setPassphraseOptions((current) => ({ ...current, [key]: value }));
+    setSettings((current) => ({ ...current, passphrase: { ...current.passphrase, [key]: value } }));
+    setCopied(false);
+  };
+
+  const changePinOption = <K extends keyof PinOptions>(key: K, value: PinOptions[K]) => {
+    setSettings((current) => ({ ...current, pin: { ...current.pin, [key]: value } }));
+    setCopied(false);
+  };
+
+  const changeUsernameOption = <K extends keyof UsernameOptions>(key: K, value: UsernameOptions[K]) => {
+    setSettings((current) => ({ ...current, username: { ...current.username, [key]: value } }));
+    setCopied(false);
+  };
+
+  const changeEmailOption = <K extends keyof EmailOptions>(key: K, value: EmailOptions[K]) => {
+    setSettings((current) => ({ ...current, email: { ...current.email, [key]: value } }));
+    setCopied(false);
+  };
+
+  const changeSshKeyOption = <K extends keyof SshKeyOptions>(key: K, value: SshKeyOptions[K]) => {
+    setSettings((current) => ({ ...current, sshKey: { ...current.sshKey, [key]: value } }));
     setCopied(false);
   };
 
@@ -178,52 +126,169 @@ export default function PasswordGeneratorPage() {
     <section className="generator-page" aria-label={t('txt_password_generator')}>
       <div className="generator-layout">
         <section className="generator-output-card" aria-live="polite">
-          <div className="settings-category-tabs" role="tablist" aria-label={t('txt_generator_type')}>
-            <button type="button" role="tab" aria-selected={mode === 'password'} className={`settings-category-tab ${mode === 'password' ? 'active' : ''}`} onClick={() => setMode('password')}>{t('txt_password')}</button>
-            <button type="button" role="tab" aria-selected={mode === 'passphrase'} className={`settings-category-tab ${mode === 'passphrase' ? 'active' : ''}`} onClick={() => setMode('passphrase')}>{t('txt_passphrase')}</button>
+          <div className="settings-category-tabs generator-mode-tabs" role="tablist" aria-label={t('txt_generator_type')}>
+            {([
+              ['password', 'txt_password'],
+              ['passphrase', 'txt_passphrase'],
+              ['pin', 'txt_generator_pin'],
+              ['username', 'txt_generator_username'],
+              ['email', 'txt_generator_email_alias'],
+              ['sshKey', 'txt_generator_ssh_key'],
+            ] as const).map(([mode, label]) => (
+              <button key={mode} type="button" role="tab" aria-selected={settings.mode === mode} className={`settings-category-tab ${settings.mode === mode ? 'active' : ''}`} onClick={() => changeMode(mode)}>{t(label)}</button>
+            ))}
           </div>
-          <output className="generator-value" aria-label={t('txt_generated_password')}>{generated}</output>
-          <div className="generator-strength-row">
-            <div className="generator-strength" aria-label={`${t('txt_password_strength')}: ${strength.label}`}>
-              {[1, 2, 3, 4].map((level) => <span key={level} className={level <= strength.score ? `active level-${strength.score}` : ''} />)}
-            </div>
-            <span><ShieldCheck size={15} /> {strength.label}</span>
-          </div>
+          {settings.mode === 'sshKey' ? (
+            <SshKeyOutput value={sshKey} loading={sshKeyLoading} error={sshKeyError} comment={settings.sshKey.comment} />
+          ) : <output className={`generator-value ${generated ? '' : 'empty'}`} aria-label={t('txt_generated_value')}>{generated || t('txt_generator_email_required_hint')}</output>}
+          {settings.mode !== 'sshKey' && <div className="generator-meta-row">
+            {strength > 0 ? (
+              <>
+                <div className="generator-strength" aria-label={`${t('txt_password_strength')}: ${strengthLabel}`}>
+                  {[1, 2, 3, 4].map((level) => <span key={level} className={level <= strength ? `active level-${strength}` : ''} />)}
+                </div>
+                <span><ShieldCheck size={15} /> {strengthLabel}</span>
+              </>
+            ) : <span />}
+            <span>{t('txt_generator_character_count', { count: generated.length })}</span>
+          </div>}
           <div className="actions generator-actions">
-            <button type="button" className="btn btn-primary" onClick={regenerate}><RefreshCw size={16} className="btn-icon" />{t('txt_regenerate')}</button>
-            <button type="button" className="btn btn-secondary" onClick={() => void copy()}><Copy size={16} className="btn-icon" />{copied ? t('txt_copied') : t('txt_copy')}</button>
+            <button type="button" className="btn btn-primary" disabled={sshKeyLoading} onClick={regenerate}>{sshKeyLoading ? <LoaderCircle size={16} className="btn-icon generator-spinner" /> : <RefreshCw size={16} className="btn-icon" />}{t('txt_regenerate')}</button>
+            <button type="button" className="btn btn-secondary" disabled={(settings.mode === 'sshKey' && !sshKey) || !generated} onClick={() => void copy()}><Copy size={16} className="btn-icon" />{copied ? t('txt_copied') : settings.mode === 'sshKey' ? t('txt_generator_copy_public_key') : t('txt_copy')}</button>
           </div>
-          <p className="generator-security-note"><Check size={15} />{t('txt_generator_security_note')}</p>
+          <p className="generator-security-note"><Check size={15} />{t(settings.mode === 'sshKey' ? 'txt_generator_ssh_security_note' : 'txt_generator_security_note')}</p>
         </section>
 
         <section className="generator-options-card" aria-labelledby="generator-options-title">
           <h2 id="generator-options-title">{t('txt_options')}</h2>
-          {mode === 'password' ? (
+          {settings.mode === 'password' && (
+            <PasswordOptionFields options={settings.password} onChange={changePasswordOption} onCharacterTypeChange={changeCharacterType} />
+          )}
+          {settings.mode === 'passphrase' && (
             <>
-              <GeneratorNumberStepper id="length" label={t('txt_generator_length')} value={passwordOptions.length} minimum={5} maximum={128} fallback={14} onChange={(value) => changePasswordOption('length', value)} />
-              <fieldset className="generator-option-group"><legend>{t('txt_generator_character_types')}</legend>
-                <GeneratorToggle checked={passwordOptions.uppercase} onChange={(checked) => changePasswordOption('uppercase', checked)} label={t('txt_generator_uppercase')} />
-                <GeneratorToggle checked={passwordOptions.lowercase} onChange={(checked) => changePasswordOption('lowercase', checked)} label={t('txt_generator_lowercase')} />
-                <GeneratorToggle checked={passwordOptions.numbers} onChange={(checked) => changePasswordOption('numbers', checked)} label={t('txt_generator_numbers')} />
-                {passwordOptions.numbers && <GeneratorNumberStepper id="min-numbers" compact label={t('txt_generator_minimum')} value={passwordOptions.minNumbers} minimum={0} maximum={9} fallback={1} onChange={(value) => changePasswordOption('minNumbers', value)} />}
-                <GeneratorToggle checked={passwordOptions.special} onChange={(checked) => changePasswordOption('special', checked)} label={t('txt_generator_special')} />
-                {passwordOptions.special && <GeneratorNumberStepper id="min-special" compact label={t('txt_generator_minimum')} value={passwordOptions.minSpecial} minimum={0} maximum={9} fallback={1} onChange={(value) => changePasswordOption('minSpecial', value)} />}
-              </fieldset>
-              <GeneratorToggle checked={passwordOptions.avoidAmbiguous} onChange={(checked) => changePasswordOption('avoidAmbiguous', checked)} label={t('txt_generator_avoid_ambiguous')} />
-            </>
-          ) : (
-            <>
-              <GeneratorNumberStepper id="words" label={t('txt_generator_words')} value={passphraseOptions.words} minimum={3} maximum={20} fallback={6} onChange={(value) => changePassphraseOption('words', value)} />
-              <label className="generator-number-field" htmlFor="generator-separator"><span>{t('txt_generator_separator')}</span><input id="generator-separator" className="input" type="text" maxLength={1} value={passphraseOptions.separator} onInput={(event) => changePassphraseOption('separator', event.currentTarget.value.slice(0, 1))} /></label>
+              <GeneratorNumberStepper id="words" label={t('txt_generator_words')} value={settings.passphrase.words} minimum={3} maximum={20} fallback={6} onChange={(value) => changePassphraseOption('words', value)} />
+              <label className="generator-select-field" htmlFor="generator-word-list"><span>{t('txt_generator_word_list')}</span><select id="generator-word-list" className="input" value={settings.passphrase.wordList} onChange={(event) => changePassphraseOption('wordList', event.currentTarget.value as 'eff' | 'custom')}><option value="eff">{t('txt_generator_eff_word_list')}</option><option value="custom">{t('txt_generator_custom_word_list')}</option></select></label>
+              {settings.passphrase.wordList === 'custom' && <label className="generator-text-field" htmlFor="generator-custom-words"><span>{t('txt_generator_custom_words')}</span><textarea id="generator-custom-words" className="input generator-word-list-input" rows={6} spellcheck={false} placeholder={t('txt_generator_custom_words_placeholder')} value={settings.passphrase.customWords} onInput={(event) => changePassphraseOption('customWords', event.currentTarget.value)} /></label>}
+              <label className="generator-number-field" htmlFor="generator-separator"><span>{t('txt_generator_separator')}</span><input id="generator-separator" className="input" type="text" maxLength={1} value={settings.passphrase.separator} onInput={(event) => changePassphraseOption('separator', event.currentTarget.value.slice(0, 1))} /></label>
               <div className="generator-option-group">
-                <GeneratorToggle checked={passphraseOptions.capitalize} onChange={(checked) => changePassphraseOption('capitalize', checked)} label={t('txt_generator_capitalize')} />
-                <GeneratorToggle checked={passphraseOptions.includeNumber} onChange={(checked) => changePassphraseOption('includeNumber', checked)} label={t('txt_generator_include_number')} />
+                <GeneratorToggle checked={settings.passphrase.capitalize} onChange={(checked) => changePassphraseOption('capitalize', checked)} label={t('txt_generator_capitalize')} />
+                <GeneratorToggle checked={settings.passphrase.includeNumber} onChange={(checked) => changePassphraseOption('includeNumber', checked)} label={t('txt_generator_include_number')} />
               </div>
             </>
+          )}
+          {settings.mode === 'pin' && (
+            <>
+              <GeneratorNumberStepper id="pin-length" label={t('txt_generator_length')} value={settings.pin.length} minimum={3} maximum={64} fallback={6} onChange={(value) => changePinOption('length', value)} />
+              <p className="generator-options-note">{t('txt_generator_pin_description')}</p>
+            </>
+          )}
+          {settings.mode === 'username' && (
+            <UsernameOptionFields options={settings.username} onChange={changeUsernameOption} />
+          )}
+          {settings.mode === 'email' && (
+            <EmailOptionFields options={settings.email} onChange={changeEmailOption} />
+          )}
+          {settings.mode === 'sshKey' && (
+            <SshKeyOptionFields options={settings.sshKey} onChange={changeSshKeyOption} />
           )}
         </section>
       </div>
     </section>
+  );
+}
+
+function PasswordOptionFields(props: { options: PasswordOptions; onChange: <K extends keyof PasswordOptions>(key: K, value: PasswordOptions[K]) => void; onCharacterTypeChange: (key: 'uppercase' | 'lowercase' | 'numbers' | 'special', checked: boolean) => void }) {
+  const { options } = props;
+  return (
+    <>
+      <GeneratorNumberStepper id="length" label={t('txt_generator_length')} value={options.length} minimum={5} maximum={128} fallback={16} onChange={(value) => props.onChange('length', value)} />
+      <fieldset className="generator-option-group"><legend>{t('txt_generator_character_types')}</legend>
+        <GeneratorToggle checked={options.uppercase} onChange={(checked) => props.onCharacterTypeChange('uppercase', checked)} label={t('txt_generator_uppercase')} />
+        {options.uppercase && <GeneratorNumberStepper id="min-uppercase" compact label={t('txt_generator_minimum')} value={options.minUppercase} minimum={0} maximum={9} fallback={1} onChange={(value) => props.onChange('minUppercase', value)} />}
+        <GeneratorToggle checked={options.lowercase} onChange={(checked) => props.onCharacterTypeChange('lowercase', checked)} label={t('txt_generator_lowercase')} />
+        {options.lowercase && <GeneratorNumberStepper id="min-lowercase" compact label={t('txt_generator_minimum')} value={options.minLowercase} minimum={0} maximum={9} fallback={1} onChange={(value) => props.onChange('minLowercase', value)} />}
+        <GeneratorToggle checked={options.numbers} onChange={(checked) => props.onCharacterTypeChange('numbers', checked)} label={t('txt_generator_numbers')} />
+        {options.numbers && <GeneratorNumberStepper id="min-numbers" compact label={t('txt_generator_minimum')} value={options.minNumbers} minimum={0} maximum={9} fallback={1} onChange={(value) => props.onChange('minNumbers', value)} />}
+        <GeneratorToggle checked={options.special} onChange={(checked) => props.onCharacterTypeChange('special', checked)} label={t('txt_generator_special')} />
+        {options.special && <GeneratorNumberStepper id="min-special" compact label={t('txt_generator_minimum')} value={options.minSpecial} minimum={0} maximum={9} fallback={1} onChange={(value) => props.onChange('minSpecial', value)} />}
+      </fieldset>
+      <GeneratorToggle checked={options.avoidAmbiguous} onChange={(checked) => props.onChange('avoidAmbiguous', checked)} label={t('txt_generator_avoid_ambiguous')} />
+    </>
+  );
+}
+
+function UsernameOptionFields(props: { options: UsernameOptions; onChange: <K extends keyof UsernameOptions>(key: K, value: UsernameOptions[K]) => void }) {
+  return (
+    <>
+      <GeneratorNumberStepper id="username-words" label={t('txt_generator_words')} value={props.options.words} minimum={1} maximum={10} fallback={2} onChange={(value) => props.onChange('words', value)} />
+      <div className="generator-option-group">
+        <GeneratorToggle checked={props.options.capitalize} onChange={(checked) => props.onChange('capitalize', checked)} label={t('txt_generator_capitalize')} />
+        <GeneratorToggle checked={props.options.includeNumber} onChange={(checked) => props.onChange('includeNumber', checked)} label={t('txt_generator_include_number')} />
+      </div>
+      <label className="generator-select-field" htmlFor="generator-username-word-list"><span>{t('txt_generator_word_list')}</span><select id="generator-username-word-list" className="input" value={props.options.wordList} onChange={(event) => props.onChange('wordList', event.currentTarget.value as 'eff' | 'custom')}><option value="eff">{t('txt_generator_eff_word_list')}</option><option value="custom">{t('txt_generator_custom_word_list')}</option></select></label>
+      {props.options.wordList === 'custom' && <label className="generator-text-field" htmlFor="generator-username-custom-words"><span>{t('txt_generator_custom_words')}</span><textarea id="generator-username-custom-words" className="input generator-word-list-input" rows={6} spellcheck={false} placeholder={t('txt_generator_custom_words_placeholder')} value={props.options.customWords} onInput={(event) => props.onChange('customWords', event.currentTarget.value)} /></label>}
+      <label className="generator-text-field" htmlFor="generator-username-custom-word"><span>{t('txt_generator_custom_word')}</span><input id="generator-username-custom-word" className="input" type="text" autocomplete="off" maxLength={128} value={props.options.customWord} onInput={(event) => props.onChange('customWord', event.currentTarget.value)} /></label>
+      <label className="generator-text-field" htmlFor="generator-username-delimiter"><span>{t('txt_generator_separator')}</span><input id="generator-username-delimiter" className="input" type="text" autocomplete="off" maxLength={8} value={props.options.delimiter} onInput={(event) => props.onChange('delimiter', event.currentTarget.value.slice(0, 8))} /></label>
+      <p className="generator-options-note">{t('txt_generator_long_word_username_description')}</p>
+    </>
+  );
+}
+
+function EmailOptionFields(props: { options: EmailOptions; onChange: <K extends keyof EmailOptions>(key: K, value: EmailOptions[K]) => void }) {
+  const types: Array<[EmailMode, string]> = [
+    ['plusAddressed', 'txt_generator_plus_addressed_email'],
+    ['catchAll', 'txt_generator_catch_all_email'],
+    ['subdomain', 'txt_generator_subdomain_email'],
+  ];
+  return (
+    <>
+      <label className="generator-select-field" htmlFor="generator-email-type"><span>{t('txt_generator_email_type')}</span><select id="generator-email-type" className="input" value={props.options.type} onChange={(event) => props.onChange('type', event.currentTarget.value as EmailMode)}>{types.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}</select></label>
+      {props.options.type === 'catchAll'
+        ? <label className="generator-text-field" htmlFor="generator-domain"><span>{t('txt_generator_domain')}</span><input id="generator-domain" className="input" type="text" autocomplete="off" value={props.options.domain} onInput={(event) => props.onChange('domain', event.currentTarget.value)} /></label>
+        : <label className="generator-text-field" htmlFor="generator-email"><span>{t('txt_generator_email')}</span><input id="generator-email" className="input" type="email" autocomplete="off" value={props.options.email} onInput={(event) => props.onChange('email', event.currentTarget.value)} /></label>}
+      <p className="generator-options-note">{t('txt_generator_email_description')}</p>
+    </>
+  );
+}
+
+function publicKeyWithComment(publicKey: string, comment: string): string {
+  const base = publicKey.trim().split(/\s+/).slice(0, 2).join(' ');
+  const safeComment = comment.replace(/[\r\n]+/g, ' ').trim();
+  return safeComment ? `${base} ${safeComment}` : base;
+}
+
+function downloadText(filename: string, value: string): void {
+  const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function SshKeyOutput(props: { value: GeneratedSshKey | null; loading: boolean; error: string; comment: string }) {
+  if (props.loading) return <div className="generator-key-status"><LoaderCircle size={24} className="generator-spinner" /><span>{t('txt_generator_ssh_generating')}</span></div>;
+  if (props.error) return <div className="generator-key-status error">{props.error}</div>;
+  if (!props.value) return null;
+  const publicKey = publicKeyWithComment(props.value.publicKey, props.comment);
+  const copyField = (value: string) => void copyTextToClipboard(value);
+  return (
+    <div className="generator-key-output">
+      <div className="generator-key-summary"><strong>{props.value.type}{props.value.type === 'RSA' ? ` ${props.value.bits}` : ''}</strong><code>{props.value.fingerprint}</code></div>
+      <div className="generator-key-field"><span>{t('txt_generator_public_key')}</span><code>{publicKey}</code><div className="generator-key-field-actions"><button type="button" className="btn btn-secondary small" onClick={() => copyField(publicKey)}><Copy size={14} />{t('txt_copy')}</button><button type="button" className="btn btn-secondary small" onClick={() => downloadText('id_nodewarden.pub', `${publicKey}\n`)}><Download size={14} />{t('txt_download')}</button></div></div>
+      <details className="generator-private-key"><summary>{t('txt_generator_private_key')}</summary><code>{props.value.privateKey}</code><div className="generator-key-field-actions"><button type="button" className="btn btn-secondary small" onClick={() => copyField(props.value!.privateKey)}><Copy size={14} />{t('txt_copy')}</button><button type="button" className="btn btn-secondary small" onClick={() => downloadText('id_nodewarden', props.value!.privateKey)}><Download size={14} />{t('txt_download')}</button></div></details>
+    </div>
+  );
+}
+
+function SshKeyOptionFields(props: { options: SshKeyOptions; onChange: <K extends keyof SshKeyOptions>(key: K, value: SshKeyOptions[K]) => void }) {
+  return (
+    <>
+      <label className="generator-select-field" htmlFor="generator-ssh-type"><span>{t('txt_generator_ssh_algorithm')}</span><select id="generator-ssh-type" className="input" value={props.options.type} onChange={(event) => props.onChange('type', event.currentTarget.value as SshKeyOptions['type'])}><option value="ed25519">Ed25519</option><option value="rsa">RSA</option></select></label>
+      {props.options.type === 'rsa' && <label className="generator-select-field" htmlFor="generator-rsa-length"><span>{t('txt_generator_key_length')}</span><select id="generator-rsa-length" className="input" value={props.options.rsaLength} onChange={(event) => props.onChange('rsaLength', Number(event.currentTarget.value) as SshKeyOptions['rsaLength'])}><option value={1024}>1024 ({t('txt_generator_not_recommended')})</option><option value={2048}>2048</option><option value={3072}>3072</option><option value={4096}>4096</option></select></label>}
+      <label className="generator-text-field" htmlFor="generator-ssh-comment"><span>{t('txt_generator_ssh_comment')}</span><input id="generator-ssh-comment" className="input" type="text" autocomplete="off" maxLength={256} placeholder="user@example.com" value={props.options.comment} onInput={(event) => props.onChange('comment', event.currentTarget.value)} /></label>
+      <p className="generator-options-note">{t(props.options.type === 'rsa' ? 'txt_generator_ssh_rsa_description' : 'txt_generator_ssh_ed25519_description')}</p>
+    </>
   );
 }
 
@@ -233,7 +298,7 @@ function GeneratorToggle(props: { checked: boolean; label: string; onChange: (ch
 
 function GeneratorNumberStepper(props: { id: string; label: string; value: number; minimum: number; maximum: number; fallback: number; compact?: boolean; onChange: (value: number) => void }) {
   const id = `generator-stepper-${props.id}`;
-  const setValue = (value: number) => props.onChange(clamp(value, props.minimum, props.maximum, props.fallback));
+  const setValue = (value: number) => props.onChange(clampInteger(value, props.minimum, props.maximum, props.fallback));
   return (
     <div className={`generator-number-field ${props.compact ? 'compact' : ''}`}>
       <label htmlFor={id}>{props.label}</label>
