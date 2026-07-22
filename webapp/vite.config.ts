@@ -145,6 +145,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (NEVER_CACHE_PATH_RE.test(url.pathname)) return;
 
+  // 真实的 connector 页面（webauthn-fallback-connector.html /
+  // webauthn-mobile-connector.html / sso-connector.html 等）必须原样返回，
+  // 不能被 app shell 回退吞掉。网络优先，离线时才退回 shell。
+  if (url.pathname.endsWith('-connector.html')) {
+    event.respondWith(fetch(request).catch(() => appShellNavigation(request)));
+    return;
+  }
+
   if (request.mode === 'navigate') {
     event.respondWith(appShellNavigation(request));
     if (navigator.onLine !== false) {
