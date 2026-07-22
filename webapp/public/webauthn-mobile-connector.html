@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f3f6f9" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'"
+    />
+    <title>NodeWarden WebAuthn</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f3f6f9;
+        --panel: rgba(255, 255, 255, 0.94);
+        --panel-soft: #f8fafc;
+        --line: rgba(100, 116, 139, 0.22);
+        --line-soft: rgba(100, 116, 139, 0.13);
+        --text: #0f172a;
+        --muted: #64748b;
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --primary-soft: #eaf2ff;
+        --success: #047857;
+        --success-soft: #ecfdf5;
+        --danger: #b91c1c;
+        --danger-soft: #fef2f2;
+        --shadow: 0 24px 64px rgba(15, 23, 42, 0.12), 0 4px 14px rgba(15, 23, 42, 0.05);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        overflow-x: hidden;
+        background:
+          radial-gradient(circle at 14% 0%, rgba(37, 99, 235, 0.12), transparent 36%),
+          radial-gradient(circle at 92% 92%, rgba(13, 148, 136, 0.08), transparent 34%),
+          var(--bg);
+        color: var(--text);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      body::before {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        content: "";
+        opacity: 0.28;
+        background-image: linear-gradient(rgba(100, 116, 139, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(100, 116, 139, 0.06) 1px, transparent 1px);
+        background-size: 34px 34px;
+        mask-image: linear-gradient(to bottom, black, transparent 68%);
+      }
+
+      .page-shell {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        min-height: 100svh;
+        place-items: center;
+        padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+      }
+
+      .connector-card {
+        width: min(100%, 440px);
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+        animation: card-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .brand-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 17px 20px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .brand-bar img { width: 29px; height: 29px; object-fit: contain; }
+      .brand-name { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; }
+      .brand-context { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 650; }
+
+      .card-body { padding: 27px 28px 28px; text-align: center; }
+
+      .passkey-visual {
+        position: relative;
+        display: grid;
+        width: 156px;
+        height: 156px;
+        margin: 0 auto 23px;
+        place-items: center;
+        border: 1px solid rgba(37, 99, 235, 0.13);
+        border-radius: 48px;
+        background: linear-gradient(145deg, #f8fbff 0%, #e7f0ff 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 16px 34px rgba(37, 99, 235, 0.13);
+      }
+
+      .passkey-visual::before, .passkey-visual::after {
+        position: absolute;
+        border-radius: 999px;
+        content: "";
+      }
+
+      .passkey-visual::before { width: 9px; height: 9px; top: 21px; right: 28px; background: #14b8a6; box-shadow: 0 0 0 6px rgba(20, 184, 166, 0.10); }
+      .passkey-visual::after { width: 7px; height: 7px; bottom: 27px; left: 24px; background: #f59e0b; box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.10); }
+      .passkey-visual svg { width: 106px; height: 106px; filter: drop-shadow(0 8px 12px rgba(30, 64, 175, 0.14)); }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0 0 10px;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .eyebrow::before { width: 7px; height: 7px; border-radius: 50%; background: #14b8a6; box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.11); content: ""; }
+
+      h1 { margin: 0; font-size: clamp(24px, 7vw, 30px); line-height: 1.18; letter-spacing: -0.035em; }
+      .intro { max-width: 340px; margin: 11px auto 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+
+      .status {
+        margin: 20px 0 0;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 11px 12px;
+        background: var(--panel-soft);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.45;
+      }
+
+      .status[hidden] { display: none; }
+      .status[data-kind="error"] { border-color: rgba(185, 28, 28, 0.19); background: var(--danger-soft); color: var(--danger); }
+      .status[data-kind="success"] { border-color: rgba(4, 120, 87, 0.19); background: var(--success-soft); color: var(--success); }
+
+      button {
+        position: relative;
+        display: inline-flex;
+        width: 100%;
+        min-height: 50px;
+        align-items: center;
+        justify-content: center;
+        margin-top: 20px;
+        overflow: hidden;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        padding: 12px 18px;
+        background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+        box-shadow: 0 10px 22px rgba(37, 99, 235, 0.24);
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-size: 15px;
+        font-weight: 800;
+        transition: transform 120ms ease, box-shadow 180ms ease, filter 180ms ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      button::after {
+        position: absolute;
+        width: 80px;
+        height: 160px;
+        left: -110px;
+        top: -55px;
+        background: rgba(255, 255, 255, 0.14);
+        content: "";
+        transform: rotate(22deg);
+        transition: left 360ms ease;
+      }
+
+      button:hover:not([data-state="waiting"]):not([data-state="unavailable"]) { filter: brightness(1.06); box-shadow: 0 13px 27px rgba(37, 99, 235, 0.29); }
+      button:hover::after { left: calc(100% + 30px); }
+      button:active:not([data-state="waiting"]):not([data-state="unavailable"]) { transform: translateY(1px); }
+      button:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.22); outline-offset: 3px; }
+      button[data-state="waiting"], button[data-state="unavailable"] { cursor: default; opacity: 0.58; box-shadow: none; }
+      button[data-state="return"] { background: var(--panel-soft); border-color: var(--line); box-shadow: none; color: var(--primary); }
+
+      .security-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 17px; color: var(--muted); font-size: 12px; font-weight: 650; }
+      .security-note svg { width: 14px; height: 14px; color: #0d9488; }
+
+      @keyframes card-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0e13;
+          --panel: rgba(21, 27, 36, 0.96);
+          --panel-soft: #111720;
+          --line: rgba(148, 163, 184, 0.18);
+          --line-soft: rgba(148, 163, 184, 0.10);
+          --text: #f1f5f9;
+          --muted: #94a3b8;
+          --primary: #60a5fa;
+          --primary-soft: rgba(96, 165, 250, 0.12);
+          --success: #34d399;
+          --success-soft: rgba(52, 211, 153, 0.09);
+          --danger: #f87171;
+          --danger-soft: rgba(248, 113, 113, 0.09);
+          --shadow: 0 28px 70px rgba(0, 0, 0, 0.46);
+        }
+        body { background: radial-gradient(circle at 14% 0%, rgba(37, 99, 235, 0.16), transparent 38%), radial-gradient(circle at 92% 92%, rgba(20, 184, 166, 0.08), transparent 34%), var(--bg); }
+        .passkey-visual { border-color: rgba(96, 165, 250, 0.16); background: linear-gradient(145deg, #172235 0%, #111827 100%); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 38px rgba(0, 0, 0, 0.25); }
+      }
+
+      @media (max-width: 480px) {
+        .page-shell { align-items: center; padding-left: 12px; padding-right: 12px; }
+        .connector-card { border-radius: 20px; }
+        .brand-bar { padding: 15px 17px; }
+        .card-body { padding: 22px 20px 24px; }
+        .passkey-visual { width: 136px; height: 136px; margin-bottom: 20px; border-radius: 42px; }
+        .passkey-visual svg { width: 92px; height: 92px; }
+      }
+
+      @media (max-height: 650px) {
+        .card-body { padding-top: 20px; }
+        .passkey-visual { width: 112px; height: 112px; margin-bottom: 16px; border-radius: 35px; }
+        .passkey-visual svg { width: 78px; height: 78px; }
+        .intro { margin-top: 7px; }
+        button { margin-top: 16px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="connector-card" aria-labelledby="webauthn-header">
+        <header class="brand-bar">
+          <img src="/nodewarden-logo.svg" alt="" />
+          <span class="brand-name">NodeWarden</span>
+          <span class="brand-context">WebAuthn</span>
+        </header>
+        <div class="card-body">
+          <div class="passkey-visual" aria-hidden="true">
+            <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="22" y="15" width="76" height="90" rx="23" fill="#fff" stroke="#BFD3F7" stroke-width="3" />
+              <circle cx="60" cy="52" r="18" fill="#DBEAFE" stroke="#2563EB" stroke-width="3" />
+              <path d="M60 44a8 8 0 0 1 5.5 13.8V66h-11v-8.2A8 8 0 0 1 60 44Z" fill="#2563EB" />
+              <path d="M48 85h24" stroke="#94A3B8" stroke-width="4" stroke-linecap="round" />
+              <path d="M88 78h12a11 11 0 1 1 0 22H84" stroke="#0D9488" stroke-width="6" stroke-linecap="round" />
+              <path d="M84 89h22M99 89v7M91 89v5" stroke="#0D9488" stroke-width="6" stroke-linecap="round" />
+            </svg>
+          </div>
+          <p class="eyebrow">Secure sign-in</p>
+          <h1 id="webauthn-header">Two-step verification</h1>
+          <p id="webauthn-copy" class="intro">Use your passkey or security key to finish signing in.</p>
+          <div id="webauthn-status" class="status" role="status" aria-live="polite" hidden></div>
+          <button id="webauthn-button" type="button" data-state="loading" aria-busy="true">Preparing passkey…</button>
+          <div class="security-note">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6V10Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M12 14v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <span id="secure-label">Protected by WebAuthn</span>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/webauthn-mobile-connector.js"></script>
+  </body>
+</html>
