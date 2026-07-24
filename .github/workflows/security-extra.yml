@@ -48,8 +48,8 @@ jobs:
       upload-sarif: true
       fail-on-vuln: true
 
-  pnpm-audit:
-    name: pnpm audit
+  npm-audit:
+    name: npm audit
     runs-on: ubuntu-latest
 
     permissions:
@@ -66,17 +66,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Run pnpm audit
-        shell: bash
-        run: |
-          if [ ! -f pnpm-lock.yaml ]; then
-            echo "pnpm-lock.yaml not found, skip pnpm audit."
-            exit 0
-          fi
-
-          corepack enable
-          corepack prepare pnpm@10 --activate
-          pnpm audit --audit-level=high
+      - name: Run npm audit
+        run: npm audit --audit-level=high
 
   semgrep:
     name: Semgrep CE Scan
