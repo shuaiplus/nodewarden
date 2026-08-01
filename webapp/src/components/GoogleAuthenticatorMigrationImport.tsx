@@ -118,6 +118,11 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
         ...payloadMeta,
         reason: parsed.reason,
         version: parsed.version ?? null,
+        accountCount: parsed.accountCount ?? null,
+        batchSize: parsed.batchSize ?? null,
+        batchIndex: parsed.batchIndex ?? null,
+        batchId: parsed.batchId ?? null,
+        payloadBytes: parsed.payloadBytes ?? null,
       });
       setStatus(t('txt_ga_migration_invalid_page'));
       return false;

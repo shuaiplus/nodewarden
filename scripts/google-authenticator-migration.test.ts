@@ -175,16 +175,35 @@ test('reports incompatible records without exposing a TOTP URI', () => {
   assert.ok(!JSON.stringify(page).includes('otpauth://'));
 });
 
-test('accepts migration payload version 2 and high-bit batch ids', () => {
-  const page = parseGoogleAuthenticatorMigrationPage(migrationUri({
-    accounts: [validAccount],
-    version: 2,
-    batchId: 0xffffffff,
-  }));
+test('defaults missing batch metadata and preserves plus in base64 data', () => {
+  // Minimal payload: one otp parameter only (proto3 defaults for batch fields).
+  const account = buildOtpParameter({
+    secret: validSecret,
+    name: 'a',
+    type: 2,
+  });
+  const base = fieldBytes(1, account);
+  let b64 = '';
+  let payload: Uint8Array | null = null;
+  for (let i = 0; i < 10_000; i += 1) {
+    const junk = Uint8Array.from({ length: 3 }, (_, j) => (i * 3 + j) & 255);
+    const candidate = Uint8Array.from([...base, ...fieldBytes(99, junk)]);
+    b64 = Buffer.from(candidate).toString('base64');
+    if (b64.includes('+')) {
+      payload = candidate;
+      break;
+    }
+  }
+  assert.ok(payload && b64.includes('+'), 'fixture base64 must include +');
+  // Raw '+' in the query (not %2B) — URLSearchParams would corrupt this to a space.
+  const uri = `otpauth-migration://offline?data=${b64}`;
+  const page = parseGoogleAuthenticatorMigrationPage(uri);
   assert.equal(page.ok, true);
   if (!page.ok) return;
-  assert.equal(page.page.version, 2);
-  assert.equal(page.page.batchId, 0xffffffff);
+  assert.equal(page.page.version, 1);
+  assert.equal(page.page.batchSize, 1);
+  assert.equal(page.page.batchIndex, 0);
+  assert.equal(page.page.accounts.length, 1);
 });
 
 test('rejects malformed, unsupported, and incomplete migration pages', () => {
@@ -192,31 +211,40 @@ test('rejects malformed, unsupported, and incomplete migration pages', () => {
     ok: false,
     reason: 'invalid-data',
   });
-  assert.deepEqual(parseGoogleAuthenticatorMigrationPage(migrationUri({
+
+  const unsupported = parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [buildOtpParameter({ secret: validSecret, type: 2 })],
     version: 99,
-  })), {
-    ok: false,
-    reason: 'unsupported-version',
-    version: 99,
-  });
-  assert.deepEqual(parseGoogleAuthenticatorMigrationPage(migrationUri({
+  }));
+  assert.equal(unsupported.ok, false);
+  if (unsupported.ok) return;
+  assert.equal(unsupported.reason, 'unsupported-version');
+  assert.equal(unsupported.version, 99);
+  assert.equal(unsupported.accountCount, 1);
+  assert.ok(typeof unsupported.payloadBytes === 'number');
+
+  // Proto3: batch_size 0 on the wire is the default → treat as single-page.
+  const defaultedBatch = parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [validAccount],
     batchSize: 0,
-  })), {
-    ok: false,
-    reason: 'invalid-batch',
-  });
-  assert.deepEqual(parseGoogleAuthenticatorMigrationPage(migrationUri({
+  }));
+  assert.equal(defaultedBatch.ok, true);
+  if (!defaultedBatch.ok) return;
+  assert.equal(defaultedBatch.page.batchSize, 1);
+
+  const invalidBatch = parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [validAccount],
     batchIndex: 5,
     batchSize: 2,
-  })), {
-    ok: false,
-    reason: 'invalid-batch',
-  });
+  }));
+  assert.equal(invalidBatch.ok, false);
+  if (invalidBatch.ok) return;
+  assert.equal(invalidBatch.reason, 'invalid-batch');
+  assert.equal(invalidBatch.version, 1);
+  assert.equal(invalidBatch.batchSize, 2);
+  assert.equal(invalidBatch.batchIndex, 5);
+  assert.equal(invalidBatch.accountCount, 1);
 });
-
 test('preserves high-bit batch ids and skips unknown protobuf fields', () => {
   const page = parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [buildOtpParameter({

@@ -35,6 +35,11 @@ export type GoogleAuthenticatorMigrationParseResult =
     ok: false;
     reason: 'invalid-data' | 'invalid-batch' | 'invalid-uri' | 'malformed-payload' | 'unsupported-version';
     version?: number | null;
+    accountCount?: number;
+    batchSize?: number | null;
+    batchIndex?: number | null;
+    batchId?: number | null;
+    payloadBytes?: number;
   };
 
 const MAX_URI_LENGTH = 100_000;
@@ -269,26 +274,62 @@ function parseMigrationPayload(bytes: Uint8Array): GoogleAuthenticatorMigrationP
     }
   }
 
-  if (version == null || !SUPPORTED_VERSIONS.has(version)) {
-    return { ok: false, reason: 'unsupported-version', version };
+  // Proto3 scalar defaults: absent version 0/null → 1; absent batch fields → single-page defaults.
+  const resolvedVersion = version == null || version === 0 ? 1 : version;
+  if (!SUPPORTED_VERSIONS.has(resolvedVersion)) {
+    return { ok: false, reason: 'unsupported-version', version: resolvedVersion, accountCount: accounts.length };
   }
-  // batch_index is optional in some exporters; default to 0 for single-page batches.
-  if (batchIndex == null && batchSize === 1) batchIndex = 0;
-  if (!accounts.length || batchSize == null || batchIndex == null || batchId == null
-    || batchSize < 1 || batchSize > MAX_BATCH_SIZE || batchIndex < 0 || batchIndex >= batchSize) {
-    return { ok: false, reason: 'invalid-batch' };
+  const resolvedBatchSize = batchSize == null || batchSize === 0 ? (accounts.length ? 1 : null) : batchSize;
+  const resolvedBatchIndex = batchIndex == null ? 0 : batchIndex;
+  const resolvedBatchId = batchId == null ? 0 : batchId;
+  if (!accounts.length || resolvedBatchSize == null
+    || resolvedBatchSize < 1 || resolvedBatchSize > MAX_BATCH_SIZE
+    || resolvedBatchIndex < 0 || resolvedBatchIndex >= resolvedBatchSize) {
+    return {
+      ok: false,
+      reason: 'invalid-batch',
+      version: resolvedVersion,
+      accountCount: accounts.length,
+      batchSize: resolvedBatchSize,
+      batchIndex: resolvedBatchIndex,
+      batchId: resolvedBatchId,
+    };
   }
 
   return {
     ok: true,
     page: {
-      batchId,
-      batchSize,
-      batchIndex,
-      version: version as 1 | 2,
+      batchId: resolvedBatchId,
+      batchSize: resolvedBatchSize,
+      batchIndex: resolvedBatchIndex,
+      version: resolvedVersion as 1 | 2,
       accounts,
     },
   };
+}
+
+function extractMigrationDataParam(raw: string): string | null {
+  const trimmed = String(raw || '').trim();
+  const queryIndex = trimmed.indexOf('?');
+  if (queryIndex < 0) return null;
+  let found: string | null = null;
+  for (const part of trimmed.slice(queryIndex + 1).split('&')) {
+    const eq = part.indexOf('=');
+    const key = eq < 0 ? part : part.slice(0, eq);
+    if (key !== 'data') {
+      if (key) return null;
+      continue;
+    }
+    if (found != null) return null;
+    const value = eq < 0 ? '' : part.slice(eq + 1);
+    // Keep '+' as '+' (URLSearchParams would turn it into a space and corrupt Base64).
+    try {
+      found = decodeURIComponent(value.replace(/\+/g, '%2B'));
+    } catch {
+      return null;
+    }
+  }
+  return found;
 }
 
 export function parseGoogleAuthenticatorMigrationPage(raw: string): GoogleAuthenticatorMigrationParseResult {
@@ -303,11 +344,11 @@ export function parseGoogleAuthenticatorMigrationPage(raw: string): GoogleAuthen
     || (url.pathname !== '' && url.pathname !== '/')) {
     return { ok: false, reason: 'invalid-uri' };
   }
-  const data = url.searchParams.getAll('data');
-  if (data.length !== 1 || Array.from(url.searchParams.keys()).some((key) => key !== 'data')) {
-    return { ok: false, reason: 'invalid-data' };
-  }
-  const bytes = decodeBase64(data[0]);
+  const data = extractMigrationDataParam(raw);
+  if (data == null) return { ok: false, reason: 'invalid-data' };
+  const bytes = decodeBase64(data);
   if (!bytes) return { ok: false, reason: 'invalid-data' };
-  return parseMigrationPayload(bytes);
+  const parsed = parseMigrationPayload(bytes);
+  if (!parsed.ok) return { ...parsed, payloadBytes: bytes.length };
+  return parsed;
 }
