@@ -25,7 +25,7 @@ export interface GoogleAuthenticatorMigrationPage {
   batchId: number;
   batchSize: number;
   batchIndex: number;
-  version: 1;
+  version: 1 | 2;
   accounts: Array<GoogleAuthenticatorMigrationAcceptedAccount | GoogleAuthenticatorMigrationExcludedAccount>;
 }
 
@@ -34,6 +34,7 @@ export type GoogleAuthenticatorMigrationParseResult =
   | {
     ok: false;
     reason: 'invalid-data' | 'invalid-batch' | 'invalid-uri' | 'malformed-payload' | 'unsupported-version';
+    version?: number | null;
   };
 
 const MAX_URI_LENGTH = 100_000;
@@ -42,27 +43,26 @@ const MAX_FIELD_BYTES = 4 * 1024;
 const MAX_ACCOUNT_COUNT = 512;
 const MAX_BATCH_SIZE = 100;
 const MIN_SECRET_BYTES = 10;
+const SUPPORTED_VERSIONS = new Set([1, 2]);
 
 interface ProtoState {
   offset: number;
 }
 
-function readVarint(bytes: Uint8Array, state: ProtoState): number | null {
-  let value = 0;
-  let multiplier = 1;
-  for (let index = 0; index < 10 && state.offset < bytes.length; index += 1) {
+/** Read a protobuf varint and return the low 32 bits as unsigned (int32/uint32 wire). */
+function readVarint32(bytes: Uint8Array, state: ProtoState): number | null {
+  let value = 0n;
+  for (let index = 0; index < 10; index += 1) {
+    if (state.offset >= bytes.length) return null;
     const byte = bytes[state.offset++];
-    if (index === 9 && byte > 1) return null;
-    value += (byte & 0x7f) * multiplier;
-    if (!Number.isSafeInteger(value)) return null;
-    if ((byte & 0x80) === 0) return value;
-    multiplier *= 128;
+    value |= BigInt(byte & 0x7f) << BigInt(7 * index);
+    if ((byte & 0x80) === 0) return Number(value & 0xffffffffn);
   }
   return null;
 }
 
 function readBytes(bytes: Uint8Array, state: ProtoState, maxLength: number): Uint8Array | null {
-  const length = readVarint(bytes, state);
+  const length = readVarint32(bytes, state);
   if (length == null || length > maxLength || state.offset + length > bytes.length) return null;
   const value = bytes.slice(state.offset, state.offset + length);
   state.offset += length;
@@ -70,7 +70,7 @@ function readBytes(bytes: Uint8Array, state: ProtoState, maxLength: number): Uin
 }
 
 function skipField(bytes: Uint8Array, state: ProtoState, wireType: number): boolean {
-  if (wireType === 0) return readVarint(bytes, state) != null;
+  if (wireType === 0) return readVarint32(bytes, state) != null;
   if (wireType === 1 && state.offset + 8 <= bytes.length) {
     state.offset += 8;
     return true;
@@ -171,7 +171,7 @@ function parseOtpParameter(bytes: Uint8Array): GoogleAuthenticatorMigrationAccep
   const seen = new Set<number>();
 
   while (state.offset < bytes.length) {
-    const key = readVarint(bytes, state);
+    const key = readVarint32(bytes, state);
     if (key == null) return excluded('malformed-record');
     const fieldNumber = Math.floor(key / 8);
     const wireType = key % 8;
@@ -192,15 +192,15 @@ function parseOtpParameter(bytes: Uint8Array): GoogleAuthenticatorMigrationAccep
       if (decoded == null) return excluded('malformed-record');
       issuer = decoded;
     } else if (fieldNumber === 4 && wireType === 0) {
-      const value = readVarint(bytes, state);
+      const value = readVarint32(bytes, state);
       algorithm = value == null ? null : algorithmFromEnum(value);
       if (!algorithm) return excluded('unsupported-algorithm');
     } else if (fieldNumber === 5 && wireType === 0) {
-      const value = readVarint(bytes, state);
+      const value = readVarint32(bytes, state);
       digits = value == null ? null : digitsFromEnum(value);
       if (!digits) return excluded('unsupported-digits');
     } else if (fieldNumber === 6 && wireType === 0) {
-      otpType = readVarint(bytes, state);
+      otpType = readVarint32(bytes, state);
       if (otpType == null) return excluded('malformed-record');
     } else if (!skipField(bytes, state, wireType)) {
       return excluded('malformed-record');
@@ -242,7 +242,7 @@ function parseMigrationPayload(bytes: Uint8Array): GoogleAuthenticatorMigrationP
   const seen = new Set<number>();
 
   while (state.offset < bytes.length) {
-    const key = readVarint(bytes, state);
+    const key = readVarint32(bytes, state);
     if (key == null) return { ok: false, reason: 'malformed-payload' };
     const fieldNumber = Math.floor(key / 8);
     const wireType = key % 8;
@@ -257,22 +257,25 @@ function parseMigrationPayload(bytes: Uint8Array): GoogleAuthenticatorMigrationP
       if (!parameter) return { ok: false, reason: 'malformed-payload' };
       accounts.push(parseOtpParameter(parameter));
     } else if (fieldNumber === 2 && wireType === 0) {
-      version = readVarint(bytes, state);
+      version = readVarint32(bytes, state);
     } else if (fieldNumber === 3 && wireType === 0) {
-      batchSize = readVarint(bytes, state);
+      batchSize = readVarint32(bytes, state);
     } else if (fieldNumber === 4 && wireType === 0) {
-      batchIndex = readVarint(bytes, state);
+      batchIndex = readVarint32(bytes, state);
     } else if (fieldNumber === 5 && wireType === 0) {
-      batchId = readVarint(bytes, state);
+      batchId = readVarint32(bytes, state);
     } else if (!skipField(bytes, state, wireType)) {
       return { ok: false, reason: 'malformed-payload' };
     }
   }
 
-  if (version !== 1) return { ok: false, reason: 'unsupported-version' };
+  if (version == null || !SUPPORTED_VERSIONS.has(version)) {
+    return { ok: false, reason: 'unsupported-version', version };
+  }
+  // batch_index is optional in some exporters; default to 0 for single-page batches.
+  if (batchIndex == null && batchSize === 1) batchIndex = 0;
   if (!accounts.length || batchSize == null || batchIndex == null || batchId == null
-    || batchSize < 1 || batchSize > MAX_BATCH_SIZE || batchIndex < 0 || batchIndex >= batchSize
-    || batchId < 0 || batchId > 0xffffffff) {
+    || batchSize < 1 || batchSize > MAX_BATCH_SIZE || batchIndex < 0 || batchIndex >= batchSize) {
     return { ok: false, reason: 'invalid-batch' };
   }
 
@@ -282,7 +285,7 @@ function parseMigrationPayload(bytes: Uint8Array): GoogleAuthenticatorMigrationP
       batchId,
       batchSize,
       batchIndex,
-      version: 1,
+      version: version as 1 | 2,
       accounts,
     },
   };

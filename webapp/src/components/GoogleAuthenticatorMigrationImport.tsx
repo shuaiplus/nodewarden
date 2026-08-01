@@ -114,7 +114,11 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
 
     const parsed = parseGoogleAuthenticatorMigrationPage(value);
     if (!parsed.ok) {
-      gaMigrationWarn('ingest.parse-failed', { ...payloadMeta, reason: parsed.reason });
+      gaMigrationWarn('ingest.parse-failed', {
+        ...payloadMeta,
+        reason: parsed.reason,
+        version: parsed.version ?? null,
+      });
       setStatus(t('txt_ga_migration_invalid_page'));
       return false;
     }

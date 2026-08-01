@@ -175,6 +175,18 @@ test('reports incompatible records without exposing a TOTP URI', () => {
   assert.ok(!JSON.stringify(page).includes('otpauth://'));
 });
 
+test('accepts migration payload version 2 and high-bit batch ids', () => {
+  const page = parseGoogleAuthenticatorMigrationPage(migrationUri({
+    accounts: [validAccount],
+    version: 2,
+    batchId: 0xffffffff,
+  }));
+  assert.equal(page.ok, true);
+  if (!page.ok) return;
+  assert.equal(page.page.version, 2);
+  assert.equal(page.page.batchId, 0xffffffff);
+});
+
 test('rejects malformed, unsupported, and incomplete migration pages', () => {
   assert.deepEqual(parseGoogleAuthenticatorMigrationPage('otpauth-migration://offline?data=%%%'), {
     ok: false,
@@ -182,10 +194,11 @@ test('rejects malformed, unsupported, and incomplete migration pages', () => {
   });
   assert.deepEqual(parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [buildOtpParameter({ secret: validSecret, type: 2 })],
-    version: 2,
+    version: 99,
   })), {
     ok: false,
     reason: 'unsupported-version',
+    version: 99,
   });
   assert.deepEqual(parseGoogleAuthenticatorMigrationPage(migrationUri({
     accounts: [validAccount],

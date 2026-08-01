@@ -131,7 +131,7 @@ export class GoogleAuthenticatorMigrationSession {
       || page.batchSize < 1
       || page.batchIndex < 0
       || page.batchIndex >= page.batchSize
-      || page.version !== 1
+      || (page.version !== 1 && page.version !== 2)
     ) {
       return { ok: false, reason: 'invalid-page' };
     }
