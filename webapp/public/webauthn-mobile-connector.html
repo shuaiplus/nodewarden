@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f6f8fb" />
+    <meta name="color-scheme" content="light" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>NodeWarden WebAuthn Connector</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --primary: #2563eb;
+        --primary-strong: #1d4ed8;
+        --text: #101828;
+        --muted: #667085;
+        --line: #d8e0ec;
+        --panel: #ffffff;
+        --surface: #f6f8fb;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background: var(--surface);
+        color: var(--text);
+      }
+
+      main {
+        display: grid;
+        min-height: 100vh;
+        min-height: 100svh;
+        place-items: center;
+        padding: max(28px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      }
+
+      .connector-card {
+        width: min(100%, 430px);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--panel);
+        box-shadow: 0 18px 44px rgba(16, 24, 40, 0.10);
+        padding: 28px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 28px;
+      }
+
+      .brand img {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+      }
+
+      .brand strong {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 26px;
+        line-height: 1.2;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .form {
+        display: grid;
+        gap: 16px;
+        margin-top: 24px;
+      }
+
+      button {
+        min-height: 48px;
+        width: 100%;
+        border: 1px solid var(--primary);
+        border-radius: 10px;
+        background: var(--primary);
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 800;
+        transition: background-color 160ms ease, border-color 160ms ease, transform 120ms ease;
+      }
+
+      button:hover:not(:disabled)[aria-disabled="false"] {
+        background: var(--primary-strong);
+        border-color: var(--primary-strong);
+      }
+
+      button:active:not(:disabled)[aria-disabled="false"] {
+        transform: translateY(1px);
+      }
+
+      button:disabled,
+      button[aria-disabled="true"] {
+        cursor: not-allowed;
+        opacity: 0.62;
+      }
+
+      button[data-state="return"] {
+        cursor: pointer;
+        opacity: 1;
+      }
+
+      .msg {
+        display: none;
+        border-radius: 10px;
+        padding: 11px 12px;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      .msg.show {
+        display: block;
+      }
+
+      .msg.info {
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1e40af;
+      }
+
+      .msg.error {
+        border: 1px solid #fecaca;
+        background: #fef2f2;
+        color: #991b1b;
+      }
+
+      .msg.success {
+        border: 1px solid #bbf7d0;
+        background: #f0fdf4;
+        color: #166534;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="connector-card" aria-labelledby="webauthn-header">
+        <div class="brand">
+          <img src="/nodewarden-logo.svg" alt="NodeWarden" />
+          <strong>NodeWarden</strong>
+        </div>
+        <h1 id="webauthn-header">Verify your identity</h1>
+        <p id="webauthn-copy">Use your security key to finish two-step verification.</p>
+        <div class="form">
+          <div id="webauthn-status" class="msg" role="status" aria-live="polite" hidden></div>
+          <button id="webauthn-button" type="button" data-state="loading" aria-busy="true" aria-disabled="true">
+            Preparing passkey…
+          </button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/webauthn-mobile-connector.js"></script>
+  </body>
+</html>

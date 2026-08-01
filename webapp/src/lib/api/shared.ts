@@ -1,4 +1,4 @@
-import { t } from '../i18n';
+import { t, translateServerError } from '../i18n';
 import type { SessionState, TokenError } from '../types';
 
 export type AuthedFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -46,7 +46,7 @@ export function parseContentDispositionFileName(response: Response, fallback: st
 
 export async function parseErrorMessage(resp: Response, fallback: string): Promise<string> {
   const body = await parseJson<TokenError>(resp);
-  return body?.error_description || body?.error || fallback;
+  return translateServerError(body?.error_description || body?.error, fallback);
 }
 
 export function createApiError(message: string, status?: number): Error & { status?: number } {

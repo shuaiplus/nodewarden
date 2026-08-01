@@ -2,23 +2,26 @@
 export interface Env {
   DB: D1Database;
   NOTIFICATIONS_HUB: DurableObjectNamespace;
+  BACKUP_TRANSFER_RUNNER: DurableObjectNamespace;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
+  // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
+  HIDE_WEB_VAULT?: string;
   // Prefer R2 when available. Optional to support KV-only deployments.
   ATTACHMENTS?: R2Bucket;
   // Optional fallback for attachment/send file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
   JWT_SECRET: string;
-  TOTP_SECRET?: string;
+  WEBAUTHN_RP_ID?: string;
+  WEBAUTHN_RP_NAME?: string;
+  WEBAUTHN_ALLOWED_ORIGINS?: string;
+  YUBICO_VALIDATION_URLS?: string;
+  'globalSettings__yubico__validationUrls'?: string;
 }
 
 export type UserRole = 'admin' | 'user';
 export type UserStatus = 'active' | 'banned';
-
-// Sample JWT secret used by `.dev.vars.example`.
-// If runtime JWT_SECRET equals this value, treat it as unsafe.
-export const DEFAULT_DEV_SECRET = 'Enter-your-JWT-key-here-at-least-32-characters';
 
 // Attachment model
 export interface Attachment {
@@ -50,9 +53,43 @@ export interface User {
   verifyDevices?: boolean;
   totpSecret: string | null;
   totpRecoveryCode: string | null;
+  yubikeyKey1: string | null;
+  yubikeyKey2: string | null;
+  yubikeyKey3: string | null;
+  yubikeyKey4: string | null;
+  yubikeyKey5: string | null;
+  yubikeyNfc: boolean;
   apiKey: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UserDomainSettings {
+  userId: string;
+  equivalentDomains: string[][];
+  customEquivalentDomains: CustomEquivalentDomain[];
+  excludedGlobalEquivalentDomains: number[];
+  updatedAt: string | null;
+}
+
+export interface CustomEquivalentDomain {
+  id: string;
+  domains: string[];
+  excluded: boolean;
+}
+
+export interface GlobalEquivalentDomain {
+  type: number;
+  domains: string[];
+  excluded: boolean;
+  [key: string]: unknown;
+}
+
+export interface DomainRulesResponse {
+  equivalentDomains: string[][];
+  customEquivalentDomains: CustomEquivalentDomain[];
+  globalEquivalentDomains: GlobalEquivalentDomain[];
+  object: 'domains';
 }
 
 export interface Invite {
@@ -68,9 +105,13 @@ export interface Invite {
 export interface AuditLog {
   id: string;
   actorUserId: string | null;
+  actorEmail?: string | null;
   action: string;
+  category: 'auth' | 'security' | 'device' | 'data' | 'system';
+  level: 'info' | 'warn' | 'error' | 'security';
   targetType: string | null;
   targetId: string | null;
+  targetUserEmail?: string | null;
   metadata: string | null;
   createdAt: string;
 }
@@ -81,6 +122,10 @@ export enum CipherType {
   SecureNote = 2,
   Card = 3,
   Identity = 4,
+  SSHKey = 5,
+  BankAccount = 6,
+  DriversLicense = 7,
+  Passport = 8,
 }
 
 export interface CipherLoginUri {
@@ -113,6 +158,52 @@ export interface CipherSshKey {
   publicKey: string;
   privateKey: string;
   keyFingerprint: string;
+}
+
+export interface CipherBankAccount {
+  bankName: string | null;
+  nameOnAccount: string | null;
+  accountType: string | null;
+  accountNumber: string | null;
+  routingNumber: string | null;
+  branchNumber: string | null;
+  pin: string | null;
+  swiftCode: string | null;
+  iban: string | null;
+  bankContactPhone: string | null;
+  [key: string]: any;
+}
+
+export interface CipherDriversLicense {
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  dateOfBirth: string | null;
+  licenseNumber: string | null;
+  issuingCountry: string | null;
+  issuingState: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  issuingAuthority: string | null;
+  licenseClass: string | null;
+  [key: string]: any;
+}
+
+export interface CipherPassport {
+  surname: string | null;
+  givenName: string | null;
+  dateOfBirth: string | null;
+  sex: string | null;
+  birthPlace: string | null;
+  nationality: string | null;
+  issuingCountry: string | null;
+  passportNumber: string | null;
+  passportType: string | null;
+  nationalIdentificationNumber: string | null;
+  issuingAuthority: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  [key: string]: any;
 }
 
 export interface CipherIdentity {
@@ -165,6 +256,9 @@ export interface Cipher {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount?: CipherBankAccount | null;
+  driversLicense?: CipherDriversLicense | null;
+  passport?: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;
@@ -196,15 +290,76 @@ export interface Device {
   encryptedUserKey: string | null;
   encryptedPublicKey: string | null;
   encryptedPrivateKey: string | null;
+  pushUuid: string | null;
+  pushToken: string | null;
   devicePendingAuthRequest?: DevicePendingAuthRequest | null;
   lastSeenAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export type AccountPasskeyPrfStatus = 0 | 1 | 2;
+
+export interface AccountPasskeyCredential {
+  id: string;
+  userId: string;
+  purpose: 'login' | 'twoFactor';
+  name: string;
+  publicKey: string;
+  credentialId: string;
+  counter: number;
+  type: string | null;
+  aaGuid: string | null;
+  transports: string[] | null;
+  encryptedUserKey: string | null;
+  encryptedPublicKey: string | null;
+  encryptedPrivateKey: string | null;
+  supportsPrf: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AccountPasskeyChallengeScope =
+  | 'Authentication'
+  | 'CreateCredential'
+  | 'UpdateKeySet'
+  | 'TwoFactorAuthentication'
+  | 'TwoFactorCreate';
+
+export interface AccountPasskeyChallenge {
+  challengeHash: string;
+  scope: AccountPasskeyChallengeScope;
+  userId: string | null;
+  expiresAt: number;
+  usedAt: number | null;
+  createdAt: number;
+}
+
 export interface DevicePendingAuthRequest {
   id: string;
   creationDate: string;
+}
+
+export type AuthRequestType = 0 | 1 | 2;
+
+export interface AuthRequestRecord {
+  id: string;
+  userId: string;
+  organizationId: string | null;
+  type: AuthRequestType;
+  requestDeviceIdentifier: string;
+  requestDeviceType: number;
+  requestIpAddress: string | null;
+  requestCountryName: string | null;
+  responseDeviceIdentifier: string | null;
+  accessCode: string;
+  publicKey: string;
+  key: string | null;
+  masterPasswordHash: string | null;
+  approved: boolean | null;
+  creationDate: string;
+  responseDate: string | null;
+  authenticationDate: string | null;
 }
 
 export interface DeviceResponse {
@@ -217,6 +372,7 @@ export interface DeviceResponse {
   type: number;
   creationDate: string;
   revisionDate: string;
+  lastActivityDate?: string | null;
   lastSeenAt?: string | null;
   hasStoredDevice?: boolean;
   isTrusted: boolean;
@@ -244,6 +400,11 @@ export interface RefreshTokenRecord {
   expiresAt: number;
   deviceIdentifier: string | null;
   deviceSessionStamp: string | null;
+  securityStamp: string | null;
+  createdAt: number | null;
+  lastUsedAt: number | null;
+  absoluteExpiresAt: number | null;
+  clientType: string | null;
 }
 
 export interface TrustedDeviceTokenSummary {
@@ -340,6 +501,14 @@ export interface MasterPasswordUnlock {
   Object: string;
 }
 
+export interface WebAuthnPrfDecryptionOption {
+  EncryptedPrivateKey: string;
+  EncryptedUserKey: string;
+  CredentialId: string;
+  Transports: string[];
+  Object?: string;
+}
+
 export interface UserDecryptionOptions {
   HasMasterPassword: boolean;
   Object: string;
@@ -347,6 +516,7 @@ export interface UserDecryptionOptions {
   MasterPasswordUnlock: MasterPasswordUnlock;
   TrustedDeviceOption: null;
   KeyConnectorOption: null;
+  WebAuthnPrfOption?: WebAuthnPrfDecryptionOption | null;
 }
 
 // API Response types
@@ -367,8 +537,18 @@ export interface TokenResponse {
   ResetMasterPassword: boolean;
   scope: string;
   unofficialServer: boolean;
+  UserVerificationToken?: string;
+  userVerificationToken?: string;
   MasterPasswordPolicy?: {
+    minComplexity: number;
+    minLength: number;
+    requireUpper: boolean;
+    requireLower: boolean;
+    requireNumbers: boolean;
+    requireSpecial: boolean;
+    enforceOnLogin: boolean;
     Object: string;
+    object?: string;
   } | null;
   ApiUseKeyConnector?: boolean;
   AccountKeys?: any | null;
@@ -392,17 +572,19 @@ export interface ProfileResponse {
   masterPasswordHint: string | null;
   culture: string;
   twoFactorEnabled: boolean;
+  yubikeyEnabled?: boolean;
   key: string;
   privateKey: string | null;
   accountKeys: any | null;
   securityStamp: string;
   organizations: any[];
+  organizationsNew?: any[];
   providers: any[];
   providerOrganizations: any[];
   forcePasswordReset: boolean;
   avatarColor: string | null;
   creationDate: string;
-  verifyDevices?: boolean;
+  verifyDevices: boolean;
   role?: UserRole;
   status?: UserStatus;
   object: string;
@@ -421,6 +603,9 @@ export interface CipherResponse {
   identity: CipherIdentity | null;
   secureNote: CipherSecureNote | null;
   sshKey: CipherSshKey | null;
+  bankAccount: CipherBankAccount | null;
+  driversLicense: CipherDriversLicense | null;
+  passport: CipherPassport | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;
@@ -461,12 +646,18 @@ export interface SyncResponse {
   ciphers: CipherResponse[];
   domains: any;
   policies: any[];
+  policiesNew?: any[];
   sends: SendResponse[];
   UserDecryption?: {
     MasterPasswordUnlock: MasterPasswordUnlock | null;
     TrustedDeviceOption?: null;
     KeyConnectorOption?: null;
-    WebAuthnPrfOption?: null;
+    WebAuthnPrfOption?: WebAuthnPrfDecryptionOption | null;
+    WebAuthnPrfOptions?: WebAuthnPrfDecryptionOption[];
+    V2UpgradeToken?: {
+      WrappedUserKey1: string;
+      WrappedUserKey2: string;
+    } | null;
     Object?: string;
   } | null;
   // PascalCase for desktop/browser clients

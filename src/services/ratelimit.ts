@@ -3,6 +3,7 @@ import { LIMITS } from '../config/limits';
 // Rate limiting service.
 // - Login attempts: D1-backed (low volume, security-critical, needs cross-colo persistence).
 // - API budgets: Cloudflare Cache API (high volume, auto-expires, zero D1 writes).
+// - Strict budgets: D1-backed fixed windows for low-volume anonymous sensitive endpoints.
 
 const CONFIG = {
   LOGIN_MAX_ATTEMPTS: LIMITS.rateLimit.loginMaxAttempts,
@@ -12,11 +13,14 @@ const CONFIG = {
 
 export class RateLimitService {
   private static loginIpTableReady = false;
+  private static strictBudgetTableReady = false;
   private static lastLoginIpCleanupAt = 0;
+  private static lastStrictBudgetCleanupAt = 0;
 
   private static readonly PERIODIC_CLEANUP_PROBABILITY = LIMITS.rateLimit.cleanupProbability;
   private static readonly LOGIN_IP_CLEANUP_INTERVAL_MS = LIMITS.rateLimit.loginIpCleanupIntervalMs;
   private static readonly LOGIN_IP_RETENTION_MS = LIMITS.rateLimit.loginIpRetentionMs;
+  private static readonly STRICT_BUDGET_CLEANUP_INTERVAL_MS = LIMITS.rateLimit.loginIpCleanupIntervalMs;
 
   constructor(private db: D1Database) {}
 
@@ -56,6 +60,35 @@ export class RateLimitService {
       .run();
 
     RateLimitService.loginIpTableReady = true;
+  }
+
+  private async ensureStrictBudgetTable(): Promise<void> {
+    if (RateLimitService.strictBudgetTableReady) return;
+
+    await this.db
+      .prepare(
+        'CREATE TABLE IF NOT EXISTS rate_limit_buckets (' +
+        'bucket_key TEXT PRIMARY KEY, ' +
+        'count INTEGER NOT NULL, ' +
+        'expires_at INTEGER NOT NULL, ' +
+        'updated_at INTEGER NOT NULL' +
+        ')'
+      )
+      .run();
+
+    await this.db
+      .prepare('CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_expires ON rate_limit_buckets(expires_at)')
+      .run();
+    RateLimitService.strictBudgetTableReady = true;
+  }
+
+  private async maybeCleanupStrictBudgets(nowMs: number): Promise<void> {
+    if (!this.shouldRunCleanup(RateLimitService.lastStrictBudgetCleanupAt, RateLimitService.STRICT_BUDGET_CLEANUP_INTERVAL_MS)) {
+      return;
+    }
+
+    await this.db.prepare('DELETE FROM rate_limit_buckets WHERE expires_at < ?').bind(nowMs).run();
+    RateLimitService.lastStrictBudgetCleanupAt = nowMs;
   }
 
   async checkLoginAttempt(ip: string): Promise<{
@@ -172,6 +205,59 @@ export class RateLimitService {
     );
 
     return { allowed: true, remaining: Math.max(0, maxRequests - count) };
+  }
+
+  async consumeStrictBudget(
+    identifier: string,
+    maxRequests: number
+  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
+    return this.consumeStrictBudgetWithWindow(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS);
+  }
+
+  async consumeStrictBudgetWithWindow(
+    identifier: string,
+    maxRequests: number,
+    windowSeconds: number
+  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
+    await this.ensureStrictBudgetTable();
+
+    const key = String(identifier || '').trim() || 'unknown';
+    const max = Math.max(1, Math.floor(maxRequests));
+    const windowSize = Math.max(1, Math.floor(windowSeconds));
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+    const windowStart = nowSec - (nowSec % windowSize);
+    const windowEndMs = (windowStart + windowSize) * 1000;
+    const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000));
+    const bucketKey = `${key}:${windowStart}`;
+
+    await this.maybeCleanupStrictBudgets(nowMs);
+    await this.db
+      .prepare(
+        'INSERT OR IGNORE INTO rate_limit_buckets(bucket_key, count, expires_at, updated_at) VALUES(?, 0, ?, ?)'
+      )
+      .bind(bucketKey, windowEndMs, nowMs)
+      .run();
+
+    const update = await this.db
+      .prepare(
+        'UPDATE rate_limit_buckets SET count = count + 1, expires_at = ?, updated_at = ? ' +
+        'WHERE bucket_key = ? AND count < ?'
+      )
+      .bind(windowEndMs, nowMs, bucketKey, max)
+      .run();
+
+    const allowed = Number(update.meta?.changes ?? 0) > 0;
+    const row = await this.db
+      .prepare('SELECT count FROM rate_limit_buckets WHERE bucket_key = ?')
+      .bind(bucketKey)
+      .first<{ count: number }>();
+    const count = Math.max(0, Number(row?.count || 0));
+
+    if (!allowed) {
+      return { allowed: false, remaining: 0, retryAfterSeconds };
+    }
+    return { allowed: true, remaining: Math.max(0, max - count) };
   }
 
   // General-purpose fixed-window budget.

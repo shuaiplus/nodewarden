@@ -1,0 +1,15 @@
+{
+  "source": "https://github.com/bitwarden/server",
+  "ref": "main",
+  "generatedAt": "2026-05-05T00:00:00.000Z",
+  "rulesCount": 91,
+  "domainsCount": 436,
+  "sourceFiles": [
+    "src/Core/Enums/GlobalEquivalentDomainsType.cs",
+    "src/Core/Utilities/StaticStore.cs"
+  ],
+  "sourceUrls": [
+    "https://raw.githubusercontent.com/bitwarden/server/main/src/Core/Enums/GlobalEquivalentDomainsType.cs",
+    "https://raw.githubusercontent.com/bitwarden/server/main/src/Core/Utilities/StaticStore.cs"
+  ]
+}

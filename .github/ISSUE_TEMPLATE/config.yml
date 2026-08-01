@@ -1,7 +1,7 @@
 blank_issues_enabled: false
 contact_links:
   - name: Project Wiki/ 项目文档
-    url: https://github.com/shuaiplus/nodewarden/wiki
+    url: https://nodewarden.app
     about: |
       Please check the documentation for common questions and troubleshooting steps.
       请先查看文档，常见问题和排查步骤可能已经覆盖了你的问题。

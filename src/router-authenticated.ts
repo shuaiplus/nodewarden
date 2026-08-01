@@ -1,8 +1,9 @@
 import type { Env, User } from './types';
-import { errorResponse, jsonResponse } from './utils/response';
+import { errorResponse, jsonResponse, unsupportedResponse } from './utils/response';
 import {
   handleGetProfile,
   handleUpdateProfile,
+  handleGetKeys,
   handleSetKeys,
   handleGetRevisionDate,
   handleVerifyPassword,
@@ -11,6 +12,16 @@ import {
   handleGetTotpStatus,
   handleSetTotpStatus,
   handleGetTotpRecoveryCode,
+  handleGetTwoFactorProviders,
+  handleGetTwoFactorAuthenticator,
+  handlePutTwoFactorAuthenticator,
+  handleGetTwoFactorYubiKey,
+  handlePutTwoFactorYubiKey,
+  handlePutTwoFactorYubiKeyConfig,
+  handleBootstrapTwoFactorYubiKeyConfig,
+  handleGetDeviceVerificationSettings,
+  handlePutDeviceVerificationSettings,
+  handleDisableTwoFactorProvider,
   handleGetApiKey,
   handleRotateApiKey,
 } from './handlers/accounts';
@@ -65,6 +76,26 @@ import {
 } from './handlers/attachments';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
 import { handleAdminRoute } from './router-admin';
+import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
+import {
+  handleCreateAccountPasskeyCredential,
+  handleDeleteAccountPasskeyCredential,
+  handleDeleteTwoFactorWebAuthn,
+  handleGetAccountPasskeyAttestationOptions,
+  handleGetAccountPasskeyCredentials,
+  handleGetAccountPasskeyUpdateAssertionOptions,
+  handleGetTwoFactorWebAuthn,
+  handleGetTwoFactorWebAuthnChallenge,
+  handlePutTwoFactorWebAuthn,
+  handleUpdateAccountPasskeyEncryption,
+} from './handlers/account-passkeys';
+import {
+  handleCreateAdminAuthRequest,
+  handleGetAuthRequest,
+  handleListAuthRequests,
+  handleListPendingAuthRequests,
+  handleUpdateAuthRequest,
+} from './handlers/auth-requests';
 
 export async function handleAuthenticatedRoute(
   request: Request,
@@ -86,6 +117,40 @@ export async function handleAuthenticatedRoute(
     }
   }
 
+  if ((path === '/api/accounts/kdf' || path === '/accounts/kdf') && (method === 'POST' || method === 'PUT')) {
+    return unsupportedResponse('KDF changes are not supported by this server.');
+  }
+
+  const mailBackedAccountPaths = new Set([
+    '/api/accounts/email-token',
+    '/accounts/email-token',
+    '/api/accounts/verify-email',
+    '/accounts/verify-email',
+    '/api/accounts/verify-email-token',
+    '/accounts/verify-email-token',
+    '/api/accounts/request-otp',
+    '/accounts/request-otp',
+    '/api/accounts/verify-otp',
+    '/accounts/verify-otp',
+  ]);
+  if (mailBackedAccountPaths.has(path) && (method === 'POST' || method === 'PUT')) {
+    return unsupportedResponse('Email delivery is not supported by this server.');
+  }
+
+  const emailTwoFactorPaths = new Set([
+    '/api/two-factor/get-email',
+    '/two-factor/get-email',
+    '/api/two-factor/send-email',
+    '/two-factor/send-email',
+    '/api/two-factor/send-email-login',
+    '/two-factor/send-email-login',
+    '/api/two-factor/email',
+    '/two-factor/email',
+  ]);
+  if (emailTwoFactorPaths.has(path) && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
+    return unsupportedResponse('Email two-step login is not supported by this server.');
+  }
+
   if (path === '/api/accounts/profile') {
     if (method === 'GET') return handleGetProfile(request, env, userId);
     if (method === 'PUT') return handleUpdateProfile(request, env, userId);
@@ -96,8 +161,10 @@ export async function handleAuthenticatedRoute(
     return handleChangePassword(request, env, userId);
   }
 
-  if (path === '/api/accounts/keys' && method === 'POST') {
-    return handleSetKeys(request, env, userId);
+  if (path === '/api/accounts/keys') {
+    if (method === 'GET') return handleGetKeys(request, env, userId);
+    if (method === 'POST') return handleSetKeys(request, env, userId);
+    return errorResponse('Method not allowed', 405);
   }
 
   if (path === '/api/accounts/totp') {
@@ -108,6 +175,66 @@ export async function handleAuthenticatedRoute(
 
   if ((path === '/api/accounts/totp/recovery-code' || path === '/api/two-factor/get-recover') && method === 'POST') {
     return handleGetTotpRecoveryCode(request, env, userId);
+  }
+
+  if (path === '/api/two-factor') {
+    if (method === 'GET') return handleGetTwoFactorProviders(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/two-factor/get-authenticator' && method === 'POST') {
+    return handleGetTwoFactorAuthenticator(request, env, userId);
+  }
+
+  if ((path === '/api/two-factor/get-yubikey' || path === '/api/two-factor/get-yubi-key') && method === 'POST') {
+    return handleGetTwoFactorYubiKey(request, env, userId);
+  }
+
+  if (path === '/api/two-factor/get-device-verification-settings' && method === 'POST') {
+    return handleGetDeviceVerificationSettings(request, env, userId);
+  }
+
+  if (path === '/api/two-factor/device-verification-settings') {
+    if (method === 'PUT' || method === 'POST') return handlePutDeviceVerificationSettings(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/two-factor/get-webauthn' && method === 'POST') {
+    return handleGetTwoFactorWebAuthn(request, env, userId, currentUser);
+  }
+
+  if (path === '/api/two-factor/get-webauthn-challenge' && method === 'POST') {
+    return handleGetTwoFactorWebAuthnChallenge(request, env, userId, currentUser);
+  }
+
+  if (path === '/api/two-factor/authenticator') {
+    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorAuthenticator(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if ((path === '/api/two-factor/yubikey' || path === '/api/two-factor/yubi-key')) {
+    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorYubiKey(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/two-factor/webauthn') {
+    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorWebAuthn(request, env, userId, currentUser);
+    if (method === 'DELETE') return handleDeleteTwoFactorWebAuthn(request, env, userId, currentUser);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if ((path === '/api/two-factor/yubikey/config' || path === '/api/two-factor/yubi-key/config') && (method === 'PUT' || method === 'POST')) {
+    return handlePutTwoFactorYubiKeyConfig(request, env, userId);
+  }
+
+  if ((path === '/api/two-factor/yubikey/bootstrap' || path === '/api/two-factor/yubi-key/bootstrap') && method === 'POST') {
+    return handleBootstrapTwoFactorYubiKeyConfig(request, env, userId);
+  }
+
+  if (path === '/api/two-factor/disable' && (method === 'PUT' || method === 'POST')) {
+    return handleDisableTwoFactorProvider(request, env, userId);
   }
 
   if (path === '/api/accounts/revision-date' && method === 'GET') {
@@ -128,6 +255,28 @@ export async function handleAuthenticatedRoute(
 
   if ((path === '/api/accounts/rotate-api-key' || path === '/api/accounts/rotate_api_key') && method === 'POST') {
     return handleRotateApiKey(request, env, userId);
+  }
+
+  if (path === '/api/webauthn' || path === '/webauthn') {
+    if (method === 'GET') return handleGetAccountPasskeyCredentials(request, env, userId);
+    if (method === 'POST') return handleCreateAccountPasskeyCredential(request, env, userId);
+    if (method === 'PUT') return handleUpdateAccountPasskeyEncryption(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if ((path === '/api/webauthn/attestation-options' || path === '/webauthn/attestation-options') && method === 'POST') {
+    return handleGetAccountPasskeyAttestationOptions(request, env, userId, currentUser);
+  }
+
+  if ((path === '/api/webauthn/assertion-options' || path === '/webauthn/assertion-options') && method === 'POST') {
+    return handleGetAccountPasskeyUpdateAssertionOptions(request, env, userId, currentUser);
+  }
+
+  const accountPasskeyDeleteMatch =
+    path.match(/^\/api\/webauthn\/([^/]+)\/delete$/i) ||
+    path.match(/^\/webauthn\/([^/]+)\/delete$/i);
+  if (accountPasskeyDeleteMatch && method === 'POST') {
+    return handleDeleteAccountPasskeyCredential(request, env, userId, accountPasskeyDeleteMatch[1], currentUser);
   }
 
   if (path === '/api/sync' && method === 'GET') {
@@ -231,8 +380,26 @@ export async function handleAuthenticatedRoute(
     if (method === 'DELETE') return handleDeleteFolder(request, env, userId, folderId);
   }
 
-  if (path.startsWith('/api/auth-requests')) {
-    return jsonResponse({ data: [], object: 'list', continuationToken: null });
+  if (path === '/api/auth-requests' || path === '/api/auth-requests/' || path === '/auth-requests' || path === '/auth-requests/') {
+    if (method === 'GET') return handleListAuthRequests(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/auth-requests/pending' || path === '/auth-requests/pending') {
+    if (method === 'GET') return handleListPendingAuthRequests(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/auth-requests/admin-request' || path === '/auth-requests/admin-request') {
+    if (method === 'POST') return handleCreateAdminAuthRequest(request, env, userId, currentUser.email);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  const authRequestMatch = path.match(/^\/(?:api\/)?auth-requests\/([a-f0-9-]+)$/i);
+  if (authRequestMatch) {
+    if (method === 'GET') return handleGetAuthRequest(request, env, userId, authRequestMatch[1]);
+    if (method === 'PUT') return handleUpdateAuthRequest(request, env, userId, authRequestMatch[1]);
+    return errorResponse('Method not allowed', 405);
   }
 
   if (path === '/api/collections' || path.startsWith('/api/collections/')) {
@@ -297,14 +464,9 @@ export async function handleAuthenticatedRoute(
     return null;
   }
 
-  if (path === '/api/settings/domains') {
-    if (method === 'GET' || method === 'PUT' || method === 'POST') {
-      return jsonResponse({
-        equivalentDomains: [],
-        globalEquivalentDomains: [],
-        object: 'domains',
-      });
-    }
+  if (path === '/api/settings/domains' || path === '/settings/domains') {
+    if (method === 'GET') return handleGetDomains(env, userId);
+    if (method === 'PUT' || method === 'POST') return handleUpdateDomains(request, env, userId);
     return null;
   }
 

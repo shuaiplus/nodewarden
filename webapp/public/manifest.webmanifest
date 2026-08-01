@@ -1,0 +1,48 @@
+{
+  "name": "NodeWarden",
+  "short_name": "NodeWarden",
+  "description": "A lightweight Bitwarden-compatible vault for Cloudflare Workers.",
+  "id": "/",
+  "start_url": "/vault",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#eef4ff",
+  "theme_color": "#0f172a",
+  "categories": ["security", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Vault",
+      "short_name": "Vault",
+      "url": "/vault",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "TOTP Codes",
+      "short_name": "TOTP",
+      "url": "/vault/totp",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

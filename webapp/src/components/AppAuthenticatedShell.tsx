@@ -1,6 +1,9 @@
-import { ArrowUpDown, Cloud, Clock3, Folder as FolderIcon, KeyRound, Lock, LogOut, Send as SendIcon, Settings as SettingsIcon, Shield, ShieldUser } from 'lucide-preact';
+import { ArrowUpDown, ChevronDown, Clock3, Cloud, FileClock, Folder as FolderIcon, KeyRound, Lock, LogOut, MonitorSmartphone, Send as SendIcon, Settings as SettingsIcon, ShieldCheck, ShieldUser, Sparkles, Users } from 'lucide-preact';
+import type { ComponentChildren } from 'preact';
+import { useState } from 'preact/hooks';
 import { Link } from 'wouter';
 import AppMainRoutes from '@/components/AppMainRoutes';
+import NetworkStatusBadge from '@/components/NetworkStatusBadge';
 import ThemeSwitch from '@/components/ThemeSwitch';
 import type { AppMainRoutesProps } from '@/components/AppMainRoutes';
 import { t } from '@/lib/i18n';
@@ -25,13 +28,144 @@ interface AppAuthenticatedShellProps {
   mainRoutesProps: AppMainRoutesProps;
 }
 
+const NAV_GROUPS_STORAGE_KEY = 'nodewarden.navGroups';
+
+const DEFAULT_EXPANDED_GROUPS = {
+  tools: true,
+  settings: true,
+  management: true,
+};
+
+type NavGroup = keyof typeof DEFAULT_EXPANDED_GROUPS;
+type ExpandedGroups = Record<NavGroup, boolean>;
+
+function readExpandedGroups(): ExpandedGroups {
+  if (typeof window === 'undefined') return DEFAULT_EXPANDED_GROUPS;
+  try {
+    const saved = window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY);
+    if (!saved) return DEFAULT_EXPANDED_GROUPS;
+    const parsed = JSON.parse(saved) as Partial<ExpandedGroups>;
+    return {
+      tools: typeof parsed.tools === 'boolean' ? parsed.tools : DEFAULT_EXPANDED_GROUPS.tools,
+      settings: typeof parsed.settings === 'boolean' ? parsed.settings : DEFAULT_EXPANDED_GROUPS.settings,
+      management: typeof parsed.management === 'boolean' ? parsed.management : DEFAULT_EXPANDED_GROUPS.management,
+    };
+  } catch {
+    // Ignore local preference read failures.
+  }
+  return DEFAULT_EXPANDED_GROUPS;
+}
+
 function isAdminProfile(profile: Profile | null): boolean {
   return String(profile?.role || '').toLowerCase() === 'admin';
 }
 
+const DEVICE_MANAGEMENT_ROUTE = '/settings/security/device-management';
+const LEGACY_DEVICE_MANAGEMENT_ROUTE = '/security/devices';
+
 export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps) {
   const routeAnimationKey = props.isImportRoute ? props.importRoute : props.location;
+  const isDomainRulesRoute = props.location === '/settings/domain-rules';
+  const isLogRoute = props.location === '/logs';
   const isAdmin = isAdminProfile(props.profile);
+  const deviceManagementActive = props.location === DEVICE_MANAGEMENT_ROUTE || props.location === LEGACY_DEVICE_MANAGEMENT_ROUTE;
+  const [expandedGroups, setExpandedGroups] = useState<ExpandedGroups>(readExpandedGroups);
+
+  function toggleGroup(group: NavGroup): void {
+    setExpandedGroups((current) => {
+      const next = { ...current, [group]: !current[group] };
+      try {
+        window.localStorage.setItem(NAV_GROUPS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore local preference write failures.
+      }
+      return next;
+    });
+  }
+
+  function renderSideLink(href: string, active: boolean, icon: ComponentChildren, label: string) {
+    return (
+      <Link href={href} className={`side-link ${active ? 'active' : ''}`}>
+        {icon}
+        <span>{label}</span>
+      </Link>
+    );
+  }
+
+  function renderSubLink(href: string, active: boolean, label: string) {
+    return (
+      <Link href={href} className={`side-sub-link ${active ? 'active' : ''}`}>
+        <span>{label}</span>
+      </Link>
+    );
+  }
+
+  function renderNavGroup(
+    group: NavGroup,
+    title: string,
+    icon: ComponentChildren,
+    children: ComponentChildren
+  ) {
+    const open = expandedGroups[group];
+    return (
+      <div className={`side-nav-group ${open ? 'open' : ''}`}>
+        <button
+          type="button"
+          className="side-group-trigger"
+          aria-expanded={open}
+          onClick={() => toggleGroup(group)}
+        >
+          {icon}
+          <span>{title}</span>
+          <ChevronDown size={15} className="side-group-chevron" />
+        </button>
+        <div className={`side-subnav ${open ? 'open' : ''}`}>
+          <div className="side-subnav-inner">
+            {children}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const groupedNav = (
+    <>
+      {renderSideLink('/vault', props.location === '/vault', <KeyRound size={16} />, t('nav_vault_items'))}
+      {renderSideLink('/sends', props.location === '/sends', <SendIcon size={16} />, t('nav_sends'))}
+      {renderNavGroup(
+        'tools',
+        t('nav_group_tools'),
+        <Sparkles size={16} />,
+        <>
+          {renderSubLink('/vault/totp', props.location === '/vault/totp', t('txt_verification_code'))}
+          {renderSubLink('/generator', props.location === '/generator', t('nav_generator'))}
+          {renderSubLink('/security/password-health', props.location === '/security/password-health', t('nav_password_security'))}
+          {renderSubLink(props.importRoute, props.isImportRoute, t('nav_import_export'))}
+        </>
+      )}
+      {renderNavGroup(
+        'settings',
+        t('txt_settings'),
+        <SettingsIcon size={16} />,
+        <>
+          {renderSubLink(props.settingsAccountRoute, props.location === props.settingsAccountRoute, t('nav_account_settings'))}
+          {renderSubLink(DEVICE_MANAGEMENT_ROUTE, deviceManagementActive, t('nav_device_management'))}
+          {renderSubLink('/settings/domain-rules', props.location === '/settings/domain-rules', t('nav_domain_rules'))}
+        </>
+      )}
+      {isAdmin &&
+        renderNavGroup(
+          'management',
+          t('nav_group_system_management'),
+          <ShieldUser size={16} />,
+          <>
+            {renderSubLink('/backup', props.location === '/backup', t('nav_backup_strategy'))}
+            {renderSubLink('/admin', props.location === '/admin', t('nav_admin_panel'))}
+            {renderSubLink('/logs', props.location === '/logs', t('nav_log_center'))}
+          </>
+        )}
+    </>
+  );
 
   return (
     <div className="app-page">
@@ -43,6 +177,7 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
             <span className="mobile-page-title">{props.currentPageTitle}</span>
           </div>
           <div className="topbar-actions">
+            <NetworkStatusBadge />
             <div className="user-chip">
               <ShieldUser size={16} />
               <span>{props.profile?.email}</span>
@@ -76,45 +211,12 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
 
         <div className="app-main">
           <aside className="app-side">
-            <Link href="/vault" className={`side-link ${props.location === '/vault' ? 'active' : ''}`}>
-              <KeyRound size={16} />
-              <span>{t('nav_my_vault')}</span>
-            </Link>
-            <Link href="/vault/totp" className={`side-link ${props.location === '/vault/totp' ? 'active' : ''}`}>
-              <Clock3 size={16} />
-              <span>{t('txt_verification_code')}</span>
-            </Link>
-            <Link href="/sends" className={`side-link ${props.location === '/sends' ? 'active' : ''}`}>
-              <SendIcon size={16} />
-              <span>{t('nav_sends')}</span>
-            </Link>
-            {isAdmin && (
-              <Link href="/admin" className={`side-link ${props.location === '/admin' ? 'active' : ''}`}>
-                <ShieldUser size={16} />
-                <span>{t('nav_admin_panel')}</span>
-              </Link>
-            )}
-            <Link href={props.settingsAccountRoute} className={`side-link ${props.location === props.settingsAccountRoute ? 'active' : ''}`}>
-              <SettingsIcon size={16} />
-              <span>{t('nav_account_settings')}</span>
-            </Link>
-            <Link href="/security/devices" className={`side-link ${props.location === '/security/devices' ? 'active' : ''}`}>
-              <Shield size={16} />
-              <span>{t('nav_device_management')}</span>
-            </Link>
-            {isAdmin && (
-              <Link href="/backup" className={`side-link ${props.location === '/backup' ? 'active' : ''}`}>
-                <Cloud size={16} />
-                <span>{t('nav_backup_strategy')}</span>
-              </Link>
-            )}
-            <Link href={props.importRoute} className={`side-link ${props.isImportRoute ? 'active' : ''}`}>
-              <ArrowUpDown size={14} />
-              <span>{t('nav_import_export')}</span>
-            </Link>
+            <div className="side-nav-main">
+              {groupedNav}
+            </div>
           </aside>
           <main className="content">
-            <div key={routeAnimationKey} className="route-stage">
+            <div key={routeAnimationKey} className={`route-stage ${isDomainRulesRoute ? 'route-stage-fixed' : ''} ${isLogRoute ? 'route-stage-log-fixed' : ''}`}>
               <AppMainRoutes {...props.mainRoutesProps} />
             </div>
           </main>
@@ -128,6 +230,10 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
           <Link href="/vault/totp" className={`mobile-tab ${props.mobilePrimaryRoute === '/vault/totp' ? 'active' : ''}`}>
             <Clock3 size={18} />
             <span>{t('txt_verification_code')}</span>
+          </Link>
+          <Link href="/generator" className={`mobile-tab ${props.mobilePrimaryRoute === '/generator' ? 'active' : ''}`}>
+            <Sparkles size={18} />
+            <span>{t('nav_generator')}</span>
           </Link>
           <Link href="/sends" className={`mobile-tab ${props.mobilePrimaryRoute === '/sends' ? 'active' : ''}`}>
             <SendIcon size={18} />

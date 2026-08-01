@@ -1,4 +1,4 @@
-import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr, encryptBw, encryptBwFileData } from '../crypto';
+import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr, encryptBw, encryptBwFileData, sha256Base64 } from '../crypto';
 import type {
   Cipher,
   CipherPasswordHistoryEntry,
@@ -10,6 +10,7 @@ import type {
 import {
   BULK_API_CHUNK_SIZE,
   chunkArray,
+  createApiError,
   parseErrorMessage,
   parseJson,
   uploadDirectEncryptedPayload,
@@ -19,16 +20,30 @@ import {
 import { readResponseBytesWithProgress } from '../download';
 import { loadVaultCoreSyncSnapshot } from './vault-sync';
 
+type CipherLoginData = NonNullable<Cipher['login']>;
+const NODEWARDEN_WEB_REPAIR_HEADER = 'X-NodeWarden-Web';
+
 export async function getFolders(authedFetch: AuthedFetch, cacheKey: string): Promise<Folder[]> {
   const body = await loadVaultCoreSyncSnapshot(authedFetch, cacheKey);
   return body.folders || [];
+}
+
+export async function getFolderById(authedFetch: AuthedFetch, folderId: string): Promise<Folder> {
+  const id = String(folderId || '').trim();
+  if (!id) throw new Error('Folder id is required');
+  const resp = await authedFetch(`/api/folders/${encodeURIComponent(id)}`);
+  if (resp.status === 404) throw createApiError('Folder not found', 404);
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Load folder failed'));
+  const body = await parseJson<Folder>(resp);
+  if (!body?.id) throw new Error('Load folder failed');
+  return body;
 }
 
 export async function createFolder(
   authedFetch: AuthedFetch,
   session: SessionState,
   name: string
-): Promise<{ id: string; name?: string | null }> {
+): Promise<Folder> {
   if (!session.symEncKey || !session.symMacKey) throw new Error('Vault key unavailable');
   const enc = base64ToBytes(session.symEncKey);
   const mac = base64ToBytes(session.symMacKey);
@@ -39,9 +54,9 @@ export async function createFolder(
     body: JSON.stringify({ name: encryptedName }),
   });
   if (!resp.ok) throw new Error('Create folder failed');
-  const body = await parseJson<{ id?: string; name?: string | null }>(resp);
+  const body = await parseJson<Folder>(resp);
   if (!body?.id) throw new Error('Create folder failed');
-  return { id: body.id, name: body.name ?? null };
+  return body;
 }
 
 export async function encryptFolderImportName(session: SessionState, name: string): Promise<string> {
@@ -77,7 +92,7 @@ export async function updateFolder(
   session: SessionState,
   folderId: string,
   name: string
-): Promise<void> {
+): Promise<Folder> {
   const id = String(folderId || '').trim();
   if (!id) throw new Error('Folder id is required');
   if (!session.symEncKey || !session.symMacKey) throw new Error('Vault key unavailable');
@@ -90,11 +105,25 @@ export async function updateFolder(
     body: JSON.stringify({ name: encryptedName }),
   });
   if (!resp.ok) throw new Error('Update folder failed');
+  const body = await parseJson<Folder>(resp);
+  if (!body?.id) throw new Error('Update folder failed');
+  return body;
 }
 
 export async function getCiphers(authedFetch: AuthedFetch, cacheKey: string): Promise<Cipher[]> {
   const body = await loadVaultCoreSyncSnapshot(authedFetch, cacheKey);
   return body.ciphers || [];
+}
+
+export async function getCipherById(authedFetch: AuthedFetch, cipherId: string): Promise<Cipher> {
+  const id = String(cipherId || '').trim();
+  if (!id) throw new Error('Cipher id is required');
+  const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(id)}`);
+  if (resp.status === 404) throw createApiError('Cipher not found', 404);
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Load cipher failed'));
+  const body = await parseJson<Cipher>(resp);
+  if (!body?.id) throw new Error('Load cipher failed');
+  return body;
 }
 
 export interface CiphersImportPayload {
@@ -484,6 +513,30 @@ async function encryptTextValue(value: string, enc: Uint8Array, mac: Uint8Array)
   return encryptBw(new TextEncoder().encode(s), enc, mac);
 }
 
+function stripDecodedObjectFields(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^dec[A-Z]/.test(key)) continue;
+    out[key] = item;
+  }
+  return out;
+}
+
+async function encryptObjectFields(
+  existing: unknown,
+  entries: Array<[string, string]>,
+  draft: VaultDraft,
+  enc: Uint8Array,
+  mac: Uint8Array
+): Promise<Record<string, unknown>> {
+  const out = stripDecodedObjectFields(existing);
+  for (const [fieldName, draftKey] of entries) {
+    out[fieldName] = await encryptTextValue(String((draft as unknown as Record<string, unknown>)[draftKey] || ''), enc, mac);
+  }
+  return out;
+}
+
 async function encryptPasswordHistory(
   entries: CipherPasswordHistoryEntry[] | null | undefined,
   enc: Uint8Array,
@@ -494,8 +547,11 @@ async function encryptPasswordHistory(
   const out: CipherPasswordHistoryEntry[] = [];
   for (const entry of entries) {
     const rawPassword = String(entry?.password || '');
+    const hasDecryptedPassword = typeof entry?.decPassword === 'string';
     const plainPassword = entry?.decPassword ?? rawPassword;
-    const encryptedPassword = looksLikeCipherString(rawPassword)
+    const encryptedPassword = hasDecryptedPassword
+      ? await encryptTextValue(plainPassword, enc, mac)
+      : looksLikeCipherString(rawPassword)
       ? rawPassword
       : await encryptTextValue(plainPassword, enc, mac);
     if (!encryptedPassword) continue;
@@ -506,6 +562,204 @@ async function encryptPasswordHistory(
   }
 
   return out.length ? out : null;
+}
+
+function plainCipherValue(decrypted: unknown, raw: unknown = ''): string {
+  if (typeof decrypted === 'string' && !looksLikeCipherString(decrypted)) return decrypted;
+  const value = String(raw ?? '');
+  return looksLikeCipherString(value) ? '' : value;
+}
+
+function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
+  const type = Number(cipher.type || 1) || 1;
+  const draft: VaultDraft = {
+    type,
+    name: plainCipherValue(cipher.decName, cipher.name).trim() || 'Untitled',
+    notes: plainCipherValue(cipher.decNotes, cipher.notes),
+    favorite: !!cipher.favorite,
+    reprompt: Number(cipher.reprompt || 0) === 1,
+    folderId: cipher.folderId || '',
+    loginUsername: '',
+    loginPassword: '',
+    loginTotp: '',
+    loginUris: [{ uri: '', match: null, originalUri: '', extra: {} }],
+    loginFido2Credentials: [],
+    cardholderName: '',
+    cardNumber: '',
+    cardBrand: '',
+    cardExpMonth: '',
+    cardExpYear: '',
+    cardCode: '',
+    identTitle: '',
+    identFirstName: '',
+    identMiddleName: '',
+    identLastName: '',
+    identUsername: '',
+    identCompany: '',
+    identSsn: '',
+    identPassportNumber: '',
+    identLicenseNumber: '',
+    identEmail: '',
+    identPhone: '',
+    identAddress1: '',
+    identAddress2: '',
+    identAddress3: '',
+    identCity: '',
+    identState: '',
+    identPostalCode: '',
+    identCountry: '',
+    sshPrivateKey: '',
+    sshPublicKey: '',
+    sshFingerprint: '',
+    bankName: '',
+    bankNameOnAccount: '',
+    bankAccountType: '',
+    bankAccountNumber: '',
+    bankRoutingNumber: '',
+    bankBranchNumber: '',
+    bankPin: '',
+    bankSwiftCode: '',
+    bankIban: '',
+    bankContactPhone: '',
+    licenseFirstName: '',
+    licenseMiddleName: '',
+    licenseLastName: '',
+    licenseDateOfBirth: '',
+    licenseNumber: '',
+    licenseIssuingCountry: '',
+    licenseIssuingState: '',
+    licenseIssueDate: '',
+    licenseExpirationDate: '',
+    licenseIssuingAuthority: '',
+    licenseClass: '',
+    passportSurname: '',
+    passportGivenName: '',
+    passportDateOfBirth: '',
+    passportSex: '',
+    passportBirthPlace: '',
+    passportNationality: '',
+    passportIssuingCountry: '',
+    passportNumber: '',
+    passportType: '',
+    passportNationalIdentificationNumber: '',
+    passportIssuingAuthority: '',
+    passportIssueDate: '',
+    passportExpirationDate: '',
+    customFields: [],
+  };
+
+  draft.customFields = (cipher.fields || [])
+    .map((field) => ({
+      type: parseFieldType(field.type ?? 0),
+      label: plainCipherValue(field.decName, field.name).trim(),
+      value: plainCipherValue(field.decValue, field.value),
+    }))
+    .filter((field) => field.label);
+
+  if (type === 1 && cipher.login) {
+    draft.loginUsername = plainCipherValue(cipher.login.decUsername, cipher.login.username);
+    draft.loginPassword = plainCipherValue(cipher.login.decPassword, cipher.login.password);
+    draft.loginTotp = plainCipherValue(cipher.login.decTotp, cipher.login.totp);
+    draft.loginFido2Credentials = Array.isArray(cipher.login.fido2Credentials)
+      ? cipher.login.fido2Credentials.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      : [];
+    const seenUris = new Set<string>();
+    const uris = (cipher.login.uris || [])
+      .map((entry) => {
+        const uri = plainCipherValue(entry.decUri, entry.uri).trim();
+        const extra = { ...(entry as Record<string, unknown>) };
+        delete extra.uri;
+        delete extra.uriChecksum;
+        delete extra.match;
+        delete extra.decUri;
+        return {
+          uri,
+          match: typeof entry.match === 'number' && Number.isFinite(entry.match) ? entry.match : null,
+          originalUri: '',
+          extra,
+        };
+      })
+      .filter((entry) => {
+        if (!entry.uri) return false;
+        const key = entry.uri.toLowerCase();
+        if (seenUris.has(key)) return false;
+        seenUris.add(key);
+        return true;
+      });
+    draft.loginUris = uris.length ? uris : draft.loginUris;
+  } else if (type === 3 && cipher.card) {
+    draft.cardholderName = plainCipherValue(cipher.card.decCardholderName, cipher.card.cardholderName);
+    draft.cardNumber = plainCipherValue(cipher.card.decNumber, cipher.card.number);
+    draft.cardBrand = plainCipherValue(cipher.card.decBrand, cipher.card.brand);
+    draft.cardExpMonth = plainCipherValue(cipher.card.decExpMonth, cipher.card.expMonth);
+    draft.cardExpYear = plainCipherValue(cipher.card.decExpYear, cipher.card.expYear);
+    draft.cardCode = plainCipherValue(cipher.card.decCode, cipher.card.code);
+  } else if (type === 4 && cipher.identity) {
+    draft.identTitle = plainCipherValue(cipher.identity.decTitle, cipher.identity.title);
+    draft.identFirstName = plainCipherValue(cipher.identity.decFirstName, cipher.identity.firstName);
+    draft.identMiddleName = plainCipherValue(cipher.identity.decMiddleName, cipher.identity.middleName);
+    draft.identLastName = plainCipherValue(cipher.identity.decLastName, cipher.identity.lastName);
+    draft.identUsername = plainCipherValue(cipher.identity.decUsername, cipher.identity.username);
+    draft.identCompany = plainCipherValue(cipher.identity.decCompany, cipher.identity.company);
+    draft.identSsn = plainCipherValue(cipher.identity.decSsn, cipher.identity.ssn);
+    draft.identPassportNumber = plainCipherValue(cipher.identity.decPassportNumber, cipher.identity.passportNumber);
+    draft.identLicenseNumber = plainCipherValue(cipher.identity.decLicenseNumber, cipher.identity.licenseNumber);
+    draft.identEmail = plainCipherValue(cipher.identity.decEmail, cipher.identity.email);
+    draft.identPhone = plainCipherValue(cipher.identity.decPhone, cipher.identity.phone);
+    draft.identAddress1 = plainCipherValue(cipher.identity.decAddress1, cipher.identity.address1);
+    draft.identAddress2 = plainCipherValue(cipher.identity.decAddress2, cipher.identity.address2);
+    draft.identAddress3 = plainCipherValue(cipher.identity.decAddress3, cipher.identity.address3);
+    draft.identCity = plainCipherValue(cipher.identity.decCity, cipher.identity.city);
+    draft.identState = plainCipherValue(cipher.identity.decState, cipher.identity.state);
+    draft.identPostalCode = plainCipherValue(cipher.identity.decPostalCode, cipher.identity.postalCode);
+    draft.identCountry = plainCipherValue(cipher.identity.decCountry, cipher.identity.country);
+  } else if (type === 5 && cipher.sshKey) {
+    draft.sshPrivateKey = plainCipherValue(cipher.sshKey.decPrivateKey, cipher.sshKey.privateKey);
+    draft.sshPublicKey = plainCipherValue(cipher.sshKey.decPublicKey, cipher.sshKey.publicKey);
+    draft.sshFingerprint = plainCipherValue(
+      cipher.sshKey.decFingerprint,
+      cipher.sshKey.keyFingerprint || cipher.sshKey.fingerprint
+    );
+  } else if (type === 6 && cipher.bankAccount) {
+    draft.bankName = plainCipherValue(cipher.bankAccount.decBankName, cipher.bankAccount.bankName);
+    draft.bankNameOnAccount = plainCipherValue(cipher.bankAccount.decNameOnAccount, cipher.bankAccount.nameOnAccount);
+    draft.bankAccountType = plainCipherValue(cipher.bankAccount.decAccountType, cipher.bankAccount.accountType);
+    draft.bankAccountNumber = plainCipherValue(cipher.bankAccount.decAccountNumber, cipher.bankAccount.accountNumber);
+    draft.bankRoutingNumber = plainCipherValue(cipher.bankAccount.decRoutingNumber, cipher.bankAccount.routingNumber);
+    draft.bankBranchNumber = plainCipherValue(cipher.bankAccount.decBranchNumber, cipher.bankAccount.branchNumber);
+    draft.bankPin = plainCipherValue(cipher.bankAccount.decPin, cipher.bankAccount.pin);
+    draft.bankSwiftCode = plainCipherValue(cipher.bankAccount.decSwiftCode, cipher.bankAccount.swiftCode);
+    draft.bankIban = plainCipherValue(cipher.bankAccount.decIban, cipher.bankAccount.iban);
+    draft.bankContactPhone = plainCipherValue(cipher.bankAccount.decBankContactPhone, cipher.bankAccount.bankContactPhone);
+  } else if (type === 7 && cipher.driversLicense) {
+    draft.licenseFirstName = plainCipherValue(cipher.driversLicense.decFirstName, cipher.driversLicense.firstName);
+    draft.licenseMiddleName = plainCipherValue(cipher.driversLicense.decMiddleName, cipher.driversLicense.middleName);
+    draft.licenseLastName = plainCipherValue(cipher.driversLicense.decLastName, cipher.driversLicense.lastName);
+    draft.licenseDateOfBirth = plainCipherValue(cipher.driversLicense.decDateOfBirth, cipher.driversLicense.dateOfBirth);
+    draft.licenseNumber = plainCipherValue(cipher.driversLicense.decLicenseNumber, cipher.driversLicense.licenseNumber);
+    draft.licenseIssuingCountry = plainCipherValue(cipher.driversLicense.decIssuingCountry, cipher.driversLicense.issuingCountry);
+    draft.licenseIssuingState = plainCipherValue(cipher.driversLicense.decIssuingState, cipher.driversLicense.issuingState);
+    draft.licenseIssueDate = plainCipherValue(cipher.driversLicense.decIssueDate, cipher.driversLicense.issueDate);
+    draft.licenseExpirationDate = plainCipherValue(cipher.driversLicense.decExpirationDate, cipher.driversLicense.expirationDate);
+    draft.licenseIssuingAuthority = plainCipherValue(cipher.driversLicense.decIssuingAuthority, cipher.driversLicense.issuingAuthority);
+    draft.licenseClass = plainCipherValue(cipher.driversLicense.decLicenseClass, cipher.driversLicense.licenseClass);
+  } else if (type === 8 && cipher.passport) {
+    draft.passportSurname = plainCipherValue(cipher.passport.decSurname, cipher.passport.surname);
+    draft.passportGivenName = plainCipherValue(cipher.passport.decGivenName, cipher.passport.givenName);
+    draft.passportDateOfBirth = plainCipherValue(cipher.passport.decDateOfBirth, cipher.passport.dateOfBirth);
+    draft.passportSex = plainCipherValue(cipher.passport.decSex, cipher.passport.sex);
+    draft.passportBirthPlace = plainCipherValue(cipher.passport.decBirthPlace, cipher.passport.birthPlace);
+    draft.passportNationality = plainCipherValue(cipher.passport.decNationality, cipher.passport.nationality);
+    draft.passportIssuingCountry = plainCipherValue(cipher.passport.decIssuingCountry, cipher.passport.issuingCountry);
+    draft.passportNumber = plainCipherValue(cipher.passport.decPassportNumber, cipher.passport.passportNumber);
+    draft.passportType = plainCipherValue(cipher.passport.decPassportType, cipher.passport.passportType);
+    draft.passportNationalIdentificationNumber = plainCipherValue(cipher.passport.decNationalIdentificationNumber, cipher.passport.nationalIdentificationNumber);
+    draft.passportIssuingAuthority = plainCipherValue(cipher.passport.decIssuingAuthority, cipher.passport.issuingAuthority);
+    draft.passportIssueDate = plainCipherValue(cipher.passport.decIssueDate, cipher.passport.issueDate);
+    draft.passportExpirationDate = plainCipherValue(cipher.passport.decExpirationDate, cipher.passport.expirationDate);
+  }
+
+  return draft;
 }
 
 async function buildUpdatedPasswordHistory(
@@ -574,12 +828,18 @@ async function encryptUris(
       entry?.extra && typeof entry.extra === 'object'
         ? { ...entry.extra }
         : {};
-    if (String(entry?.originalUri || '').trim() !== trimmed) {
+    const canReuseChecksum = String(entry?.originalUri || '').trim() === trimmed;
+    if (!canReuseChecksum) {
       delete preservedExtra.uriChecksum;
     }
+    const preservedChecksum = typeof preservedExtra.uriChecksum === 'string' && looksLikeCipherString(preservedExtra.uriChecksum)
+      ? preservedExtra.uriChecksum
+      : null;
+    const uriChecksum = preservedChecksum || await encryptTextValue(await sha256Base64(trimmed), enc, mac);
     out.push({
       ...preservedExtra,
       uri: await encryptTextValue(trimmed, enc, mac),
+      uriChecksum,
       match: typeof entry?.match === 'number' && Number.isFinite(entry.match) ? entry.match : null,
     });
   }
@@ -660,6 +920,352 @@ async function getCipherKeys(
   return { enc: userEnc, mac: userMac, key: null };
 }
 
+async function repairCipherLoginUris(
+  cipher: Cipher,
+  enc: Uint8Array,
+  mac: Uint8Array
+): Promise<{ login: Cipher['login']; changed: boolean }> {
+  if (!cipher.login || !Array.isArray(cipher.login.uris)) {
+    return { login: cipher.login ?? null, changed: false };
+  }
+
+  let changed = false;
+  const uris: Array<Record<string, unknown>> = [];
+
+  for (const entry of cipher.login.uris) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { decUri: _decUri, ...encryptedEntry } = entry as Record<string, unknown>;
+    const rawUri = typeof entry.uri === 'string' ? entry.uri.trim() : '';
+    if (!looksLikeCipherString(rawUri)) {
+      uris.push({ ...encryptedEntry });
+      continue;
+    }
+
+    let clearUri = '';
+    let rawUriUsesCurrentKey = false;
+    try {
+      clearUri = (await decryptStr(rawUri, enc, mac)).trim();
+      rawUriUsesCurrentKey = !!clearUri;
+    } catch {
+      const fallbackUri = String(entry.decUri || '').trim();
+      if (fallbackUri && !looksLikeCipherString(fallbackUri)) {
+        clearUri = fallbackUri;
+      }
+    }
+
+    if (!clearUri) {
+      uris.push({ ...encryptedEntry });
+      continue;
+    }
+
+    const expectedChecksum = await sha256Base64(clearUri);
+    let currentChecksumOk = false;
+    const rawChecksum = typeof entry.uriChecksum === 'string' ? entry.uriChecksum.trim() : '';
+    if (looksLikeCipherString(rawChecksum)) {
+      try {
+        currentChecksumOk = (await decryptStr(rawChecksum, enc, mac)) === expectedChecksum;
+      } catch {
+        currentChecksumOk = false;
+      }
+    }
+
+    if (currentChecksumOk && rawUriUsesCurrentKey) {
+      uris.push({ ...encryptedEntry });
+      continue;
+    }
+
+    const repairedUri = rawUriUsesCurrentKey ? rawUri : await encryptTextValue(clearUri, enc, mac);
+    const repairedChecksum = currentChecksumOk
+      ? rawChecksum
+      : await encryptTextValue(expectedChecksum, enc, mac);
+
+    uris.push({
+      ...encryptedEntry,
+      uri: repairedUri || rawUri,
+      uriChecksum: repairedChecksum,
+      match: typeof entry.match === 'number' && Number.isFinite(entry.match) ? entry.match : null,
+    });
+    changed = true;
+  }
+
+  const {
+    decUsername: _decUsername,
+    decPassword: _decPassword,
+    decTotp: _decTotp,
+    ...encryptedLogin
+  } = cipher.login as Record<string, unknown>;
+
+  return {
+    login: {
+      ...encryptedLogin,
+      uris: uris as CipherLoginData['uris'],
+    } as CipherLoginData,
+    changed,
+  };
+}
+
+export async function repairCipherUriChecksums(
+  authedFetch: AuthedFetch,
+  session: SessionState,
+  ciphers: Cipher[]
+): Promise<number> {
+  if (!session.symEncKey || !session.symMacKey || !Array.isArray(ciphers) || ciphers.length === 0) {
+    return 0;
+  }
+
+  const userEnc = base64ToBytes(session.symEncKey);
+  const userMac = base64ToBytes(session.symMacKey);
+  let repaired = 0;
+
+  for (const cipher of ciphers) {
+    if (!cipher?.id || cipher.type !== 1 || !cipher.login || !Array.isArray(cipher.login.uris)) continue;
+    let keys: { enc: Uint8Array; mac: Uint8Array; key: string | null } = {
+      enc: userEnc,
+      mac: userMac,
+      key: null,
+    };
+    if (looksLikeCipherString(cipher.key)) {
+      let itemKey: Uint8Array;
+      try {
+        itemKey = await decryptBw(String(cipher.key).trim(), userEnc, userMac);
+      } catch {
+        continue;
+      }
+      if (itemKey.length < 64) continue;
+      keys = { enc: itemKey.slice(0, 32), mac: itemKey.slice(32, 64), key: String(cipher.key).trim() };
+    }
+    const repair = await repairCipherLoginUris(cipher, keys.enc, keys.mac);
+    if (!repair.changed) continue;
+
+    const payload: Record<string, unknown> = {
+      type: cipher.type,
+      folderId: cipher.folderId ?? null,
+      favorite: !!cipher.favorite,
+      reprompt: cipher.reprompt ?? 0,
+      name: cipher.name ?? null,
+      notes: cipher.notes ?? null,
+      login: repair.login,
+      fields: Array.isArray(cipher.fields)
+        ? cipher.fields.map(({ decName: _decName, decValue: _decValue, ...field }) => field)
+        : null,
+      lastKnownRevisionDate: cipher.revisionDate ?? null,
+      preserveRevisionDate: true,
+    };
+    if (keys.key) payload.key = keys.key;
+
+    const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipher.id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', [NODEWARDEN_WEB_REPAIR_HEADER]: '1' },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Repair URI checksum failed'));
+    repaired += 1;
+  }
+
+  return repaired;
+}
+
+function getCipherKeyMismatchProbes(cipher: Cipher): string[] {
+  const candidates = [
+    cipher.name,
+    cipher.notes,
+    cipher.login?.username,
+    cipher.login?.password,
+    cipher.login?.totp,
+    ...(cipher.login?.uris || []).map((uri) => uri.uri),
+    cipher.card?.cardholderName,
+    cipher.card?.number,
+    cipher.identity?.title,
+    cipher.identity?.firstName,
+    cipher.sshKey?.privateKey,
+    cipher.bankAccount?.bankName,
+    cipher.bankAccount?.accountNumber,
+    cipher.driversLicense?.licenseNumber,
+    cipher.passport?.passportNumber,
+    ...(cipher.fields || []).flatMap((field) => [field.name, field.value]),
+  ];
+  const probes: string[] = [];
+  const seen = new Set<string>();
+  for (const value of candidates) {
+    const probe = String(value || '').trim();
+    if (!looksLikeCipherString(probe) || seen.has(probe)) continue;
+    seen.add(probe);
+    probes.push(probe);
+  }
+  return probes;
+}
+
+function isResolvedEncryptedField(raw: unknown, decrypted: unknown): boolean {
+  const encrypted = String(raw || '').trim();
+  if (!looksLikeCipherString(encrypted)) return true;
+  const plain = typeof decrypted === 'string' ? decrypted.trim() : '';
+  return !!plain && !looksLikeCipherString(plain);
+}
+
+function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
+  const fido2EncryptedFields = (cipher.login?.fido2Credentials || []).flatMap((credential) => [
+    credential?.credentialId,
+    credential?.keyType,
+    credential?.keyAlgorithm,
+    credential?.keyCurve,
+    credential?.keyValue,
+    credential?.rpId,
+    credential?.rpName,
+    credential?.userHandle,
+    credential?.userName,
+    credential?.userDisplayName,
+    credential?.counter,
+    credential?.discoverable,
+  ]);
+
+  const checks: Array<[unknown, unknown]> = [
+    [cipher.name, cipher.decName],
+    [cipher.notes, cipher.decNotes],
+    [cipher.login?.username, cipher.login?.decUsername],
+    [cipher.login?.password, cipher.login?.decPassword],
+    [cipher.login?.totp, cipher.login?.decTotp],
+    ...(cipher.login?.uris || []).map((uri) => [uri.uri, uri.decUri] as [unknown, unknown]),
+    [cipher.card?.cardholderName, cipher.card?.decCardholderName],
+    [cipher.card?.number, cipher.card?.decNumber],
+    [cipher.card?.brand, cipher.card?.decBrand],
+    [cipher.card?.expMonth, cipher.card?.decExpMonth],
+    [cipher.card?.expYear, cipher.card?.decExpYear],
+    [cipher.card?.code, cipher.card?.decCode],
+    [cipher.identity?.title, cipher.identity?.decTitle],
+    [cipher.identity?.firstName, cipher.identity?.decFirstName],
+    [cipher.identity?.middleName, cipher.identity?.decMiddleName],
+    [cipher.identity?.lastName, cipher.identity?.decLastName],
+    [cipher.identity?.username, cipher.identity?.decUsername],
+    [cipher.identity?.company, cipher.identity?.decCompany],
+    [cipher.identity?.ssn, cipher.identity?.decSsn],
+    [cipher.identity?.passportNumber, cipher.identity?.decPassportNumber],
+    [cipher.identity?.licenseNumber, cipher.identity?.decLicenseNumber],
+    [cipher.identity?.email, cipher.identity?.decEmail],
+    [cipher.identity?.phone, cipher.identity?.decPhone],
+    [cipher.identity?.address1, cipher.identity?.decAddress1],
+    [cipher.identity?.address2, cipher.identity?.decAddress2],
+    [cipher.identity?.address3, cipher.identity?.decAddress3],
+    [cipher.identity?.city, cipher.identity?.decCity],
+    [cipher.identity?.state, cipher.identity?.decState],
+    [cipher.identity?.postalCode, cipher.identity?.decPostalCode],
+    [cipher.identity?.country, cipher.identity?.decCountry],
+    [cipher.sshKey?.privateKey, cipher.sshKey?.decPrivateKey],
+    [cipher.sshKey?.publicKey, cipher.sshKey?.decPublicKey],
+    [cipher.sshKey?.keyFingerprint || cipher.sshKey?.fingerprint, cipher.sshKey?.decFingerprint],
+    [cipher.bankAccount?.bankName, cipher.bankAccount?.decBankName],
+    [cipher.bankAccount?.nameOnAccount, cipher.bankAccount?.decNameOnAccount],
+    [cipher.bankAccount?.accountType, cipher.bankAccount?.decAccountType],
+    [cipher.bankAccount?.accountNumber, cipher.bankAccount?.decAccountNumber],
+    [cipher.bankAccount?.routingNumber, cipher.bankAccount?.decRoutingNumber],
+    [cipher.bankAccount?.branchNumber, cipher.bankAccount?.decBranchNumber],
+    [cipher.bankAccount?.pin, cipher.bankAccount?.decPin],
+    [cipher.bankAccount?.swiftCode, cipher.bankAccount?.decSwiftCode],
+    [cipher.bankAccount?.iban, cipher.bankAccount?.decIban],
+    [cipher.bankAccount?.bankContactPhone, cipher.bankAccount?.decBankContactPhone],
+    [cipher.driversLicense?.firstName, cipher.driversLicense?.decFirstName],
+    [cipher.driversLicense?.middleName, cipher.driversLicense?.decMiddleName],
+    [cipher.driversLicense?.lastName, cipher.driversLicense?.decLastName],
+    [cipher.driversLicense?.dateOfBirth, cipher.driversLicense?.decDateOfBirth],
+    [cipher.driversLicense?.licenseNumber, cipher.driversLicense?.decLicenseNumber],
+    [cipher.driversLicense?.issuingCountry, cipher.driversLicense?.decIssuingCountry],
+    [cipher.driversLicense?.issuingState, cipher.driversLicense?.decIssuingState],
+    [cipher.driversLicense?.issueDate, cipher.driversLicense?.decIssueDate],
+    [cipher.driversLicense?.expirationDate, cipher.driversLicense?.decExpirationDate],
+    [cipher.driversLicense?.issuingAuthority, cipher.driversLicense?.decIssuingAuthority],
+    [cipher.driversLicense?.licenseClass, cipher.driversLicense?.decLicenseClass],
+    [cipher.passport?.surname, cipher.passport?.decSurname],
+    [cipher.passport?.givenName, cipher.passport?.decGivenName],
+    [cipher.passport?.dateOfBirth, cipher.passport?.decDateOfBirth],
+    [cipher.passport?.sex, cipher.passport?.decSex],
+    [cipher.passport?.birthPlace, cipher.passport?.decBirthPlace],
+    [cipher.passport?.nationality, cipher.passport?.decNationality],
+    [cipher.passport?.issuingCountry, cipher.passport?.decIssuingCountry],
+    [cipher.passport?.passportNumber, cipher.passport?.decPassportNumber],
+    [cipher.passport?.passportType, cipher.passport?.decPassportType],
+    [cipher.passport?.nationalIdentificationNumber, cipher.passport?.decNationalIdentificationNumber],
+    [cipher.passport?.issuingAuthority, cipher.passport?.decIssuingAuthority],
+    [cipher.passport?.issueDate, cipher.passport?.decIssueDate],
+    [cipher.passport?.expirationDate, cipher.passport?.decExpirationDate],
+    ...(cipher.fields || []).flatMap((field) => [
+      [field.name, field.decName] as [unknown, unknown],
+      [field.value, field.decValue] as [unknown, unknown],
+    ]),
+    ...(cipher.passwordHistory || []).map((entry) => [entry.password, entry.decPassword] as [unknown, unknown]),
+    ...fido2EncryptedFields.map((value) => [value, undefined] as [unknown, unknown]),
+  ];
+
+  return checks.some(([raw, decrypted]) => !isResolvedEncryptedField(raw, decrypted));
+}
+
+async function hasItemKeyFieldMismatch(
+  cipher: Cipher,
+  userEnc: Uint8Array,
+  userMac: Uint8Array
+): Promise<boolean> {
+  if (!looksLikeCipherString(cipher.key)) return false;
+  const probes = getCipherKeyMismatchProbes(cipher);
+  if (probes.length === 0) return false;
+
+  let itemKey: Uint8Array;
+  try {
+    itemKey = await decryptBw(String(cipher.key).trim(), userEnc, userMac);
+  } catch {
+    return false;
+  }
+  if (itemKey.length < 64) return false;
+
+  const itemEnc = itemKey.slice(0, 32);
+  const itemMac = itemKey.slice(32, 64);
+  for (const probe of probes) {
+    try {
+      await decryptStr(probe, itemEnc, itemMac);
+      continue;
+    } catch {
+      // Try the legacy user-key field path below.
+    }
+
+    try {
+      await decryptStr(probe, userEnc, userMac);
+      return true;
+    } catch {
+      // Keep scanning in case another field reveals a repairable mismatch.
+    }
+  }
+
+  return false;
+}
+
+export async function repairCipherKeyMismatches(
+  authedFetch: AuthedFetch,
+  session: SessionState,
+  ciphers: Cipher[]
+): Promise<number> {
+  if (!session.symEncKey || !session.symMacKey || !Array.isArray(ciphers) || ciphers.length === 0) {
+    return 0;
+  }
+
+  const userEnc = base64ToBytes(session.symEncKey);
+  const userMac = base64ToBytes(session.symMacKey);
+  let repaired = 0;
+
+  for (const cipher of ciphers) {
+    if (!cipher?.id || !looksLikeCipherString(cipher.key)) continue;
+    if (!(await hasItemKeyFieldMismatch(cipher, userEnc, userMac))) continue;
+    if (hasUnresolvedEncryptedFields(cipher)) continue;
+    await updateCipher(
+      authedFetch,
+      session,
+      cipher,
+      draftFromDecryptedCipher(cipher),
+      { preserveRevisionDate: true },
+      { webRepair: true }
+    );
+    repaired += 1;
+  }
+
+  return repaired;
+}
+
 async function buildCipherPayload(
   session: SessionState,
   draft: VaultDraft,
@@ -684,6 +1290,9 @@ async function buildCipherPayload(
     identity: null,
     secureNote: null,
     sshKey: null,
+    bankAccount: null,
+    driversLicense: null,
+    passport: null,
     fields: await encryptCustomFields(draft.customFields || [], keys.enc, keys.mac),
     passwordHistory: await encryptPasswordHistory(cipher?.passwordHistory, keys.enc, keys.mac),
   };
@@ -703,6 +1312,9 @@ async function buildCipherPayload(
       cipher?.login && typeof cipher.login === 'object'
         ? { ...(cipher.login as Record<string, unknown>) }
         : {};
+    delete existingLogin.decUsername;
+    delete existingLogin.decPassword;
+    delete existingLogin.decTotp;
     payload.login = {
       ...existingLogin,
       username: await encryptTextValue(draft.loginUsername, keys.enc, keys.mac),
@@ -746,11 +1358,73 @@ async function buildCipherPayload(
   } else if (type === 5) {
     const encryptedFingerprint = await encryptTextValue(draft.sshFingerprint, keys.enc, keys.mac);
     payload.sshKey = {
+      ...stripDecodedObjectFields(cipher?.sshKey),
       privateKey: await encryptTextValue(draft.sshPrivateKey, keys.enc, keys.mac),
       publicKey: await encryptTextValue(draft.sshPublicKey, keys.enc, keys.mac),
       keyFingerprint: encryptedFingerprint,
       fingerprint: encryptedFingerprint,
     };
+  } else if (type === 6) {
+    payload.bankAccount = await encryptObjectFields(
+      cipher?.bankAccount,
+      [
+        ['bankName', 'bankName'],
+        ['nameOnAccount', 'bankNameOnAccount'],
+        ['accountType', 'bankAccountType'],
+        ['accountNumber', 'bankAccountNumber'],
+        ['routingNumber', 'bankRoutingNumber'],
+        ['branchNumber', 'bankBranchNumber'],
+        ['pin', 'bankPin'],
+        ['swiftCode', 'bankSwiftCode'],
+        ['iban', 'bankIban'],
+        ['bankContactPhone', 'bankContactPhone'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
+  } else if (type === 7) {
+    payload.driversLicense = await encryptObjectFields(
+      cipher?.driversLicense,
+      [
+        ['firstName', 'licenseFirstName'],
+        ['middleName', 'licenseMiddleName'],
+        ['lastName', 'licenseLastName'],
+        ['dateOfBirth', 'licenseDateOfBirth'],
+        ['licenseNumber', 'licenseNumber'],
+        ['issuingCountry', 'licenseIssuingCountry'],
+        ['issuingState', 'licenseIssuingState'],
+        ['issueDate', 'licenseIssueDate'],
+        ['expirationDate', 'licenseExpirationDate'],
+        ['issuingAuthority', 'licenseIssuingAuthority'],
+        ['licenseClass', 'licenseClass'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
+  } else if (type === 8) {
+    payload.passport = await encryptObjectFields(
+      cipher?.passport,
+      [
+        ['surname', 'passportSurname'],
+        ['givenName', 'passportGivenName'],
+        ['dateOfBirth', 'passportDateOfBirth'],
+        ['sex', 'passportSex'],
+        ['birthPlace', 'passportBirthPlace'],
+        ['nationality', 'passportNationality'],
+        ['issuingCountry', 'passportIssuingCountry'],
+        ['passportNumber', 'passportNumber'],
+        ['passportType', 'passportType'],
+        ['nationalIdentificationNumber', 'passportNationalIdentificationNumber'],
+        ['issuingAuthority', 'passportIssuingAuthority'],
+        ['issueDate', 'passportIssueDate'],
+        ['expirationDate', 'passportExpirationDate'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
   } else if (type === 2) {
     payload.secureNote = { type: 0 };
   }
@@ -784,13 +1458,21 @@ export async function updateCipher(
   authedFetch: AuthedFetch,
   session: SessionState,
   cipher: Cipher,
-  draft: VaultDraft
+  draft: VaultDraft,
+  extraPayload?: Record<string, unknown>,
+  options?: { webRepair?: boolean }
 ): Promise<Cipher> {
   const payload = await buildCipherPayload(session, draft, cipher);
+  if (extraPayload) {
+    Object.assign(payload, extraPayload);
+  }
 
   const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipher.id)}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options?.webRepair ? { [NODEWARDEN_WEB_REPAIR_HEADER]: '1' } : {}),
+    },
     body: JSON.stringify(payload),
   });
   if (!resp.ok) throw new Error('Update item failed');
@@ -801,6 +1483,13 @@ export async function deleteCipher(authedFetch: AuthedFetch, cipherId: string): 
   const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipherId)}`, { method: 'DELETE' });
   if (!resp.ok) throw new Error('Delete item failed');
   return (await parseJson<Cipher>(resp))!;
+}
+
+export async function permanentDeleteCipher(authedFetch: AuthedFetch, cipherId: string): Promise<void> {
+  const id = String(cipherId || '').trim();
+  if (!id) throw new Error('Cipher id is required');
+  const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(id)}/delete`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error('Permanent delete item failed');
 }
 
 export async function archiveCipher(authedFetch: AuthedFetch, cipherId: string): Promise<Cipher> {

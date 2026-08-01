@@ -68,6 +68,10 @@
   @apply my-1.5 text-3xl;
 }
 
+.dialog-title-stack {
+  @apply flex flex-col items-center gap-1;
+}
+
 .dialog-message {
   @apply mb-2.5;
   color: #475467;
@@ -91,12 +95,31 @@
 }
 
 .dialog-extra {
-  @apply mt-2;
+  @apply mt-2 grid gap-2;
 }
 
 .dialog-divider {
   @apply my-2 mb-2.5 h-px;
   background: var(--line);
+}
+
+.two-factor-method-switcher {
+  @apply grid gap-2;
+}
+
+.two-factor-method-list {
+  @apply grid gap-2 rounded-lg border p-2;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, var(--surface));
+}
+
+.two-factor-method-label {
+  @apply px-1 text-left text-sm font-extrabold;
+  color: var(--muted);
+}
+
+.two-factor-method-option {
+  @apply min-h-11 justify-start text-base;
 }
 
 .import-summary-dialog {
@@ -209,14 +232,29 @@
 }
 
 .toast-close {
-  @apply cursor-pointer border-0 bg-transparent text-xl;
+  @apply flex cursor-pointer items-center justify-center border-0;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
   color: inherit;
-  transition: transform var(--dur-fast) var(--ease-out-soft), opacity var(--dur-fast) var(--ease-smooth);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 120ms ease, opacity 120ms ease;
 }
 
 .toast-close:hover {
-  transform: scale(1.08);
-  opacity: 0.84;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.toast-close:active {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.toast-close:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+  border-radius: 8px;
 }
 
 .toast-progress {

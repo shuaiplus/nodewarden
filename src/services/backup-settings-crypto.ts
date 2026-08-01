@@ -1,5 +1,17 @@
 import type { Env, User } from '../types';
 
+// CONTRACT:
+// Backup settings contain provider credentials. They are stored as a v2 envelope:
+// - runtime: AES-GCM encrypted with a key derived from JWT_SECRET for the current
+//   server's scheduled backup runner.
+// - portable: AES-GCM encrypted with a random DEK; that DEK is RSA-wrapped for
+//   active admin public keys so settings can be repaired after restore/migration.
+//   Historical/imported databases may not have usable admin public keys; in that
+//   case portable.wraps is empty but the runtime ciphertext is still encrypted.
+//
+// New admin-entered provider secrets, such as mail API keys, should use this
+// pattern or a deliberately documented replacement. Do not store provider
+// secrets as plain config JSON.
 const RUNTIME_SALT = 'nodewarden.backup-settings.runtime.v2';
 const RUNTIME_INFO = 'runtime';
 const PORTABLE_ALGORITHM = 'RSA-OAEP';
@@ -155,6 +167,20 @@ export function parseBackupSettingsEnvelope(raw: string | null): BackupSettingsE
   }
 }
 
+export function exportPortableBackupSettingsEnvelope(raw: string | null): string | null {
+  const envelope = parseBackupSettingsEnvelope(raw);
+  if (!envelope) return null;
+  return JSON.stringify({
+    version: 2,
+    portableOnly: true,
+    runtime: {
+      iv: '',
+      ciphertext: '',
+    },
+    portable: envelope.portable,
+  });
+}
+
 export async function encryptBackupSettingsEnvelope(
   plaintext: string,
   env: Env,
@@ -162,9 +188,6 @@ export async function encryptBackupSettingsEnvelope(
 ): Promise<string> {
   const encoder = new TextEncoder();
   const eligibleUsers = getEligiblePortableUsers(users);
-  if (!eligibleUsers.length) {
-    throw new Error('No active administrator public keys are available for backup settings recovery');
-  }
 
   const runtimeKey = await deriveRuntimeKey(env.JWT_SECRET);
   const runtime = await encryptAesGcm(encoder.encode(plaintext), runtimeKey);
@@ -181,18 +204,22 @@ export async function encryptBackupSettingsEnvelope(
 
   const wraps: BackupSettingsPortableWrap[] = [];
   for (const user of eligibleUsers) {
-    const publicKey = await importPortablePublicKey(user.publicKey!);
-    const wrappedKey = new Uint8Array(
-      await crypto.subtle.encrypt(
-        { name: PORTABLE_ALGORITHM },
-        publicKey,
-        portableDek
-      )
-    );
-    wraps.push({
-      userId: user.id,
-      wrappedKey: bytesToBase64(wrappedKey),
-    });
+    try {
+      const publicKey = await importPortablePublicKey(user.publicKey!);
+      const wrappedKey = new Uint8Array(
+        await crypto.subtle.encrypt(
+          { name: PORTABLE_ALGORITHM },
+          publicKey,
+          portableDek
+        )
+      );
+      wraps.push({
+        userId: user.id,
+        wrappedKey: bytesToBase64(wrappedKey),
+      });
+    } catch {
+      // Keep runtime settings usable even if an imported admin key is malformed.
+    }
   }
 
   const envelope: BackupSettingsEnvelopeV2 = {

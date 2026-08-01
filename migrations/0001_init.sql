@@ -1,8 +1,14 @@
 PRAGMA foreign_keys = ON;
 
 -- IMPORTANT:
--- Keep this file in sync with src/services/storage.ts (SCHEMA_STATEMENTS).
+-- This is the initial D1 schema. Keep it in sync with
+-- src/services/storage-schema.ts (SCHEMA_STATEMENTS).
 -- Any new table/column/index must be added to both places together.
+--
+-- WHEN CHANGING THIS:
+-- - Also bump STORAGE_SCHEMA_VERSION in src/services/storage.ts.
+-- - If the new table stores persistent data, update backup export/import.
+-- - Keep src/services/storage-schema.ts idempotent for existing installs.
 
 CREATE TABLE IF NOT EXISTS config (
   key TEXT PRIMARY KEY,
@@ -25,12 +31,21 @@ CREATE TABLE IF NOT EXISTS users (
   security_stamp TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
-  verify_devices INTEGER NOT NULL DEFAULT 1,
+  verify_devices INTEGER NOT NULL DEFAULT 0,
   totp_secret TEXT,
   totp_recovery_code TEXT,
   api_key TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS domain_settings (
+  user_id TEXT PRIMARY KEY,
+  equivalent_domains TEXT NOT NULL DEFAULT '[]',
+  custom_equivalent_domains TEXT NOT NULL DEFAULT '[]',
+  excluded_global_equivalent_domains TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- Per-user sync revision date
@@ -115,6 +130,13 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   token TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
+  device_identifier TEXT,
+  device_session_stamp TEXT,
+  security_stamp TEXT,
+  created_at INTEGER,
+  last_used_at INTEGER,
+  absolute_expires_at INTEGER,
+  client_type TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
@@ -137,6 +159,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
   actor_user_id TEXT,
   action TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'system',
+  level TEXT NOT NULL DEFAULT 'info',
   target_type TEXT,
   target_id TEXT,
   metadata TEXT,
@@ -145,6 +169,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_category_created ON audit_logs(category, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_level_created ON audit_logs(level, created_at);
 
 CREATE TABLE IF NOT EXISTS devices (
   user_id TEXT NOT NULL,
@@ -155,6 +181,10 @@ CREATE TABLE IF NOT EXISTS devices (
   encrypted_user_key TEXT,
   encrypted_public_key TEXT,
   encrypted_private_key TEXT,
+  push_uuid TEXT,
+  push_token TEXT,
+  banned INTEGER NOT NULL DEFAULT 0,
+  banned_at TEXT,
   device_note TEXT,
   last_seen_at TEXT,
   created_at TEXT NOT NULL,
@@ -164,6 +194,34 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 CREATE INDEX IF NOT EXISTS idx_devices_user_updated ON devices(user_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_devices_user_last_seen ON devices(user_id, last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_devices_user_push ON devices(user_id, push_token);
+
+CREATE TABLE IF NOT EXISTS auth_requests (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  organization_id TEXT,
+  type INTEGER NOT NULL,
+  request_device_identifier TEXT NOT NULL,
+  request_device_type INTEGER NOT NULL,
+  request_ip_address TEXT,
+  request_country_name TEXT,
+  response_device_identifier TEXT,
+  access_code TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  key TEXT,
+  master_password_hash TEXT,
+  approved INTEGER,
+  creation_date TEXT NOT NULL,
+  response_date TEXT,
+  authentication_date TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_auth_requests_user_created
+  ON auth_requests(user_id, creation_date);
+CREATE INDEX IF NOT EXISTS idx_auth_requests_user_pending
+  ON auth_requests(user_id, approved, response_date, authentication_date, creation_date);
+CREATE INDEX IF NOT EXISTS idx_auth_requests_device_pending
+  ON auth_requests(user_id, request_device_identifier, creation_date);
 
 CREATE TABLE IF NOT EXISTS trusted_two_factor_device_tokens (
   token TEXT PRIMARY KEY,
@@ -174,6 +232,55 @@ CREATE TABLE IF NOT EXISTS trusted_two_factor_device_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_trusted_two_factor_device_tokens_user_device
   ON trusted_two_factor_device_tokens(user_id, device_identifier);
+
+CREATE TABLE IF NOT EXISTS totp_login_replays (
+  user_id TEXT NOT NULL,
+  time_counter INTEGER NOT NULL,
+  consumed_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, time_counter),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_totp_login_replays_consumed_at
+  ON totp_login_replays(consumed_at);
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'login',
+  name TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  counter INTEGER NOT NULL DEFAULT 0,
+  type TEXT,
+  aa_guid TEXT,
+  transports TEXT,
+  encrypted_user_key TEXT,
+  encrypted_public_key TEXT,
+  encrypted_private_key TEXT,
+  supports_prf INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_credentials_credential_id
+  ON webauthn_credentials(credential_id);
+CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user
+  ON webauthn_credentials(user_id);
+CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user_updated
+  ON webauthn_credentials(user_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  challenge_hash TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  user_id TEXT,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires
+  ON webauthn_challenges(expires_at);
+CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope
+  ON webauthn_challenges(user_id, scope);
 
 -- Rate limiting
 CREATE TABLE IF NOT EXISTS login_attempts_ip (

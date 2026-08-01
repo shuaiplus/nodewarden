@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+// CONTRACT:
+// This list is the script-side locale source of truth. Keep it in sync with
+// webapp/src/lib/i18n.ts whenever adding/removing a locale.
 const localeDir = path.join(__dirname, '..', 'webapp', 'src', 'lib', 'i18n', 'locales');
 
 const localeFiles = [
@@ -10,6 +13,11 @@ const localeFiles = [
   ['zh-TW', 'zh-TW.ts', 'zhTW', 'Traditional Chinese'],
   ['ru', 'ru.ts', 'ru', 'Russian'],
   ['es', 'es.ts', 'es', 'Spanish'],
+  ['fi', 'fi.ts', 'fi', 'Finnish'],
+  ['de', 'de.ts', 'de', 'German'],
+  ['fr', 'fr.ts', 'fr', 'French'],
+  ['it', 'it.ts', 'it', 'Italian'],
+  ['sv', 'sv.ts', 'sv', 'Swedish'],
 ];
 
 function readLocale(fileName, variableName) {

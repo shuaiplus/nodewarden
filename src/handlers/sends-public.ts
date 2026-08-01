@@ -2,7 +2,7 @@ import { Env, SendType } from '../types';
 import { StorageService } from '../services/storage';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { LIMITS } from '../config/limits';
+import { sanitizeDownloadContentType } from '../utils/content-type';
 import {
   createSendAccessToken,
   createSendFileDownloadToken,
@@ -21,6 +21,7 @@ import {
   getSafeJwtSecret,
   hasEmailAuth,
   isSendAvailable,
+  notifySendUpdateForRequest,
   notifyVaultSyncForRequest,
   parseStoredSendData,
   resolveSendFromIdOrAccessId,
@@ -32,6 +33,14 @@ import {
   verifySendPassword,
   verifySendPasswordHashB64,
 } from './sends-shared';
+
+function contentDispositionAttachment(fileName: string | null | undefined): string {
+  const fallback = 'send-file';
+  const value = String(fileName || fallback)
+    .replace(/[\r\n"]/g, '_')
+    .trim() || fallback;
+  return `attachment; filename="${value}"`;
+}
 
 export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -59,7 +68,7 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     if (!clientIdentifier) {
       return errorResponse('Client IP is required', 403);
     }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier);
+    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
     sendPasswordRateLimit = new RateLimitService(env.DB);
     const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
     if (!sendPasswordCheck.allowed) {
@@ -90,6 +99,7 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     send.accessCount += 1;
     const revisionDate = await storage.updateRevisionDate(send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -102,10 +112,9 @@ export async function handleAccessSendFile(
   idOrAccessId: string,
   fileId: string
 ): Promise<Response> {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength) {
-    return errorResponse('Server configuration error', 500);
-  }
+  const safeSecret = getSafeJwtSecret(env);
+  if (!safeSecret.ok) return safeSecret.response;
+  const { secret } = safeSecret;
 
   const storage = new StorageService(env.DB);
   const send = await resolveSendFromIdOrAccessId(storage, idOrAccessId);
@@ -133,7 +142,7 @@ export async function handleAccessSendFile(
     if (!clientIdentifier) {
       return errorResponse('Client IP is required', 403);
     }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier);
+    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
     sendPasswordRateLimit = new RateLimitService(env.DB);
     const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
     if (!sendPasswordCheck.allowed) {
@@ -163,6 +172,7 @@ export async function handleAccessSendFile(
   send.accessCount += 1;
   const revisionDate = await storage.updateRevisionDate(send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   const token = await createSendFileDownloadToken(send.id, fileId, secret);
   const url = new URL(request.url);
@@ -203,6 +213,7 @@ export async function handleAccessSendV2(request: Request, env: Env): Promise<Re
     send.accessCount += 1;
     const revisionDate = await storage.updateRevisionDate(send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -242,6 +253,7 @@ export async function handleAccessSendFileV2(request: Request, env: Env, fileId:
   send.accessCount += 1;
   const revisionDate = await storage.updateRevisionDate(send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   const downloadToken = await createSendFileDownloadToken(send.id, fileId, jwt.secret);
   const url = new URL(request.url);
@@ -278,9 +290,14 @@ export async function handleDownloadSendFile(
   }
 
   const storage = new StorageService(env.DB);
-  const object = await getBlobObject(env, getSendFileObjectKey(sendId, fileId));
-  if (!object) {
-    return errorResponse('Send file not found', 404);
+  const send = await storage.getSend(sendId);
+  if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
+    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  }
+  const data = parseStoredSendData(send);
+  const expectedFileId = typeof data.id === 'string' ? data.id : null;
+  if (!expectedFileId || expectedFileId !== fileId) {
+    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
   const firstUse = await storage.consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
@@ -288,11 +305,19 @@ export async function handleDownloadSendFile(
     return errorResponse('Invalid or expired token', 401);
   }
 
+  const object = await getBlobObject(env, getSendFileObjectKey(sendId, fileId));
+  if (!object) {
+    return errorResponse('Send file not found', 404);
+  }
+  const fileName = typeof data.fileName === 'string' ? data.fileName : fileId;
+
   return new Response(object.body, {
     headers: {
-      'Content-Type': object.contentType || 'application/octet-stream',
+      'Content-Type': sanitizeDownloadContentType(object.contentType),
       'Content-Length': String(object.size),
+      'Content-Disposition': contentDispositionAttachment(fileName),
       'Cache-Control': 'private, no-cache',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -303,7 +328,7 @@ export async function issueSendAccessToken(
   passwordHashB64?: string | null,
   password?: string | null,
   rateLimit?: RateLimitService,
-  sendPasswordLimitIpKey?: string
+  clientIdentifier?: string
 ): Promise<{ token: string } | { error: Response }> {
   const jwt = getSafeJwtSecret(env);
   if (!jwt.ok) {
@@ -343,10 +368,13 @@ export async function issueSendAccessToken(
             Object: 'error',
           },
         },
-        400
+        501
       ),
     };
   }
+
+  const sendPasswordLimitIpKey =
+    rateLimit && clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
 
   if (send.passwordHash) {
     if (rateLimit && sendPasswordLimitIpKey) {

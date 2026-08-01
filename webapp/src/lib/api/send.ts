@@ -67,6 +67,17 @@ export async function getSends(authedFetch: AuthedFetch): Promise<Send[]> {
   return body?.data || [];
 }
 
+export async function getSendById(authedFetch: AuthedFetch, sendId: string): Promise<Send> {
+  const id = String(sendId || '').trim();
+  if (!id) throw new Error('Send id is required');
+  const resp = await authedFetch(`/api/sends/${encodeURIComponent(id)}`);
+  if (resp.status === 404) throw createApiError('Send not found', 404);
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Load send failed'));
+  const body = await parseJson<Send>(resp);
+  if (!body?.id) throw new Error('Load send failed');
+  return body;
+}
+
 export async function createSend(
   authedFetch: AuthedFetch,
   session: SessionState,

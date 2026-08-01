@@ -8,6 +8,7 @@ import { LIMITS } from '../config/limits';
 import {
   getBlobStorageMaxBytes,
   getSendFileObjectKey,
+  getBlobObject,
   putBlobObject,
   deleteBlobObject,
 } from '../services/blob-store';
@@ -16,6 +17,9 @@ import {
   formatSize,
   getAliasedProp,
   normalizeEmails,
+  notifySendCreateForRequest,
+  notifySendDeleteForRequest,
+  notifySendUpdateForRequest,
   notifyVaultSyncForRequest,
   parseDate,
   parseFileLength,
@@ -29,6 +33,30 @@ import {
   setSendPassword,
   validateDeletionDate,
 } from './sends-shared';
+import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+
+const SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE = 'Send email verification is not supported by this server.';
+
+async function writeSendAudit(
+  storage: StorageService,
+  request: Request,
+  userId: string,
+  action: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await writeAuditEvent(storage, {
+    actorUserId: userId,
+    action,
+    category: 'data',
+    level: action.includes('delete') ? 'security' : 'info',
+    targetType: 'send',
+    targetId: typeof metadata.id === 'string' ? metadata.id : null,
+    metadata: {
+      ...metadata,
+      ...auditRequestMetadata(request),
+    },
+  });
+}
 
 async function processSendFileUpload(
   request: Request,
@@ -57,8 +85,13 @@ async function processSendFileUpload(
     return upload;
   }
 
+  const path = getSendFileObjectKey(send.id, fileId);
+  if (await getBlobObject(env, path)) {
+    return errorResponse('Send file has already been uploaded', 409);
+  }
+
   try {
-    await putBlobObject(env, getSendFileObjectKey(send.id, fileId), upload.body, {
+    await putBlobObject(env, path, upload.body, {
       size: upload.size,
       contentType: upload.contentType,
       customMetadata: {
@@ -77,6 +110,7 @@ async function processSendFileUpload(
   const storage = new StorageService(env.DB);
   const revisionDate = await storage.updateRevisionDate(send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   return new Response(null, { status: 201 });
 }
@@ -108,7 +142,7 @@ export async function handleGetSends(request: Request, env: Env, userId: string)
 export async function handleGetSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
   void request;
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
 
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
@@ -184,10 +218,16 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
   if (authTypeRaw.present && requestedAuthType === null) {
     return errorResponse('Invalid authType', 400);
   }
+  if (requestedAuthType === SendAuthType.Email) {
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+  }
 
   const normalizedEmails = normalizeEmails(emailsRaw.value);
   if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) {
     return errorResponse('Invalid emails', 400);
+  }
+  if (normalizedEmails) {
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
   }
 
   const now = new Date().toISOString();
@@ -227,6 +267,7 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
 
   return jsonResponse(sendToResponse(send));
 }
@@ -307,10 +348,16 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
   if (authTypeRaw.present && requestedAuthType === null) {
     return errorResponse('Invalid authType', 400);
   }
+  if (requestedAuthType === SendAuthType.Email) {
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+  }
 
   const normalizedEmails = normalizeEmails(emailsRaw.value);
   if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) {
     return errorResponse('Invalid emails', 400);
+  }
+  if (normalizedEmails) {
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
   }
 
   const now = new Date().toISOString();
@@ -350,6 +397,7 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
   const jwtSecret = getSafeJwtSecret(env);
   if (!jwtSecret) {
     return errorResponse('Server configuration error', 500);
@@ -373,7 +421,7 @@ export async function handleGetSendFileUpload(
 ): Promise<Response> {
   void request;
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -408,7 +456,7 @@ export async function handleUploadSendFile(
   fileId: string
 ): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -444,7 +492,7 @@ export async function handlePublicUploadSendFile(
   }
 
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, claims.userId);
   if (!send || send.userId !== claims.userId) {
     return errorResponse('Send not found. Unable to save the file.', 404);
   }
@@ -457,7 +505,7 @@ export async function handlePublicUploadSendFile(
 
 export async function handleUpdateSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -564,10 +612,11 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     if (parsedAuthType === null) {
       return errorResponse('Invalid authType', 400);
     }
-    send.authType = parsedAuthType;
-    if (parsedAuthType !== SendAuthType.Email) {
-      send.emails = null;
+    if (parsedAuthType === SendAuthType.Email) {
+      return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
     }
+    send.authType = parsedAuthType;
+    send.emails = null;
   }
 
   const emailsRaw = getAliasedProp(body, ['emails', 'Emails']);
@@ -576,10 +625,13 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     if (emailsRaw.value !== null && normalizedEmails === null) {
       return errorResponse('Invalid emails', 400);
     }
+    if (normalizedEmails) {
+      return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+    }
     send.emails = normalizedEmails;
     if (send.emails) {
       send.authType = SendAuthType.Email;
-    } else if (send.authType === SendAuthType.Email) {
+    } else if (Number(send.authType) === SendAuthType.Email) {
       send.authType = SendAuthType.None;
     }
   }
@@ -597,14 +649,14 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
 
   return jsonResponse(sendToResponse(send));
 }
 
 export async function handleDeleteSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -620,6 +672,11 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
   await storage.deleteSend(sendId, userId);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendDeleteForRequest(request, env, sendId, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.delete', {
+    id: sendId,
+    type: send.type,
+  });
 
   return new Response(null, { status: 200 });
 }
@@ -651,15 +708,21 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
   const revisionDate = await storage.bulkDeleteSends(body.ids, userId);
   if (revisionDate) {
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
+    for (const send of sends) {
+      notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
+    }
+    await writeSendAudit(storage, request, userId, 'send.delete.bulk', {
+      count: sends.length,
+      requestedCount: body.ids.length,
+    });
   }
 
   return new Response(null, { status: 200 });
 }
 
 export async function handleRemoveSendPassword(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -669,14 +732,18 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.password.remove', {
+    id: send.id,
+    type: send.type,
+  });
 
   return jsonResponse(sendToResponse(send));
 }
 
 export async function handleRemoveSendAuth(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await storage.getSendForUser(sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
   }
@@ -687,6 +754,11 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.auth.remove', {
+    id: send.id,
+    type: send.type,
+  });
 
   return jsonResponse(sendToResponse(send));
 }

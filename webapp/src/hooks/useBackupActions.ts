@@ -27,9 +27,10 @@ export default function useBackupActions(options: UseBackupActionsOptions) {
 
   return useMemo(
     () => ({
-      async exportBackup(includeAttachments: boolean = false) {
+      async exportBackup(masterPasswordHash: string, includeAttachments: boolean = false) {
         const payload = await buildCompleteAdminBackupExport(
           authedFetch,
+          masterPasswordHash,
           includeAttachments,
           async (event: BackupExportClientProgressEvent) => {
             dispatchBackupProgress(event);
@@ -48,14 +49,14 @@ export default function useBackupActions(options: UseBackupActionsOptions) {
         });
       },
 
-      async importBackup(file: File, replaceExisting: boolean = false) {
-        const result = await importAdminBackup(authedFetch, file, replaceExisting);
+      async importBackup(masterPasswordHash: string, file: File, replaceExisting: boolean = false) {
+        const result = await importAdminBackup(authedFetch, masterPasswordHash, file, replaceExisting);
         onImported?.();
         return result;
       },
 
-      async importBackupAllowingChecksumMismatch(file: File, replaceExisting: boolean = false) {
-        const result = await importAdminBackup(authedFetch, file, replaceExisting, true);
+      async importBackupAllowingChecksumMismatch(masterPasswordHash: string, file: File, replaceExisting: boolean = false) {
+        const result = await importAdminBackup(authedFetch, masterPasswordHash, file, replaceExisting, true);
         onImported?.();
         return result;
       },
@@ -64,39 +65,39 @@ export default function useBackupActions(options: UseBackupActionsOptions) {
         return getAdminBackupSettings(authedFetch);
       },
 
-      async saveSettings(settings: Parameters<typeof saveAdminBackupSettings>[1]) {
-        return saveAdminBackupSettings(authedFetch, settings);
+      async saveSettings(masterPasswordHash: string, settings: Parameters<typeof saveAdminBackupSettings>[2]) {
+        return saveAdminBackupSettings(authedFetch, masterPasswordHash, settings);
       },
 
-      async runRemoteBackup(destinationId?: string | null) {
-        return runAdminBackupNow(authedFetch, destinationId);
+      async runRemoteBackup(masterPasswordHash: string, destinationId?: string | null) {
+        return runAdminBackupNow(authedFetch, masterPasswordHash, destinationId);
       },
 
       async listRemoteBackups(destinationId: string, path: string) {
         return listRemoteBackups(authedFetch, destinationId, path);
       },
 
-      async downloadRemoteBackup(destinationId: string, path: string, onProgress?: (percent: number | null) => void) {
-        const payload = await fetchRemoteBackupPayload(authedFetch, destinationId, path, onProgress);
+      async downloadRemoteBackup(masterPasswordHash: string, destinationId: string, path: string, onProgress?: (percent: number | null) => void) {
+        const payload = await fetchRemoteBackupPayload(authedFetch, masterPasswordHash, destinationId, path, onProgress);
         downloadBytesAsFile(payload.bytes, payload.fileName, payload.mimeType);
       },
 
-      async inspectRemoteBackup(destinationId: string, path: string) {
-        return inspectRemoteBackupIntegrity(authedFetch, destinationId, path);
+      async inspectRemoteBackup(masterPasswordHash: string, destinationId: string, path: string) {
+        return inspectRemoteBackupIntegrity(authedFetch, masterPasswordHash, destinationId, path);
       },
 
-      async deleteRemoteBackup(destinationId: string, path: string) {
-        await deleteRemoteBackup(authedFetch, destinationId, path);
+      async deleteRemoteBackup(masterPasswordHash: string, destinationId: string, path: string) {
+        await deleteRemoteBackup(authedFetch, masterPasswordHash, destinationId, path);
       },
 
-      async restoreRemoteBackup(destinationId: string, path: string, replaceExisting: boolean = false) {
-        const result = await restoreRemoteBackupRequest(authedFetch, destinationId, path, replaceExisting);
+      async restoreRemoteBackup(masterPasswordHash: string, destinationId: string, path: string, replaceExisting: boolean = false) {
+        const result = await restoreRemoteBackupRequest(authedFetch, masterPasswordHash, destinationId, path, replaceExisting);
         onRestored?.();
         return result;
       },
 
-      async restoreRemoteBackupAllowingChecksumMismatch(destinationId: string, path: string, replaceExisting: boolean = false) {
-        const result = await restoreRemoteBackupRequest(authedFetch, destinationId, path, replaceExisting, true);
+      async restoreRemoteBackupAllowingChecksumMismatch(masterPasswordHash: string, destinationId: string, path: string, replaceExisting: boolean = false) {
+        const result = await restoreRemoteBackupRequest(authedFetch, masterPasswordHash, destinationId, path, replaceExisting, true);
         onRestored?.();
         return result;
       },

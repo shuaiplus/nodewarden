@@ -7,7 +7,7 @@ interface ThemeSwitchProps {
 export default function ThemeSwitch(props: ThemeSwitchProps) {
   return (
     <div className="theme-switch-wrap" title={props.title}>
-      <label className="theme-switch" aria-label={props.title}>
+      <label className={`theme-switch ${props.checked ? 'checked' : 'unchecked'}`} aria-label={props.title}>
         <span className="sun" aria-hidden="true">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
             <g fill="#ffd43b">

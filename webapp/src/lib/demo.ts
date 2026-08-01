@@ -9,6 +9,7 @@ import type {
 import type {
   AdminInvite,
   AdminUser,
+  AuditLogEntry,
   AuthorizedDevice,
   Cipher,
   Folder,
@@ -383,6 +384,143 @@ export const DEMO_CIPHERS: Cipher[] = [
       decFingerprint: 'SHA256:demoNodeWardenFingerprint',
     },
   },
+  // --- Duplicate detection demo pairs (exact, login-site, login-credentials, password) ---
+  {
+    id: 'cipher-dup-exact-a',
+    type: 1,
+    folderId: 'folder-work',
+    favorite: false,
+    name: 'Internal VPN',
+    decName: 'Internal VPN',
+    creationDate: '2026-04-10T08:00:00.000Z',
+    revisionDate: '2026-04-28T10:00:00.000Z',
+    login: {
+      username: 'vpn-user',
+      password: 'vpn-secret-2026', // gitguardian:ignore
+      decUsername: 'vpn-user',
+      decPassword: 'vpn-secret-2026', // gitguardian:ignore
+      uris: [{ uri: 'https://vpn.internal.example.com', decUri: 'https://vpn.internal.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-exact-b',
+    type: 1,
+    folderId: 'folder-work',
+    favorite: false,
+    name: 'Internal VPN',
+    decName: 'Internal VPN',
+    creationDate: '2026-03-15T08:00:00.000Z',
+    revisionDate: '2026-04-30T10:00:00.000Z',
+    login: {
+      username: 'vpn-user',
+      password: 'vpn-secret-2026', // gitguardian:ignore
+      decUsername: 'vpn-user',
+      decPassword: 'vpn-secret-2026', // gitguardian:ignore
+      uris: [{ uri: 'https://vpn.internal.example.com', decUri: 'https://vpn.internal.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-site-a',
+    type: 1,
+    folderId: 'folder-devops',
+    favorite: false,
+    name: 'AWS Console',
+    decName: 'AWS Console',
+    creationDate: '2026-03-01T08:00:00.000Z',
+    revisionDate: '2026-04-25T09:00:00.000Z',
+    login: {
+      username: 'aws-admin',
+      password: 'aws-secure-password', // gitguardian:ignore
+      decUsername: 'aws-admin',
+      decPassword: 'aws-secure-password', // gitguardian:ignore
+      uris: [{ uri: 'https://console.aws.amazon.com', decUri: 'https://console.aws.amazon.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-site-b',
+    type: 1,
+    folderId: 'folder-devops',
+    favorite: false,
+    name: 'Amazon Web Services',
+    decName: 'Amazon Web Services',
+    creationDate: '2026-02-20T08:00:00.000Z',
+    revisionDate: '2026-04-20T09:00:00.000Z',
+    login: {
+      username: 'aws-admin',
+      password: 'aws-secure-password', // gitguardian:ignore
+      decUsername: 'aws-admin',
+      decPassword: 'aws-secure-password', // gitguardian:ignore
+      uris: [{ uri: 'https://console.aws.amazon.com', decUri: 'https://console.aws.amazon.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-cred-a',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Personal Blog',
+    decName: 'Personal Blog',
+    creationDate: '2026-01-10T08:00:00.000Z',
+    revisionDate: '2026-04-15T10:00:00.000Z',
+    login: {
+      username: 'my-account@example.com',
+      password: 'shared-credential', // gitguardian:ignore
+      decUsername: 'my-account@example.com',
+      decPassword: 'shared-credential', // gitguardian:ignore
+      uris: [{ uri: 'https://blog.example.com', decUri: 'https://blog.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-cred-b',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Forum Account',
+    decName: 'Forum Account',
+    creationDate: '2026-01-15T08:00:00.000Z',
+    revisionDate: '2026-04-18T10:00:00.000Z',
+    login: {
+      username: 'my-account@example.com',
+      password: 'shared-credential', // gitguardian:ignore
+      decUsername: 'my-account@example.com',
+      decPassword: 'shared-credential', // gitguardian:ignore
+      uris: [{ uri: 'https://forum.example.com', decUri: 'https://forum.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-pw-a',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Old Forum',
+    decName: 'Old Forum',
+    creationDate: '2025-06-01T08:00:00.000Z',
+    revisionDate: '2026-03-01T10:00:00.000Z',
+    login: {
+      username: 'legacy-user',
+      password: 'reused-password-2020', // gitguardian:ignore
+      decUsername: 'legacy-user',
+      decPassword: 'reused-password-2020', // gitguardian:ignore
+      uris: [{ uri: 'https://old-forum.example.com', decUri: 'https://old-forum.example.com', match: null }],
+    },
+  },
+  {
+    id: 'cipher-dup-pw-b',
+    type: 1,
+    folderId: 'folder-personal',
+    favorite: false,
+    name: 'Legacy CMS',
+    decName: 'Legacy CMS',
+    creationDate: '2025-05-10T08:00:00.000Z',
+    revisionDate: '2026-02-15T10:00:00.000Z',
+    login: {
+      username: 'cms-admin',
+      password: 'reused-password-2020', // gitguardian:ignore
+      decUsername: 'cms-admin',
+      decPassword: 'reused-password-2020', // gitguardian:ignore
+      uris: [{ uri: 'https://cms.example.com', decUri: 'https://cms.example.com', match: null }],
+    },
+  },
   {
     id: 'cipher-archived',
     type: 1,
@@ -574,6 +712,233 @@ export const DEMO_BACKUP_SETTINGS: AdminBackupSettings = {
     },
   ],
 };
+
+export const DEMO_AUDIT_LOGS: AuditLogEntry[] = [
+  {
+    id: 'demo-log-auth-login',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'auth.login.success',
+    category: 'auth',
+    level: 'info',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ ip: '203.0.113.42', device: 'Chrome 125 on Windows', location: 'San Francisco, US' }),
+    createdAt: '2026-07-08T14:32:10.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-auth-failed',
+    actorUserId: null,
+    actorEmail: 'unknown@example.com',
+    action: 'auth.login.failed',
+    category: 'auth',
+    level: 'warn',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ ip: '198.51.100.7', reason: 'invalid_password', attemptCount: 3 }),
+    createdAt: '2026-07-08T13:15:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-auth-2fa',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'auth.totp.enabled',
+    category: 'auth',
+    level: 'security',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ ip: '203.0.113.42', trigger: 'user_initiated' }),
+    createdAt: '2026-07-07T09:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-auth-refresh-failed',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'auth.refresh.failed.token_expired',
+    category: 'auth',
+    level: 'error',
+    targetType: null,
+    targetId: 'demo-device-browser',
+    targetUserEmail: null,
+    metadata: JSON.stringify({ ip: '203.0.113.42', device: 'Chrome 125 on Windows' }),
+    createdAt: '2026-07-06T18:45:30.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-security-password',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'user.password.changed',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: DEMO_USER_ID,
+    targetUserEmail: DEMO_PROFILE.email,
+    metadata: JSON.stringify({ ip: '203.0.113.42', trigger: 'user_initiated' }),
+    createdAt: '2026-07-05T10:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-security-user-banned',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.user.banned',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: 'demo-user-003',
+    targetUserEmail: 'suspended@example.com',
+    metadata: JSON.stringify({ ip: '203.0.113.42', reason: 'violation_of_tos' }),
+    createdAt: '2026-07-04T16:20:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-security-user-register',
+    actorUserId: null,
+    actorEmail: 'newuser@example.com',
+    action: 'user.register.completed',
+    category: 'security',
+    level: 'info',
+    targetType: 'user',
+    targetId: 'demo-user-004',
+    targetUserEmail: 'newuser@example.com',
+    metadata: JSON.stringify({ ip: '192.0.2.55', invite: 'DEMO-INVITE-2026' }),
+    createdAt: '2026-07-03T08:30:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-device-trusted',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'device.trusted.added',
+    category: 'device',
+    level: 'info',
+    targetType: 'device',
+    targetId: 'demo-device-mobile',
+    targetUserEmail: null,
+    metadata: JSON.stringify({ deviceName: 'iPhone', os: 'iOS 18', ip: '203.0.113.42' }),
+    createdAt: '2026-07-02T12:15:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-device-removed',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'device.removed',
+    category: 'device',
+    level: 'warn',
+    targetType: 'device',
+    targetId: 'demo-device-old',
+    targetUserEmail: null,
+    metadata: JSON.stringify({ deviceName: 'Firefox on Linux', ip: '198.51.100.20', trigger: 'user_initiated' }),
+    createdAt: '2026-07-01T09:45:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-device-all-revoked',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'device.all_trust_revoked',
+    category: 'device',
+    level: 'security',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ ip: '203.0.113.42', trigger: 'password_change' }),
+    createdAt: '2026-07-01T09:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-data-backup',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.backup.run.completed',
+    category: 'data',
+    level: 'info',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ fileName: 'nodewarden_backup_20260701_030000.zip', size: '1.2 MB', destination: 'Demo WebDAV' }),
+    createdAt: '2026-07-01T03:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-data-restore',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.backup.restore.completed',
+    category: 'data',
+    level: 'warn',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ fileName: 'nodewarden_backup_20260628_030000.zip', checksum: 'verified' }),
+    createdAt: '2026-06-30T14:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-data-export',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.export.completed',
+    category: 'data',
+    level: 'info',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ format: 'encrypted_json', totalItems: 24 }),
+    createdAt: '2026-06-28T11:30:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-system-settings',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.settings.updated',
+    category: 'system',
+    level: 'info',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ changedKeys: ['signupsAllowed', 'kdfIterations'], ip: '203.0.113.42' }),
+    createdAt: '2026-06-25T08:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-system-invite',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.invite.created',
+    category: 'system',
+    level: 'info',
+    targetType: 'invite',
+    targetId: 'DEMO-INVITE-2026',
+    targetUserEmail: null,
+    metadata: JSON.stringify({ expiresIn: '168h', ip: '203.0.113.42' }),
+    createdAt: '2026-06-20T10:00:00.000Z',
+    object: 'auditLog',
+  },
+  {
+    id: 'demo-log-system-config',
+    actorUserId: DEMO_USER_ID,
+    actorEmail: DEMO_PROFILE.email,
+    action: 'admin.config.updated',
+    category: 'system',
+    level: 'warn',
+    targetType: null,
+    targetId: null,
+    targetUserEmail: null,
+    metadata: JSON.stringify({ changedKeys: ['smtp.host', 'smtp.port'], ip: '203.0.113.42' }),
+    createdAt: '2026-06-18T15:30:00.000Z',
+    object: 'auditLog',
+  },
+];
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -789,6 +1154,8 @@ async function runDemoRemoteRestoreProgress(fileName: string): Promise<void> {
 export function createDemoInitialBootstrapState(): InitialAppBootstrapState {
   return {
     defaultKdfIterations: 600000,
+    registrationInviteRequired: true,
+    websiteIconsEnabled: true,
     jwtWarning: null,
     session: null,
     phase: 'login',
@@ -906,9 +1273,12 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     adminLoading: false,
     adminError: '',
     totpEnabled: true,
+    passkey2faEnabled: false,
     authorizedDevices: state.authorizedDevices,
     authorizedDevicesLoading: false,
     authorizedDevicesError: '',
+    domainRulesLoading: false,
+    domainRulesError: '',
     onImport: async () => {
       await readonly();
       return createDemoImportResult();
@@ -929,6 +1299,11 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
       notify('success', t('txt_item_updated'));
     },
     onDeleteVaultItem: async (cipher) => {
+      if (cipher.deletedDate || (cipher as { deletedAt?: string | null }).deletedAt) {
+        state.setCiphers((prev) => prev.filter((item) => item.id !== cipher.id));
+        notify('success', t('txt_item_deleted_permanently'));
+        return;
+      }
       const deletedDate = new Date().toISOString();
       state.setCiphers((prev) => prev.map((item) => (
         item.id === cipher.id ? { ...item, deletedDate, archivedDate: null, revisionDate: deletedDate } : item
@@ -961,6 +1336,11 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
       const idSet = new Set(ids);
       state.setCiphers((prev) => prev.filter((item) => !idSet.has(item.id)));
       notify('success', t('txt_deleted_selected_items_permanently'));
+    },
+    onRestoreVaultItems: async (ids) => {
+      const idSet = new Set(ids);
+      state.setCiphers((prev) => prev.map((item) => (idSet.has(item.id) ? { ...item, deletedDate: null } : item)));
+      notify('success', t('txt_restored_selected_items'));
     },
     onBulkRestoreVaultItems: async (ids) => {
       const idSet = new Set(ids);
@@ -1047,14 +1427,60 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     onSavePasswordHint: readonly,
     onEnableTotp: readonly,
     onOpenDisableTotp: readonlyVoid,
+    onGetTwoFactorPasskeySettings: async () => ({ enabled: false, keys: [] }),
+    onCreateTwoFactorPasskey: async () => {
+      await readonly();
+      return { enabled: false, keys: [] };
+    },
+    onDeleteTwoFactorPasskey: async () => {
+      await readonly();
+      return { enabled: false, keys: [] };
+    },
+    onDisableTwoFactorPasskeys: readonly,
     onGetRecoveryCode: readonlyString,
     onGetApiKey: readonlyString,
     onRotateApiKey: readonlyString,
+    onListAccountPasskeys: async () => [],
+    onCreateAccountPasskey: async () => {
+      await readonly();
+      return null;
+    },
+    onEnableAccountPasskeyDirectUnlock: readonly,
+    onDeleteAccountPasskey: readonly,
+    onLoadAuditLogs: async (filters) => {
+      const limit = Number(filters.limit || 50) || 50;
+      const offset = Number(filters.offset || 0) || 0;
+      let filtered = DEMO_AUDIT_LOGS.filter((log) => {
+        if (filters.category && filters.category !== 'all' && log.category !== filters.category) return false;
+        if (filters.level && filters.level !== 'all' && log.level !== filters.level) return false;
+        if (filters.q) {
+          const q = filters.q.toLowerCase();
+          if (!log.action.toLowerCase().includes(q) && !(log.actorEmail || '').toLowerCase().includes(q)) return false;
+        }
+        if (filters.from && new Date(log.createdAt).getTime() < new Date(filters.from).getTime()) return false;
+        if (filters.to && new Date(log.createdAt).getTime() > new Date(filters.to).getTime()) return false;
+        return true;
+      });
+      filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const total = filtered.length;
+      const sliced = filtered.slice(offset, offset + limit);
+      return {
+        logs: sliced,
+        total,
+        limit,
+        offset: offset + sliced.length,
+        hasMore: offset + sliced.length < total,
+      };
+    },
     onLockTimeoutChange: readonlyVoid,
     onSessionTimeoutActionChange: readonlyVoid,
     onRefreshAuthorizedDevices: async () => {
       notify('success', t('txt_demo_devices_refreshed'));
     },
+    onRefreshDomainRules: () => {
+      notify('success', t('txt_domain_rules_refreshed'));
+    },
+    onSaveDomainRules: readonly,
     onRenameAuthorizedDevice: async (device, name) => {
       const normalized = String(name || '').trim();
       if (!normalized) {
@@ -1075,6 +1501,14 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
           : item
       )));
       notify('success', t('txt_device_authorization_revoked'));
+    },
+    onTrustDevicePermanently: (device) => {
+      state.setAuthorizedDevices((prev) => prev.map((item) => (
+        item.identifier === device.identifier && item.trusted
+          ? { ...item, trustedUntil: '2099-12-31T23:59:59.000Z', revisionDate: new Date().toISOString() }
+          : item
+      )));
+      notify('success', t('txt_device_trusted_permanently'));
     },
     onRemoveDevice: (device) => {
       state.setAuthorizedDevices((prev) => prev.filter((item) => item.identifier !== device.identifier));
@@ -1102,6 +1536,13 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     onRefreshAdmin: () => {
       notify('success', t('txt_demo_admin_refreshed'));
     },
+    onDeleteInvalidInvites: async () => {
+      const now = Date.now();
+      state.setInvites((prev) => prev.filter((invite) => (
+        invite.status === 'active' && (!invite.expiresAt || new Date(invite.expiresAt).getTime() > now)
+      )));
+      notify('success', t('txt_invalid_invites_deleted'));
+    },
     onDeleteAllInvites: async () => {
       state.setInvites([]);
       notify('success', t('txt_all_invites_deleted'));
@@ -1116,41 +1557,48 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
       state.setUsers((prev) => prev.filter((user) => user.id !== userId));
       notify('success', t('txt_user_deleted'));
     },
-    onRevokeInvite: async (code) => {
-      state.setInvites((prev) => prev.map((invite) => (
-        invite.code === code ? { ...invite, status: 'inactive' } : invite
-      )));
-      notify('success', t('txt_invite_revoked'));
+    onDeleteInvite: async (code) => {
+      state.setInvites((prev) => prev.filter((invite) => invite.code !== code));
+      notify('success', t('txt_invite_deleted'));
     },
-    onExportBackup: async () => {
+    onLoadAuditLogSettings: async () => ({ retentionDays: 90, maxEntries: null }),
+    onSaveAuditLogSettings: async (settings) => {
+      notify('success', t('txt_log_settings_saved'));
+      return settings;
+    },
+    onClearAuditLogs: async () => {
+      notify('success', t('txt_logs_cleared'));
+      return 0;
+    },
+    onExportBackup: async (_masterPassword: string) => {
       notify('success', t('txt_backup_export_success'));
     },
-    onImportBackup: async () => {
+    onImportBackup: async (_masterPassword: string, _file: File, _replaceExisting?: boolean) => {
       resetDemoVaultState(state);
       notify('success', t('txt_backup_import_success_relogin'));
       return createDemoImportBackupResult();
     },
-    onImportBackupAllowingChecksumMismatch: async () => {
+    onImportBackupAllowingChecksumMismatch: async (_masterPassword: string, _file: File, _replaceExisting?: boolean) => {
       resetDemoVaultState(state);
       notify('success', t('txt_backup_import_success_relogin'));
       return createDemoImportBackupResult();
     },
     onLoadBackupSettings: async () => state.backupSettings,
-    onSaveBackupSettings: async (settings) => {
+    onSaveBackupSettings: async (_masterPassword: string, settings) => {
       const next = cloneJson(settings);
       state.setBackupSettings(next);
       notify('success', t('txt_backup_settings_saved'));
       return next;
     },
-    onRunRemoteBackup: async (destinationId?: string | null) => {
+    onRunRemoteBackup: async (_masterPassword: string, destinationId?: string | null) => {
       notify('success', t('txt_backup_remote_run_success'));
       return createDemoBackupRun(state.backupSettings, destinationId);
     },
     onListRemoteBackups: async (destinationId: string, path: string) => createDemoRemoteBrowser(destinationId, path),
-    onDownloadRemoteBackup: async () => {
+    onDownloadRemoteBackup: async (_masterPassword: string, _destinationId: string, _path: string, _onProgress?: (percent: number | null) => void) => {
       notify('success', t('txt_demo_download_prepared'));
     },
-    onInspectRemoteBackup: async (_destinationId: string, path: string) => ({
+    onInspectRemoteBackup: async (_masterPassword: string, _destinationId: string, path: string) => ({
       object: 'backup-remote-integrity',
       destinationId: _destinationId,
       path,
@@ -1165,13 +1613,13 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     onDeleteRemoteBackup: async () => {
       notify('success', t('txt_backup_remote_delete_success'));
     },
-    onRestoreRemoteBackup: async (_destinationId, path) => {
+    onRestoreRemoteBackup: async (_masterPassword: string, _destinationId, path) => {
       await runDemoRemoteRestoreProgress(path.split('/').pop() || path || 'nodewarden_backup_demo.zip');
       resetDemoVaultState(state);
       notify('success', t('txt_backup_remote_restore_completed_verified'));
       return createDemoImportBackupResult();
     },
-    onRestoreRemoteBackupAllowingChecksumMismatch: async (_destinationId, path) => {
+    onRestoreRemoteBackupAllowingChecksumMismatch: async (_masterPassword: string, _destinationId, path) => {
       await runDemoRemoteRestoreProgress(path.split('/').pop() || path || 'nodewarden_backup_demo.zip');
       resetDemoVaultState(state);
       notify('success', t('txt_backup_remote_restore_completed_verified'));

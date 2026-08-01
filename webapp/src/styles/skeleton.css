@@ -1,0 +1,75 @@
+.skeleton-card,
+.skeleton-list-item {
+  @apply flex items-center gap-3 rounded-xl border p-4;
+  background: var(--panel);
+  border-color: var(--line-soft);
+  animation: skeleton-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.skeleton-avatar {
+  @apply h-12 w-12 shrink-0 rounded-full;
+  background: linear-gradient(
+    90deg,
+    var(--panel-muted) 0%,
+    var(--panel-soft) 50%,
+    var(--panel-muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-icon {
+  @apply h-10 w-10 shrink-0 rounded-lg;
+  background: linear-gradient(
+    90deg,
+    var(--panel-muted) 0%,
+    var(--panel-soft) 50%,
+    var(--panel-muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-content {
+  @apply min-w-0 flex-1 space-y-2;
+}
+
+.skeleton-line {
+  @apply h-3 rounded-full;
+  background: linear-gradient(
+    90deg,
+    var(--panel-muted) 0%,
+    var(--panel-soft) 50%,
+    var(--panel-muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-line-sm {
+  @apply w-1/3;
+}
+
+.skeleton-line-md {
+  @apply w-2/3;
+}
+
+.skeleton-line-lg {
+  @apply w-4/5;
+}
+
+.skeleton-line-xl {
+  @apply w-full;
+}
+
+.skeleton-page {
+  @apply h-full space-y-4 p-4;
+}
+
+.skeleton-header {
+  @apply mb-6;
+}
+
+.skeleton-body {
+  @apply space-y-3;
+}

@@ -1,6 +1,6 @@
 import type { Cipher, Folder, Send } from '../types';
 import { getVaultRevisionDate } from './auth';
-import { loadCachedVaultCoreSnapshot, saveCachedVaultCoreSnapshot, type VaultCoreSnapshot } from '../vault-cache';
+import { clearCachedVaultCoreSnapshot, loadCachedVaultCoreSnapshot, saveCachedVaultCoreSnapshot, type VaultCoreSnapshot } from '../vault-cache';
 import { parseJson, type AuthedFetch } from './shared';
 
 interface VaultSyncResponse {
@@ -41,6 +41,37 @@ export async function getCachedVaultCoreSnapshot(cacheKey: string): Promise<Vaul
     snapshot,
   });
   return snapshot;
+}
+
+export async function invalidateVaultCoreSyncSnapshot(cacheKey: string): Promise<void> {
+  const normalizedKey = String(cacheKey || '').trim();
+  if (!normalizedKey) return;
+  pendingVaultCoreRequests.delete(normalizedKey);
+  memoryVaultCoreCache.delete(normalizedKey);
+  await clearCachedVaultCoreSnapshot(normalizedKey);
+}
+
+export async function saveVaultCoreSyncSnapshot(
+  cacheKey: string,
+  snapshot: VaultCoreSnapshot,
+  revisionStamp?: number | null
+): Promise<void> {
+  const normalizedKey = String(cacheKey || '').trim();
+  if (!normalizedKey) return;
+
+  const normalizedSnapshot = normalizeCachedSnapshot(snapshot);
+  const currentMemory = memoryVaultCoreCache.get(normalizedKey);
+  let nextRevisionStamp = Number(revisionStamp);
+  if (!Number.isFinite(nextRevisionStamp) || nextRevisionStamp <= 0) {
+    const cached = await loadCachedVaultCoreSnapshot(normalizedKey);
+    nextRevisionStamp = currentMemory?.revisionStamp || cached?.revisionStamp || Date.now();
+  }
+
+  memoryVaultCoreCache.set(normalizedKey, {
+    revisionStamp: nextRevisionStamp,
+    snapshot: normalizedSnapshot,
+  });
+  await saveCachedVaultCoreSnapshot(normalizedKey, nextRevisionStamp, normalizedSnapshot);
 }
 
 export async function loadVaultCoreSyncSnapshot(authedFetch: AuthedFetch, cacheKey: string): Promise<VaultCoreSnapshot> {

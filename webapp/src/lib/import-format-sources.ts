@@ -23,6 +23,7 @@ export const IMPORT_SOURCES = [
   { id: 'lastpass', label: 'LastPass (csv)' },
   { id: 'dashlane_csv', label: 'Dashlane (csv)' },
   { id: 'dashlane_json', label: 'Dashlane (json)' },
+  { id: 'keepass_csv', label: 'KeePass 1.x (csv)' },
   { id: 'keepass_xml', label: 'KeePass 2 (xml)' },
   { id: 'keepassx_csv', label: 'KeePassX (csv)' },
   { id: 'arc_csv', label: 'Arc (csv)' },

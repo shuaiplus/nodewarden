@@ -81,6 +81,9 @@ export function summarizeImportResult(
     if (type === 3) return t('txt_card');
     if (type === 4) return t('txt_identity');
     if (type === 5) return t('txt_ssh_key');
+    if (type === 6) return t('txt_bank_account');
+    if (type === 7) return t('txt_drivers_license');
+    if (type === 8) return t('txt_passport');
     return t('txt_other');
   };
   const counter = new Map<number, number>();
@@ -88,7 +91,7 @@ export function summarizeImportResult(
     const cipherType = Number(raw?.type || 1) || 1;
     counter.set(cipherType, (counter.get(cipherType) || 0) + 1);
   }
-  const order = [1, 2, 3, 4, 5];
+  const order = [1, 2, 3, 4, 5, 6, 7, 8];
   const seen = new Set<number>(order);
   const typeCounts = order
     .filter((type) => (counter.get(type) || 0) > 0)
@@ -146,6 +149,40 @@ function buildEmptyImportDraft(type: number): VaultDraft {
     sshPrivateKey: '',
     sshPublicKey: '',
     sshFingerprint: '',
+    bankName: '',
+    bankNameOnAccount: '',
+    bankAccountType: '',
+    bankAccountNumber: '',
+    bankRoutingNumber: '',
+    bankBranchNumber: '',
+    bankPin: '',
+    bankSwiftCode: '',
+    bankIban: '',
+    bankContactPhone: '',
+    licenseFirstName: '',
+    licenseMiddleName: '',
+    licenseLastName: '',
+    licenseDateOfBirth: '',
+    licenseNumber: '',
+    licenseIssuingCountry: '',
+    licenseIssuingState: '',
+    licenseIssueDate: '',
+    licenseExpirationDate: '',
+    licenseIssuingAuthority: '',
+    licenseClass: '',
+    passportSurname: '',
+    passportGivenName: '',
+    passportDateOfBirth: '',
+    passportSex: '',
+    passportBirthPlace: '',
+    passportNationality: '',
+    passportIssuingCountry: '',
+    passportNumber: '',
+    passportType: '',
+    passportNationalIdentificationNumber: '',
+    passportIssuingAuthority: '',
+    passportIssueDate: '',
+    passportExpirationDate: '',
     customFields: [],
   };
 }
@@ -247,6 +284,46 @@ export function importCipherToDraft(cipher: Record<string, unknown>, folderId: s
     draft.sshPrivateKey = asText(sshKey.privateKey);
     draft.sshPublicKey = asText(sshKey.publicKey);
     draft.sshFingerprint = asText(sshKey.keyFingerprint ?? sshKey.fingerprint);
+  } else if (type === 6) {
+    const bankAccount = (cipher.bankAccount || {}) as Record<string, unknown>;
+    draft.bankName = asText(bankAccount.bankName);
+    draft.bankNameOnAccount = asText(bankAccount.nameOnAccount);
+    draft.bankAccountType = asText(bankAccount.accountType);
+    draft.bankAccountNumber = asText(bankAccount.accountNumber);
+    draft.bankRoutingNumber = asText(bankAccount.routingNumber);
+    draft.bankBranchNumber = asText(bankAccount.branchNumber);
+    draft.bankPin = asText(bankAccount.pin);
+    draft.bankSwiftCode = asText(bankAccount.swiftCode);
+    draft.bankIban = asText(bankAccount.iban);
+    draft.bankContactPhone = asText(bankAccount.bankContactPhone);
+  } else if (type === 7) {
+    const driversLicense = (cipher.driversLicense || {}) as Record<string, unknown>;
+    draft.licenseFirstName = asText(driversLicense.firstName);
+    draft.licenseMiddleName = asText(driversLicense.middleName);
+    draft.licenseLastName = asText(driversLicense.lastName);
+    draft.licenseDateOfBirth = asText(driversLicense.dateOfBirth);
+    draft.licenseNumber = asText(driversLicense.licenseNumber);
+    draft.licenseIssuingCountry = asText(driversLicense.issuingCountry);
+    draft.licenseIssuingState = asText(driversLicense.issuingState);
+    draft.licenseIssueDate = asText(driversLicense.issueDate);
+    draft.licenseExpirationDate = asText(driversLicense.expirationDate);
+    draft.licenseIssuingAuthority = asText(driversLicense.issuingAuthority);
+    draft.licenseClass = asText(driversLicense.licenseClass);
+  } else if (type === 8) {
+    const passport = (cipher.passport || {}) as Record<string, unknown>;
+    draft.passportSurname = asText(passport.surname);
+    draft.passportGivenName = asText(passport.givenName);
+    draft.passportDateOfBirth = asText(passport.dateOfBirth);
+    draft.passportSex = asText(passport.sex);
+    draft.passportBirthPlace = asText(passport.birthPlace);
+    draft.passportNationality = asText(passport.nationality);
+    draft.passportIssuingCountry = asText(passport.issuingCountry);
+    draft.passportNumber = asText(passport.passportNumber);
+    draft.passportType = asText(passport.passportType);
+    draft.passportNationalIdentificationNumber = asText(passport.nationalIdentificationNumber);
+    draft.passportIssuingAuthority = asText(passport.issuingAuthority);
+    draft.passportIssueDate = asText(passport.issueDate);
+    draft.passportExpirationDate = asText(passport.expirationDate);
   }
 
   return draft;

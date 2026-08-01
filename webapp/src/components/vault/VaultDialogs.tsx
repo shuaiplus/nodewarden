@@ -99,7 +99,11 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         ) : (
           <label className="field">
             <span>{t('txt_field_value')}</span>
-            <input className="input" value={props.fieldValue} onInput={(e) => props.onFieldValueChange((e.currentTarget as HTMLInputElement).value)} />
+            <textarea
+              className="input textarea custom-field-textarea"
+              value={props.fieldValue}
+              onInput={(e) => props.onFieldValueChange((e.currentTarget as HTMLTextAreaElement).value)}
+            />
           </label>
         )}
       </ConfirmDialog>

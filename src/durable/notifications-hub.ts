@@ -1,17 +1,32 @@
 import { DurableObject, waitUntil } from 'cloudflare:workers';
 import type { Env } from '../types';
+import { notifyMobilePush } from '../services/push-relay';
 
 const SIGNALR_RECORD_SEPARATOR = 0x1e;
 const SIGNALR_HANDSHAKE_ACK = new Uint8Array([0x7b, 0x7d, SIGNALR_RECORD_SEPARATOR]);
+const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE = 0;
+const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE = 1;
+const SIGNALR_UPDATE_TYPE_SYNC_FOLDER_DELETE = 3;
+const SIGNALR_UPDATE_TYPE_SYNC_CIPHERS = 4;
 const SIGNALR_UPDATE_TYPE_SYNC_VAULT = 5;
+const SIGNALR_UPDATE_TYPE_SYNC_FOLDER_CREATE = 7;
+const SIGNALR_UPDATE_TYPE_SYNC_FOLDER_UPDATE = 8;
+const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_DELETE = 9;
 const SIGNALR_UPDATE_TYPE_LOG_OUT = 11;
-const SIGNALR_UPDATE_TYPE_DEVICE_STATUS = 12;
-const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 13;
+const SIGNALR_UPDATE_TYPE_SYNC_SEND_CREATE = 12;
+const SIGNALR_UPDATE_TYPE_SYNC_SEND_UPDATE = 13;
+const SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE = 14;
+const SIGNALR_UPDATE_TYPE_AUTH_REQUEST = 15;
+const SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE = 16;
+const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 102;
 
 type HubProtocol = 'json' | 'messagepack';
+type HubKind = 'user' | 'anonymous-auth-request';
 
 interface WsAttachment {
-  userId: string;
+  kind: HubKind;
+  userId: string | null;
+  authRequestId: string | null;
   handshakeComplete: boolean;
   protocol: HubProtocol;
   deviceIdentifier: string | null;
@@ -137,11 +152,12 @@ function frameSignalRBinary(payload: Uint8Array): Uint8Array {
 function buildSignalRJsonInvocation(
   updateType: number,
   payload: Record<string, unknown>,
-  contextId: string | null
+  contextId: string | null,
+  target: string = 'ReceiveMessage'
 ): string {
   return JSON.stringify({
     type: 1,
-    target: 'ReceiveMessage',
+    target,
     arguments: [
         {
           ContextId: contextId,
@@ -155,15 +171,16 @@ function buildSignalRJsonInvocation(
 function buildSignalRMessagePackInvocation(
   updateType: number,
   messagePayload: Record<string, unknown>,
-  contextId: string | null
+  contextId: string | null,
+  target: string = 'ReceiveMessage'
 ): Uint8Array {
   // SignalR MessagePack hub protocol uses an array-based invocation shape:
-  // [type, headers, invocationId, target, arguments]
+  // [type, headers, invocationId, target, arguments, streamIds]
   const encodedPayload = encodeMsgPack([
     1,
     {},
     null,
-    'ReceiveMessage',
+    target,
     [
       {
         ContextId: contextId,
@@ -171,6 +188,7 @@ function buildSignalRMessagePackInvocation(
         Payload: messagePayload,
       },
     ],
+    [],
   ]);
   return frameSignalRBinary(encodedPayload);
 }
@@ -201,7 +219,9 @@ export class NotificationsHub extends DurableObject<Env> {
       const revisionDate = String(body?.revisionDate || '').trim() || new Date().toISOString();
       const userId = String(request.headers.get('X-NodeWarden-UserId') || body?.userId || '').trim();
       const contextId = String(body?.contextId || '').trim() || null;
-      const updateType = Number(body?.updateType || SIGNALR_UPDATE_TYPE_SYNC_VAULT) || SIGNALR_UPDATE_TYPE_SYNC_VAULT;
+      const rawUpdateType = body?.updateType;
+      const parsedUpdateType = typeof rawUpdateType === 'number' ? rawUpdateType : Number(rawUpdateType);
+      const updateType = Number.isFinite(parsedUpdateType) ? parsedUpdateType : SIGNALR_UPDATE_TYPE_SYNC_VAULT;
       const targetDeviceIdentifier = String(body?.targetDeviceIdentifier || '').trim() || null;
       const payload = body?.payload && typeof body.payload === 'object'
         ? body.payload
@@ -210,6 +230,20 @@ export class NotificationsHub extends DurableObject<Env> {
           Date: revisionDate,
         };
       this.broadcastMessage(updateType, payload, contextId, targetDeviceIdentifier);
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === '/internal/auth-request-response' && request.method === 'POST') {
+      const body = (await request.json().catch(() => null)) as {
+        userId?: string;
+        authRequestId?: string;
+        contextId?: string | null;
+      } | null;
+      const userId = String(body?.userId || '').trim();
+      const authRequestId = String(body?.authRequestId || '').trim();
+      if (!userId || !authRequestId) return new Response('Invalid auth request notification', { status: 400 });
+
+      this.broadcastAuthRequestResponse(userId, authRequestId, String(body?.contextId || '').trim() || null);
       return new Response(null, { status: 204 });
     }
 
@@ -222,7 +256,7 @@ export class NotificationsHub extends DurableObject<Env> {
       });
     }
 
-    if (url.pathname !== '/notifications/hub') {
+    if (url.pathname !== '/notifications/hub' && url.pathname !== '/notifications/anonymous-hub') {
       return new Response('Not found', { status: 404 });
     }
 
@@ -232,8 +266,13 @@ export class NotificationsHub extends DurableObject<Env> {
 
     const requestUserId = String(url.searchParams.get('nw_uid') || '').trim();
     const requestDeviceIdentifier = String(url.searchParams.get('nw_did') || '').trim() || null;
+    const requestAuthRequestId = String(url.searchParams.get('nw_auth_request_id') || '').trim() || null;
+    const isAnonymousAuthRequestHub = url.pathname === '/notifications/anonymous-hub';
 
-    if (!requestUserId) {
+    if (!isAnonymousAuthRequestHub && !requestUserId) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+    if (isAnonymousAuthRequestHub && !requestAuthRequestId) {
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -248,7 +287,9 @@ export class NotificationsHub extends DurableObject<Env> {
     this.ctx.acceptWebSocket(server, tags);
 
     server.serializeAttachment({
-      userId: requestUserId,
+      kind: isAnonymousAuthRequestHub ? 'anonymous-auth-request' : 'user',
+      userId: isAnonymousAuthRequestHub ? null : requestUserId,
+      authRequestId: requestAuthRequestId,
       handshakeComplete: false,
       protocol: 'messagepack',
       deviceIdentifier: requestDeviceIdentifier,
@@ -274,7 +315,6 @@ export class NotificationsHub extends DurableObject<Env> {
           attachment.handshakeComplete = true;
           ws.serializeAttachment(attachment);
           ws.send(SIGNALR_HANDSHAKE_ACK);
-          this.broadcastDeviceStatus(attachment.userId);
           return;
         } catch {
           // Ignore malformed pre-handshake payloads.
@@ -293,26 +333,22 @@ export class NotificationsHub extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
-    const attachment = ws.deserializeAttachment() as WsAttachment | null;
-    const shouldBroadcast = !!attachment?.handshakeComplete;
-    if (shouldBroadcast && attachment?.userId) {
-      this.broadcastDeviceStatus(attachment.userId);
-    }
+    void ws;
+    void code;
+    void reason;
+    void wasClean;
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
-    const attachment = ws.deserializeAttachment() as WsAttachment | null;
-    const shouldBroadcast = !!attachment?.handshakeComplete;
-    if (shouldBroadcast && attachment?.userId) {
-      this.broadcastDeviceStatus(attachment.userId);
-    }
+    void ws;
+    void error;
   }
 
   private getOnlineDeviceIdentifiers(): string[] {
     const out = new Set<string>();
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as WsAttachment | null;
-      if (!attachment?.handshakeComplete || !attachment.deviceIdentifier) continue;
+      if (!attachment?.handshakeComplete || attachment.kind !== 'user' || !attachment.deviceIdentifier) continue;
       out.add(attachment.deviceIdentifier);
     }
     return Array.from(out);
@@ -349,16 +385,45 @@ export class NotificationsHub extends DurableObject<Env> {
     }
   }
 
-  private broadcastDeviceStatus(userId: string): void {
-    this.broadcastMessage(
-      SIGNALR_UPDATE_TYPE_DEVICE_STATUS,
-      {
+  private broadcastAuthRequestResponse(userId: string, authRequestId: string, contextId: string | null): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = ws.deserializeAttachment() as WsAttachment | null;
+      if (
+        !attachment?.handshakeComplete ||
+        attachment.kind !== 'anonymous-auth-request' ||
+        attachment.authRequestId !== authRequestId
+      ) {
+        continue;
+      }
+
+      const payload = {
         UserId: userId,
-        Date: new Date().toISOString(),
-      },
-      null,
-      null
-    );
+        Id: authRequestId,
+      };
+      try {
+        if (attachment.protocol === 'json') {
+          ws.send(buildSignalRJsonInvocation(
+            SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE,
+            payload,
+            contextId,
+            'AuthRequestResponseRecieved'
+          ));
+        } else {
+          ws.send(buildSignalRMessagePackInvocation(
+            SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE,
+            payload,
+            contextId,
+            'AuthRequestResponseRecieved'
+          ));
+        }
+      } catch {
+        try {
+          ws.close(1011, 'Notification send failed');
+        } catch {
+          // ignore close races
+        }
+      }
+    }
   }
 }
 
@@ -369,6 +434,243 @@ export function notifyUserVaultSync(
   contextId?: string | null
 ): void {
   waitUntil(notifyUserUpdate(env, userId, SIGNALR_UPDATE_TYPE_SYNC_VAULT, revisionDate, contextId ?? null, null));
+}
+
+export function notifyUserCiphersSync(
+  env: Env,
+  userId: string,
+  revisionDate: string,
+  contextId?: string | null
+): void {
+  waitUntil(notifyUserUpdate(env, userId, SIGNALR_UPDATE_TYPE_SYNC_CIPHERS, revisionDate, contextId ?? null, null));
+}
+
+export function notifyUserCipherCreate(
+  env: Env,
+  payload: {
+    userId: string;
+    cipherId: string;
+    revisionDate: string;
+    organizationId?: string | null;
+    collectionIds?: string[] | null;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.cipherId,
+      OrganizationId: payload.organizationId ?? null,
+      CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserCipherUpdate(
+  env: Env,
+  payload: {
+    userId: string;
+    cipherId: string;
+    revisionDate: string;
+    organizationId?: string | null;
+    collectionIds?: string[] | null;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.cipherId,
+      OrganizationId: payload.organizationId ?? null,
+      CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserCipherDelete(
+  env: Env,
+  payload: {
+    userId: string;
+    cipherId: string;
+    revisionDate: string;
+    organizationId?: string | null;
+    collectionIds?: string[] | null;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_CIPHER_DELETE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.cipherId,
+      OrganizationId: payload.organizationId ?? null,
+      CollectionIds: Array.isArray(payload.collectionIds) ? payload.collectionIds : null,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserFolderCreate(
+  env: Env,
+  payload: {
+    userId: string;
+    folderId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_FOLDER_CREATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.folderId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserFolderUpdate(
+  env: Env,
+  payload: {
+    userId: string;
+    folderId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_FOLDER_UPDATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.folderId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserFolderDelete(
+  env: Env,
+  payload: {
+    userId: string;
+    folderId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_FOLDER_DELETE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.folderId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserSendCreate(
+  env: Env,
+  payload: {
+    userId: string;
+    sendId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_SEND_CREATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.sendId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserSendUpdate(
+  env: Env,
+  payload: {
+    userId: string;
+    sendId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_SEND_UPDATE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.sendId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
+}
+
+export function notifyUserSendDelete(
+  env: Env,
+  payload: {
+    userId: string;
+    sendId: string;
+    revisionDate: string;
+    contextId?: string | null;
+  }
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    payload.userId,
+    SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE,
+    payload.revisionDate,
+    payload.contextId ?? null,
+    null,
+    {
+      UserId: payload.userId,
+      Id: payload.sendId,
+      RevisionDate: payload.revisionDate,
+    }
+  ));
 }
 
 export function notifyUserLogout(
@@ -392,13 +694,59 @@ export async function getOnlineUserDevices(env: Env, userId: string): Promise<st
   }
 }
 
+export async function notifyAuthRequestResponse(
+  env: Env,
+  userId: string,
+  authRequestId: string,
+  contextId?: string | null
+): Promise<void> {
+  try {
+    const id = env.NOTIFICATIONS_HUB.idFromName(authRequestId);
+    const stub = env.NOTIFICATIONS_HUB.get(id);
+    await stub.fetch('https://notifications/internal/auth-request-response', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId,
+        authRequestId,
+        contextId: contextId || null,
+      }),
+    });
+  } catch (error) {
+    console.error('Failed to broadcast auth request response notification:', error);
+  }
+}
+
+export function notifyUserAuthRequest(
+  env: Env,
+  userId: string,
+  authRequestId: string,
+  contextId?: string | null
+): void {
+  waitUntil(notifyUserUpdate(
+    env,
+    userId,
+    SIGNALR_UPDATE_TYPE_AUTH_REQUEST,
+    new Date().toISOString(),
+    contextId ?? null,
+    null,
+    {
+      UserId: userId,
+      Id: authRequestId,
+    }
+  ));
+}
+
 async function notifyUserUpdate(
   env: Env,
   userId: string,
   updateType: number,
   revisionDate: string,
   contextId: string | null,
-  targetDeviceIdentifier: string | null
+  targetDeviceIdentifier: string | null,
+  payloadOverride?: Record<string, unknown> | null
 ): Promise<void> {
   try {
     const id = env.NOTIFICATIONS_HUB.idFromName(userId);
@@ -414,11 +762,21 @@ async function notifyUserUpdate(
         contextId: contextId || null,
         updateType,
         targetDeviceIdentifier: targetDeviceIdentifier || null,
-        payload: {
+        payload: payloadOverride || {
           UserId: userId,
           Date: revisionDate,
         },
       }),
+    });
+    await notifyMobilePush(env, {
+      userId,
+      updateType,
+      revisionDate,
+      contextId,
+      payload: payloadOverride || {
+        UserId: userId,
+        Date: revisionDate,
+      },
     });
   } catch (error) {
     console.error('Failed to broadcast realtime notification:', error);

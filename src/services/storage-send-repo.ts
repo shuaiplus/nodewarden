@@ -40,15 +40,27 @@ export async function getSend(db: D1Database, id: string): Promise<Send | null> 
   return mapSendRow(row);
 }
 
+export async function getSendForUser(db: D1Database, id: string, userId: string): Promise<Send | null> {
+  const row = await db
+    .prepare(
+      'SELECT id, user_id, type, name, notes, data, key, password_hash, password_salt, password_iterations, auth_type, emails, max_access_count, access_count, disabled, hide_email, created_at, updated_at, expiration_date, deletion_date FROM sends WHERE id = ? AND user_id = ?'
+    )
+    .bind(id, userId)
+    .first<any>();
+  if (!row) return null;
+  return mapSendRow(row);
+}
+
 export async function saveSend(db: D1Database, safeBind: SafeBind, send: Send): Promise<void> {
   const stmt = db.prepare(
     'INSERT INTO sends(id, user_id, type, name, notes, data, key, password_hash, password_salt, password_iterations, auth_type, emails, max_access_count, access_count, disabled, hide_email, created_at, updated_at, expiration_date, deletion_date) ' +
     'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
-    'user_id=excluded.user_id, type=excluded.type, name=excluded.name, notes=excluded.notes, data=excluded.data, key=excluded.key, ' +
+    'type=excluded.type, name=excluded.name, notes=excluded.notes, data=excluded.data, key=excluded.key, ' +
     'password_hash=excluded.password_hash, password_salt=excluded.password_salt, password_iterations=excluded.password_iterations, auth_type=excluded.auth_type, emails=excluded.emails, ' +
     'max_access_count=excluded.max_access_count, access_count=excluded.access_count, disabled=excluded.disabled, hide_email=excluded.hide_email, ' +
-    'updated_at=excluded.updated_at, expiration_date=excluded.expiration_date, deletion_date=excluded.deletion_date'
+    'updated_at=excluded.updated_at, expiration_date=excluded.expiration_date, deletion_date=excluded.deletion_date ' +
+    'WHERE user_id=excluded.user_id'
   );
 
   await safeBind(
@@ -81,9 +93,13 @@ export async function incrementSendAccessCount(db: D1Database, sendId: string): 
   const result = await db
     .prepare(
       'UPDATE sends SET access_count = access_count + 1, updated_at = ? ' +
-      'WHERE id = ? AND (max_access_count IS NULL OR access_count < max_access_count)'
+      'WHERE id = ? ' +
+      'AND disabled = 0 ' +
+      'AND (max_access_count IS NULL OR access_count < max_access_count) ' +
+      'AND (expiration_date IS NULL OR expiration_date > ?) ' +
+      'AND deletion_date > ?'
     )
-    .bind(now, sendId)
+    .bind(now, sendId, now, now)
     .run();
   return (result.meta.changes ?? 0) > 0;
 }

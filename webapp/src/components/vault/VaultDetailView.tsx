@@ -1,28 +1,36 @@
 import { createPortal } from 'preact/compat';
-import { useMemo, useState } from 'preact/hooks';
-import { Archive, Clipboard, Download, Eye, EyeOff, ExternalLink, Folder, Paperclip, Pencil, RotateCcw, Trash2, X } from 'lucide-preact';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { AlertTriangle, Archive, Clipboard, Download, Eye, EyeOff, ExternalLink, Folder, Paperclip, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldAlert, Trash2, X } from 'lucide-preact';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
+import type { TotpCodeResult } from '@/lib/crypto';
+import { checkPasswordLeaked, type PasswordBreachResult } from '@/lib/password-security';
 import type { Cipher } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import {
-  TOTP_PERIOD_SECONDS,
+  CardBrandIcon,
   TOTP_RING_CIRCUMFERENCE,
   VaultListIcon,
   copyToClipboard,
+  displayCardBrand,
   formatAttachmentSize,
   formatHistoryTime,
   formatTotp,
+  isCipherDeleted,
   maskSecret,
   openUri,
   parseFieldType,
   toBooleanFieldValue,
 } from '@/components/vault/vault-page-helpers';
 
+function isAbortError(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'name' in error && (error as { name?: string }).name === 'AbortError';
+}
+
 interface VaultDetailViewProps {
   selectedCipher: Cipher;
   repromptApprovedCipherId: string | null;
   showPassword: boolean;
-  totpLive: { code: string; remain: number } | null;
+  totpLive: TotpCodeResult | null;
   passkeyCreatedAt: string | null;
   hiddenFieldVisibleMap: Record<number, boolean>;
   folderName: (id: string | null | undefined) => string;
@@ -34,8 +42,14 @@ interface VaultDetailViewProps {
   onDownloadAttachment: (cipher: Cipher, attachmentId: string) => void;
   onStartEdit: () => void;
   onDelete: (cipher: Cipher) => void;
+  onRestore: (cipher: Cipher) => void | Promise<void>;
   onArchive: (cipher: Cipher) => void | Promise<void>;
   onUnarchive: (cipher: Cipher) => void | Promise<void>;
+}
+
+function totpProgress(live: TotpCodeResult | null): number {
+  const period = Math.max(1, live?.period || 30);
+  return live ? Math.max(0, Math.min(period, live.remain)) / period : 0;
 }
 
 function PasswordHistoryDialog(props: {
@@ -81,7 +95,11 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
   const selectedAttachments = Array.isArray(props.selectedCipher.attachments) ? props.selectedCipher.attachments : [];
   const [showSshPrivateKey, setShowSshPrivateKey] = useState(false);
   const [passwordHistoryOpen, setPasswordHistoryOpen] = useState(false);
+  const [breachResult, setBreachResult] = useState<PasswordBreachResult | null>(null);
+  const [checkingBreach, setCheckingBreach] = useState(false);
+  const breachControllerRef = useRef<AbortController | null>(null);
   const isArchived = !!(props.selectedCipher.archivedDate || (props.selectedCipher as { archivedAt?: string | null }).archivedAt);
+  const isDeleted = isCipherDeleted(props.selectedCipher);
   const passwordHistoryEntries = useMemo(
     () =>
       (props.selectedCipher.passwordHistory || [])
@@ -92,6 +110,40 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
         .filter((entry) => entry.password.trim()),
     [props.selectedCipher.passwordHistory]
   );
+  useEffect(() => {
+    breachControllerRef.current?.abort();
+    breachControllerRef.current = null;
+    setShowSshPrivateKey(false);
+    setPasswordHistoryOpen(false);
+    setBreachResult(null);
+    setCheckingBreach(false);
+    return () => {
+      breachControllerRef.current?.abort();
+      breachControllerRef.current = null;
+    };
+  }, [props.selectedCipher.id, props.selectedCipher.login?.decPassword]);
+  const checkBreach = async () => {
+    const password = String(props.selectedCipher.login?.decPassword || '');
+    if (!password) return;
+    breachControllerRef.current?.abort();
+    const controller = new AbortController();
+    breachControllerRef.current = controller;
+    setCheckingBreach(true);
+    setBreachResult(null);
+    try {
+      const result = await checkPasswordLeaked(password, fetch, controller.signal);
+      if (controller.signal.aborted) return;
+      setBreachResult(result);
+    } catch (error) {
+      if (controller.signal.aborted || isAbortError(error)) return;
+      setBreachResult({ count: null, available: false });
+    } finally {
+      if (breachControllerRef.current === controller) {
+        breachControllerRef.current = null;
+        setCheckingBreach(false);
+      }
+    }
+  };
   const formatDownloadLabel = (attachmentId: string) => {
     const downloadKey = `${props.selectedCipher.id}:${attachmentId}`;
     if (props.downloadingAttachmentKey !== downloadKey) return t('txt_download');
@@ -158,8 +210,18 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                   <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(props.selectedCipher.login?.decPassword || '')}>
                     <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
                   </button>
+                  <button type="button" className="btn btn-secondary small" disabled={checkingBreach || !props.selectedCipher.login?.decPassword} onClick={() => void checkBreach()}>
+                    {checkingBreach ? <RefreshCw size={14} className="btn-icon spin" /> : <ShieldCheck size={14} className="btn-icon" />}
+                    {checkingBreach ? t('txt_checking_password_security') : t('txt_check_password_breach')}
+                  </button>
                 </div>
               </div>
+              {breachResult && (
+                <div className={`password-breach-inline ${breachResult.available ? (breachResult.count ? 'danger' : 'safe') : 'warning'}`} role="status">
+                  {breachResult.available ? (breachResult.count ? <ShieldAlert size={15} /> : <ShieldCheck size={15} />) : <AlertTriangle size={15} />}
+                  <span>{breachResult.available ? (breachResult.count ? t('txt_password_exposed_count', { count: breachResult.count }) : t('txt_password_not_found_in_breaches')) : t('txt_password_security_check_failed')}</span>
+                </div>
+              )}
               {!!props.selectedCipher.login.decTotp && (
                 <div className="kv-row">
                   <span className="kv-label">{t('txt_totp')}</span>
@@ -182,8 +244,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                               strokeDasharray: `${TOTP_RING_CIRCUMFERENCE} ${TOTP_RING_CIRCUMFERENCE}`,
                               strokeDashoffset: String(
                                 TOTP_RING_CIRCUMFERENCE -
-                                  TOTP_RING_CIRCUMFERENCE *
-                                    (Math.max(0, Math.min(TOTP_PERIOD_SECONDS, props.totpLive?.remain ?? 0)) / TOTP_PERIOD_SECONDS)
+                                  TOTP_RING_CIRCUMFERENCE * totpProgress(props.totpLive)
                               ),
                             }}
                           />
@@ -242,7 +303,13 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
               <h4>{t('txt_card_details')}</h4>
               <div className="kv-line"><span>{t('txt_cardholder_name')}</span><strong>{props.selectedCipher.card.decCardholderName || ''}</strong></div>
               <div className="kv-line"><span>{t('txt_number')}</span><strong>{props.selectedCipher.card.decNumber || ''}</strong></div>
-              <div className="kv-line"><span>{t('txt_brand')}</span><strong>{props.selectedCipher.card.decBrand || ''}</strong></div>
+              <div className="kv-line">
+                <span>{t('txt_brand')}</span>
+                <strong className="card-brand-detail">
+                  <CardBrandIcon brand={props.selectedCipher.card.decBrand} />
+                  {displayCardBrand(props.selectedCipher.card.decBrand)}
+                </strong>
+              </div>
               <div className="kv-line"><span>{t('txt_expiry')}</span><strong>{`${props.selectedCipher.card.decExpMonth || ''}/${props.selectedCipher.card.decExpYear || ''}`}</strong></div>
               <div className="kv-line"><span>{t('txt_security_code')}</span><strong>{props.selectedCipher.card.decCode || ''}</strong></div>
             </div>
@@ -312,6 +379,55 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
             </div>
           )}
 
+          {props.selectedCipher.bankAccount && (
+            <div className="card">
+              <h4>{t('txt_bank_account_details')}</h4>
+              <div className="kv-line"><span>{t('txt_bank_name')}</span><strong>{props.selectedCipher.bankAccount.decBankName || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_name_on_account')}</span><strong>{props.selectedCipher.bankAccount.decNameOnAccount || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_account_type')}</span><strong>{props.selectedCipher.bankAccount.decAccountType || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_account_number')}</span><strong>{props.selectedCipher.bankAccount.decAccountNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_routing_number')}</span><strong>{props.selectedCipher.bankAccount.decRoutingNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_branch_number')}</span><strong>{props.selectedCipher.bankAccount.decBranchNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_pin')}</span><strong>{props.selectedCipher.bankAccount.decPin || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_swift_code')}</span><strong>{props.selectedCipher.bankAccount.decSwiftCode || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_iban')}</span><strong>{props.selectedCipher.bankAccount.decIban || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_bank_contact_phone')}</span><strong>{props.selectedCipher.bankAccount.decBankContactPhone || ''}</strong></div>
+            </div>
+          )}
+
+          {props.selectedCipher.driversLicense && (
+            <div className="card">
+              <h4>{t('txt_drivers_license_details')}</h4>
+              <div className="kv-line"><span>{t('txt_name')}</span><strong>{[props.selectedCipher.driversLicense.decFirstName, props.selectedCipher.driversLicense.decMiddleName, props.selectedCipher.driversLicense.decLastName].filter(Boolean).join(' ')}</strong></div>
+              <div className="kv-line"><span>{t('txt_date_of_birth')}</span><strong>{props.selectedCipher.driversLicense.decDateOfBirth || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_license_number')}</span><strong>{props.selectedCipher.driversLicense.decLicenseNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issuing_country')}</span><strong>{props.selectedCipher.driversLicense.decIssuingCountry || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issuing_state')}</span><strong>{props.selectedCipher.driversLicense.decIssuingState || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issue_date')}</span><strong>{props.selectedCipher.driversLicense.decIssueDate || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_expiration_date')}</span><strong>{props.selectedCipher.driversLicense.decExpirationDate || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issuing_authority')}</span><strong>{props.selectedCipher.driversLicense.decIssuingAuthority || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_license_class')}</span><strong>{props.selectedCipher.driversLicense.decLicenseClass || ''}</strong></div>
+            </div>
+          )}
+
+          {props.selectedCipher.passport && (
+            <div className="card">
+              <h4>{t('txt_passport_details')}</h4>
+              <div className="kv-line"><span>{t('txt_name')}</span><strong>{[props.selectedCipher.passport.decGivenName, props.selectedCipher.passport.decSurname].filter(Boolean).join(' ')}</strong></div>
+              <div className="kv-line"><span>{t('txt_date_of_birth')}</span><strong>{props.selectedCipher.passport.decDateOfBirth || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_sex')}</span><strong>{props.selectedCipher.passport.decSex || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_birth_place')}</span><strong>{props.selectedCipher.passport.decBirthPlace || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_nationality')}</span><strong>{props.selectedCipher.passport.decNationality || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issuing_country')}</span><strong>{props.selectedCipher.passport.decIssuingCountry || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_passport_number')}</span><strong>{props.selectedCipher.passport.decPassportNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_passport_type')}</span><strong>{props.selectedCipher.passport.decPassportType || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_national_id_number')}</span><strong>{props.selectedCipher.passport.decNationalIdentificationNumber || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issuing_authority')}</span><strong>{props.selectedCipher.passport.decIssuingAuthority || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_issue_date')}</span><strong>{props.selectedCipher.passport.decIssueDate || ''}</strong></div>
+              <div className="kv-line"><span>{t('txt_expiration_date')}</span><strong>{props.selectedCipher.passport.decExpirationDate || ''}</strong></div>
+            </div>
+          )}
+
           {!!(props.selectedCipher.decNotes || '').trim() && (
             <div className="card">
               <h4>{t('txt_notes')}</h4>
@@ -357,7 +473,10 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                       <div className="custom-field-label" title={fieldName}>{fieldName}</div>
                       <div className="custom-field-body">
                         <div className="custom-field-value">
-                          <strong className="value-ellipsis" title={fieldType === 1 && !isHiddenVisible ? '' : rawValue}>
+                          <strong
+                            className={fieldType === 1 && !isHiddenVisible ? 'value-ellipsis' : 'custom-field-display'}
+                            title={fieldType === 1 && !isHiddenVisible ? '' : rawValue}
+                          >
                             {fieldType === 1 && !isHiddenVisible ? maskSecret(rawValue) : rawValue}
                           </strong>
                         </div>
@@ -431,21 +550,29 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
 
           <div className="detail-actions">
             <div className="actions">
-              <button type="button" className="btn btn-secondary" onClick={props.onStartEdit}>
-                <Pencil size={14} className="btn-icon" /> {t('txt_edit')}
-              </button>
-              {isArchived ? (
-                <button type="button" className="btn btn-secondary" onClick={() => void props.onUnarchive(props.selectedCipher)}>
-                  <RotateCcw size={14} className="btn-icon" /> {t('txt_unarchive')}
+              {isDeleted ? (
+                <button type="button" className="btn btn-secondary" onClick={() => void props.onRestore(props.selectedCipher)}>
+                  <RotateCcw size={14} className="btn-icon" /> {t('txt_restore')}
                 </button>
               ) : (
-                <button type="button" className="btn btn-secondary" onClick={() => void props.onArchive(props.selectedCipher)}>
-                  <Archive size={14} className="btn-icon" /> {t('txt_archive')}
-                </button>
+                <>
+                  <button type="button" className="btn btn-secondary" onClick={props.onStartEdit}>
+                    <Pencil size={14} className="btn-icon" /> {t('txt_edit')}
+                  </button>
+                  {isArchived ? (
+                    <button type="button" className="btn btn-secondary" onClick={() => void props.onUnarchive(props.selectedCipher)}>
+                      <RotateCcw size={14} className="btn-icon" /> {t('txt_unarchive')}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-secondary" onClick={() => void props.onArchive(props.selectedCipher)}>
+                      <Archive size={14} className="btn-icon" /> {t('txt_archive')}
+                    </button>
+                  )}
+                </>
               )}
             </div>
             <button type="button" className="btn btn-danger" onClick={() => props.onDelete(props.selectedCipher)}>
-              <Trash2 size={14} className="btn-icon" /> {t('txt_delete')}
+              <Trash2 size={14} className="btn-icon" /> {isDeleted ? t('txt_delete_permanently') : t('txt_delete')}
             </button>
           </div>
         </>

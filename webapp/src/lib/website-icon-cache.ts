@@ -1,13 +1,18 @@
 type WebsiteIconStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
-const ICON_LOAD_TIMEOUT_MS = 5000;
-
 interface WebsiteIconRecord {
   status: WebsiteIconStatus;
-  promise: Promise<WebsiteIconStatus> | null;
   imageUrl: string | null;
+  errorAt: number;
+  loadStartedAt: number;
+  loadToken: number;
+  loader: HTMLImageElement | null;
+  timeoutId: ReturnType<typeof setTimeout> | null;
   listeners: Set<(status: WebsiteIconStatus) => void>;
 }
+
+const WEBSITE_ICON_ERROR_TTL_MS = 5 * 60 * 1000;
+const WEBSITE_ICON_LOAD_TIMEOUT_MS = 15 * 1000;
 
 const iconRecords = new Map<string, WebsiteIconRecord>();
 
@@ -16,13 +21,40 @@ function ensureRecord(host: string): WebsiteIconRecord {
   if (!record) {
     record = {
       status: 'idle',
-      promise: null,
       imageUrl: null,
+      errorAt: 0,
+      loadStartedAt: 0,
+      loadToken: 0,
+      loader: null,
+      timeoutId: null,
       listeners: new Set(),
     };
     iconRecords.set(host, record);
   }
   return record;
+}
+
+function clearLoadTimer(record: WebsiteIconRecord): void {
+  if (record.timeoutId) {
+    clearTimeout(record.timeoutId);
+    record.timeoutId = null;
+  }
+}
+
+function expireRecordIfNeeded(record: WebsiteIconRecord): void {
+  const now = Date.now();
+  if (record.status === 'error' && record.errorAt && now - record.errorAt >= WEBSITE_ICON_ERROR_TTL_MS) {
+    record.status = 'idle';
+    record.errorAt = 0;
+    record.imageUrl = null;
+  }
+  if (record.status === 'loading' && record.loadStartedAt && now - record.loadStartedAt >= WEBSITE_ICON_LOAD_TIMEOUT_MS) {
+    clearLoadTimer(record);
+    record.status = 'error';
+    record.errorAt = now;
+    record.imageUrl = null;
+    record.loader = null;
+  }
 }
 
 function notifyRecord(host: string, status: WebsiteIconStatus): void {
@@ -35,12 +67,16 @@ function notifyRecord(host: string, status: WebsiteIconStatus): void {
 
 export function getWebsiteIconStatus(host: string): WebsiteIconStatus {
   if (!host) return 'idle';
-  return ensureRecord(host).status;
+  const record = ensureRecord(host);
+  expireRecordIfNeeded(record);
+  return record.status;
 }
 
 export function getWebsiteIconImageUrl(host: string): string {
   if (!host) return '';
-  return ensureRecord(host).imageUrl || '';
+  const record = ensureRecord(host);
+  expireRecordIfNeeded(record);
+  return record.imageUrl || '';
 }
 
 export function subscribeWebsiteIconStatus(host: string, listener: (status: WebsiteIconStatus) => void): () => void {
@@ -52,69 +88,72 @@ export function subscribeWebsiteIconStatus(host: string, listener: (status: Webs
   };
 }
 
-export function markWebsiteIconLoaded(host: string, imageUrl?: string): void {
+function markWebsiteIconLoaded(host: string, imageUrl?: string): void {
   if (!host) return;
   const record = ensureRecord(host);
-  record.promise = null;
+  clearLoadTimer(record);
   if (imageUrl) {
     record.imageUrl = imageUrl;
   }
+  record.errorAt = 0;
+  record.loadStartedAt = 0;
+  record.loader = null;
   notifyRecord(host, 'loaded');
 }
 
-export function markWebsiteIconErrored(host: string): void {
+function markWebsiteIconErrored(host: string): void {
   if (!host) return;
   const record = ensureRecord(host);
-  record.promise = null;
+  clearLoadTimer(record);
   record.imageUrl = null;
+  record.errorAt = Date.now();
+  record.loadStartedAt = 0;
+  record.loader = null;
   notifyRecord(host, 'error');
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(reader.error || new Error('Failed to read icon'));
-    reader.readAsDataURL(blob);
-  });
-}
-
-export function preloadWebsiteIcon(host: string, src: string): Promise<WebsiteIconStatus> {
-  if (!host) return Promise.resolve('error');
-
+export function beginWebsiteIconLoad(host: string, src: string): boolean {
+  if (!host || !src) return false;
   const record = ensureRecord(host);
-  if (record.status === 'loaded' || record.status === 'error') {
-    return Promise.resolve(record.status);
-  }
-  if (record.promise) {
-    return record.promise;
+  expireRecordIfNeeded(record);
+  if (record.status !== 'idle') return false;
+
+  if (typeof Image !== 'function') {
+    markWebsiteIconErrored(host);
+    return false;
   }
 
+  const token = record.loadToken + 1;
+  const loader = new Image();
+  record.loadToken = token;
+  record.loader = loader;
+  record.imageUrl = src;
+  record.errorAt = 0;
+  record.loadStartedAt = Date.now();
   notifyRecord(host, 'loading');
-  record.promise = (async () => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), ICON_LOAD_TIMEOUT_MS);
-    try {
-      const resp = await fetch(src, {
-        cache: 'force-cache',
-        signal: controller.signal,
-      });
-      if (!resp.ok) throw new Error('Icon unavailable');
-      const contentType = String(resp.headers.get('Content-Type') || '').toLowerCase();
-      if (!contentType.startsWith('image/')) throw new Error('Icon response is not an image');
-      const blob = await resp.blob();
-      if (!blob.size) throw new Error('Icon response is empty');
-      const imageUrl = await blobToDataUrl(blob);
-      if (!imageUrl) throw new Error('Icon response is empty');
-      markWebsiteIconLoaded(host, imageUrl);
-      return 'loaded';
-    } catch {
-      markWebsiteIconErrored(host);
-      return 'error';
-    } finally {
-      window.clearTimeout(timeout);
-    }
-  })();
 
-  return record.promise;
+  record.timeoutId = setTimeout(() => {
+    const current = ensureRecord(host);
+    if (current.loadToken !== token || current.status !== 'loading') return;
+    current.imageUrl = null;
+    current.errorAt = Date.now();
+    current.loadStartedAt = 0;
+    current.loader = null;
+    current.timeoutId = null;
+    notifyRecord(host, 'error');
+  }, WEBSITE_ICON_LOAD_TIMEOUT_MS);
+
+  loader.onload = () => {
+    const current = ensureRecord(host);
+    if (current.loadToken !== token) return;
+    markWebsiteIconLoaded(host, src);
+  };
+  loader.onerror = () => {
+    const current = ensureRecord(host);
+    if (current.loadToken !== token) return;
+    markWebsiteIconErrored(host);
+  };
+  loader.src = src;
+
+  return true;
 }

@@ -30,14 +30,11 @@
 
 .not-found-page {
   @apply relative grid min-h-full place-items-center overflow-hidden p-6 text-center;
-  background:
-    radial-gradient(circle at 50% 42%, rgba(28, 118, 255, 0.24), transparent 27rem),
-    radial-gradient(circle at 16% 84%, rgba(22, 163, 255, 0.10), transparent 22rem),
-    linear-gradient(180deg, #020b1a 0%, #061328 48%, #0a1730 100%);
+  background: var(--surface);
 }
 
 .not-found-shell {
-  @apply relative z-20 grid w-full max-w-[620px] justify-items-center gap-5 px-4 py-7 text-center;
+  @apply relative z-20 grid w-full max-w-[560px] justify-items-center gap-6 px-4 py-7 text-center;
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -356,7 +353,7 @@
 }
 
 .not-found-logo {
-  @apply h-14 w-[70px] flex-shrink-0 object-contain;
+  @apply h-14 w-14 flex-shrink-0 object-contain;
   filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
 }
 
@@ -377,17 +374,16 @@
 
 .not-found-copy {
   @apply grid justify-items-center gap-3;
-  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.38);
 }
 
 .not-found-shell h1 {
   @apply m-0 text-3xl font-extrabold leading-tight;
-  color: #f8fbff;
+  color: var(--text);
 }
 
 .not-found-shell p {
   @apply m-0 max-w-[420px] text-sm leading-relaxed;
-  color: rgba(220, 232, 251, 0.82);
+  color: var(--muted);
 }
 
 .not-found-action {
@@ -396,10 +392,7 @@
 
 @media (max-width: 520px) {
   .not-found-page {
-    background:
-      radial-gradient(circle at 50% 36%, rgba(28, 118, 255, 0.24), transparent 18rem),
-      radial-gradient(circle at 18% 82%, rgba(22, 163, 255, 0.10), transparent 16rem),
-      linear-gradient(180deg, #020b1a 0%, #061328 48%, #0a1730 100%);
+    background: var(--surface);
   }
 
   .not-found-shell {
@@ -451,7 +444,7 @@
 }
 
 .auth-card h1 {
-  @apply m-0 mb-1 text-center;
+  @apply m-0;
 }
 
 .standalone-eyebrow {
@@ -486,7 +479,69 @@
 }
 
 .standalone-title {
-  @apply m-0 mb-1 text-left text-3xl font-bold leading-tight tracking-normal;
+  @apply m-0 text-center text-3xl font-bold leading-tight tracking-normal;
+}
+
+.standalone-title-row {
+  @apply relative mb-1 flex min-h-9 items-center justify-center;
+  padding-inline: 84px;
+}
+
+.standalone-title-row > .network-status-badge {
+  @apply absolute right-0 top-1/2;
+  transform: translateY(-50%);
+}
+
+.offline-mode-notice {
+  @apply mb-4 flex items-start gap-3 rounded-xl border px-3.5 py-3 text-left text-sm leading-relaxed;
+  background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
+  color: var(--text);
+}
+
+.offline-mode-notice svg {
+  @apply mt-0.5 shrink-0;
+  color: var(--warning);
+}
+
+.offline-mode-notice strong {
+  @apply block text-center text-[13px] font-extrabold;
+  color: color-mix(in srgb, var(--warning) 82%, var(--text));
+}
+
+.offline-mode-notice > div {
+  @apply min-w-0 flex-1;
+}
+
+.offline-shortcut-list {
+  @apply mt-2 grid gap-1.5;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.offline-shortcut-row {
+  display: contents;
+}
+
+.offline-shortcut-label {
+  @apply text-xs font-extrabold;
+  color: color-mix(in srgb, var(--warning) 76%, var(--text));
+}
+
+.offline-shortcut-value {
+  @apply flex min-w-0 flex-wrap items-center gap-1.5;
+  color: var(--muted-strong);
+}
+
+.offline-shortcut-chord {
+  @apply inline-flex items-center gap-1 whitespace-nowrap;
+}
+
+.offline-shortcut-chord kbd {
+  @apply inline-flex min-h-6 items-center rounded-md border px-1.5 font-mono text-[12px] font-bold leading-none;
+  background: color-mix(in srgb, var(--panel) 88%, var(--warning));
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--warning) 26%, transparent);
+  color: var(--text);
 }
 
 .standalone-muted {

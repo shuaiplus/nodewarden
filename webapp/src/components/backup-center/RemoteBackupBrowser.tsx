@@ -1,4 +1,4 @@
-import { Download, FileArchive, FolderOpen, RefreshCw, RotateCcw, Trash2 } from 'lucide-preact';
+import { Download, FileArchive, FolderOpen, FolderUp, RefreshCw, RotateCcw, Trash2 } from 'lucide-preact';
 import type { RemoteBackupBrowserResponse } from '@/lib/api/backup';
 import { formatBytes, formatDateTime, isZipCandidate } from '@/lib/backup-center';
 import { t } from '@/lib/i18n';
@@ -32,26 +32,32 @@ export function RemoteBackupBrowser(props: RemoteBackupBrowserProps) {
       : t('txt_downloading_percent', { percent: props.downloadingRemotePercent });
   };
 
+  const renderRefreshPrompt = () => (
+    <div className="backup-browser-empty">
+      <span className="backup-browser-refresh-prompt">
+        <span>{t('txt_backup_remote_cached_empty_prefix')}</span>
+        <button type="button" className="btn btn-secondary small" disabled={!props.canBrowse || props.loadingRemoteBrowser || props.disableWhileBusy} onClick={props.onRefresh}>
+          {t('txt_backup_remote_refresh')}
+        </button>
+        <span>{t('txt_backup_remote_cached_empty_suffix')}</span>
+      </span>
+    </div>
+  );
+
   return (
     <>
       <div className="backup-divider" />
 
       <div className="section-head">
         <h3>{t('txt_backup_remote_title')}</h3>
-        {props.canBrowse ? (
-          <div className="actions">
-            <button type="button" className="btn btn-secondary small" disabled={props.loadingRemoteBrowser || props.disableWhileBusy} onClick={props.onRefresh}>
-              <RefreshCw size={14} className="btn-icon" />
-              {t('txt_backup_remote_refresh')}
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {!props.destinationIsSaved ? (
         <div className="backup-browser-empty">{t('txt_backup_remote_save_first')}</div>
+      ) : props.loadingRemoteBrowser && !props.remoteBrowser ? (
+        <div className="backup-browser-empty">{t('txt_backup_remote_loading')}</div>
       ) : !props.remoteBrowser ? (
-        <div className="backup-browser-empty">{t('txt_backup_remote_cached_empty')}</div>
+        renderRefreshPrompt()
       ) : (
         <>
           <div className="backup-browser-path">
@@ -59,20 +65,28 @@ export function RemoteBackupBrowser(props: RemoteBackupBrowserProps) {
             <span>{props.remoteBrowser.currentPath ? `/${props.remoteBrowser.currentPath}` : '/'}</span>
           </div>
 
-          <div className="actions backup-browser-nav">
-            <button type="button" className="btn btn-secondary small" disabled={props.loadingRemoteBrowser || props.disableWhileBusy} onClick={() => props.onShowPath('')}>
-              <FolderOpen size={14} className="btn-icon" />
-              {t('txt_backup_remote_root')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary small"
-              disabled={props.loadingRemoteBrowser || props.disableWhileBusy || props.remoteBrowser.parentPath === null}
-              onClick={() => props.onShowPath(props.remoteBrowser?.parentPath || '')}
-            >
-              <RotateCcw size={14} className="btn-icon" />
-              {t('txt_backup_remote_up')}
-            </button>
+          <div className="backup-browser-nav">
+            <div className="actions backup-browser-nav-left">
+              <button type="button" className="btn btn-secondary small" disabled={props.loadingRemoteBrowser || props.disableWhileBusy} onClick={() => props.onShowPath('')}>
+                <FolderOpen size={14} className="btn-icon" />
+                {t('txt_backup_remote_root')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary small"
+                disabled={props.loadingRemoteBrowser || props.disableWhileBusy || props.remoteBrowser.parentPath === null}
+                onClick={() => props.onShowPath(props.remoteBrowser?.parentPath || '')}
+              >
+                <FolderUp size={14} className="btn-icon" />
+                {t('txt_backup_remote_up')}
+              </button>
+            </div>
+            {props.canBrowse ? (
+              <button type="button" className="btn btn-secondary small" disabled={props.loadingRemoteBrowser || props.disableWhileBusy} onClick={props.onRefresh}>
+                <RefreshCw size={14} className="btn-icon" />
+                {t('txt_backup_remote_refresh')}
+              </button>
+            ) : null}
           </div>
 
           {props.loadingRemoteBrowser ? (
@@ -80,6 +94,12 @@ export function RemoteBackupBrowser(props: RemoteBackupBrowserProps) {
           ) : props.remoteBrowser.items.length ? (
             <>
               <div className="backup-browser-list">
+                <div className="backup-browser-head" aria-hidden="true">
+                  <span>{t('txt_name')}</span>
+                  <span>{t('txt_backup_remote_modified')}</span>
+                  <span>{t('txt_backup_remote_size')}</span>
+                  <span>{t('txt_actions')}</span>
+                </div>
                 {props.visibleItems.map((item) => (
                   <div key={`${item.isDirectory ? 'd' : 'f'}:${item.path}`} className="backup-browser-row">
                     <button
@@ -92,10 +112,12 @@ export function RemoteBackupBrowser(props: RemoteBackupBrowserProps) {
                       {item.isDirectory ? <FolderOpen size={16} className="btn-icon" /> : <FileArchive size={16} className="btn-icon" />}
                       <span className="backup-browser-name">{item.name}</span>
                     </button>
-                    <div className="backup-browser-meta">
-                      <span>{item.modifiedAt ? formatDateTime(item.modifiedAt) : t('txt_backup_remote_unknown_time')}</span>
-                      <span>{item.isDirectory ? t('txt_backup_remote_folder') : formatBytes(item.size)}</span>
-                    </div>
+                    <span className="backup-browser-meta backup-browser-modified">
+                      {item.modifiedAt ? formatDateTime(item.modifiedAt) : t('txt_backup_remote_unknown_time')}
+                    </span>
+                    <span className="backup-browser-meta backup-browser-size">
+                      {item.isDirectory ? t('txt_backup_remote_folder') : formatBytes(item.size)}
+                    </span>
                     <div className="actions backup-browser-actions">
                       {item.isDirectory ? (
                         <button type="button" className="btn btn-secondary small" onClick={() => props.onShowPath(item.path)}>

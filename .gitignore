@@ -18,6 +18,7 @@ build/
 .idea/
 *.swp
 *.swo
+docs/
 
 # OS
 .DS_Store
@@ -26,7 +27,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-
+.vite-tailwind.err
 # Environment
 .env
 .env.local
@@ -40,7 +41,26 @@ npm-debug.log*
 
 tmp/
 .tmp/
+.tmp-bitwarden-clients/
 
-nodewarden.wiki/
+nodewarden-wiki/
+wiki/
 AGENTS.md
 settings.json
+.claude/
+NodeWarden-compat/
+.codex-upstream/
+.codex-upstream/bitwarden-server/
+.codex-upstream/bitwarden-clients/
+.codex-upstream/bitwarden-web/
+.codex-upstream/bitwarden-browser/
+
+.reasonix/
+.upstream/
+
+# Compatibility analysis documents
+BITWARDEN_COMPATIBILITY_ANALYSIS.md
+security-audits/
+.mcp.json
+opencode.jsonc
+.cursor/

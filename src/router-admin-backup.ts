@@ -14,6 +14,7 @@ import {
   handleRunAdminConfiguredBackup,
   handleUpdateAdminBackupSettings,
 } from './handlers/backup';
+import { errorResponse } from './utils/response';
 
 export async function handleAdminBackupRoute(
   request: Request,
@@ -26,8 +27,22 @@ export async function handleAdminBackupRoute(
     return handleAdminExportBackup(request, env, actorUser);
   }
 
-  if (path === '/api/admin/backup/blob' && method === 'GET') {
-    return handleDownloadAdminBackupAttachment(request, env, actorUser);
+  if (path === '/api/admin/backup/blob') {
+    // POST only: this endpoint requires master-password verification, and a GET
+    // could only carry that credential in the query string, where it would leak
+    // into request logs, proxy logs, browser history and Referer headers.
+    // The credential is the same value clients send to /identity/connect/token,
+    // so a leaked copy is enough to sign in as this admin.
+    if (method === 'POST') {
+      return handleDownloadAdminBackupAttachment(request, env, actorUser);
+    }
+    if (method === 'GET') {
+      return errorResponse(
+        'Use POST with a JSON body for this endpoint. Credentials must not be sent in the URL.',
+        405
+      );
+    }
+    return null;
   }
 
   if (path === '/api/admin/backup/settings') {
@@ -50,11 +65,11 @@ export async function handleAdminBackupRoute(
     return handleListAdminRemoteBackups(request, env, actorUser);
   }
 
-  if (path === '/api/admin/backup/remote/download' && method === 'GET') {
+  if (path === '/api/admin/backup/remote/download' && method === 'POST') {
     return handleDownloadAdminRemoteBackup(request, env, actorUser);
   }
 
-  if (path === '/api/admin/backup/remote/integrity' && method === 'GET') {
+  if (path === '/api/admin/backup/remote/integrity' && method === 'POST') {
     return handleInspectAdminRemoteBackup(request, env, actorUser);
   }
 

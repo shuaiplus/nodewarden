@@ -22,16 +22,55 @@ export async function getAttachment(db: D1Database, id: string): Promise<Attachm
   };
 }
 
+export async function getAttachmentForUser(db: D1Database, id: string, userId: string): Promise<Attachment | null> {
+  const row = await db
+    .prepare(
+      `SELECT a.id, a.cipher_id, a.file_name, a.size, a.size_name, a.key
+       FROM attachments a
+       INNER JOIN ciphers c ON c.id = a.cipher_id
+       WHERE a.id = ? AND c.user_id = ?`
+    )
+    .bind(id, userId)
+    .first<any>();
+  if (!row) return null;
+  return {
+    id: row.id,
+    cipherId: row.cipher_id,
+    fileName: row.file_name,
+    size: row.size,
+    sizeName: row.size_name,
+    key: row.key,
+  };
+}
+
 export async function saveAttachment(db: D1Database, safeBind: SafeBind, attachment: Attachment): Promise<void> {
   const stmt = db.prepare(
     'INSERT INTO attachments(id, cipher_id, file_name, size, size_name, key) VALUES(?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key'
+    'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key ' +
+    'WHERE EXISTS (' +
+    'SELECT 1 FROM ciphers current_cipher INNER JOIN ciphers next_cipher ON next_cipher.id = excluded.cipher_id ' +
+    'WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = next_cipher.user_id' +
+    ')'
   );
   await safeBind(stmt, attachment.id, attachment.cipherId, attachment.fileName, attachment.size, attachment.sizeName, attachment.key).run();
 }
 
 export async function deleteAttachment(db: D1Database, id: string): Promise<void> {
   await db.prepare('DELETE FROM attachments WHERE id = ?').bind(id).run();
+}
+
+export async function deleteAttachmentForUser(db: D1Database, id: string, userId: string): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM attachments
+       WHERE id = ?
+         AND EXISTS (
+           SELECT 1 FROM ciphers c
+           WHERE c.id = attachments.cipher_id AND c.user_id = ?
+         )`
+    )
+    .bind(id, userId)
+    .run();
 }
 
 export async function bulkDeleteAttachmentsByIds(
@@ -133,6 +172,30 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
 
 export async function addAttachmentToCipher(db: D1Database, cipherId: string, attachmentId: string): Promise<void> {
   await db.prepare('UPDATE attachments SET cipher_id = ? WHERE id = ?').bind(cipherId, attachmentId).run();
+}
+
+export async function addAttachmentToCipherForUser(
+  db: D1Database,
+  cipherId: string,
+  attachmentId: string,
+  userId: string
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE attachments
+       SET cipher_id = ?
+       WHERE id = ?
+         AND EXISTS (
+           SELECT 1 FROM ciphers target_cipher
+           WHERE target_cipher.id = ? AND target_cipher.user_id = ?
+         )
+         AND EXISTS (
+           SELECT 1 FROM ciphers current_cipher
+           WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = ?
+         )`
+    )
+    .bind(cipherId, attachmentId, cipherId, userId, userId)
+    .run();
 }
 
 export async function deleteAllAttachmentsByCipher(db: D1Database, cipherId: string): Promise<void> {

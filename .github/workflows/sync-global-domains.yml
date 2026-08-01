@@ -1,0 +1,60 @@
+name: Sync Bitwarden global domains
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      bitwarden_ref:
+        description: "bitwarden/server ref to sync"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-global-domains:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+
+      - name: Sync generated Bitwarden domains
+        env:
+          BITWARDEN_REF: ${{ inputs.bitwarden_ref || 'main' }}
+        run: |
+          case "$BITWARDEN_REF" in
+            "" | *[!A-Za-z0-9._/-]* )
+              echo "Invalid bitwarden_ref"
+              exit 1
+              ;;
+          esac
+          npm run domains:sync -- --ref "$BITWARDEN_REF"
+
+      - name: Verify custom domains were not touched
+        run: git diff --exit-code -- src/static/global_domains.custom.json
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          branch: chore/sync-bitwarden-global-domains
+          delete-branch: true
+          title: "chore: sync Bitwarden global domain rules"
+          commit-message: "chore: sync Bitwarden global domain rules"
+          body: |
+            Automated sync from bitwarden/server.
+
+            This PR only updates:
+            - `src/static/global_domains.bitwarden.json`
+            - `src/static/global_domains.bitwarden.meta.json`
+
+            `src/static/global_domains.custom.json` is intentionally left untouched.
+          add-paths: |
+            src/static/global_domains.bitwarden.json
+            src/static/global_domains.bitwarden.meta.json

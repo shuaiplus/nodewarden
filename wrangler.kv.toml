@@ -2,26 +2,15 @@ name = "nodewarden"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
-[observability]
-enabled = false
-
-[observability.logs]
-enabled = true
-head_sampling_rate = 1
-persist = true
-invocation_logs = true
-
-[observability.traces]
-enabled = false
+[build]
+command = "npm run build"
 
 [assets]
 binding = "ASSETS"
 directory = "./dist"
+html_handling = "none"
 not_found_handling = "single-page-application"
-run_worker_first = false
-
-[build]
-command = "npm run build"
+run_worker_first = true
 
 [triggers]
 crons = [ "*/5 * * * *" ]
@@ -34,9 +23,17 @@ database_name = "nodewarden-db"
 name = "NOTIFICATIONS_HUB"
 class_name = "NotificationsHub"
 
+[[durable_objects.bindings]]
+name = "BACKUP_TRANSFER_RUNNER"
+class_name = "BackupTransferRunner"
+
 [[kv_namespaces]]
 binding = "ATTACHMENTS_KV"
 
 [[migrations]]
 tag = "v1-notifications-hub"
 new_sqlite_classes = [ "NotificationsHub" ]
+
+[[migrations]]
+tag = "v2-backup-transfer-runner"
+new_sqlite_classes = [ "BackupTransferRunner" ]

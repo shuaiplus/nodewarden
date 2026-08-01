@@ -1,5 +1,6 @@
-import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord } from '../types';
+import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
+import { ensurePushInstallationCredentials } from './push-relay';
 import { ensureStorageSchema } from './storage-schema';
 import {
   getConfigValue as getStoredConfigValue,
@@ -18,13 +19,21 @@ import {
   saveUser as saveStoredUser,
 } from './storage-user-repo';
 import {
+  type AuditLogListOptions,
   createAuditLog as createStoredAuditLog,
+  clearAuditLogs as clearStoredAuditLogs,
+  assignInviteUsedBy as assignStoredInviteUsedBy,
   createInvite as createStoredInvite,
+  deleteInvite as deleteStoredInvite,
+  deleteInvalidInvites as deleteStoredInvalidInvites,
   deleteAllInvites as deleteStoredInvites,
   getInvite as findStoredInvite,
+  listAuditLogs as listStoredAuditLogs,
   listInvites as listStoredInvites,
   markInviteUsed as markStoredInviteUsed,
-  revokeInvite as revokeStoredInvite,
+  pruneAuditLogs as pruneStoredAuditLogs,
+  pruneAuditLogsToMax as pruneStoredAuditLogsToMax,
+  revertInviteUsed as revertStoredInviteUsed,
 } from './storage-admin-repo';
 import {
   bulkDeleteFolders as deleteStoredFolders,
@@ -32,6 +41,7 @@ import {
   deleteFolder as deleteStoredFolder,
   getAllFolders as listStoredFolders,
   getFolder as findStoredFolder,
+  getFolderForUser as findStoredFolderForUser,
   getFoldersPage as listStoredFoldersPage,
   saveFolder as saveStoredFolder,
 } from './storage-folder-repo';
@@ -44,6 +54,7 @@ import {
   bulkUnarchiveCiphers as unarchiveStoredCiphers,
   getAllCiphers as listStoredCiphers,
   getCipher as findStoredCipher,
+  getCipherForUser as findStoredCipherForUser,
   getCiphersByIds as listStoredCiphersByIds,
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
@@ -51,10 +62,13 @@ import {
 } from './storage-cipher-repo';
 import {
   addAttachmentToCipher as attachStoredAttachmentToCipher,
+  addAttachmentToCipherForUser as attachStoredAttachmentToCipherForUser,
   bulkDeleteAttachmentsByIds as deleteStoredAttachmentsByIds,
   deleteAllAttachmentsByCipher as deleteStoredAttachmentsByCipher,
   deleteAttachment as deleteStoredAttachment,
+  deleteAttachmentForUser as deleteStoredAttachmentForUser,
   getAttachment as findStoredAttachment,
+  getAttachmentForUser as findStoredAttachmentForUser,
   getAttachmentsByCipher as listStoredAttachmentsByCipher,
   getAttachmentsByCipherIds as listStoredAttachmentsByCipherIds,
   getAttachmentsByUserId as listStoredAttachmentsByUserId,
@@ -66,49 +80,92 @@ import {
   deleteSend as deleteStoredSend,
   getAllSends as listStoredSends,
   getSend as findStoredSend,
+  getSendForUser as findStoredSendForUser,
   getSendsByIds as listStoredSendsByIds,
   getSendsPage as listStoredSendsPage,
   incrementSendAccessCount as incrementStoredSendAccessCount,
   saveSend as saveStoredSend,
 } from './storage-send-repo';
 import {
-  constrainRefreshTokenExpiry as constrainStoredRefreshTokenExpiry,
+  bindRefreshTokenDeviceStamp as bindStoredRefreshTokenDeviceStamp,
+  bindRefreshTokenSecurityStamp as bindStoredRefreshTokenSecurityStamp,
   deleteRefreshToken as deleteStoredRefreshToken,
   deleteRefreshTokensByDevice as deleteStoredRefreshTokensByDevice,
   deleteRefreshTokensByUserId as deleteStoredRefreshTokensByUserId,
+  extendRefreshTokenExpiry as extendStoredRefreshTokenExpiry,
   getRefreshTokenRecord as findStoredRefreshTokenRecord,
   saveRefreshToken as saveStoredRefreshToken,
 } from './storage-refresh-token-repo';
 import {
   deleteDevice as deleteStoredDevice,
   deleteDevicesByUserId as deleteStoredDevicesByUserId,
+  clearDevicePushToken as clearStoredDevicePushToken,
   clearDeviceKeys as clearStoredDeviceKeys,
   deleteTrustedTwoFactorTokensByDevice as deleteStoredTrustedTokensByDevice,
   deleteTrustedTwoFactorTokensByUserId as deleteStoredTrustedTokensByUserId,
   getDevice as findStoredDevice,
+  getDevicePushUuid as findStoredDevicePushUuid,
   getDevicesByUserId as listStoredDevicesByUserId,
   getTrustedDeviceTokenSummariesByUserId as listStoredTrustedTokenSummaries,
   getTrustedTwoFactorDeviceTokenUserId as findStoredTrustedTokenUserId,
   isKnownDevice as getKnownStoredDevice,
   isKnownDeviceByEmail as getKnownStoredDeviceByEmail,
   saveTrustedTwoFactorDeviceToken as saveStoredTrustedDeviceToken,
+  rotateDeviceSessionStamp as rotateStoredDeviceSessionStamp,
   touchDeviceLastSeen as touchStoredDeviceLastSeen,
   upsertDevice as saveStoredDevice,
   updateDeviceName as updateStoredDeviceName,
   updateDeviceKeys as updateStoredDeviceKeys,
+  updateDevicePushToken as updateStoredDevicePushToken,
+  updateTrustedTwoFactorTokensExpiryByDevice as updateStoredTrustedTokensExpiryByDevice,
+  userHasPushDevice as getUserHasPushDevice,
 } from './storage-device-repo';
+import {
+  createAuthRequest as createStoredAuthRequest,
+  getAuthRequestById as findStoredAuthRequestById,
+  getAuthRequestByIdForUser as findStoredAuthRequestByIdForUser,
+  listAuthRequestsByUserId as listStoredAuthRequestsByUserId,
+  listPendingAuthRequestsByUserId as listStoredPendingAuthRequestsByUserId,
+  markAuthRequestAuthenticated as markStoredAuthRequestAuthenticated,
+  pruneExpiredAuthRequests as pruneStoredExpiredAuthRequests,
+  updateAuthRequestResponse as updateStoredAuthRequestResponse,
+} from './storage-auth-request-repo';
 import {
   ensureUsedAttachmentDownloadTokenTable as ensureStoredAttachmentTokenTable,
   consumeAttachmentDownloadToken as consumeStoredAttachmentDownloadToken,
 } from './storage-attachment-token-repo';
 import {
+  consumeTotpLoginCounter as consumeStoredTotpLoginCounter,
+} from './storage-totp-replay-repo';
+import {
   getRevisionDate as getStoredRevisionDate,
   updateRevisionDate as updateStoredRevisionDate,
 } from './storage-revision-repo';
+import {
+  getUserDomainSettings as getStoredUserDomainSettings,
+  saveUserDomainSettings as saveStoredUserDomainSettings,
+} from './storage-domain-rules-repo';
+import {
+  consumeAccountPasskeyChallenge as consumeStoredAccountPasskeyChallenge,
+  countAccountPasskeyCredentialsByUserId as countStoredAccountPasskeyCredentialsByUserId,
+  deleteAccountPasskeyCredential as deleteStoredAccountPasskeyCredential,
+  getAccountPasskeyCredentialByCredentialId as findStoredAccountPasskeyCredentialByCredentialId,
+  getAccountPasskeyCredentialById as findStoredAccountPasskeyCredentialById,
+  listAccountPasskeyCredentialsByUserId as listStoredAccountPasskeyCredentialsByUserId,
+  saveAccountPasskeyChallenge as saveStoredAccountPasskeyChallenge,
+  saveAccountPasskeyCredential as saveStoredAccountPasskeyCredential,
+  updateAccountPasskeyCounter as updateStoredAccountPasskeyCounter,
+  updateAccountPasskeyEncryption as updateStoredAccountPasskeyEncryption,
+} from './storage-account-passkey-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
-const STORAGE_SCHEMA_VERSION = '2026-04-28';
+// IMPORTANT:
+// Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
+// changes. Existing D1 installs only rerun ensureStorageSchema() when this value
+// differs from config.schema.version.
+const STORAGE_SCHEMA_VERSION = '2026-07-13-refresh-session-reuse';
+const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays'] as const;
 
 // D1-backed storage.
 // Contract:
@@ -121,10 +178,13 @@ export class StorageService {
   private static schemaVerified = false;
   private static lastRefreshTokenCleanupAt = 0;
   private static lastAttachmentTokenCleanupAt = 0;
+  private static lastTotpReplayCleanupAt = 0;
   private static readonly MAX_D1_SQL_VARIABLES = 100;
 
   private static readonly REFRESH_TOKEN_CLEANUP_INTERVAL_MS = LIMITS.cleanup.refreshTokenCleanupIntervalMs;
   private static readonly ATTACHMENT_TOKEN_CLEANUP_INTERVAL_MS = LIMITS.cleanup.attachmentTokenCleanupIntervalMs;
+  private static readonly TOTP_REPLAY_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+  private static readonly TOTP_REPLAY_MARKER_TTL_MS = 5 * 60 * 1000;
   private static readonly PERIODIC_CLEANUP_PROBABILITY = LIMITS.cleanup.cleanupProbability;
 
   constructor(private db: D1Database) {}
@@ -139,10 +199,25 @@ export class StorageService {
     return stmt.bind(...values.map(v => v === undefined ? null : v));
   }
 
-  private sqlChunkSize(fixedBindCount: number): number {
+  private async hasRequiredSchemaTables(): Promise<boolean> {
+    const placeholders = REQUIRED_SCHEMA_TABLES.map(() => '?').join(', ');
+    const result = await this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
+      .bind(...REQUIRED_SCHEMA_TABLES)
+      .all<{ name: string }>();
+    const found = new Set((result.results || []).map((row) => row.name));
+    return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
+  }
+
+  private sqlChunkSize(fixedBindCount: number, bindCountPerItem = 1): number {
+    const safeFixedBindCount = Math.max(0, Math.floor(fixedBindCount));
+    const safeBindCountPerItem = Math.max(1, Math.floor(bindCountPerItem));
     return Math.max(
       1,
-      Math.min(LIMITS.performance.bulkMoveChunkSize, StorageService.MAX_D1_SQL_VARIABLES - fixedBindCount)
+      Math.min(
+        LIMITS.performance.bulkMoveChunkSize,
+        Math.floor((StorageService.MAX_D1_SQL_VARIABLES - safeFixedBindCount) / safeBindCountPerItem)
+      )
     );
   }
 
@@ -182,10 +257,14 @@ export class StorageService {
 
     await this.db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)').run();
     const schemaVersion = await getStoredConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY);
-    if (schemaVersion !== STORAGE_SCHEMA_VERSION) {
+    const schemaMissingRequiredTables = schemaVersion === STORAGE_SCHEMA_VERSION
+      ? !(await this.hasRequiredSchemaTables())
+      : true;
+    if (schemaVersion !== STORAGE_SCHEMA_VERSION || schemaMissingRequiredTables) {
       await ensureStorageSchema(this.db);
       await saveConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);
     }
+    await ensurePushInstallationCredentials(this.db);
 
     StorageService.schemaVerified = true;
   }
@@ -258,8 +337,20 @@ export class StorageService {
     return markStoredInviteUsed(this.db, code, userId);
   }
 
-  async revokeInvite(code: string): Promise<boolean> {
-    return revokeStoredInvite(this.db, code);
+  async assignInviteUsedBy(code: string, userId: string): Promise<boolean> {
+    return assignStoredInviteUsedBy(this.db, code, userId);
+  }
+
+  async revertInviteUsed(code: string, userId: string): Promise<boolean> {
+    return revertStoredInviteUsed(this.db, code, userId);
+  }
+
+  async deleteInvite(code: string): Promise<boolean> {
+    return deleteStoredInvite(this.db, code);
+  }
+
+  async deleteInvalidInvites(): Promise<number> {
+    return deleteStoredInvalidInvites(this.db);
   }
 
   async deleteAllInvites(): Promise<number> {
@@ -270,10 +361,130 @@ export class StorageService {
     await createStoredAuditLog(this.db, log);
   }
 
+  async listAuditLogs(options: AuditLogListOptions): Promise<{ logs: AuditLog[]; total: number; hasMore: boolean }> {
+    return listStoredAuditLogs(this.db, options);
+  }
+
+  async pruneAuditLogs(beforeIso: string): Promise<number> {
+    return pruneStoredAuditLogs(this.db, beforeIso);
+  }
+
+  async pruneAuditLogsToMax(maxEntries: number): Promise<number> {
+    return pruneStoredAuditLogsToMax(this.db, maxEntries);
+  }
+
+  async clearAuditLogs(): Promise<number> {
+    return clearStoredAuditLogs(this.db);
+  }
+
+  // --- Domain rules ---
+
+  async getUserDomainSettings(userId: string) {
+    return getStoredUserDomainSettings(this.db, userId);
+  }
+
+  async saveUserDomainSettings(
+    userId: string,
+    equivalentDomains: string[][],
+    customEquivalentDomains: CustomEquivalentDomain[],
+    excludedGlobalEquivalentDomains: number[]
+  ): Promise<void> {
+    await saveStoredUserDomainSettings(
+      this.db,
+      userId,
+      equivalentDomains,
+      customEquivalentDomains,
+      excludedGlobalEquivalentDomains,
+      new Date().toISOString()
+    );
+    await this.updateRevisionDate(userId);
+  }
+
+  // --- Account passkeys / WebAuthn login credentials ---
+
+  async saveAccountPasskeyCredential(credential: AccountPasskeyCredential): Promise<void> {
+    await saveStoredAccountPasskeyCredential(this.db, this.safeBind.bind(this), credential);
+  }
+
+  async getAccountPasskeyCredentialsByUserId(
+    userId: string,
+    purpose: AccountPasskeyCredential['purpose'] = 'login'
+  ): Promise<AccountPasskeyCredential[]> {
+    return listStoredAccountPasskeyCredentialsByUserId(this.db, userId, purpose);
+  }
+
+  async getAccountPasskeyCredentialById(userId: string, id: string): Promise<AccountPasskeyCredential | null> {
+    return findStoredAccountPasskeyCredentialById(this.db, userId, id);
+  }
+
+  async getAccountPasskeyCredentialByCredentialId(credentialId: string): Promise<AccountPasskeyCredential | null> {
+    return findStoredAccountPasskeyCredentialByCredentialId(this.db, credentialId);
+  }
+
+  async countAccountPasskeyCredentialsByUserId(
+    userId: string,
+    purpose: AccountPasskeyCredential['purpose'] = 'login'
+  ): Promise<number> {
+    return countStoredAccountPasskeyCredentialsByUserId(this.db, userId, purpose);
+  }
+
+  async updateAccountPasskeyCounter(
+    userId: string,
+    credentialId: string,
+    counter: number,
+    updatedAt: string = new Date().toISOString()
+  ): Promise<void> {
+    await updateStoredAccountPasskeyCounter(this.db, userId, credentialId, counter, updatedAt);
+  }
+
+  async updateAccountPasskeyEncryption(
+    userId: string,
+    credentialId: string,
+    encryptedUserKey: string,
+    encryptedPublicKey: string,
+    encryptedPrivateKey: string,
+    updatedAt: string = new Date().toISOString()
+  ): Promise<boolean> {
+    return updateStoredAccountPasskeyEncryption(
+      this.db,
+      userId,
+      credentialId,
+      encryptedUserKey,
+      encryptedPublicKey,
+      encryptedPrivateKey,
+      updatedAt
+    );
+  }
+
+  async deleteAccountPasskeyCredential(
+    userId: string,
+    id: string,
+    purpose: AccountPasskeyCredential['purpose'] = 'login'
+  ): Promise<boolean> {
+    return deleteStoredAccountPasskeyCredential(this.db, userId, id, purpose);
+  }
+
+  async saveAccountPasskeyChallenge(challenge: AccountPasskeyChallenge): Promise<void> {
+    await saveStoredAccountPasskeyChallenge(this.db, challenge);
+  }
+
+  async consumeAccountPasskeyChallenge(
+    challengeHash: string,
+    scope: AccountPasskeyChallengeScope,
+    userId: string | null,
+    nowMs: number = Date.now()
+  ): Promise<AccountPasskeyChallenge | null> {
+    return consumeStoredAccountPasskeyChallenge(this.db, challengeHash, scope, userId, nowMs);
+  }
+
   // --- Ciphers ---
 
   async getCipher(id: string): Promise<Cipher | null> {
     return findStoredCipher(this.db, id);
+  }
+
+  async getCipherForUser(id: string, userId: string): Promise<Cipher | null> {
+    return findStoredCipherForUser(this.db, id, userId);
   }
 
   async saveCipher(cipher: Cipher): Promise<void> {
@@ -326,6 +537,10 @@ export class StorageService {
     return findStoredFolder(this.db, id);
   }
 
+  async getFolderForUser(id: string, userId: string): Promise<Folder | null> {
+    return findStoredFolderForUser(this.db, id, userId);
+  }
+
   async saveFolder(folder: Folder): Promise<void> {
     await saveStoredFolder(this.db, folder);
   }
@@ -364,12 +579,20 @@ export class StorageService {
     return findStoredAttachment(this.db, id);
   }
 
+  async getAttachmentForUser(id: string, userId: string): Promise<Attachment | null> {
+    return findStoredAttachmentForUser(this.db, id, userId);
+  }
+
   async saveAttachment(attachment: Attachment): Promise<void> {
     await saveStoredAttachment(this.db, this.safeBind.bind(this), attachment);
   }
 
   async deleteAttachment(id: string): Promise<void> {
     await deleteStoredAttachment(this.db, id);
+  }
+
+  async deleteAttachmentForUser(id: string, userId: string): Promise<void> {
+    await deleteStoredAttachmentForUser(this.db, id, userId);
   }
 
   async bulkDeleteAttachmentsByIds(ids: string[]): Promise<void> {
@@ -392,6 +615,10 @@ export class StorageService {
     await attachStoredAttachmentToCipher(this.db, cipherId, attachmentId);
   }
 
+  async addAttachmentToCipherForUser(cipherId: string, attachmentId: string, userId: string): Promise<void> {
+    await attachStoredAttachmentToCipherForUser(this.db, cipherId, attachmentId, userId);
+  }
+
   async deleteAllAttachmentsByCipher(cipherId: string): Promise<void> {
     await deleteStoredAttachmentsByCipher(this.db, cipherId);
   }
@@ -412,9 +639,13 @@ export class StorageService {
     userId: string,
     expiresAtMs?: number,
     deviceIdentifier?: string | null,
-    deviceSessionStamp?: string | null
+    deviceSessionStamp?: string | null,
+    securityStamp?: string | null,
+    clientType?: string | null,
+    absoluteExpiresAtMs?: number | null
   ): Promise<void> {
-    const expiresAt = expiresAtMs ?? (Date.now() + LIMITS.auth.refreshTokenTtlMs);
+    const now = Date.now();
+    const expiresAt = expiresAtMs ?? (now + LIMITS.auth.refreshTokenDefaultSlidingTtlMs);
     await saveStoredRefreshToken(
       this.db,
       this.refreshTokenKey.bind(this),
@@ -423,7 +654,10 @@ export class StorageService {
       userId,
       expiresAt,
       deviceIdentifier,
-      deviceSessionStamp
+      deviceSessionStamp,
+      securityStamp,
+      clientType,
+      absoluteExpiresAtMs ?? (now + LIMITS.auth.refreshTokenAbsoluteTtlMs)
     );
   }
 
@@ -432,7 +666,6 @@ export class StorageService {
       this.db,
       this.refreshTokenKey.bind(this),
       this.maybeCleanupExpiredRefreshTokens.bind(this),
-      this.saveRefreshToken.bind(this),
       this.deleteRefreshToken.bind(this),
       token
     );
@@ -451,6 +684,10 @@ export class StorageService {
 
   async getSend(id: string): Promise<Send | null> {
     return findStoredSend(this.db, id);
+  }
+
+  async getSendForUser(id: string, userId: string): Promise<Send | null> {
+    return findStoredSendForUser(this.db, id, userId);
   }
 
   async saveSend(send: Send): Promise<void> {
@@ -494,11 +731,16 @@ export class StorageService {
     return deleteStoredRefreshTokensByDevice(this.db, userId, deviceIdentifier);
   }
 
-  // Keep a short overlap window for rotated refresh token to reduce
-  // multi-context refresh races (e.g. browser extension popup/background).
-  // Expiry is only tightened, never extended.
-  async constrainRefreshTokenExpiry(token: string, maxExpiresAtMs: number): Promise<void> {
-    await constrainStoredRefreshTokenExpiry(this.db, this.refreshTokenKey.bind(this), token, maxExpiresAtMs);
+  async extendRefreshTokenExpiry(token: string, requestedExpiresAtMs: number, nowMs: number = Date.now()): Promise<boolean> {
+    return extendStoredRefreshTokenExpiry(this.db, this.refreshTokenKey.bind(this), token, requestedExpiresAtMs, nowMs);
+  }
+
+  async bindRefreshTokenSecurityStamp(token: string, securityStamp: string): Promise<void> {
+    await bindStoredRefreshTokenSecurityStamp(this.db, this.refreshTokenKey.bind(this), token, securityStamp);
+  }
+
+  async bindRefreshTokenDeviceStamp(token: string, deviceSessionStamp: string): Promise<void> {
+    await bindStoredRefreshTokenDeviceStamp(this.db, this.refreshTokenKey.bind(this), token, deviceSessionStamp);
   }
 
   private async trustedTwoFactorTokenKey(token: string): Promise<string> {
@@ -539,6 +781,10 @@ export class StorageService {
     return findStoredDevice(this.db, userId, deviceIdentifier);
   }
 
+  async rotateDeviceSessionStamp(userId: string, deviceIdentifier: string, sessionStamp: string): Promise<boolean> {
+    return rotateStoredDeviceSessionStamp(this.db, userId, deviceIdentifier, sessionStamp);
+  }
+
   async updateDeviceKeys(
     userId: string,
     deviceIdentifier: string,
@@ -559,6 +805,27 @@ export class StorageService {
     return touchStoredDeviceLastSeen(this.db, userId, deviceIdentifier);
   }
 
+  async updateDevicePushToken(
+    userId: string,
+    deviceIdentifier: string,
+    pushUuid: string,
+    pushToken: string
+  ): Promise<boolean> {
+    return updateStoredDevicePushToken(this.db, userId, deviceIdentifier, pushUuid, pushToken);
+  }
+
+  async clearDevicePushToken(userId: string, deviceIdentifier: string): Promise<{ pushUuid: string | null } | null> {
+    return clearStoredDevicePushToken(this.db, userId, deviceIdentifier);
+  }
+
+  async getDevicePushUuid(userId: string, deviceIdentifier: string): Promise<string | null> {
+    return findStoredDevicePushUuid(this.db, userId, deviceIdentifier);
+  }
+
+  async userHasPushDevice(userId: string): Promise<boolean> {
+    return getUserHasPushDevice(this.db, userId);
+  }
+
   async clearDeviceKeys(userId: string, deviceIdentifiers: string[]): Promise<number> {
     return clearStoredDeviceKeys(this.db, userId, deviceIdentifiers);
   }
@@ -571,6 +838,49 @@ export class StorageService {
     return deleteStoredDevicesByUserId(this.db, userId);
   }
 
+  // --- Auth requests / Login with device ---
+
+  async createAuthRequest(request: AuthRequestRecord): Promise<void> {
+    await createStoredAuthRequest(this.db, request);
+  }
+
+  async getAuthRequestById(id: string): Promise<AuthRequestRecord | null> {
+    return findStoredAuthRequestById(this.db, id);
+  }
+
+  async getAuthRequestByIdForUser(id: string, userId: string): Promise<AuthRequestRecord | null> {
+    return findStoredAuthRequestByIdForUser(this.db, id, userId);
+  }
+
+  async listAuthRequestsByUserId(userId: string): Promise<AuthRequestRecord[]> {
+    return listStoredAuthRequestsByUserId(this.db, userId);
+  }
+
+  async listPendingAuthRequestsByUserId(userId: string): Promise<AuthRequestRecord[]> {
+    return listStoredPendingAuthRequestsByUserId(this.db, userId);
+  }
+
+  async updateAuthRequestResponse(
+    id: string,
+    userId: string,
+    update: {
+      approved: boolean;
+      responseDeviceIdentifier: string;
+      key?: string | null;
+      masterPasswordHash?: string | null;
+    }
+  ): Promise<boolean> {
+    return updateStoredAuthRequestResponse(this.db, id, userId, update);
+  }
+
+  async markAuthRequestAuthenticated(id: string): Promise<boolean> {
+    return markStoredAuthRequestAuthenticated(this.db, id);
+  }
+
+  async pruneExpiredAuthRequests(): Promise<number> {
+    return pruneStoredExpiredAuthRequests(this.db);
+  }
+
   async getTrustedDeviceTokenSummariesByUserId(userId: string): Promise<TrustedDeviceTokenSummary[]> {
     return listStoredTrustedTokenSummaries(this.db, userId);
   }
@@ -581,6 +891,10 @@ export class StorageService {
 
   async deleteTrustedTwoFactorTokensByUserId(userId: string): Promise<number> {
     return deleteStoredTrustedTokensByUserId(this.db, userId);
+  }
+
+  async updateTrustedTwoFactorTokensExpiryByDevice(userId: string, deviceIdentifier: string, expiresAtMs: number): Promise<number> {
+    return updateStoredTrustedTokensExpiryByDevice(this.db, userId, deviceIdentifier, expiresAtMs);
   }
 
   // --- Trusted 2FA remember tokens (device-bound) ---
@@ -597,6 +911,24 @@ export class StorageService {
 
   async getTrustedTwoFactorDeviceTokenUserId(token: string, deviceIdentifier: string): Promise<string | null> {
     return findStoredTrustedTokenUserId(this.db, this.trustedTwoFactorTokenKey.bind(this), token, deviceIdentifier);
+  }
+
+  async consumeTotpLoginCounter(userId: string, timeCounter: number, consumedAtMs: number = Date.now()): Promise<boolean> {
+    if (!Number.isSafeInteger(timeCounter) || timeCounter < 0) return false;
+    const result = await consumeStoredTotpLoginCounter(
+      this.db,
+      this.shouldRunPeriodicCleanup.bind(this),
+      StorageService.lastTotpReplayCleanupAt,
+      StorageService.TOTP_REPLAY_CLEANUP_INTERVAL_MS,
+      userId,
+      timeCounter,
+      consumedAtMs,
+      StorageService.TOTP_REPLAY_MARKER_TTL_MS
+    );
+    if (result.cleanedUpAt !== null) {
+      StorageService.lastTotpReplayCleanupAt = result.cleanedUpAt;
+    }
+    return result.consumed;
   }
 
   // --- Revision dates ---

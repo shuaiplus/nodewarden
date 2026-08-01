@@ -1,4 +1,5 @@
 import type { Device, TrustedDeviceTokenSummary, User } from '../types';
+import { generateUUID } from '../utils/uuid';
 
 type GetUserByEmail = (email: string) => Promise<User | null>;
 type TrustedTokenKeyFn = (token: string) => Promise<string>;
@@ -14,6 +15,8 @@ function mapDeviceRow(row: any): Device {
     encryptedUserKey: row.encrypted_user_key ?? null,
     encryptedPublicKey: row.encrypted_public_key ?? null,
     encryptedPrivateKey: row.encrypted_private_key ?? null,
+    pushUuid: row.push_uuid ?? null,
+    pushToken: row.push_token ?? null,
     lastSeenAt: row.last_seen_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -38,13 +41,16 @@ export async function upsertDevice(
   const existingDevice = await getDeviceById(userId, deviceIdentifier);
   const effectiveSessionStamp = String(sessionStamp || '').trim() || existingDevice?.sessionStamp || '';
   const effectiveName = String(name || '').trim() || String(existingDevice?.name || '').trim();
+  const effectivePushUuid = String(existingDevice?.pushUuid || '').trim() || generateUUID();
   await db
     .prepare(
-      'INSERT INTO devices(user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?) ' +
-        'ON CONFLICT(user_id, device_identifier) DO UPDATE SET name=excluded.name, type=excluded.type, session_stamp=excluded.session_stamp, ' +
+      'INSERT INTO devices(user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, push_uuid, banned, banned_at, device_note, last_seen_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?) ' +
+        'ON CONFLICT(user_id, device_identifier) DO UPDATE SET name=excluded.name, type=excluded.type, ' +
+        'session_stamp=CASE WHEN devices.session_stamp IS NULL OR devices.session_stamp = ? THEN excluded.session_stamp ELSE devices.session_stamp END, ' +
         'encrypted_user_key=COALESCE(excluded.encrypted_user_key, encrypted_user_key), ' +
         'encrypted_public_key=COALESCE(excluded.encrypted_public_key, encrypted_public_key), ' +
         'encrypted_private_key=COALESCE(excluded.encrypted_private_key, encrypted_private_key), ' +
+        'push_uuid=COALESCE(push_uuid, excluded.push_uuid), ' +
         'last_seen_at=excluded.last_seen_at, ' +
         'updated_at=excluded.updated_at'
     )
@@ -57,10 +63,12 @@ export async function upsertDevice(
       keys?.encryptedUserKey ?? null,
       keys?.encryptedPublicKey ?? null,
       keys?.encryptedPrivateKey ?? null,
+      effectivePushUuid,
       existingDevice?.deviceNote ?? null,
       now,
       now,
-      now
+      now,
+      ''
     )
     .run();
 }
@@ -87,6 +95,20 @@ export async function touchDeviceLastSeen(
   const result = await db
     .prepare('UPDATE devices SET last_seen_at = ? WHERE user_id = ? AND device_identifier = ?')
     .bind(now, userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+export async function rotateDeviceSessionStamp(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  sessionStamp: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db
+    .prepare('UPDATE devices SET session_stamp = ?, updated_at = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(sessionStamp, now, userId, deviceIdentifier)
     .run();
   return Number(result.meta.changes ?? 0) > 0;
 }
@@ -166,7 +188,7 @@ export async function isKnownDeviceByEmail(
 export async function getDevicesByUserId(db: D1Database, userId: string): Promise<Device[]> {
   const res = await db
     .prepare(
-      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
+      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, push_uuid, push_token, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
         'FROM devices WHERE user_id = ? ORDER BY COALESCE(last_seen_at, created_at) DESC, updated_at DESC'
     )
     .bind(userId)
@@ -177,12 +199,69 @@ export async function getDevicesByUserId(db: D1Database, userId: string): Promis
 export async function getDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<Device | null> {
   const row = await db
     .prepare(
-      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
+      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, push_uuid, push_token, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
         'FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1'
     )
     .bind(userId, deviceIdentifier)
     .first<any>();
   return row ? mapDeviceRow(row) : null;
+}
+
+export async function updateDevicePushToken(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  pushUuid: string,
+  pushToken: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db
+    .prepare(
+      'UPDATE devices SET push_uuid = ?, push_token = ?, updated_at = ? ' +
+        'WHERE user_id = ? AND device_identifier = ?'
+    )
+    .bind(pushUuid, pushToken, now, userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+export async function clearDevicePushToken(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string
+): Promise<{ pushUuid: string | null } | null> {
+  const existing = await db
+    .prepare('SELECT push_uuid FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1')
+    .bind(userId, deviceIdentifier)
+    .first<{ push_uuid: string | null }>();
+  if (!existing) return null;
+
+  await db
+    .prepare('UPDATE devices SET push_token = NULL, updated_at = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(new Date().toISOString(), userId, deviceIdentifier)
+    .run();
+
+  return { pushUuid: existing.push_uuid ?? null };
+}
+
+export async function getDevicePushUuid(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string
+): Promise<string | null> {
+  const row = await db
+    .prepare('SELECT push_uuid FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1')
+    .bind(userId, deviceIdentifier)
+    .first<{ push_uuid: string | null }>();
+  return row?.push_uuid ?? null;
+}
+
+export async function userHasPushDevice(db: D1Database, userId: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 FROM devices WHERE user_id = ? AND push_token IS NOT NULL AND push_token <> ? LIMIT 1')
+    .bind(userId, '')
+    .first<{ '1': number }>();
+  return !!row;
 }
 
 export async function deleteDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<boolean> {
@@ -229,6 +308,21 @@ export async function deleteTrustedTwoFactorTokensByUserId(db: D1Database, userI
   const result = await db
     .prepare('DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ?')
     .bind(userId)
+    .run();
+  return Number(result.meta.changes ?? 0);
+}
+
+export async function updateTrustedTwoFactorTokensExpiryByDevice(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  expiresAtMs: number
+): Promise<number> {
+  const now = Date.now();
+  await db.prepare('DELETE FROM trusted_two_factor_device_tokens WHERE expires_at < ?').bind(now).run();
+  const result = await db
+    .prepare('UPDATE trusted_two_factor_device_tokens SET expires_at = ? WHERE user_id = ? AND device_identifier = ? AND expires_at >= ?')
+    .bind(expiresAtMs, userId, deviceIdentifier, now)
     .run();
   return Number(result.meta.changes ?? 0);
 }

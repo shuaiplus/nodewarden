@@ -1,4 +1,4 @@
-import { DEFAULT_DEV_SECRET, Env } from './types';
+import { Env } from './types';
 import { AuthService } from './services/auth';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
 import { handleCors, errorResponse } from './utils/response';
@@ -6,12 +6,23 @@ import { LIMITS } from './config/limits';
 import { handleAuthenticatedRoute } from './router-authenticated';
 import { handlePublicRoute } from './router-public';
 
-function jwtSecretUnsafeReason(env: Env): 'missing' | 'default' | 'too_short' | null {
+function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
   const secret = (env.JWT_SECRET || '').trim();
   if (!secret) return 'missing';
-  if (secret === DEFAULT_DEV_SECRET) return 'default';
   if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
   return null;
+}
+
+function canServeWithUnsafeJwtSecret(path: string, method: string): boolean {
+  if (method === 'OPTIONS') return true;
+  if (method === 'GET' && (path === '/api/web-bootstrap' || path === '/web-bootstrap')) return true;
+  if (method === 'GET' && (path === '/config' || path === '/api/config' || path === '/api/version')) return true;
+  if (method === 'GET' && path === '/.well-known/appspecific/com.chrome.devtools.json') return true;
+  if (method === 'GET' && path === '/fill-assist/manifest.json') return true;
+  if (method === 'GET' && /^\/fill-assist\/[^/]+$/i.test(path)) return true;
+  if (method === 'GET' && (path === '/v1/assetlinks:check' || path === '/api/v1/assetlinks:check')) return true;
+  if (method === 'GET' && /^\/icons\/[^/]+\/icon\.png$/i.test(path)) return true;
+  return false;
 }
 
 function isImportBypassRequest(request: Request, path: string, method: string): boolean {
@@ -24,6 +35,70 @@ function isImportBypassRequest(request: Request, path: string, method: string): 
   }
 
   return false;
+}
+
+const BODY_LIMIT_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function isLargeUploadPath(path: string): boolean {
+  return (
+    /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path) ||
+    /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path) ||
+    path === '/api/admin/backup/import'
+  );
+}
+
+async function enforceRequestBodyLimit(
+  request: Request,
+  path: string,
+  method: string
+): Promise<Request | Response> {
+  if (!BODY_LIMIT_METHODS.has(method) || isLargeUploadPath(path) || !request.body) {
+    return request;
+  }
+
+  const contentLengthRaw = request.headers.get('Content-Length');
+  if (contentLengthRaw) {
+    const contentLength = Number(contentLengthRaw);
+    if (Number.isFinite(contentLength) && contentLength > LIMITS.request.maxBodyBytes) {
+      return errorResponse('Request body too large', 413);
+    }
+    if (Number.isFinite(contentLength) && contentLength >= 0) {
+      return request;
+    }
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > LIMITS.request.maxBodyBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Ignore cancellation races after the oversized body is rejected.
+      }
+      return errorResponse('Request body too large', 413);
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body,
+    redirect: request.redirect,
+  });
 }
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -50,7 +125,10 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     }
 
     const rateLimit = new RateLimitService(env.DB);
-    const check = await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
+    const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
+    const check = shouldUseStrictBudget
+      ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)
+      : await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
     if (check.allowed) return null;
 
     return new Response(
@@ -70,28 +148,23 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   }
 
   if (method === 'OPTIONS') {
-    return handleCors(request);
+    return handleCors(request, env);
   }
 
   try {
-    const isLargeUploadPath =
-      /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path) ||
-      /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path) ||
-      path === '/api/admin/backup/import';
-    if (!isLargeUploadPath) {
-      const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
-      if (contentLength > LIMITS.request.maxBodyBytes) {
-        return errorResponse('Request body too large', 413);
-      }
+    const bodyLimitResult = await enforceRequestBodyLimit(request, path, method);
+    if (bodyLimitResult instanceof Response) {
+      return bodyLimitResult;
+    }
+    request = bodyLimitResult;
+
+    const secretIssue = jwtSecretUnsafeReason(env);
+    if (secretIssue && !canServeWithUnsafeJwtSecret(path, method)) {
+      return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
     }
 
     const publicResponse = await handlePublicRoute(request, env, path, method, enforcePublicRateLimit);
     if (publicResponse) return publicResponse;
-
-    const secretIssue = jwtSecretUnsafeReason(env);
-    if (secretIssue) {
-      return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
-    }
 
     const auth = new AuthService(env);
     const authHeader = request.headers.get('Authorization');

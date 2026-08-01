@@ -3,12 +3,14 @@
     // Access token lifetime in seconds.
     // 访问令牌有效期（秒）。
     accessTokenTtlSeconds: 7200,
-    // Refresh token lifetime in milliseconds.
-    // 刷新令牌有效期（毫秒）。
-    refreshTokenTtlMs: 30 * 24 * 60 * 60 * 1000,
-    // Grace window for previous refresh token after rotation (ms).
-    // 刷新令牌轮换后的旧令牌宽限窗口（毫秒）。
-    refreshTokenOverlapGraceMs: 60 * 1000,
+    // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
+    // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
+    refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+    refreshTokenDefaultSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
+    refreshTokenMobileSlidingTtlMs: 90 * 24 * 60 * 60 * 1000,
+    // Hard upper bound for one login session, regardless of sliding refreshes.
+    // 单次登录会话的绝对最长寿命，不因滑动续期突破该上限。
+    refreshTokenAbsoluteTtlMs: 365 * 24 * 60 * 60 * 1000,
     // Refresh token random byte length.
     // 刷新令牌随机字节长度。
     refreshTokenRandomBytes: 32,
@@ -44,6 +46,9 @@
     // Public read-only request budget per IP per minute.
     // 公开只读接口每 IP 每分钟请求配额。
     publicReadRequestsPerMinute: 120,
+    // Public website icon proxy budget per IP per minute.
+    // 公开网站图标代理每 IP 每分钟请求配额。
+    publicIconRequestsPerMinute: 500,
     // Sensitive public/auth request budget per IP per minute.
     // 敏感公开/认证接口每 IP 每分钟请求配额。
     sensitivePublicRequestsPerMinute: 30,
@@ -59,6 +64,12 @@
     // Refresh-token grant budget per IP per minute.
     // refresh_token 授权每 IP 每分钟请求配额。
     refreshTokenRequestsPerMinute: 30,
+    // Coarser IP budget; the per-session budget above remains the primary guard.
+    // 更宽松的 IP 总预算；主要保护仍由每个 refresh session 的预算承担。
+    refreshTokenRequestsPerIpMinute: 300,
+    // Passwordless/auth-request creation budget per IP/email/device per minute.
+    // 免密/设备审批请求创建接口每 IP/邮箱/设备每分钟配额。
+    authRequestRequestsPerMinute: 5,
     // Fixed window size for API rate limiting in seconds.
     // API 限流固定窗口大小（秒）。
     apiWindowSeconds: 60,
@@ -145,6 +156,20 @@
   compatibility: {
     // Single source of truth for /config.version and /api/version.
     // /config.version 与 /api/version 的统一版本号来源。
-    bitwardenServerVersion: '2026.1.0',
+    // Vaultwarden 1.37.0 advertises 2026.6.0 after aligning its API response
+    // with the response contract required by Bitwarden 2026.7.x clients.
+    bitwardenServerVersion: '2026.6.0',
+    // Official 2026.4.x clients need this flag to receive and use cipher.key.
+    // Hiding existing item keys makes item-key encrypted vault data unreadable.
+    // 官方 2026.4.x 客户端需要该开关来接收并使用 cipher.key。
+    // 隐藏已有逐项密钥会导致逐项密钥加密的密码库数据无法解密。
+    cipherKeyEncryptionFeatureEnabled: true,
   },
 } as const;
+
+export function getRefreshTokenSlidingTtlMs(clientType?: string | null): number {
+  const normalized = String(clientType || '').trim().toLowerCase();
+  if (normalized === 'web') return LIMITS.auth.refreshTokenWebSlidingTtlMs;
+  if (normalized === 'mobile') return LIMITS.auth.refreshTokenMobileSlidingTtlMs;
+  return LIMITS.auth.refreshTokenDefaultSlidingTtlMs;
+}

@@ -5,7 +5,7 @@ import StandalonePageFrame from '@/components/StandalonePageFrame';
 import { t } from '@/lib/i18n';
 
 interface JwtWarningPageProps {
-  reason: 'missing' | 'default' | 'too_short';
+  reason: 'missing' | 'too_short';
   minLength: number;
 }
 
@@ -21,9 +21,7 @@ export default function JwtWarningPage(props: JwtWarningPageProps) {
   const title =
     props.reason === 'missing'
       ? t('txt_jwt_title_missing')
-      : props.reason === 'default'
-        ? t('txt_jwt_title_default')
-        : t('txt_jwt_title_too_short');
+      : t('txt_jwt_title_too_short');
 
   const isMissing = props.reason === 'missing';
   const fixTitle = isMissing ? t('txt_jwt_how_to_fix_add') : t('txt_jwt_how_to_fix_replace');

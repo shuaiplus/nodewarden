@@ -19,11 +19,20 @@ export async function getFolder(db: D1Database, id: string): Promise<Folder | nu
   return mapFolderRow(row);
 }
 
+export async function getFolderForUser(db: D1Database, id: string, userId: string): Promise<Folder | null> {
+  const row = await db
+    .prepare('SELECT id, user_id, name, created_at, updated_at FROM folders WHERE id = ? AND user_id = ?')
+    .bind(id, userId)
+    .first<any>();
+  if (!row) return null;
+  return mapFolderRow(row);
+}
+
 export async function saveFolder(db: D1Database, folder: Folder): Promise<void> {
   await db
     .prepare(
       'INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
-      'ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, name=excluded.name, updated_at=excluded.updated_at'
+      'ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at WHERE user_id=excluded.user_id'
     )
     .bind(folder.id, folder.userId, folder.name, folder.createdAt, folder.updatedAt)
     .run();
@@ -44,9 +53,14 @@ export async function clearFolderFromCiphers(
       `UPDATE ciphers
        SET folder_id = NULL, updated_at = ?,
            data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-       WHERE user_id = ? AND folder_id = ?`
+       WHERE user_id = ?
+         AND (
+           folder_id = ?
+           OR json_extract(data, '$.folderId') = ?
+           OR json_extract(data, '$.folder_id') = ?
+         )`
     )
-    .bind(now, userId, folderId)
+    .bind(now, userId, folderId, folderId, folderId)
     .run();
 }
 
@@ -54,33 +68,41 @@ export async function bulkDeleteFolders(
   db: D1Database,
   userId: string,
   ids: string[],
-  sqlChunkSize: (fixedBindCount: number) => number,
+  sqlChunkSize: (fixedBindCount: number, bindCountPerItem?: number) => number,
   updateRevisionDate: (userId: string) => Promise<string>
 ): Promise<string | null> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const chunkSize = sqlChunkSize(2);
+  // Each folder ID is bound in all three compatibility predicates below.
+  const chunkSize = sqlChunkSize(2, 3);
+  const statements: D1PreparedStatement[] = [];
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
-    await db
-      .prepare(
+    statements.push(
+      db.prepare(
         `UPDATE ciphers
          SET folder_id = NULL, updated_at = ?,
              data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ? AND folder_id IN (${placeholders})`
+         WHERE user_id = ?
+           AND (
+             folder_id IN (${placeholders})
+             OR json_extract(data, '$.folderId') IN (${placeholders})
+             OR json_extract(data, '$.folder_id') IN (${placeholders})
+           )`
       )
-      .bind(now, userId, ...chunk)
-      .run();
-
-    await db
-      .prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(userId, ...chunk)
-      .run();
+      .bind(now, userId, ...chunk, ...chunk, ...chunk)
+    );
+    statements.push(
+      db.prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
+        .bind(userId, ...chunk)
+    );
   }
+
+  await db.batch(statements);
 
   return updateRevisionDate(userId);
 }

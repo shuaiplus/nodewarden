@@ -19,6 +19,28 @@ const VAULT_CORE_STORE = 'vault-core';
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
+function stripDecryptedCacheFields<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripDecryptedCacheFields(item)) as T;
+  }
+  if (!value || typeof value !== 'object') return value;
+  const source = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(source)) {
+    if (/^dec[A-Z]/.test(key) || key === 'shareUrl') continue;
+    out[key] = stripDecryptedCacheFields(item);
+  }
+  return out as T;
+}
+
+function sanitizeSnapshotForCache(snapshot: VaultCoreSnapshot): VaultCoreSnapshot {
+  return {
+    ciphers: stripDecryptedCacheFields(Array.isArray(snapshot.ciphers) ? snapshot.ciphers : []),
+    folders: stripDecryptedCacheFields(Array.isArray(snapshot.folders) ? snapshot.folders : []),
+    sends: stripDecryptedCacheFields(Array.isArray(snapshot.sends) ? snapshot.sends : []),
+  };
+}
+
 function supportsIndexedDb(): boolean {
   return typeof indexedDB !== 'undefined';
 }
@@ -72,7 +94,7 @@ export async function loadCachedVaultCoreSnapshot(cacheKey: string): Promise<Vau
     const request = store.get(normalized);
     request.onsuccess = () => {
       const record = request.result as VaultCoreCacheRecord | undefined;
-      resolve(record || null);
+      resolve(record ? { ...record, snapshot: sanitizeSnapshotForCache(record.snapshot) } : null);
     };
     request.onerror = () => resolve(null);
   }));
@@ -90,7 +112,7 @@ export async function saveCachedVaultCoreSnapshot(
       cacheKey: normalized,
       revisionStamp,
       savedAt: Date.now(),
-      snapshot,
+      snapshot: sanitizeSnapshotForCache(snapshot),
     };
     const request = store.put(record);
     request.onsuccess = () => resolve();

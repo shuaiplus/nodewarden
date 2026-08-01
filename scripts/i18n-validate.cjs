@@ -1,5 +1,9 @@
 const { localeFiles, readLocale } = require('./i18n-utils.cjs');
 
+// CONTRACT:
+// This is the authoritative locale consistency gate. It checks key parity,
+// placeholder parity, and accidental mostly-English locale files. Run after any
+// user-facing text or locale-file change.
 const locales = Object.fromEntries(
   localeFiles.map(([locale, fileName, variableName]) => [locale, readLocale(fileName, variableName)])
 );
@@ -18,6 +22,17 @@ const intentionallyEnglishKeys = new Set([
   'txt_dash',
   'txt_text_3',
 ]);
+const intentionallyEnglishPrefixes = [
+  'txt_log_action_',
+  'txt_log_meta_',
+  'txt_log_reason_',
+  'txt_log_target_type_',
+  'txt_log_trigger_',
+];
+
+function isIntentionallyEnglishKey(key) {
+  return intentionallyEnglishKeys.has(key) || intentionallyEnglishPrefixes.some((prefix) => key.startsWith(prefix));
+}
 
 for (const [locale, table] of Object.entries(locales)) {
   const keys = Object.keys(table).sort();
@@ -36,7 +51,7 @@ for (const [locale, table] of Object.entries(locales)) {
   }
 
   if (locale !== 'en') {
-    const sameAsEnglish = baseKeys.filter((key) => table[key] === base[key] && !intentionallyEnglishKeys.has(key));
+    const sameAsEnglish = baseKeys.filter((key) => table[key] === base[key] && !isIntentionallyEnglishKey(key));
     if (sameAsEnglish.length > 40) {
       errors.push({
         locale,

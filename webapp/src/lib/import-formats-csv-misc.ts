@@ -198,6 +198,7 @@ export function parseEncryptrCsv(textRaw: string): CiphersImportPayload {
 export function parseKeePassXCsv(textRaw: string): CiphersImportPayload {
   const rows = parseCsv(textRaw);
   const result: CiphersImportPayload = { ciphers: [], folders: [], folderRelationships: [] };
+  const standardColumns = new Set(['Group', 'Title', 'Username', 'Password', 'URL', 'Notes', 'TOTP']);
   for (const row of rows) {
     if (!txt(row.Title)) continue;
     const cipher = makeLoginCipher();
@@ -209,8 +210,30 @@ export function parseKeePassXCsv(textRaw: string): CiphersImportPayload {
     login.totp = val(row.TOTP);
     const uri = normalizeUri(row.URL || '');
     login.uris = uri ? [{ uri, match: null }] : null;
+    for (const [key, value] of Object.entries(row)) {
+      if (standardColumns.has(key)) continue;
+      processKvp(cipher, key, value, false);
+    }
     const idx = result.ciphers.push(cipher) - 1;
     addFolder(result, txt(row.Group).replace(/^Root\//, ''), idx);
+  }
+  return result;
+}
+
+export function parseKeePassCsv(textRaw: string): CiphersImportPayload {
+  const rows = parseCsv(textRaw);
+  const result: CiphersImportPayload = { ciphers: [], folders: [], folderRelationships: [] };
+  for (const row of rows) {
+    if (!txt(row.Account)) continue;
+    const cipher = makeLoginCipher();
+    cipher.name = val(row.Account, '--');
+    cipher.notes = val(row.Comments);
+    const login = cipher.login as Record<string, unknown>;
+    login.username = val(row['Login Name']);
+    login.password = val(row.Password);
+    const uri = normalizeUri(row['Web Site'] || '');
+    login.uris = uri ? [{ uri, match: null }] : null;
+    result.ciphers.push(cipher);
   }
   return result;
 }
@@ -350,7 +373,8 @@ export function parseKeePassXml(textRaw: string): CiphersImportPayload {
       const cipher = makeLoginCipher();
       for (const s of qd(entry, 'String')) {
         const key = txt(qd(s, 'Key')[0]?.textContent);
-        const value = txt(qd(s, 'Value')[0]?.textContent);
+        const valueNode = qd(s, 'Value')[0];
+        const value = txt(valueNode?.textContent);
         if (!value) continue;
         const login = cipher.login as Record<string, unknown>;
         if (key === 'Title') cipher.name = value;
@@ -361,6 +385,11 @@ export function parseKeePassXml(textRaw: string): CiphersImportPayload {
           login.uris = uri ? [{ uri, match: null }] : null;
         } else if (key === 'otp') login.totp = value.replace('key=', '');
         else if (key === 'Notes') cipher.notes = `${txt(cipher.notes)}${txt(cipher.notes) ? '\n' : ''}${value}`;
+        else {
+          const hidden = ['True', 'true', '1'].includes(valueNode?.getAttribute('ProtectInMemory') || '')
+            || ['True', 'true', '1'].includes(valueNode?.getAttribute('Protected') || '');
+          processKvp(cipher, key, value, hidden);
+        }
       }
       const idx = result.ciphers.push(cipher) - 1;
       if (!isRoot && folder >= 0) result.folderRelationships.push({ key: idx, value: folder });
