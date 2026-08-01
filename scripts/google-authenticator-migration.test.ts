@@ -5,6 +5,10 @@ import {
   parseGoogleAuthenticatorMigrationPage,
   type GoogleAuthenticatorMigrationPage,
 } from '../webapp/src/lib/google-authenticator-migration';
+import {
+  GoogleAuthenticatorMigrationSession,
+  loginNameForMigrationAccount,
+} from '../webapp/src/lib/google-authenticator-migration-session';
 import { normalizeTotpInput } from '../webapp/src/lib/crypto';
 import { decodeSingleQrCode } from '../webapp/src/lib/qr-code';
 
@@ -226,6 +230,74 @@ test('keeps the legacy one-account normalization behavior', () => {
     batchSize: 1,
   });
   assert.equal(normalizeTotpInput(multi), '');
+});
+
+test('collects out-of-order pages and builds encrypted-ready login payloads', () => {
+  const session = new GoogleAuthenticatorMigrationSession();
+  const hotp = buildOtpParameter({ secret: validSecret, type: 1 });
+  const page0 = parseGoogleAuthenticatorMigrationPage(migrationUri({
+    accounts: [validAccount, hotp],
+    batchSize: 2,
+    batchIndex: 0,
+    batchId: 77,
+  }));
+  const page1 = parseGoogleAuthenticatorMigrationPage(migrationUri({
+    accounts: [buildOtpParameter({
+      secret: validSecret,
+      name: 'bob',
+      issuer: '',
+      algorithm: 1,
+      digits: 1,
+      type: 2,
+    })],
+    batchSize: 2,
+    batchIndex: 1,
+    batchId: 77,
+  }));
+  assert.equal(page0.ok && page1.ok, true);
+  if (!page0.ok || !page1.ok) return;
+
+  assert.equal(session.addPage(page1.page).ok, true);
+  assert.equal(session.snapshot().status.phase, 'collecting');
+  assert.equal(session.addPage(page0.page).ok, true);
+  const ready = session.snapshot();
+  assert.equal(ready.status.phase, 'ready');
+  assert.deepEqual(ready.missingIndexes, []);
+  assert.equal(ready.reviewItems.filter((item) => item.kind === 'accepted').length, 2);
+  assert.equal(ready.reviewItems.filter((item) => item.kind === 'excluded').length, 1);
+
+  const excluded = ready.reviewItems.find((item) => item.kind === 'excluded');
+  assert.ok(excluded);
+  assert.ok(!JSON.stringify(ready.reviewItems).includes('otpauth://'));
+  assert.ok(!JSON.stringify(ready.reviewItems).includes('AEBAGBAFAYDQQCIK'));
+
+  const duplicate = session.addPage(page1.page);
+  assert.deepEqual(duplicate, { ok: true, duplicate: true });
+
+  const conflictPage = parseGoogleAuthenticatorMigrationPage(migrationUri({
+    accounts: [validAccount],
+    batchSize: 2,
+    batchIndex: 1,
+    batchId: 77,
+  }));
+  assert.equal(conflictPage.ok, true);
+  if (!conflictPage.ok) return;
+  assert.deepEqual(session.addPage(conflictPage.page), { ok: false, reason: 'conflicting-page' });
+
+  const fresh = new GoogleAuthenticatorMigrationSession();
+  assert.equal(fresh.addPage(page0.page).ok, true);
+  assert.equal(fresh.addPage(page1.page).ok, true);
+  const accepted = fresh.snapshot().reviewItems.find((item) => item.kind === 'accepted' && item.name === 'bob');
+  assert.ok(accepted && accepted.kind === 'accepted');
+  fresh.setSelected(accepted.id, false);
+  const payload = fresh.buildImportPayload();
+  assert.equal(payload.ok, true);
+  if (!payload.ok) return;
+  assert.equal(payload.payload.ciphers.length, 1);
+  assert.equal(payload.payload.ciphers[0].name, 'Example: alice@example.test');
+  assert.equal((payload.payload.ciphers[0].login as { totp: string }).totp.includes('otpauth://totp/'), true);
+  assert.equal((payload.payload.ciphers[0].login as { username: string }).username, '');
+  assert.deepEqual(loginNameForMigrationAccount({ issuer: '', name: '' }), 'Authenticator');
 });
 
 test('qr decode helper returns unreadable without leaking frame details', async () => {
