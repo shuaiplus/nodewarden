@@ -1065,6 +1065,7 @@ const zhTW: Record<string, string> = {
   "txt_totp_qr_choose_image": "選擇圖片",
   "txt_google_authenticator_migration": "Google Authenticator 遷移",
   "txt_ga_migration_hint": "掃描或上傳 Google Authenticator 匯出的每一頁 QR 碼，然後選擇要匯入為新登入項目的帳戶。",
+  "txt_ga_migration_scan_camera": "掃描遷移 QR 碼",
   "txt_ga_migration_scan_page": "掃描或上傳一頁遷移 QR 碼。",
   "txt_ga_migration_point_camera": "將攝影機對準 Google Authenticator 匯出 QR 碼。",
   "txt_ga_migration_progress": "已收集 {received}/{total} 頁。",

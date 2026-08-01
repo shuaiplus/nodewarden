@@ -1062,6 +1062,7 @@ const es: Record<string, string> = {
   "txt_totp_qr_choose_image": "Elegir imagen",
   "txt_google_authenticator_migration": "Migración de Google Authenticator",
   "txt_ga_migration_hint": "Escanee o suba cada página QR de exportación de Google Authenticator y luego elija qué cuentas importar como nuevos inicios de sesión.",
+  "txt_ga_migration_scan_camera": "Escanear QR de migración",
   "txt_ga_migration_scan_page": "Escanee o suba una página QR de migración.",
   "txt_ga_migration_point_camera": "Apunte la cámara a un código QR de exportación de Google Authenticator.",
   "txt_ga_migration_progress": "Se recopilaron {received} de {total} página(s).",

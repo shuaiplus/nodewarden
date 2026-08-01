@@ -83,6 +83,21 @@ export function loginNameForMigrationAccount(
   return FALLBACK_LOGIN_NAME;
 }
 
+/** Classify an import summary against the selected payload size. */
+export function evaluateMigrationImportSummary(
+  expectedCount: number,
+  summary: { totalItems: number; confirmedItemCount?: number }
+): 'success' | 'retain' | 'unknown' {
+  const expected = Math.max(0, Math.floor(expectedCount));
+  const total = Math.max(0, Math.floor(summary.totalItems));
+  const confirmed = Math.max(0, Math.floor(summary.confirmedItemCount ?? summary.totalItems));
+  if (total < expected || confirmed < expected) {
+    // Nothing claimed imported (e.g. demo readonly) — keep review for a retry.
+    return total === 0 ? 'retain' : 'unknown';
+  }
+  return 'success';
+}
+
 export class GoogleAuthenticatorMigrationSession {
   private pages = new Map<number, StoredPage>();
   private batchId: number | null = null;

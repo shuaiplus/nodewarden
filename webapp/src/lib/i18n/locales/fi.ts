@@ -1062,6 +1062,7 @@ const fi: Record<string, string> = {
   "txt_totp_qr_choose_image": "Valitse kuva",
   "txt_google_authenticator_migration": "Google Authenticator -siirto",
   "txt_ga_migration_hint": "Skannaa tai lataa jokainen Google Authenticator -viennin QR-sivu ja valitse sitten, mitkä tilit tuodaan uusina kirjautumiskohteina.",
+  "txt_ga_migration_scan_camera": "Skannaa siirron QR",
   "txt_ga_migration_scan_page": "Skannaa tai lataa siirtymisen QR-sivu.",
   "txt_ga_migration_point_camera": "Osoita kamera Google Authenticator -viennin QR-koodiin.",
   "txt_ga_migration_progress": "Kerätty {received}/{total} sivua.",

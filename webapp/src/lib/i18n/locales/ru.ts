@@ -1062,6 +1062,7 @@ const ru: Record<string, string> = {
   "txt_totp_qr_choose_image": "Выбрать изображение",
   "txt_google_authenticator_migration": "Миграция Google Authenticator",
   "txt_ga_migration_hint": "Отсканируйте или загрузите каждую QR-страницу экспорта Google Authenticator, затем выберите учётные записи для импорта как новые логины.",
+  "txt_ga_migration_scan_camera": "Сканировать QR миграции",
   "txt_ga_migration_scan_page": "Отсканируйте или загрузите QR-страницу миграции.",
   "txt_ga_migration_point_camera": "Наведите камеру на QR-код экспорта Google Authenticator.",
   "txt_ga_migration_progress": "Собрано {received} из {total} стр.",

@@ -4,6 +4,7 @@ import type { CiphersImportPayload } from '@/lib/api/vault';
 import type { ImportResultSummary } from '@/components/ImportPage';
 import { parseGoogleAuthenticatorMigrationPage } from '@/lib/google-authenticator-migration';
 import {
+  evaluateMigrationImportSummary,
   GoogleAuthenticatorMigrationSession,
   type MigrationReviewItem,
   type MigrationSessionError,
@@ -130,10 +131,8 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
       stopCamera();
       setCameraOpen(false);
     } else {
-      setStatus(t('txt_ga_migration_progress', {
-        received: String(next.receivedIndexes.length),
-        total: String(next.batchSize || 0),
-      }));
+      // Progress counts render separately; keep status as the next-action prompt.
+      setStatus(t('txt_ga_migration_scan_page'));
     }
     return true;
   };
@@ -279,16 +278,22 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
 
     setSubmitting(true);
     try {
+      const expected = built.payload.ciphers.length;
       const summary = await props.onImport(built.payload, {
         folderMode: props.folderMode === 'original' ? 'none' : props.folderMode,
         targetFolderId: props.folderMode === 'target' ? props.targetFolderId : null,
       });
-      const confirmed = summary.confirmedItemCount ?? summary.totalItems;
+      const outcome = evaluateMigrationImportSummary(expected, summary);
+      if (outcome === 'retain') {
+        props.onNotify('error', t('txt_import_failed'));
+        setStatus(t('txt_import_failed'));
+        return;
+      }
       sessionRef.current.clearSecrets();
       sessionRef.current.clear();
       lastRawRef.current = '';
       refresh();
-      if (confirmed < summary.totalItems) {
+      if (outcome === 'unknown') {
         props.onNotify('error', t('txt_ga_migration_unknown_outcome'));
         setStatus(t('txt_ga_migration_unknown_outcome'));
         return;
@@ -355,7 +360,7 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
           disabled={props.disabled || busy || submitting || ready || blocked}
           onClick={() => setCameraOpen(true)}
         >
-          <QrCode size={15} /> {t('txt_scan_totp_qr')}
+          <QrCode size={15} /> {t('txt_ga_migration_scan_camera')}
         </button>
         <button
           type="button"

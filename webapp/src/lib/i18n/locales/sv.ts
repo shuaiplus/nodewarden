@@ -1062,6 +1062,7 @@ const sv: Record<string, string> = {
   "txt_totp_qr_choose_image": "Välj bild",
   "txt_google_authenticator_migration": "Google Authenticator-migrering",
   "txt_ga_migration_hint": "Skanna eller ladda upp varje Google Authenticator-export-QR-sida och välj sedan vilka konton som ska importeras som nya inloggningar.",
+  "txt_ga_migration_scan_camera": "Skanna migrerings-QR",
   "txt_ga_migration_scan_page": "Skanna eller ladda upp en migrerings-QR-sida.",
   "txt_ga_migration_point_camera": "Rikta kameran mot en Google Authenticator-export-QR-kod.",
   "txt_ga_migration_progress": "Samlade in {received} av {total} sida/sidor.",

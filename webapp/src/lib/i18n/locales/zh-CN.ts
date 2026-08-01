@@ -1065,6 +1065,7 @@ const zhCN: Record<string, string> = {
   "txt_totp_qr_choose_image": "选择图片",
   "txt_google_authenticator_migration": "Google Authenticator 迁移",
   "txt_ga_migration_hint": "扫描或上传 Google Authenticator 导出的每一页二维码，然后选择要导入为新登录项的账户。",
+  "txt_ga_migration_scan_camera": "扫描迁移二维码",
   "txt_ga_migration_scan_page": "扫描或上传一页迁移二维码。",
   "txt_ga_migration_point_camera": "将摄像头对准 Google Authenticator 导出二维码。",
   "txt_ga_migration_progress": "已收集 {received}/{total} 页。",

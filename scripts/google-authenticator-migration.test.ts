@@ -7,6 +7,7 @@ import {
 } from '../webapp/src/lib/google-authenticator-migration';
 import {
   GoogleAuthenticatorMigrationSession,
+  evaluateMigrationImportSummary,
   loginNameForMigrationAccount,
 } from '../webapp/src/lib/google-authenticator-migration-session';
 import { normalizeTotpInput } from '../webapp/src/lib/crypto';
@@ -298,6 +299,13 @@ test('collects out-of-order pages and builds encrypted-ready login payloads', ()
   assert.equal((payload.payload.ciphers[0].login as { totp: string }).totp.includes('otpauth://totp/'), true);
   assert.equal((payload.payload.ciphers[0].login as { username: string }).username, '');
   assert.deepEqual(loginNameForMigrationAccount({ issuer: '', name: '' }), 'Authenticator');
+});
+
+test('classifies empty and partial import summaries without false success', () => {
+  assert.equal(evaluateMigrationImportSummary(2, { totalItems: 2, confirmedItemCount: 2 }), 'success');
+  assert.equal(evaluateMigrationImportSummary(2, { totalItems: 0 }), 'retain');
+  assert.equal(evaluateMigrationImportSummary(2, { totalItems: 2, confirmedItemCount: 1 }), 'unknown');
+  assert.equal(evaluateMigrationImportSummary(2, { totalItems: 1, confirmedItemCount: 1 }), 'unknown');
 });
 
 test('qr decode helper returns unreadable without leaking frame details', async () => {
