@@ -16,7 +16,6 @@ import {
   decodeQrFromCanvas,
   decodeSingleQrCode,
 } from '@/lib/qr-code';
-import { describeQrPayload, gaMigrationDebug, gaMigrationWarn } from '@/lib/ga-migration-debug';
 
 interface GoogleAuthenticatorMigrationImportProps {
   folderMode: 'original' | 'none' | 'target';
@@ -85,7 +84,6 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
   };
 
   const clearSession = (message?: string) => {
-    gaMigrationDebug('session.clear', { hadPages: sessionRef.current.snapshot().receivedIndexes.length > 0 });
     generationRef.current += 1;
     stopCamera();
     setCameraOpen(false);
@@ -99,82 +97,36 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
 
   const ingestRaw = (raw: string): boolean => {
     const value = String(raw || '').trim();
-    const payloadMeta = describeQrPayload(value);
-    gaMigrationDebug('ingest.start', payloadMeta);
     if (!value) {
-      gaMigrationWarn('ingest.empty', payloadMeta);
       setStatus(t('txt_totp_qr_not_found'));
       return false;
     }
     if (value === lastRawRef.current) {
-      gaMigrationDebug('ingest.same-raw-as-last', payloadMeta);
       setStatus(t('txt_ga_migration_duplicate_page'));
       return true;
     }
 
     const parsed = parseGoogleAuthenticatorMigrationPage(value);
     if (!parsed.ok) {
-      gaMigrationWarn('ingest.parse-failed', {
-        ...payloadMeta,
-        reason: parsed.reason,
-        version: parsed.version ?? null,
-        accountCount: parsed.accountCount ?? null,
-        batchSize: parsed.batchSize ?? null,
-        batchIndex: parsed.batchIndex ?? null,
-        batchId: parsed.batchId ?? null,
-        payloadBytes: parsed.payloadBytes ?? null,
-      });
       setStatus(t('txt_ga_migration_invalid_page'));
       return false;
     }
 
     const page = parsed.page;
-    const acceptedCount = page.accounts.filter((account) => account.kind === 'accepted').length;
-    const excluded = page.accounts
-      .filter((account) => account.kind === 'excluded')
-      .map((account) => account.reason);
-    gaMigrationDebug('ingest.parsed', {
-      batchId: page.batchId,
-      batchSize: page.batchSize,
-      batchIndex: page.batchIndex,
-      version: page.version,
-      accountCount: page.accounts.length,
-      acceptedCount,
-      excludedReasons: excluded,
-    });
-
-    const before = sessionRef.current.snapshot();
     const result = sessionRef.current.addPage(page);
     refresh();
     if (!result.ok) {
-      gaMigrationWarn('ingest.session-rejected', {
-        reason: result.reason,
-        activeBatchId: before.batchId,
-        activeBatchSize: before.batchSize,
-        receivedIndexes: before.receivedIndexes,
-        pageBatchId: page.batchId,
-        pageBatchSize: page.batchSize,
-        pageBatchIndex: page.batchIndex,
-      });
       setStatus(sessionErrorLabel(result.reason));
       return false;
     }
 
     lastRawRef.current = value;
     if (result.duplicate) {
-      gaMigrationDebug('ingest.duplicate-page', { batchIndex: page.batchIndex });
       setStatus(t('txt_ga_migration_duplicate_page'));
       return true;
     }
 
     const next = sessionRef.current.snapshot();
-    gaMigrationDebug('ingest.accepted', {
-      phase: next.status.phase,
-      receivedIndexes: next.receivedIndexes,
-      missingIndexes: next.missingIndexes,
-      selectedCount: next.selectedCount,
-      reviewCount: next.reviewItems.length,
-    });
     if (next.status.phase === 'ready') {
       setStatus(t('txt_ga_migration_ready'));
       stopCamera();
@@ -189,19 +141,11 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
   const handleImageFile = async (file: File | null) => {
     if (!file || submitting) return;
     const check = assertQrImageFile(file);
-    gaMigrationDebug('image.start', {
-      name: file.name,
-      type: file.type || '(empty)',
-      size: file.size,
-      check,
-    });
     if (check === 'invalid-type') {
-      gaMigrationWarn('image.invalid-type', { type: file.type || '(empty)' });
       setStatus(t('txt_totp_qr_invalid_image_type'));
       return;
     }
     if (check === 'too-large') {
-      gaMigrationWarn('image.too-large', { size: file.size });
       setStatus(t('txt_totp_qr_image_too_large'));
       return;
     }
@@ -212,27 +156,17 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
     let bitmap: ImageBitmap | null = null;
     try {
       bitmap = await createImageBitmap(file);
-      if (generation !== generationRef.current) {
-        gaMigrationDebug('image.stale-after-bitmap', { generation, current: generationRef.current });
-        return;
-      }
-      gaMigrationDebug('image.bitmap', { width: bitmap.width, height: bitmap.height });
+      if (generation !== generationRef.current) return;
       const decoded = await decodeSingleQrCode(bitmap);
-      if (generation !== generationRef.current) {
-        gaMigrationDebug('image.stale-after-decode', { generation, current: generationRef.current });
-        return;
-      }
+      if (generation !== generationRef.current) return;
       if (!decoded.ok) {
-        gaMigrationWarn('image.decode-failed', { reason: decoded.reason });
         setStatus(decoded.reason === 'multiple'
           ? t('txt_ga_migration_multiple_qr')
           : t('txt_totp_qr_not_found'));
         return;
       }
-      gaMigrationDebug('image.decoded', describeQrPayload(decoded.value));
       ingestRaw(decoded.value);
-    } catch (error) {
-      gaMigrationWarn('image.exception', { name: file.name, type: file.type || '(empty)', size: file.size }, error);
+    } catch {
       if (generation === generationRef.current) setStatus(t('txt_totp_qr_scan_failed'));
     } finally {
       bitmap?.close();
@@ -252,7 +186,6 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
     const generation = generationRef.current;
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      gaMigrationWarn('camera.unsupported', { hasMediaDevices: !!navigator.mediaDevices });
       setStatus(t('txt_totp_qr_camera_unavailable'));
       setCameraOpen(false);
       return;
@@ -271,7 +204,6 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
           try {
             const results = await detector.detect(video);
             if (results.length > 1) {
-              gaMigrationWarn('camera.multiple-qr', { count: results.length });
               setStatus(t('txt_ga_migration_multiple_qr'));
             } else {
               value = String(results[0]?.rawValue || '').trim();
@@ -290,8 +222,7 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
         if (value && ingestRaw(value) && sessionRef.current.snapshot().status.phase === 'ready') {
           return;
         }
-      } catch (error) {
-        gaMigrationWarn('camera.frame-error', {}, error);
+      } catch {
         // Keep scanning through transient decode failures.
       }
       frameRef.current = window.requestAnimationFrame(scan);
@@ -299,7 +230,6 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
 
     setBusy(true);
     setStatus(t('txt_totp_qr_starting_camera'));
-    gaMigrationDebug('camera.start', { hasBarcodeDetector: !!detector });
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
       .then((stream) => {
         if (stopped || generation !== generationRef.current) {
@@ -314,19 +244,14 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
         void video.play().then(() => {
           if (stopped || generation !== generationRef.current) return;
           setBusy(false);
-          gaMigrationDebug('camera.playing', {
-            tracks: stream.getVideoTracks().map((track) => track.label || track.kind),
-          });
           frameRef.current = window.requestAnimationFrame(scan);
-        }).catch((error) => {
-          gaMigrationWarn('camera.play-failed', {}, error);
+        }).catch(() => {
           setBusy(false);
           setStatus(t('txt_totp_qr_camera_unavailable'));
           setCameraOpen(false);
         });
       })
-      .catch((error) => {
-        gaMigrationWarn('camera.getUserMedia-failed', {}, error);
+      .catch(() => {
         setBusy(false);
         setStatus(t('txt_totp_qr_camera_unavailable'));
         setCameraOpen(false);
@@ -345,25 +270,15 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
   }, []);
 
   const handleImport = async () => {
-    if (submitting || busy) {
-      gaMigrationDebug('import.ignored-busy', { submitting, busy });
-      return;
-    }
+    if (submitting || busy) return;
     const built = sessionRef.current.buildImportPayload();
     if (!built.ok) {
-      gaMigrationWarn('import.build-failed', { reason: built.reason });
       setStatus(sessionErrorLabel(built.reason));
       return;
     }
 
     const folderMode = props.folderMode === 'original' ? 'none' : props.folderMode;
     const targetFolderId = props.folderMode === 'target' ? props.targetFolderId : null;
-    gaMigrationDebug('import.start', {
-      expected: built.payload.ciphers.length,
-      folderMode,
-      hasTargetFolder: !!targetFolderId,
-      names: built.payload.ciphers.map((cipher) => String(cipher.name || '')),
-    });
 
     setSubmitting(true);
     try {
@@ -373,19 +288,7 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
         targetFolderId,
       });
       const outcome = evaluateMigrationImportSummary(expected, summary);
-      gaMigrationDebug('import.summary', {
-        expected,
-        totalItems: summary.totalItems,
-        confirmedItemCount: summary.confirmedItemCount ?? null,
-        outcome,
-        typeCounts: summary.typeCounts,
-      });
       if (outcome === 'retain') {
-        gaMigrationWarn('import.retain', {
-          expected,
-          totalItems: summary.totalItems,
-          confirmedItemCount: summary.confirmedItemCount ?? null,
-        });
         props.onNotify('error', t('txt_import_failed'));
         setStatus(t('txt_import_failed'));
         return;
@@ -395,25 +298,15 @@ export default function GoogleAuthenticatorMigrationImport(props: GoogleAuthenti
       lastRawRef.current = '';
       refresh();
       if (outcome === 'unknown') {
-        gaMigrationWarn('import.unknown-outcome', {
-          expected,
-          totalItems: summary.totalItems,
-          confirmedItemCount: summary.confirmedItemCount ?? null,
-        });
         props.onNotify('error', t('txt_ga_migration_unknown_outcome'));
         setStatus(t('txt_ga_migration_unknown_outcome'));
         return;
       }
-      gaMigrationDebug('import.success', { count: summary.totalItems });
       props.onSummary(summary);
       props.onNotify('success', t('txt_ga_migration_success', { count: String(summary.totalItems) }));
       setStatus(t('txt_ga_migration_scan_page'));
     } catch (error) {
       const dispatched = !!(error as Error & { importDispatched?: boolean })?.importDispatched;
-      gaMigrationWarn('import.exception', {
-        dispatched,
-        message: error instanceof Error ? error.message : String(error),
-      }, error);
       if (dispatched) {
         sessionRef.current.clearSecrets();
         sessionRef.current.clear();
