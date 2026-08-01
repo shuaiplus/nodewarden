@@ -1102,14 +1102,28 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           nextPayload.ciphers.push(cipherPayload);
         }
 
-        const importedCipherMap = await importCiphers(importAuthedFetch, nextPayload, {
-          returnCipherMap: attachments.length > 0,
-        });
+        let importedCipherMap: Awaited<ReturnType<typeof importCiphers>> = null;
+        try {
+          importedCipherMap = await importCiphers(importAuthedFetch, nextPayload, {
+            returnCipherMap: true,
+          });
+        } catch (error) {
+          const dispatched = new Error(error instanceof Error ? error.message : t('txt_import_failed'));
+          (dispatched as Error & { importDispatched?: boolean }).importDispatched = true;
+          throw dispatched;
+        }
         await Promise.all([refetchFolders(), refetchCiphers()]);
         const attachmentSummary = attachments.length
           ? await uploadImportedAttachments(attachments, extractImportIdMaps(importedCipherMap))
           : undefined;
-        return summarizeImportResult(payload.ciphers, mode === 'original' ? nextPayload.folders.length : 0, attachmentSummary);
+        const summary = summarizeImportResult(payload.ciphers, mode === 'original' ? nextPayload.folders.length : 0, attachmentSummary);
+        const confirmedIndexes = new Set(
+          (importedCipherMap || [])
+            .map((entry) => entry.index)
+            .filter((index) => Number.isInteger(index) && index >= 0 && index < payload.ciphers.length)
+        );
+        summary.confirmedItemCount = confirmedIndexes.size;
+        return summary;
       },
 
       async importEncryptedRaw(
