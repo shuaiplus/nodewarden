@@ -6,6 +6,7 @@ import {
   type GoogleAuthenticatorMigrationPage,
 } from '../webapp/src/lib/google-authenticator-migration';
 import { normalizeTotpInput } from '../webapp/src/lib/crypto';
+import { decodeSingleQrCode } from '../webapp/src/lib/qr-code';
 
 function encodeVarint(value: number): number[] {
   const bytes: number[] = [];
@@ -227,3 +228,39 @@ test('keeps the legacy one-account normalization behavior', () => {
   assert.equal(normalizeTotpInput(multi), '');
 });
 
+test('qr decode helper returns unreadable without leaking frame details', async () => {
+  const bitmap = {
+    width: 8,
+    height: 8,
+    close() {},
+  } as ImageBitmap;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext() {
+      return {
+        fillStyle: '',
+        fillRect() {},
+        drawImage() {},
+        getImageData() {
+          return { data: new Uint8ClampedArray(8 * 8 * 4) };
+        },
+      };
+    },
+  } as unknown as HTMLCanvasElement;
+  const previousDocument = (globalThis as { document?: Document }).document;
+  (globalThis as { document: Document }).document = {
+    createElement(tag: string) {
+      if (tag === 'canvas') return canvas;
+      throw new Error(`unexpected element ${tag}`);
+    },
+  } as Document;
+  try {
+    const result = await decodeSingleQrCode(bitmap);
+    assert.deepEqual(result, { ok: false, reason: 'unreadable' });
+    assert.ok(!JSON.stringify(result).includes('ImageData'));
+  } finally {
+    if (previousDocument) (globalThis as { document: Document }).document = previousDocument;
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
