@@ -12,6 +12,7 @@ const securityStamp = 'security-stamp';
 function createTestEnv() {
   const connectionTokens = new Map<string, { userId: string; deviceIdentifier: string | null; expiresAt: number }>();
   const forwardedHubUrls: string[] = [];
+  const durableObjectNames: string[] = [];
   const userRow = {
     id: userId,
     email: 'user@example.test',
@@ -86,6 +87,7 @@ function createTestEnv() {
     JWT_SECRET: secret,
     NOTIFICATIONS_HUB: {
       idFromName(name: string) {
+        durableObjectNames.push(name);
         return name;
       },
       get() {
@@ -94,7 +96,7 @@ function createTestEnv() {
     },
   } as unknown as Env;
 
-  return { env, connectionTokens, forwardedHubUrls };
+  return { env, connectionTokens, durableObjectNames, forwardedHubUrls };
 }
 
 async function validAccessToken(): Promise<string> {
@@ -152,4 +154,30 @@ test('negotiate issues a short-lived one-time websocket connection token', async
   assert.equal((await handleNotificationsHub(request(), env)).status, 204);
   assert.equal((await handleNotificationsHub(request(), env)).status, 401);
   assert.equal(forwardedHubUrls.length, 1);
+});
+
+test('a non-upgrade request does not consume a websocket connection token', async () => {
+  const { env, connectionTokens } = createTestEnv();
+  const accessToken = await validAccessToken();
+  const negotiate = await handleNotificationsNegotiate(new Request(
+    'https://vault.example.test/notifications/hub/negotiate',
+    { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` } }
+  ), env);
+  const { connectionToken } = await negotiate.json() as { connectionToken: string };
+  const url = `https://vault.example.test/notifications/hub?id=${encodeURIComponent(connectionToken)}`;
+
+  assert.equal((await handleNotificationsHub(new Request(url), env)).status, 426);
+  assert.ok(connectionTokens.has(connectionToken));
+  assert.equal((await handleNotificationsHub(new Request(url, { headers: { Upgrade: 'websocket' } }), env)).status, 204);
+});
+
+test('a forged ticket cannot select or activate a Durable Object', async () => {
+  const { env, durableObjectNames } = createTestEnv();
+  const response = await handleNotificationsHub(new Request(
+    'https://vault.example.test/notifications/hub?id=attacker-controlled.invalid-signature',
+    { headers: { Upgrade: 'websocket' } }
+  ), env);
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(durableObjectNames, []);
 });

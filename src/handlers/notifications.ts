@@ -4,6 +4,10 @@ import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
+import {
+  createWebSocketConnectionToken,
+  verifyWebSocketConnectionToken,
+} from '../utils/websocket-connection-token';
 
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
 
@@ -21,15 +25,9 @@ async function authenticateAccessToken(request: Request, env: Env): Promise<JWTP
   return auth.verifyAccessToken(`Bearer ${accessToken}`);
 }
 
-function getConnectionTokenUserId(token: string): string | null {
-  if (!token || token.length > 200) return null;
-  const separator = token.indexOf('.');
-  if (separator <= 0 || separator === token.length - 1) return null;
-  return token.slice(0, separator);
-}
-
 async function issueWebSocketConnectionToken(payload: JWTPayload, env: Env): Promise<string> {
-  const token = `${payload.sub}.${generateUUID()}`;
+  const expiresAt = Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS;
+  const token = await createWebSocketConnectionToken(payload.sub, expiresAt, env.JWT_SECRET);
   const id = env.NOTIFICATIONS_HUB.idFromName(payload.sub);
   const stub = env.NOTIFICATIONS_HUB.get(id);
   const response = await stub.fetch('https://notifications/internal/ws-token', {
@@ -39,7 +37,7 @@ async function issueWebSocketConnectionToken(payload: JWTPayload, env: Env): Pro
       token,
       userId: payload.sub,
       deviceIdentifier: payload.did || null,
-      expiresAt: Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS,
+      expiresAt,
     }),
   });
   if (!response.ok) throw new Error('Failed to issue websocket connection token');
@@ -48,10 +46,12 @@ async function issueWebSocketConnectionToken(payload: JWTPayload, env: Env): Pro
 
 async function consumeWebSocketConnectionToken(request: Request, env: Env): Promise<JWTPayload | null> {
   const token = String(new URL(request.url).searchParams.get('id') || '').trim();
-  const userId = getConnectionTokenUserId(token);
-  if (!userId) return null;
+  const claims = await verifyWebSocketConnectionToken(token, env.JWT_SECRET);
+  if (!claims) return null;
 
-  const id = env.NOTIFICATIONS_HUB.idFromName(userId);
+  // Verify the signed routing claim before selecting a Durable Object. Otherwise an
+  // attacker could activate arbitrary object names with forged token prefixes.
+  const id = env.NOTIFICATIONS_HUB.idFromName(claims.userId);
   const stub = env.NOTIFICATIONS_HUB.get(id);
   const response = await stub.fetch('https://notifications/internal/ws-token/consume', {
     method: 'POST',
@@ -64,10 +64,10 @@ async function consumeWebSocketConnectionToken(request: Request, env: Env): Prom
     userId?: string;
     deviceIdentifier?: string | null;
   } | null;
-  if (connection?.userId !== userId) return null;
+  if (connection?.userId !== claims.userId) return null;
 
   return {
-    sub: userId,
+    sub: claims.userId,
     did: String(connection.deviceIdentifier || '').trim() || undefined,
   } as JWTPayload;
 }
@@ -104,11 +104,11 @@ export async function handleNotificationsNegotiate(request: Request, env: Env): 
 }
 
 export async function handleNotificationsHub(request: Request, env: Env): Promise<Response> {
-  const payload = await authenticateNotificationsHub(request, env);
-  if (!payload?.sub) return errorResponse('Unauthorized', 401);
   if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
     return errorResponse('Expected websocket', 426);
   }
+  const payload = await authenticateNotificationsHub(request, env);
+  if (!payload?.sub) return errorResponse('Unauthorized', 401);
 
   const userId = payload.sub;
   const id = env.NOTIFICATIONS_HUB.idFromName(userId);
