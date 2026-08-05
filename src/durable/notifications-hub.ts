@@ -19,6 +19,8 @@ const SIGNALR_UPDATE_TYPE_SYNC_SEND_DELETE = 14;
 const SIGNALR_UPDATE_TYPE_AUTH_REQUEST = 15;
 const SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE = 16;
 const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 102;
+const WEBSOCKET_CONNECTION_TOKEN_PREFIX = 'ws-token:';
+const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
 
 type HubProtocol = 'json' | 'messagepack';
 type HubKind = 'user' | 'anonymous-auth-request';
@@ -223,14 +225,18 @@ export class NotificationsHub extends DurableObject<Env> {
       const token = String(body?.token || '').trim();
       const userId = String(body?.userId || '').trim();
       const expiresAt = Number(body?.expiresAt || 0);
-      if (!token || !userId || expiresAt <= Date.now() || expiresAt > Date.now() + 60 * 1000) {
+      if (!token || !userId || expiresAt <= Date.now() || expiresAt > Date.now() + WEBSOCKET_CONNECTION_TOKEN_TTL_MS) {
         return new Response('Invalid websocket connection token', { status: 400 });
       }
-      await this.ctx.storage.put(`ws-token:${token}`, {
+      await this.ctx.storage.put(`${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${token}`, {
         userId,
         deviceIdentifier: String(body?.deviceIdentifier || '').trim() || null,
         expiresAt,
       } satisfies WebSocketConnectionToken);
+      const currentAlarm = await this.ctx.storage.getAlarm();
+      if (currentAlarm === null || expiresAt < currentAlarm) {
+        await this.ctx.storage.setAlarm(expiresAt);
+      }
       return new Response(null, { status: 204 });
     }
 
@@ -241,7 +247,7 @@ export class NotificationsHub extends DurableObject<Env> {
 
       // Delete inside a transaction so a connection ticket cannot win two concurrent upgrades.
       const connection = await this.ctx.storage.transaction(async (txn) => {
-        const key = `ws-token:${token}`;
+        const key = `${WEBSOCKET_CONNECTION_TOKEN_PREFIX}${token}`;
         const stored = await txn.get<WebSocketConnectionToken>(key);
         if (stored) await txn.delete(key);
         return stored || null;
@@ -347,6 +353,27 @@ export class NotificationsHub extends DurableObject<Env> {
       status: 101,
       webSocket: client,
     });
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const tokens = await this.ctx.storage.list<WebSocketConnectionToken>({
+      prefix: WEBSOCKET_CONNECTION_TOKEN_PREFIX,
+    });
+    const expiredKeys: string[] = [];
+    let nextExpiration: number | null = null;
+
+    for (const [key, token] of tokens) {
+      if (token.expiresAt <= now) {
+        expiredKeys.push(key);
+      } else if (nextExpiration === null || token.expiresAt < nextExpiration) {
+        nextExpiration = token.expiresAt;
+      }
+    }
+
+    // Negotiated tickets that never reach an upgrade must not remain in DO storage indefinitely.
+    if (expiredKeys.length > 0) await this.ctx.storage.delete(expiredKeys);
+    if (nextExpiration !== null) await this.ctx.storage.setAlarm(nextExpiration);
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
