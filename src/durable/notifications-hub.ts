@@ -32,6 +32,12 @@ interface WsAttachment {
   deviceIdentifier: string | null;
 }
 
+interface WebSocketConnectionToken {
+  userId: string;
+  deviceIdentifier: string | null;
+  expiresAt: number;
+}
+
 function concatBytes(chunks: Uint8Array[]): Uint8Array {
   const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const out = new Uint8Array(total);
@@ -206,6 +212,48 @@ export class NotificationsHub extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === '/internal/ws-token' && request.method === 'POST') {
+      const body = (await request.json().catch(() => null)) as {
+        token?: string;
+        userId?: string;
+        deviceIdentifier?: string | null;
+        expiresAt?: number;
+      } | null;
+      const token = String(body?.token || '').trim();
+      const userId = String(body?.userId || '').trim();
+      const expiresAt = Number(body?.expiresAt || 0);
+      if (!token || !userId || expiresAt <= Date.now() || expiresAt > Date.now() + 60 * 1000) {
+        return new Response('Invalid websocket connection token', { status: 400 });
+      }
+      await this.ctx.storage.put(`ws-token:${token}`, {
+        userId,
+        deviceIdentifier: String(body?.deviceIdentifier || '').trim() || null,
+        expiresAt,
+      } satisfies WebSocketConnectionToken);
+      return new Response(null, { status: 204 });
+    }
+
+    if (url.pathname === '/internal/ws-token/consume' && request.method === 'POST') {
+      const body = (await request.json().catch(() => null)) as { token?: string } | null;
+      const token = String(body?.token || '').trim();
+      if (!token) return new Response('Invalid websocket connection token', { status: 400 });
+
+      // Delete inside a transaction so a connection ticket cannot win two concurrent upgrades.
+      const connection = await this.ctx.storage.transaction(async (txn) => {
+        const key = `ws-token:${token}`;
+        const stored = await txn.get<WebSocketConnectionToken>(key);
+        if (stored) await txn.delete(key);
+        return stored || null;
+      });
+      if (!connection || connection.expiresAt <= Date.now()) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      return new Response(JSON.stringify(connection), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     if (url.pathname === '/internal/notify' && request.method === 'POST') {
       const body = (await request.json().catch(() => null)) as {
