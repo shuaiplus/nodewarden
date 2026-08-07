@@ -382,7 +382,9 @@ export default function VaultPage(props: VaultPageProps) {
     }
     const groupIndexByKey = new Map<string, number>();
     Array.from(groupKeys).sort().forEach((groupKey, index) => {
-      groupIndexByKey.set(groupKey, index % 64);
+      // Keep indices unique (no modulo): they are used both for group colors and
+      // as the group identity when selecting duplicate items to delete.
+      groupIndexByKey.set(groupKey, index);
     });
     const byId = new Map<string, number>();
     for (const [cipherId, groupKey] of groupKeyById.entries()) {
