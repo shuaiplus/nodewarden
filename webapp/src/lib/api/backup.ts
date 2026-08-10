@@ -197,7 +197,7 @@ export async function downloadAdminBackupAttachmentBlob(
   authedFetch: AuthedFetch,
   blobName: string,
   masterPasswordHash: string
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const resp = await authedFetch('/api/admin/backup/blob', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

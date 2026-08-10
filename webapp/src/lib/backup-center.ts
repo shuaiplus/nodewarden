@@ -186,7 +186,7 @@ export function invalidateRemoteBrowserCacheForDestination(
   cache: Record<string, RemoteBackupBrowserResponse>,
   pathByDestination: Record<string, string>,
   pageByKey: Record<string, number>
-): PersistedRemoteBrowserState {
+): Omit<PersistedRemoteBrowserState, 'refreshedAt'> {
   return {
     cache: Object.fromEntries(Object.entries(cache).filter(([key]) => !key.startsWith(`${destinationId}:`))),
     pathByDestination: Object.fromEntries(Object.entries(pathByDestination).filter(([key]) => key !== destinationId)),
