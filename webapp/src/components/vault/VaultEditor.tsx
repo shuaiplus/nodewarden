@@ -1,13 +1,18 @@
 import type { RefObject } from 'preact';
 import { createPortal } from 'preact/compat';
 import { ArrowDown, ArrowUp, CheckCheck, Download, Paperclip, Plus, QrCode, RefreshCw, Star, StarOff, Trash2, Upload, X } from 'lucide-preact';
-import jsQR from 'jsqr';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
 import { normalizeTotpInput } from '@/lib/crypto';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';
+import {
+  assertQrImageFile,
+  createQrCodeDetector,
+  decodeQrFromCanvas,
+  decodeSingleQrCode,
+} from '@/lib/qr-code';
 import {
   CARD_BRAND_OPTIONS,
   CardBrandIcon,
@@ -67,8 +72,6 @@ interface WebsiteRowProps {
   onMove: (fromIndex: number, toIndex: number) => void;
   onRemove: (index: number) => void;
 }
-
-const TOTP_QR_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 function WebsiteRow(props: WebsiteRowProps) {
   const websiteMatchOptions = getWebsiteMatchOptions();
@@ -170,52 +173,20 @@ export default function VaultEditor(props: VaultEditorProps) {
     return true;
   };
 
-  const createTotpQrDetector = (): BarcodeDetector | null => {
-    if (typeof window === 'undefined' || !window.BarcodeDetector) return null;
-    return new window.BarcodeDetector({ formats: ['qr_code'] });
-  };
-
-  const decodeTotpQrCanvas = (source: ImageBitmap | HTMLVideoElement): string => {
-    const width = 'videoWidth' in source ? source.videoWidth : source.width;
-    const height = 'videoHeight' in source ? source.videoHeight : source.height;
-    if (!width || !height) return '';
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d');
-    if (!context) return '';
-    // jsQR ignores alpha and reads RGB directly, so transparent pixels would be
-    // treated as black. Composite over white first so transparent-background QR
-    // exports do not become black-on-black and fail to decode.
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, width, height);
-    context.drawImage(source, 0, 0, width, height);
-    const imageData = context.getImageData(0, 0, width, height);
-    return String(jsQR(imageData.data, width, height)?.data || '').trim();
-  };
-
   const decodeTotpQrImage = async (source: ImageBitmap): Promise<boolean> => {
-    const detector = createTotpQrDetector();
-    if (detector) {
-      try {
-        const results = await detector.detect(source);
-        const value = String(results[0]?.rawValue || '').trim();
-        if (value && applyTotpQrValue(value)) return true;
-      } catch {
-        // Fall back to jsQR when the native detector is present but not usable.
-      }
-    }
-    const value = decodeTotpQrCanvas(source);
-    return value ? applyTotpQrValue(value) : false;
+    // Keep the editor's first-hit semantics; migration rejects multi-QR images separately.
+    const decoded = await decodeSingleQrCode(source, { allowMultipleNativeHits: true });
+    return decoded.ok ? applyTotpQrValue(decoded.value) : false;
   };
 
   const handleTotpQrFile = async (file: File | null) => {
     if (!file) return;
-    if (file.type && !file.type.startsWith('image/')) {
+    const imageCheck = assertQrImageFile(file);
+    if (imageCheck === 'invalid-type') {
       setTotpQrStatus(t('txt_totp_qr_invalid_image_type'));
       return;
     }
-    if (file.size > TOTP_QR_IMAGE_MAX_BYTES) {
+    if (imageCheck === 'too-large') {
       setTotpQrStatus(t('txt_totp_qr_image_too_large'));
       return;
     }
@@ -241,7 +212,7 @@ export default function VaultEditor(props: VaultEditorProps) {
     }
     let stopped = false;
     let lastCanvasScan = 0;
-    const detector = createTotpQrDetector();
+    const detector = createQrCodeDetector();
     if (!navigator.mediaDevices?.getUserMedia) {
       setTotpQrStatus(t('txt_totp_qr_camera_unavailable'));
       return () => {
@@ -274,7 +245,7 @@ export default function VaultEditor(props: VaultEditorProps) {
           const now = performance.now();
           if (now - lastCanvasScan >= 250) {
             lastCanvasScan = now;
-            value = decodeTotpQrCanvas(video);
+            value = decodeQrFromCanvas(video);
           }
         }
         if (value && applyTotpQrValue(value)) return;

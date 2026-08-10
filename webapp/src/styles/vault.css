@@ -1029,6 +1029,14 @@ select.input.duplicate-mode-toolbar-select {
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.74), #0f172a);
 }
 
+.ga-migration-camera {
+  @apply mb-3 min-h-48 rounded-lg;
+}
+
+.ga-migration-review-row {
+  @apply flex items-start gap-2;
+}
+
 .totp-scan-status {
   @apply mb-3 min-h-6 text-center text-sm;
   color: rgba(248, 250, 252, 0.86);

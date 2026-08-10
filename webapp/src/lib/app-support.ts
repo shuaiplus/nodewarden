@@ -106,6 +106,7 @@ export function summarizeImportResult(
     attachmentCount: Math.max(0, attachmentSummary?.total || 0),
     importedAttachmentCount: Math.max(0, attachmentSummary?.imported || 0),
     failedAttachments: attachmentSummary?.failed || [],
+    confirmedItemCount: undefined,
   };
 }
 
