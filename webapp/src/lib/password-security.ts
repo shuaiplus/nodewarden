@@ -1,9 +1,15 @@
 import type { Cipher } from '@/lib/types';
 
+declare const __NODEWARDEN_DEMO__: boolean | undefined;
+
 const PWNED_PASSWORDS_RANGE_URL = 'https://api.pwnedpasswords.com/range/';
-const TWO_FACTOR_DIRECTORY_URL = 'https://api.2fa.directory/v4/all.json';
-const PASSKEY_DIRECTORY_URL = 'https://passkeys-api.2fa.directory/v1/all.json';
-const CDN_FETCH_TIMEOUT_MS = 15_000;
+const TWO_FACTOR_DIRECTORY_URL = (typeof __NODEWARDEN_DEMO__ !== 'undefined' && __NODEWARDEN_DEMO__)
+  ? '/cdn-2fa/v4/all.json'
+  : 'https://api.2fa.directory/v4/all.json';
+const PASSKEY_DIRECTORY_URL = (typeof __NODEWARDEN_DEMO__ !== 'undefined' && __NODEWARDEN_DEMO__)
+  ? '/cdn-passkey/v1/all.json'
+  : 'https://passkeys-api.2fa.directory/v1/all.json';
+const CDN_FETCH_TIMEOUT_MS = 30_000;
 const MAX_CONCURRENT_BREACH_CHECKS = 5;
 const COMMON_PASSWORDS = new Set([
   'password', 'password1', '123456', '12345678', '123456789', 'qwerty', 'abc123', 'letmein', 'welcome', 'iloveyou', 'admin', 'changeme',
