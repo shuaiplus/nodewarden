@@ -330,7 +330,7 @@ export async function inspectVaultPasswordSecurity(
     if (twoFactorDirectory && candidate.hostname) {
       const entry = twoFactorDirectory[candidate.hostname];
       if (entry) {
-        twoFactorSupported = Array.isArray(entry.methods) ? entry.methods.length > 0 : true;
+        twoFactorSupported = Array.isArray(entry.methods) && entry.methods.length > 0;
         twoFactorDocumentation = entry.documentation || null;
       } else {
         twoFactorSupported = false;
