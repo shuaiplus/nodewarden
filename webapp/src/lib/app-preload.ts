@@ -10,6 +10,7 @@ export function preloadAuthenticatedWorkspace(isAdmin: boolean): Promise<unknown
       import('@/components/SettingsPage'),
       import('@/components/DomainRulesPage'),
       import('@/components/SecurityDevicesPage'),
+      import('@/components/PasswordSecurityPage'),
     ]);
   }
 
@@ -44,6 +45,7 @@ export function preloadDemoExperience(): () => void {
     () => import('@/components/SettingsPage'),
     () => import('@/components/DomainRulesPage'),
     () => import('@/components/SecurityDevicesPage'),
+    () => import('@/components/PasswordSecurityPage'),
     () => import('@/components/AdminPage'),
     () => import('@/components/BackupCenterPage'),
     () => import('@/components/ImportPage'),
