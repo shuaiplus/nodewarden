@@ -112,9 +112,9 @@ export default function PasswordSecurityPage(props: PasswordSecurityPageProps) {
           <SecurityMetric icon={<ShieldAlert size={18} />} tone="danger" label={t('txt_exposed_passwords')} value={report?.exposedCount ?? 0} active={filter === 'exposed'} disabled={!report} onClick={() => setFilter('exposed')} />
           <SecurityMetric icon={<AlertTriangle size={18} />} tone="warning" label={t('txt_reused_passwords')} value={report?.reusedCount ?? 0} active={filter === 'reused'} disabled={!report} onClick={() => setFilter('reused')} />
           <SecurityMetric icon={<AlertTriangle size={18} />} tone="warning" label={t('txt_weak_passwords')} value={report?.weakCount ?? 0} active={filter === 'weak'} disabled={!report} onClick={() => setFilter('weak')} />
-          <SecurityMetric icon={<CheckCircle2 size={18} />} tone="primary" label={t('txt_passwords_checked')} value={`${scanning ? progress.checked : report?.checkedCount || 0} / ${scanning ? progress.total : report?.eligibleCount || 0}`} active={filter === 'all'} disabled={!report} onClick={() => setFilter('all')} />
           <SecurityMetric icon={<KeyRound size={18} />} tone="warning" label={t('txt_two_factor_missing')} value={report?.twoFactorMissingCount ?? 0} active={filter === 'twoFactorMissing'} disabled={!report} onClick={() => setFilter('twoFactorMissing')} />
           <SecurityMetric icon={<Fingerprint size={18} />} tone="primary" label={t('txt_passkey_available')} value={report?.passkeyAvailableCount ?? 0} active={filter === 'passkeyAvailable'} disabled={!report} onClick={() => setFilter('passkeyAvailable')} />
+          <SecurityMetric icon={<CheckCircle2 size={18} />} tone="primary" label={t('txt_passwords_checked')} value={`${scanning ? progress.checked : report?.checkedCount || 0} / ${scanning ? progress.total : report?.eligibleCount || 0}`} active={filter === 'all'} disabled={!report} onClick={() => setFilter('all')} />
         </div>
       )}
 
