@@ -318,7 +318,7 @@ export async function inspectVaultPasswordSecurity(
     ]);
   } catch (error) {
     if (isAbortError(error) || signal?.aborted) throw error;
-    // 非中断错误：检查已中止，保持两个目录为 null 并标记不可用。
+    // CDN fetch failed; directories remain null, *DataError flags set upstream.
   }
   if (twoFactorDataError) twoFactorUnavailable = true;
   if (passkeyDataError) passkeyUnavailable = true;
