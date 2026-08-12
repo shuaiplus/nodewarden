@@ -67,12 +67,12 @@
 
 ## Visual quick deploy
 
-1. Fork the NodeWarden repository to your GitHub account
-2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
-3. Choose **Continue with GitHub** and select your fork
-4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
-   - For KV mode, change the deploy command to `npm run deploy:kv`
-5. After deployment finishes, open the generated Workers URL
+1. Deploy to Cloudflare
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuaiplus/nodewarden)
+
+2. **Optional** For R2 mode, change the deploy command to `npm run deploy:r2`
+3. After deployment finishes, open the generated Workers URL
 
 - The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
 
