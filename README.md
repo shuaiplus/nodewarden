@@ -71,7 +71,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/shuaiplus/nodewarden)
 
-2. **Optional** For R2 mode, change the deploy command to `npm run deploy:r2`
+2. **Optional** For R2 mode, enable R2 in Cloudflare and change the deploy command to `npm run deploy:r2`
 3. After deployment finishes, open the generated Workers URL
 
 - The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
