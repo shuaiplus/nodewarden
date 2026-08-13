@@ -1,31 +1,33 @@
-export async function getRevisionDate(db: D1Database, userId: string): Promise<string> {
-  const row = await db
-    .prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?')
-    .bind(userId)
-    .first<{ revision_date: string }>();
+import { eq } from 'drizzle-orm';
 
-  if (row?.revision_date) return row.revision_date;
+import { getOrm } from '../db/client';
+import { userRevisions } from '../db/schema';
+
+export async function getRevisionDate(db: D1Database, userId: string): Promise<string> {
+  const orm = getOrm(db);
+  const [row] = await orm
+    .select({ revisionDate: userRevisions.revisionDate })
+    .from(userRevisions)
+    .where(eq(userRevisions.userId, userId))
+    .limit(1);
+  if (row?.revisionDate) return row.revisionDate;
 
   const date = new Date().toISOString();
-  await db
-    .prepare(
-      'INSERT INTO user_revisions(user_id, revision_date) VALUES(?, ?) ' +
-        'ON CONFLICT(user_id) DO NOTHING'
-    )
-    .bind(userId, date)
-    .run();
-
+  await orm
+    .insert(userRevisions)
+    .values({ userId, revisionDate: date })
+    .onConflictDoNothing({ target: userRevisions.userId });
   return date;
 }
 
 export async function updateRevisionDate(db: D1Database, userId: string): Promise<string> {
   const date = new Date().toISOString();
-  await db
-    .prepare(
-      'INSERT INTO user_revisions(user_id, revision_date) VALUES(?, ?) ' +
-        'ON CONFLICT(user_id) DO UPDATE SET revision_date = excluded.revision_date'
-    )
-    .bind(userId, date)
-    .run();
+  await getOrm(db)
+    .insert(userRevisions)
+    .values({ userId, revisionDate: date })
+    .onConflictDoUpdate({
+      target: userRevisions.userId,
+      set: { revisionDate: date },
+    });
   return date;
 }
