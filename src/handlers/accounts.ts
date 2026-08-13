@@ -11,6 +11,8 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
+import { createRegisterVerifyToken, verifyRegisterVerifyToken } from '../utils/jwt';
+import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -260,46 +262,30 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     return errorResponse(message, 400);
   }
 
-  let body: {
-    email?: string;
-    name?: string;
-    masterPasswordHash?: string;
-    key?: string;
-    kdf?: number;
-    kdfIterations?: number;
-    kdfMemory?: number;
-    kdfParallelism?: number;
-    inviteCode?: string;
-    masterPasswordHint?: string;
-    keys?: {
-      publicKey?: string;
-      encryptedPrivateKey?: string;
-    };
-  };
-
+  let rawBody: Record<string, unknown>;
   try {
-    body = await request.json();
+    rawBody = await request.json() as Record<string, unknown>;
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
 
-  const email = body.email?.toLowerCase().trim();
-  const name = body.name?.trim() || email;
-  const masterPasswordHash = body.masterPasswordHash;
-  const key = body.key;
-  const privateKey = body.keys?.encryptedPrivateKey;
-  const publicKey = body.keys?.publicKey;
-  const inviteCode = (body.inviteCode || '').trim();
-  const masterPasswordHint = normalizeMasterPasswordHint(body.masterPasswordHint);
+  const parsed = parseRegisterPayload(rawBody);
+  if (typeof parsed === 'string') return errorResponse(parsed, 400);
 
-  if (!email || !masterPasswordHash || !key) {
-    return errorResponse('Email, masterPasswordHash, and key are required', 400);
-  }
-  if (!email.includes('@') || email.length < 3) {
-    return errorResponse('Invalid email address', 400);
-  }
-  if (!privateKey || !publicKey) {
-    return errorResponse('Private key and public key are required', 400);
+  const email = parsed.email;
+  const name = parsed.name || email;
+  const masterPasswordHash = parsed.masterPasswordHash;
+  const key = parsed.key;
+  const privateKey = parsed.privateKey;
+  const publicKey = parsed.publicKey;
+  const inviteCode = parsed.inviteCode;
+  const masterPasswordHint = normalizeMasterPasswordHint(parsed.masterPasswordHint);
+
+  if (parsed.emailVerificationToken) {
+    const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, env.JWT_SECRET);
+    if (!claims || claims.email !== email) {
+      return errorResponse('Email verification token is invalid or expired', 400);
+    }
   }
   if (!looksLikeEncString(key)) {
     return errorResponse('key is not a valid encrypted string', 400);
@@ -311,7 +297,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
   }
 
-  const kdfErr = validateKdfParams(body.kdf, body.kdfIterations, body.kdfMemory, body.kdfParallelism);
+  const kdfErr = validateKdfParams(parsed.kdf, parsed.kdfIterations, parsed.kdfMemory, parsed.kdfParallelism);
   if (kdfErr) return errorResponse(kdfErr, 400);
 
   const now = new Date().toISOString();
@@ -327,10 +313,10 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     key,
     privateKey,
     publicKey,
-    kdfType: body.kdf ?? 0,
-    kdfIterations: body.kdfIterations ?? LIMITS.auth.defaultKdfIterations,
-    kdfMemory: body.kdfMemory,
-    kdfParallelism: body.kdfParallelism,
+    kdfType: parsed.kdf ?? 0,
+    kdfIterations: parsed.kdfIterations ?? LIMITS.auth.defaultKdfIterations,
+    kdfMemory: parsed.kdfMemory,
+    kdfParallelism: parsed.kdfParallelism,
     securityStamp: generateUUID(),
     role: 'user',
     status: 'active',
@@ -367,22 +353,24 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
       level: 'security',
       metadata: { email: user.email, ...auditRequestMetadata(request) },
     });
-    return jsonResponse({ success: true, role: user.role }, 200);
+    return registerSuccessResponse(user.role);
   }
 
-  if (!inviteCode) {
+  if (!inviteCode && !isOpenRegistrationEnabled(env)) {
     return errorResponse('Invite code is required', 403);
   }
 
-  const inviteMarked = await storage.markInviteUsed(inviteCode, user.id);
-  if (!inviteMarked) {
-    return errorResponse('Invite code is invalid or expired', 403);
+  if (inviteCode) {
+    const inviteMarked = await storage.markInviteUsed(inviteCode, user.id);
+    if (!inviteMarked) {
+      return errorResponse('Invite code is invalid or expired', 403);
+    }
   }
 
   try {
     await storage.createUser(user);
   } catch (error) {
-    await storage.revertInviteUsed(inviteCode, user.id);
+    if (inviteCode) await storage.revertInviteUsed(inviteCode, user.id);
     const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
     if (msg.includes('unique') || msg.includes('constraint')) {
       return errorResponse('Email already registered', 409);
@@ -391,19 +379,20 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     throw error;
   }
 
-  try {
-    const assigned = await storage.assignInviteUsedBy(inviteCode, user.id);
-    if (!assigned) {
-      console.warn('Invite used_by was not assigned after registration', { inviteCode, userId: user.id });
+  if (inviteCode) {
+    try {
+      const assigned = await storage.assignInviteUsedBy(inviteCode, user.id);
+      if (!assigned) {
+        console.warn('Invite used_by was not assigned after registration', { inviteCode, userId: user.id });
+      }
+    } catch (error) {
+      console.error('Invite used_by assignment failed after registration:', error);
     }
-  } catch (error) {
-    // The invite is already consumed. Do not reactivate it after the user row exists.
-    console.error('Invite used_by assignment failed after registration:', error);
   }
 
   await writeAuditEvent(storage, {
     actorUserId: user.id,
-    action: 'user.register.invite',
+    action: inviteCode ? 'user.register.invite' : 'user.register.open',
     targetType: 'user',
     targetId: user.id,
     category: 'security',
@@ -411,7 +400,47 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     metadata: { email: user.email, inviteCode, ...auditRequestMetadata(request) },
   });
 
-  return jsonResponse({ success: true, role: user.role }, 200);
+  return registerSuccessResponse(user.role);
+}
+
+function registerSuccessResponse(role: User['role']): Response {
+  return jsonResponse({
+    object: 'register',
+    captchaBypassToken: '',
+    success: true,
+    role,
+  }, 200);
+}
+
+export async function handleRegisterSendVerificationEmail(request: Request, env: Env): Promise<Response> {
+  const unsafe = jwtSecretUnsafeReason(env);
+  if (unsafe) {
+    return errorResponse(unsafe === 'missing' ? 'JWT_SECRET is not set' : 'JWT_SECRET must be at least 32 characters', 400);
+  }
+
+  let body: { email?: string; name?: string };
+  try {
+    body = await request.json() as { email?: string; name?: string };
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const email = String(body.email || '').trim().toLowerCase();
+  const name = String(body.name || '').trim() || null;
+  if (!email || !email.includes('@')) return errorResponse('Invalid email address', 400);
+
+  const storage = new StorageService(env.DB);
+  const userCount = await storage.getUserCount();
+  if (userCount > 0 && !isOpenRegistrationEnabled(env)) {
+    return errorResponse('Registration is invite-only', 403);
+  }
+
+  const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
+  return jsonResponse(token);
+}
+
+export async function handleRegisterFinish(request: Request, env: Env): Promise<Response> {
+  return handleRegister(request, env);
 }
 
 // POST /api/accounts/password-hint
@@ -494,7 +523,7 @@ export async function handleGetProfile(request: Request, env: Env, userId: strin
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(buildProfileResponse(user, env));
+  return jsonResponse(await buildProfileResponse(user, env));
 }
 
 // PUT /api/accounts/profile
@@ -533,7 +562,7 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
     },
   });
 
-  return jsonResponse(buildProfileResponse(user, env));
+  return jsonResponse(await buildProfileResponse(user, env));
 }
 
 // PUT/POST /api/accounts/verify-devices

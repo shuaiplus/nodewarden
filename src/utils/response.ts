@@ -3,6 +3,7 @@ import type { Env } from '../types';
 import {
   isBrowserExtensionOrigin,
   isConfiguredWebAuthnAllowedOrigin,
+  isConfiguredWebVaultOrigin,
   isOfficialBitwardenDesktopOrigin,
   normalizeOrigin,
 } from './origins';
@@ -46,7 +47,7 @@ function getCorsPolicy(request: Request, env: Env): { allowOrigin: string | null
       : { allowOrigin: null, allowCredentials: false };
   }
   const origin = normalizeOrigin(originHeader);
-  if (origin === url.origin) {
+  if (origin === url.origin || isConfiguredWebVaultOrigin(env, origin)) {
     return { allowOrigin: origin, allowCredentials: true };
   }
   if (

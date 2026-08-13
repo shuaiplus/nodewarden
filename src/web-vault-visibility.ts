@@ -11,12 +11,21 @@ const BACKEND_PATH_PREFIXES = [
   '/devices',
   '/auth-requests',
   '/webauthn',
+  '/scim',
+  '/v2',
+  '/connect',
+  '/sso',
+  '/oidc-signin',
+  '/licenses',
+  '/plans',
+  '/emergency-access',
 ] as const;
 
 const BACKEND_EXACT_PATHS = new Set([
   '/v1/assetlinks:check',
   '/web-bootstrap',
   '/config',
+  '/alive',
   '/accounts/kdf',
   '/settings/domains',
 ]);
