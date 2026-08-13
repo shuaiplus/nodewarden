@@ -21,3 +21,19 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 - Web vaults:
   - Local: `webapp/` (Preact + Vite) → Worker assets (`dist/`)
   - Official: `official-web/` (Bitwarden OSS self-host Angular) → Cloudflare Pages, API proxied to the Worker
+
+## Data
+
+Schema lives in `src/db/schema.ts` and `src/db/relations.ts` (relations v2). `npm run db:generate` emits nested `migrations/<id>/migration.sql` and embeds SQL into `src/db/baseline.sql.ts` for Worker bootstrap. Bump `STORAGE_SCHEMA_VERSION` when the schema changes.
+
+Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D1 caps one statement at 100 bound parameters.
+
+Personal vault lists and mutations filter `organization_id IS NULL`. Organization ciphers are loaded by id, then membership and collection ACL in `src/handlers/cipher-access.ts`.
+
+Instance backups never include runtime auth state (`session`, `account`, `two_factor`, devices, auth requests, remembered 2FA tokens).
+
+## Auth
+
+Better Auth owns credential hashing (`$s2$` via `src/services/auth-password.ts`), the `session` / `account` / `two_factor` tables, and `/api/auth/*`. Official clients stay on Bitwarden `/identity` and `/api`; those handlers call Better Auth internally where useful and still mint HS256 access JWTs with `JWT_SECRET`. Refresh tokens are rows in `session`, not a separate table.
+
+`better-auth-cloudflare` `withCloudflare()` is not used: its bundled drizzle types clash with 1.0-rc. `src/auth.ts` wires `drizzleAdapter`, KV secondary storage, and `cf-connecting-ip` directly. Worker `nodejs_compat` is required.

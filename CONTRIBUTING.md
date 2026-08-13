@@ -94,7 +94,7 @@ compatibility plan.
 
 `users.master_password_hash` is for server-side login verification. It is not the
 vault decryption key. Password changes, key material, `securityStamp`, and
-refresh-token revocation must stay aligned.
+session revocation (`session` table) must stay aligned.
 
 Password hints are reminders, not recovery secrets. They must never contain the
 master password, recovery codes, API keys, or anything that directly unlocks the
