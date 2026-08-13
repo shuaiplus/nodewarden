@@ -24,6 +24,7 @@
     "db:embed": "node scripts/embed-baseline.mjs",
     "db:seed": "tsx scripts/seed.ts",
     "test:db-schema": "tsx --test scripts/relations-smoke.test.ts scripts/drizzle-migrate.test.ts",
+    "test:auth-password": "tsx --test src/services/auth-password.test.ts",
     "test:org-authz": "tsx --test src/services/org-authz.test.ts",
     "test:register-payload": "tsx --test src/services/register-payload.test.ts",
     "test:enterprise-license": "tsx --test src/services/enterprise-license.test.ts",
@@ -85,10 +86,14 @@
     "wrangler": "^4.105.0"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.6.27",
+    "@better-auth/sso": "^1.6.27",
     "@noble/hashes": "^2.2.0",
     "@simplewebauthn/server": "^13.3.2",
     "@tanstack/react-query": "^5.101.2",
     "@zip.js/zip.js": "^2.8.26",
+    "better-auth": "^1.6.27",
+    "better-auth-cloudflare": "^0.3.1",
     "drizzle-orm": "1.0.0-rc.4",
     "fflate": "^0.8.3",
     "jsqr": "1.4.0",
