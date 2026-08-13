@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NodeWarden SSO</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code') || '';
+      var state = params.get('state') || '';
+      var error = params.get('error') || '';
+      var next = new URL('/', window.location.origin);
+      if (code) next.searchParams.set('ssoCode', code);
+      if (state) next.searchParams.set('ssoState', state);
+      if (error) next.searchParams.set('ssoError', error);
+      window.location.replace(next.toString());
+    })();
+  </script>
+  Completing SSO sign-in…
+</body>
+</html>
