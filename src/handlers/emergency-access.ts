@@ -158,16 +158,20 @@ export async function handleEmergencyAccessRoute(
     return new Response(null, { status: 200 });
   }
   if (action === 'accept' && method === 'POST') {
+    // Only a pending invite may bind a grantee: later states drop `email` on confirm,
+    // so without the status gate a guessed id could re-bind an already-confirmed record.
+    if (record.status !== EmergencyAccessStatus.Invited) return errorResponse('Emergency access not valid', 400);
+    const email = user.email.toLowerCase();
+    if (!record.email || record.email.toLowerCase() !== email) {
+      return errorResponse('Emergency access not valid', 404);
+    }
     const body = await request.json() as Record<string, unknown>;
     const token = String(body.token || '');
     if (token) {
       const claims = await verifyRegisterVerifyToken(token, env.JWT_SECRET);
-      if (claims && claims.email !== user.email.toLowerCase()) {
+      if (!claims || claims.email !== email) {
         return errorResponse('Invite email does not match this account', 400);
       }
-    }
-    if (record.email && record.email.toLowerCase() !== user.email.toLowerCase()) {
-      return errorResponse('Emergency access not valid', 404);
     }
     record.granteeId = user.id;
     record.status = EmergencyAccessStatus.Accepted;
