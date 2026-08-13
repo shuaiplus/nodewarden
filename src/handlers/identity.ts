@@ -373,9 +373,19 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (!code) return identityErrorResponse('code is required', 'invalid_request', 400);
     const claims = await exchangeOidcCode(env, code, new URL(request.url).origin);
     if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
-    let user = await storage.getUser(claims.email);
     const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
-    if (linked) user = await storage.getUserById(linked.userId) || user;
+    let user = linked ? await storage.getUserById(linked.userId) : null;
+    // Adopting an existing local account by email address is only safe when the
+    // provider vouches for the address; otherwise anyone who can claim that email
+    // at the IdP inherits the local vault.
+    if (!user && !claims.emailVerified) {
+      return identityErrorResponse(
+        'SSO linking requires an email address verified by your identity provider',
+        'invalid_grant',
+        400
+      );
+    }
+    if (!user) user = await storage.getUser(claims.email);
     if (!user) {
       if (String(env.SSO_SIGNUPS || '1') === '0') {
         return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
