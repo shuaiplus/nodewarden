@@ -11,6 +11,9 @@ import {
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
+import * as orgRepo from '../services/storage-org-repo';
+import { canViewCipher, hasFullCollectionAccess, resolveCollectionPermission } from '../services/org-authz';
+import { policyResponse } from '../utils/org-response';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -77,24 +80,71 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return cachedResponse;
   }
 
-  const [ciphers, folders, sends, attachmentsByCipher, domainSettings] = await Promise.all([
+  const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([
     storage.getAllCiphers(userId),
     storage.getAllFolders(userId),
     excludeSends ? Promise.resolve([]) : storage.getAllSends(userId),
     storage.getAttachmentsByUserId(userId),
     excludeDomains ? Promise.resolve(null) : storage.getUserDomainSettings(userId),
+    orgRepo.listAccessibleOrgCiphers(env.DB, userId),
   ]);
+  const attachmentsByCipher = new Map(personalAttachments);
+  const extraAttachmentMap = await storage.getAttachmentsByCipherIds(orgCiphersForAttachments.map((cipher) => cipher.id));
+  for (const [cipherId, attachments] of extraAttachmentMap.entries()) {
+    attachmentsByCipher.set(cipherId, attachments);
+  }
   const webAuthnPrfOptions = accountPasskeys
     .map(buildWebAuthnPrfOption)
     .filter((option): option is NonNullable<typeof option> => !!option);
   const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOptions[0] || null);
   const validFolderIds = new Set(folders.map((folder) => folder.id));
 
-  const profile: ProfileResponse = buildProfileResponse(user, env);
+  const profile: ProfileResponse = await buildProfileResponse(user, env);
+  const orgCiphers = orgCiphersForAttachments;
+  const visibleOrgCiphers = [];
+  const collectionDetails = [];
+  const policies = await orgRepo.listEnabledPoliciesForUser(env.DB, userId);
+  const memberships = await orgRepo.listMembershipsByUser(env.DB, userId);
+  for (const member of memberships) {
+    if (member.status !== 2) continue;
+    const collections = await orgRepo.listCollectionsByOrg(env.DB, member.orgId);
+    const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, member.orgId);
+    const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
+    for (const collection of collections) {
+      const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);
+      if (!permission.canView && !hasFullCollectionAccess(member)) continue;
+      collectionDetails.push({
+        id: collection.id,
+        organizationId: collection.orgId,
+        name: collection.name,
+        externalId: collection.externalId,
+        type: 0,
+        readOnly: permission.readOnly,
+        hidePasswords: permission.hidePasswords,
+        manage: permission.manage,
+        object: 'collectionDetails',
+      });
+    }
+    const assignedIds = new Set(assigned.map((item) => item.collectionId));
+    for (const cipher of orgCiphers.filter((item) => item.organizationId === member.orgId)) {
+      const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, cipher.id);
+      if (!canViewCipher(member, collectionIds, assignedMap) && assignedIds.size >= 0) {
+        if (!hasFullCollectionAccess(member) && !canViewCipher(member, collectionIds, assignedMap)) continue;
+      }
+      visibleOrgCiphers.push({ ...cipher, collectionIds });
+    }
+  }
 
   const cipherResponses: CipherResponse[] = [];
-  for (const cipher of ciphers) {
+  for (const cipher of [...ciphers, ...visibleOrgCiphers]) {
     const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris, validFolderIds });
+    if (cipher.organizationId) {
+      response.organizationId = cipher.organizationId;
+      response.collectionIds = Array.isArray((cipher as { collectionIds?: string[] }).collectionIds)
+        ? (cipher as { collectionIds?: string[] }).collectionIds || []
+        : [];
+      response.userId = null;
+    }
     if (isCipherResponseSyncCompatible(response)) {
       cipherResponses.push(response);
     }
@@ -115,7 +165,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const syncResponse: SyncResponse = {
     profile,
     folders: folderResponses,
-    collections: [],
+    collections: collectionDetails,
     ciphers: cipherResponses,
     domains: excludeDomains
       ? null
@@ -125,8 +175,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
           domainSettings?.excludedGlobalEquivalentDomains || [],
           { omitExcludedGlobals: true }
         ),
-    policies: [],
-    policiesNew: [],
+    policies: policies.map(policyResponse),
+    policiesNew: policies.map(policyResponse),
     sends: sendResponses,
     UserDecryption: {
       MasterPasswordUnlock: userDecryptionOptions.MasterPasswordUnlock,
