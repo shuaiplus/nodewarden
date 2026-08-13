@@ -212,22 +212,6 @@ export const sends = sqliteTable('sends', {
   index('idx_sends_user_updated_id').on(table.userId, table.updatedAt, table.id),
 ]);
 
-export const refreshTokens = sqliteTable('refresh_tokens', {
-  token: text('token').primaryKey(),
-  userId: text('user_id').notNull(),
-  expiresAt: integer('expires_at').notNull(),
-  deviceIdentifier: text('device_identifier'),
-  deviceSessionStamp: text('device_session_stamp'),
-  securityStamp: text('security_stamp'),
-  createdAt: integer('created_at'),
-  lastUsedAt: integer('last_used_at'),
-  absoluteExpiresAt: integer('absolute_expires_at'),
-  clientType: text('client_type'),
-}, (table) => [
-  foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
-  index('idx_refresh_tokens_user').on(table.userId),
-]);
-
 export const invites = sqliteTable('invites', {
   code: text('code').primaryKey(),
   createdBy: text('created_by').notNull(),

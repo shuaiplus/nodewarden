@@ -21,7 +21,6 @@ export const relations = defineRelations(schema, (r) => ({
     ciphers: r.many.ciphers({ from: r.users.id, to: r.ciphers.userId, alias: 'user_all_ciphers' }),
     folders: r.many.folders(),
     sends: r.many.sends(),
-    refreshTokens: r.many.refreshTokens(),
     sessions: r.many.session(),
     accounts: r.many.account(),
     twoFactor: r.one.twoFactor({ from: r.users.id, to: r.twoFactor.userId }),
@@ -78,10 +77,6 @@ export const relations = defineRelations(schema, (r) => ({
 
   sends: {
     user: r.one.users({ from: r.sends.userId, to: r.users.id, optional: false }),
-  },
-
-  refreshTokens: {
-    user: r.one.users({ from: r.refreshTokens.userId, to: r.users.id, optional: false }),
   },
 
   session: {

@@ -27,5 +27,5 @@ test('generated migrations apply twice and yield the current table set', () => {
   assert.ok(statements.length > 40);
   for (const statement of statements) execIdempotent(db, statement);
   for (const statement of statements) execIdempotent(db, statement);
-  assert.equal(tableNames(db).length, 44);
+  assert.equal(tableNames(db).length, 43);
 });

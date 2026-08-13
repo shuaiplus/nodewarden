@@ -50,7 +50,6 @@ const db = drizzle({ client: sqlite });
 await seed(db, schema, { count: 1, seed: 1, version: SEED_GENERATOR_VERSION }).refine(() => ({
   users: { count: 2 },
   ciphers: { count: 2 },
-  refreshTokens: { count: 0 },
   usedAttachmentDownloadTokens: { count: 0 },
   loginAttemptsIp: { count: 0 },
   rateLimitBuckets: { count: 0 },
