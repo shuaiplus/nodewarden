@@ -36,6 +36,6 @@ Instance backups never include runtime auth state (`session`, `account`, `two_fa
 
 Better Auth owns credential hashing (`$s2$` via `src/services/auth-password.ts`), the `session` / `account` / `two_factor` tables, and `/api/auth/*`. Official clients stay on Bitwarden `/identity` and `/api`; those handlers call Better Auth internally where useful and still mint HS256 access JWTs with `JWT_SECRET`. Refresh tokens are rows in `session`, not a separate table.
 
-Official-web signup emails go through the Cloudflare Email Sending binding (`env.EMAIL.send()`). `EMAIL_FROM` must be on an onboarded sending domain. The Worker returns an empty JSON string from `send-verification-email` (never the JWT); `/finish` requires the token from the message. RFC documentation addresses such as `@example.com` get the same empty response without a send.
+Official-web signup emails go through the Cloudflare Email Sending binding (`env.EMAIL.send()`). `EMAIL_FROM` must be on an onboarded sending domain. The Worker returns an empty JSON string from `send-verification-email` (never the JWT). Official self-host web still continues to the password form; the email link uses `/redirect-connector.html#finish-signup`. RFC documentation addresses such as `@example.com` get the same empty response without a send.
 
 `better-auth-cloudflare` `withCloudflare()` is not used: its bundled drizzle types clash with 1.0-rc. `src/auth.ts` wires `drizzleAdapter`, KV secondary storage, and `cf-connecting-ip` directly. Worker `nodejs_compat` is required.

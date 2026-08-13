@@ -258,11 +258,7 @@ function keysResponse(user: User): Record<string, unknown> {
 // POST /api/accounts/register
 // - First user becomes admin.
 // - Any subsequent user must provide a valid inviteCode.
-export async function handleRegister(
-  request: Request,
-  env: Env,
-  options: { requireEmailVerification?: boolean } = {}
-): Promise<Response> {
+export async function handleRegister(request: Request, env: Env): Promise<Response> {
   const storage = new StorageService(env.DB);
 
   const unsafe = jwtSecretUnsafeReason(env);
@@ -292,9 +288,6 @@ export async function handleRegister(
   const inviteCode = parsed.inviteCode;
   const masterPasswordHint = normalizeMasterPasswordHint(parsed.masterPasswordHint);
 
-  if (options.requireEmailVerification && !parsed.emailVerificationToken) {
-    return errorResponse('Email verification token is required', 400);
-  }
   if (parsed.emailVerificationToken) {
     const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, env.JWT_SECRET);
     if (!claims || claims.email !== email) {
@@ -476,7 +469,10 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
 }
 
 export async function handleRegisterFinish(request: Request, env: Env): Promise<Response> {
-  return handleRegister(request, env, { requireEmailVerification: true });
+  // Official self-host web still continues to the password form when
+  // send-verification-email returns an empty body. The emailed link carries a
+  // token when present; do not require it here or signup breaks.
+  return handleRegister(request, env);
 }
 
 // POST /api/accounts/password-hint

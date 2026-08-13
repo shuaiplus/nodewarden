@@ -32,7 +32,15 @@ test.describe('official Bitwarden web against NodeWarden', () => {
     await page.getByLabel(/email address/i).fill(email);
     const nameField = page.getByLabel(/^name$/i);
     if (await nameField.count()) await nameField.fill('Official');
+    const verify = page.waitForResponse(
+      (response) => response.url().includes('/accounts/register/send-verification-email') && response.request().method() === 'POST'
+    );
     await page.getByRole('button', { name: /^continue$/i }).click();
-    await expect(page.getByText(/check your email/i)).toBeVisible({ timeout: 30_000 });
+    const verifyResponse = await verify;
+    expect(verifyResponse.ok()).toBeTruthy();
+    expect(await verifyResponse.json()).toBe('');
+    // Official self-host web continues to the password form; cloud Bitwarden
+    // would show "Check your email" instead.
+    await expect(page.getByRole('heading', { name: /set a strong password/i })).toBeVisible({ timeout: 30_000 });
   });
 });
