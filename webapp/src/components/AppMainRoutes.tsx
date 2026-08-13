@@ -10,6 +10,12 @@ import type { CiphersImportPayload } from '@/lib/api/vault';
 import { t } from '@/lib/i18n';
 import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, TwoFactorPasskeySettings, VaultDraft, YubiKeyOtpSettings } from '@/lib/types';
 import type { ExportRequest } from '@/lib/export-formats';
+import type { ProfileOrganization } from '@/lib/api/orgs';
+
+function organizationsFromProfile(profile: Profile | null): ProfileOrganization[] {
+  const organizations = profile?.organizations;
+  return Array.isArray(organizations) ? organizations as ProfileOrganization[] : [];
+}
 
 const VaultPage = lazy(() => import('@/components/VaultPage'));
 const SendsPage = lazy(() => import('@/components/SendsPage'));
@@ -23,6 +29,8 @@ const AdminPage = lazy(() => import('@/components/AdminPage'));
 const LogCenterPage = lazy(() => import('@/components/LogCenterPage'));
 const BackupCenterPage = lazy(() => import('@/components/BackupCenterPage'));
 const ImportPage = lazy(() => import('@/components/ImportPage'));
+const OrganizationPage = lazy(() => import('@/components/OrganizationPage'));
+const SecretsManagerPage = lazy(() => import('@/components/SecretsManagerPage'));
 
 function RouteContentFallback() {
   return <LoadingState card lines={5} />;
@@ -68,6 +76,8 @@ export interface AppMainRoutesProps {
   domainRules: DomainRules | null;
   domainRulesLoading: boolean;
   domainRulesError: string;
+  authedFetch: import('@/lib/api/shared').AuthedFetch;
+  onRefreshProfile: () => Promise<void> | void;
   onNavigate: (path: string) => void;
   onLogout: () => void;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
@@ -339,6 +349,27 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
         ) : props.profileLoading ? (
           <LoadingState card lines={5} />
         ) : null}
+      </Route>
+      <Route path="/organizations">
+        {props.session ? (
+          <OrganizationPage
+            organizations={organizationsFromProfile(props.profile)}
+            session={props.session}
+            authedFetch={props.authedFetch}
+            onOrganizationsChanged={props.onRefreshProfile}
+            onNotify={props.onNotify}
+          />
+        ) : <LoadingState card lines={5} />}
+      </Route>
+      <Route path="/secrets">
+        {props.session ? (
+          <SecretsManagerPage
+            organizations={organizationsFromProfile(props.profile)}
+            session={props.session}
+            authedFetch={props.authedFetch}
+            onNotify={props.onNotify}
+          />
+        ) : <LoadingState card lines={5} />}
       </Route>
       <Route path="/settings">
         {props.profile ? (

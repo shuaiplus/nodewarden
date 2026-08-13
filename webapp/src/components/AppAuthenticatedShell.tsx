@@ -141,6 +141,8 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
           {renderSubLink('/generator', props.location === '/generator', t('nav_generator'))}
           {renderSubLink('/security/password-health', props.location === '/security/password-health', t('nav_password_security'))}
           {renderSubLink(props.importRoute, props.isImportRoute, t('nav_import_export'))}
+          {renderSubLink('/organizations', props.location === '/organizations', t('nav_organizations'))}
+          {renderSubLink('/secrets', props.location === '/secrets', t('nav_secrets_manager'))}
         </>
       )}
       {renderNavGroup(
