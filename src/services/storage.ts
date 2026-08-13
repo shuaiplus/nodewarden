@@ -1,3 +1,6 @@
+import { sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
@@ -208,12 +211,11 @@ export class StorageService {
   }
 
   private async hasRequiredSchemaTables(): Promise<boolean> {
-    const placeholders = REQUIRED_SCHEMA_TABLES.map(() => '?').join(', ');
-    const result = await this.db
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
-      .bind(...REQUIRED_SCHEMA_TABLES)
-      .all<{ name: string }>();
-    const found = new Set((result.results || []).map((row) => row.name));
+    const rows = await getOrm(this.db).all(sql`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (${sql.join(REQUIRED_SCHEMA_TABLES.map((name) => sql`${name}`), sql`, `)})
+    `) as Array<{ name: string }>;
+    const found = new Set(rows.map((row) => row.name));
     return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
   }
 
@@ -263,7 +265,7 @@ export class StorageService {
   async initializeDatabase(): Promise<void> {
     if (StorageService.schemaVerified) return;
 
-    await this.db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)').run();
+    await getOrm(this.db).run(sql`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     const schemaVersion = await getStoredConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY);
     const schemaMissingRequiredTables = schemaVersion === STORAGE_SCHEMA_VERSION
       ? !(await this.hasRequiredSchemaTables())

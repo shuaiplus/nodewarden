@@ -22,6 +22,7 @@ import {
   revokeStatus,
   restoreStatus,
 } from '../services/org-types';
+import { deleteCiphersByOrganization } from '../services/storage-cipher-repo';
 import * as orgRepo from '../services/storage-org-repo';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -167,10 +168,7 @@ export async function handleDeleteOrganization(env: Env, userId: string, orgId: 
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canDeleteOrganization(member)) return errorResponse('Only an owner can delete the organization', 403);
-  const cipherIds = await orgRepo.listOrgCipherIds(env.DB, orgId);
-  for (const cipherId of cipherIds) {
-    await env.DB.prepare('DELETE FROM ciphers WHERE id = ?').bind(cipherId).run();
-  }
+  await deleteCiphersByOrganization(env.DB, orgId);
   await orgRepo.deleteOrganization(env.DB, orgId);
   return jsonResponse({});
 }

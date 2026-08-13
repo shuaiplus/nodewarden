@@ -1,4 +1,8 @@
+import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
+import { loginAttemptsIp, rateLimitBuckets } from '../db/schema';
 
 // Rate limiting service.
 // - Login attempts: D1-backed (low volume, security-critical, needs cross-colo persistence).
@@ -12,8 +16,6 @@ const CONFIG = {
 };
 
 export class RateLimitService {
-  private static loginIpTableReady = false;
-  private static strictBudgetTableReady = false;
   private static lastLoginIpCleanupAt = 0;
   private static lastStrictBudgetCleanupAt = 0;
 
@@ -36,50 +38,13 @@ export class RateLimitService {
     }
 
     const cutoff = nowMs - RateLimitService.LOGIN_IP_RETENTION_MS;
-    await this.db
-      .prepare(
-        'DELETE FROM login_attempts_ip WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)'
-      )
-      .bind(cutoff, nowMs)
-      .run();
+    await getOrm(this.db)
+      .delete(loginAttemptsIp)
+      .where(and(
+        lt(loginAttemptsIp.updatedAt, cutoff),
+        or(isNull(loginAttemptsIp.lockedUntil), lt(loginAttemptsIp.lockedUntil, nowMs)),
+      ));
     RateLimitService.lastLoginIpCleanupAt = nowMs;
-  }
-
-  private async ensureLoginIpTable(): Promise<void> {
-    if (RateLimitService.loginIpTableReady) return;
-
-    await this.db
-      .prepare(
-        'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
-        'ip TEXT PRIMARY KEY, ' +
-        'attempts INTEGER NOT NULL, ' +
-        'locked_until INTEGER, ' +
-        'updated_at INTEGER NOT NULL' +
-        ')'
-      )
-      .run();
-
-    RateLimitService.loginIpTableReady = true;
-  }
-
-  private async ensureStrictBudgetTable(): Promise<void> {
-    if (RateLimitService.strictBudgetTableReady) return;
-
-    await this.db
-      .prepare(
-        'CREATE TABLE IF NOT EXISTS rate_limit_buckets (' +
-        'bucket_key TEXT PRIMARY KEY, ' +
-        'count INTEGER NOT NULL, ' +
-        'expires_at INTEGER NOT NULL, ' +
-        'updated_at INTEGER NOT NULL' +
-        ')'
-      )
-      .run();
-
-    await this.db
-      .prepare('CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_expires ON rate_limit_buckets(expires_at)')
-      .run();
-    RateLimitService.strictBudgetTableReady = true;
   }
 
   private async maybeCleanupStrictBudgets(nowMs: number): Promise<void> {
@@ -87,7 +52,7 @@ export class RateLimitService {
       return;
     }
 
-    await this.db.prepare('DELETE FROM rate_limit_buckets WHERE expires_at < ?').bind(nowMs).run();
+    await getOrm(this.db).delete(rateLimitBuckets).where(lt(rateLimitBuckets.expiresAt, nowMs));
     RateLimitService.lastStrictBudgetCleanupAt = nowMs;
   }
 
@@ -96,31 +61,30 @@ export class RateLimitService {
     remainingAttempts: number;
     retryAfterSeconds?: number;
   }> {
-    await this.ensureLoginIpTable();
-
     const key = ip.trim() || 'unknown';
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
 
-    const row = await this.db
-      .prepare('SELECT attempts, locked_until FROM login_attempts_ip WHERE ip = ?')
-      .bind(key)
-      .first<{ attempts: number; locked_until: number | null }>();
+    const [row] = await getOrm(this.db)
+      .select({ attempts: loginAttemptsIp.attempts, lockedUntil: loginAttemptsIp.lockedUntil })
+      .from(loginAttemptsIp)
+      .where(eq(loginAttemptsIp.ip, key))
+      .limit(1);
 
     if (!row) {
       return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
     }
 
-    if (row.locked_until && row.locked_until > now) {
+    if (row.lockedUntil && row.lockedUntil > now) {
       return {
         allowed: false,
         remainingAttempts: 0,
-        retryAfterSeconds: Math.ceil((row.locked_until - now) / 1000),
+        retryAfterSeconds: Math.ceil((row.lockedUntil - now) / 1000),
       };
     }
 
-    if (row.locked_until && row.locked_until <= now) {
-      await this.db.prepare('DELETE FROM login_attempts_ip WHERE ip = ?').bind(key).run();
+    if (row.lockedUntil && row.lockedUntil <= now) {
+      await getOrm(this.db).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
       return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
     }
 
@@ -129,35 +93,38 @@ export class RateLimitService {
   }
 
   async recordFailedLogin(ip: string): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
-    await this.ensureLoginIpTable();
-
     const key = ip.trim() || 'unknown';
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
+    const orm = getOrm(this.db);
 
     // D1 in Workers forbids raw BEGIN/COMMIT statements.
     // Use a single atomic UPSERT to increment attempts.
     // This is concurrency-safe because the row is keyed by IP.
-    await this.db
-      .prepare(
-        'INSERT INTO login_attempts_ip(ip, attempts, locked_until, updated_at) VALUES(?, 1, NULL, ?) ' +
-        'ON CONFLICT(ip) DO UPDATE SET attempts = attempts + 1, updated_at = excluded.updated_at'
-      )
-      .bind(key, now)
-      .run();
+    await orm
+      .insert(loginAttemptsIp)
+      .values({ ip: key, attempts: 1, lockedUntil: null, updatedAt: now })
+      .onConflictDoUpdate({
+        target: loginAttemptsIp.ip,
+        set: {
+          attempts: sql`${loginAttemptsIp.attempts} + 1`,
+          updatedAt: now,
+        },
+      });
 
-    const row = await this.db
-      .prepare('SELECT attempts FROM login_attempts_ip WHERE ip = ?')
-      .bind(key)
-      .first<{ attempts: number }>();
+    const [row] = await orm
+      .select({ attempts: loginAttemptsIp.attempts })
+      .from(loginAttemptsIp)
+      .where(eq(loginAttemptsIp.ip, key))
+      .limit(1);
 
     const attempts = row?.attempts || 1;
     if (attempts >= CONFIG.LOGIN_MAX_ATTEMPTS) {
       const lockedUntil = now + CONFIG.LOGIN_LOCKOUT_MINUTES * 60 * 1000;
-      await this.db
-        .prepare('UPDATE login_attempts_ip SET locked_until = ?, updated_at = ? WHERE ip = ?')
-        .bind(lockedUntil, now, key)
-        .run();
+      await orm
+        .update(loginAttemptsIp)
+        .set({ lockedUntil, updatedAt: now })
+        .where(eq(loginAttemptsIp.ip, key));
       return { locked: true, retryAfterSeconds: CONFIG.LOGIN_LOCKOUT_MINUTES * 60 };
     }
 
@@ -165,9 +132,8 @@ export class RateLimitService {
   }
 
   async clearLoginAttempts(ip: string): Promise<void> {
-    await this.ensureLoginIpTable();
     const key = ip.trim() || 'unknown';
-    await this.db.prepare('DELETE FROM login_attempts_ip WHERE ip = ?').bind(key).run();
+    await getOrm(this.db).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
   }
 
   // Cache API-backed fixed-window rate limiter.
@@ -219,8 +185,6 @@ export class RateLimitService {
     maxRequests: number,
     windowSeconds: number
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
-    await this.ensureStrictBudgetTable();
-
     const key = String(identifier || '').trim() || 'unknown';
     const max = Math.max(1, Math.floor(maxRequests));
     const windowSize = Math.max(1, Math.floor(windowSeconds));
@@ -230,28 +194,30 @@ export class RateLimitService {
     const windowEndMs = (windowStart + windowSize) * 1000;
     const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000));
     const bucketKey = `${key}:${windowStart}`;
+    const orm = getOrm(this.db);
 
     await this.maybeCleanupStrictBudgets(nowMs);
-    await this.db
-      .prepare(
-        'INSERT OR IGNORE INTO rate_limit_buckets(bucket_key, count, expires_at, updated_at) VALUES(?, 0, ?, ?)'
-      )
-      .bind(bucketKey, windowEndMs, nowMs)
-      .run();
+    await orm
+      .insert(rateLimitBuckets)
+      .values({ bucketKey, count: 0, expiresAt: windowEndMs, updatedAt: nowMs })
+      .onConflictDoNothing({ target: rateLimitBuckets.bucketKey });
 
-    const update = await this.db
-      .prepare(
-        'UPDATE rate_limit_buckets SET count = count + 1, expires_at = ?, updated_at = ? ' +
-        'WHERE bucket_key = ? AND count < ?'
-      )
-      .bind(windowEndMs, nowMs, bucketKey, max)
+    const update = await orm
+      .update(rateLimitBuckets)
+      .set({
+        count: sql`${rateLimitBuckets.count} + 1`,
+        expiresAt: windowEndMs,
+        updatedAt: nowMs,
+      })
+      .where(and(eq(rateLimitBuckets.bucketKey, bucketKey), sql`${rateLimitBuckets.count} < ${max}`))
       .run();
 
     const allowed = Number(update.meta?.changes ?? 0) > 0;
-    const row = await this.db
-      .prepare('SELECT count FROM rate_limit_buckets WHERE bucket_key = ?')
-      .bind(bucketKey)
-      .first<{ count: number }>();
+    const [row] = await orm
+      .select({ count: rateLimitBuckets.count })
+      .from(rateLimitBuckets)
+      .where(eq(rateLimitBuckets.bucketKey, bucketKey))
+      .limit(1);
     const count = Math.max(0, Number(row?.count || 0));
 
     if (!allowed) {

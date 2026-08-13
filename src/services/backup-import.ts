@@ -1,3 +1,7 @@
+import { count, eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { attachments, ciphers, folders, sends } from '../db/schema';
 import type { Env, User } from '../types';
 import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getAttachmentObjectKey, getBlobStorageKind, putBlobObject } from './blob-store';
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
@@ -77,9 +81,9 @@ export interface BackupImportExecutionResult {
   auditActorUserId: string | null;
 }
 
-async function queryRows(db: D1Database, sql: string, ...values: unknown[]): Promise<SqlRow[]> {
-  const response = await db.prepare(sql).bind(...values).all<SqlRow>();
-  return (response.results || []).map((row) => ({ ...row }));
+async function queryRows(db: D1Database, query: string): Promise<SqlRow[]> {
+  const rows = await getOrm(db).all(query) as SqlRow[];
+  return rows.map((row) => ({ ...row }));
 }
 
 async function getTableCreateSql(db: D1Database, table: BackupTableName): Promise<string> {
@@ -158,13 +162,14 @@ async function swapShadowTablesIntoPlace(db: D1Database): Promise<void> {
 }
 
 async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
+  const orm = getOrm(db);
   const counts = await Promise.all([
-    db.prepare('SELECT COUNT(*) AS count FROM ciphers').first<{ count: number }>(),
-    db.prepare('SELECT COUNT(*) AS count FROM folders').first<{ count: number }>(),
-    db.prepare('SELECT COUNT(*) AS count FROM attachments').first<{ count: number }>(),
-    db.prepare('SELECT COUNT(*) AS count FROM sends').first<{ count: number }>(),
+    orm.select({ count: count() }).from(ciphers),
+    orm.select({ count: count() }).from(folders),
+    orm.select({ count: count() }).from(attachments),
+    orm.select({ count: count() }).from(sends),
   ]);
-  const total = counts.reduce((sum, row) => sum + Number(row?.count || 0), 0);
+  const total = counts.reduce((sum, rows) => sum + Number(rows[0]?.count || 0), 0);
   if (total > 0) {
     throw new Error('Backup import requires a fresh instance with no vault or send data');
   }
@@ -185,14 +190,12 @@ function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[]
 
 async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
   const keys = new Set<string>();
-  const attachmentRows = await queryRows(
-    db,
-    `SELECT a.id, a.cipher_id
-     FROM attachments a
-     INNER JOIN ciphers c ON c.id = a.cipher_id`
-  );
+  const attachmentRows = await getOrm(db)
+    .select({ id: attachments.id, cipherId: attachments.cipherId })
+    .from(attachments)
+    .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId));
   for (const row of attachmentRows) {
-    const cipherId = String(row.cipher_id || '').trim();
+    const cipherId = String(row.cipherId || '').trim();
     const attachmentId = String(row.id || '').trim();
     if (!cipherId || !attachmentId) continue;
     keys.add(getAttachmentObjectKey(cipherId, attachmentId));

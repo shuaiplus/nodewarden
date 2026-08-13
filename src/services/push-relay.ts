@@ -1,7 +1,9 @@
 import type { Env } from '../types';
 import {
+  getConfigValue as getStoredConfigValue,
   setConfigValue as saveConfigValue,
 } from './storage-config-repo';
+import { getDevicePushUuid, userHasPushDevice } from './storage-device-repo';
 
 const PUSH_RELAY_URI = 'https://push.bitwarden.com';
 const PUSH_IDENTITY_URI = 'https://identity.bitwarden.com';
@@ -37,15 +39,10 @@ function randomInstallationEmail(): string {
   return `${localPart}@nodewarden.app`;
 }
 
-async function getConfigKeyPresence(db: D1Database, key: string): Promise<string | null> {
-  const row = await db.prepare('SELECT value FROM config WHERE key = ? LIMIT 1').bind(key).first<{ value: string }>();
-  return typeof row?.value === 'string' ? row.value : null;
-}
-
 async function getPushInstallationCredentials(db: D1Database): Promise<{ id: string; key: string } | null> {
   const [id, key] = await Promise.all([
-    getConfigKeyPresence(db, PUSH_INSTALLATION_ID_KEY),
-    getConfigKeyPresence(db, PUSH_INSTALLATION_KEY_KEY),
+    getStoredConfigValue(db, PUSH_INSTALLATION_ID_KEY),
+    getStoredConfigValue(db, PUSH_INSTALLATION_KEY_KEY),
   ]);
   const normalizedId = String(id || '').trim();
   const normalizedKey = String(key || '').trim();
@@ -230,20 +227,11 @@ export async function notifyMobilePush(
     payload: Record<string, unknown> | null | undefined;
   }
 ): Promise<void> {
-  const hasPushDevice = await env.DB
-    .prepare('SELECT 1 FROM devices WHERE user_id = ? AND push_token IS NOT NULL AND push_token <> ? LIMIT 1')
-    .bind(input.userId, '')
-    .first<{ '1': number }>();
-  if (!hasPushDevice) return;
+  if (!(await userHasPushDevice(env.DB, input.userId))) return;
 
-  let actingPushUuid: string | null = null;
-  if (input.contextId) {
-    const row = await env.DB
-      .prepare('SELECT push_uuid FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1')
-      .bind(input.userId, input.contextId)
-      .first<{ push_uuid: string | null }>();
-    actingPushUuid = row?.push_uuid ?? null;
-  }
+  const actingPushUuid = input.contextId
+    ? await getDevicePushUuid(env.DB, input.userId, input.contextId)
+    : null;
 
   await postToPushRelay(env, '/push/send', {
     userId: input.userId,
