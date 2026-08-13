@@ -22,6 +22,9 @@ import {
   putBlobObject,
 } from '../services/blob-store';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { createR2PresignedPutUrl, shouldPresignUpload } from '../services/r2-presign';
+import * as orgRepo from '../services/storage-org-repo';
+import { isActiveMember } from '../services/org-authz';
 
 function notifyVaultSyncForRequest(
   request: Request,
@@ -171,9 +174,12 @@ export async function handleCreateAttachment(
   const storage = new StorageService(env.DB);
 
   // Verify cipher exists and belongs to user
-  const cipher = await storage.getCipherForUser(cipherId, userId);
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
+  let cipher = await storage.getCipherForUser(cipherId, userId);
+  if (!cipher) {
+    cipher = await storage.getCipher(cipherId);
+    if (!cipher?.organizationId) return errorResponse('Cipher not found', 404);
+    const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, cipher.organizationId);
+    if (!isActiveMember(member)) return errorResponse('Cipher not found', 404);
   }
 
   let body: {
@@ -226,13 +232,18 @@ export async function handleCreateAttachment(
     return errorResponse('Server configuration error', 500);
   }
   const uploadToken = await createAttachmentUploadToken(userId, cipherId, attachmentId, jwtSecret);
+  const usePresign = shouldPresignUpload(fileSize, env);
+  const url = usePresign
+    ? await createR2PresignedPutUrl(env, getAttachmentObjectKey(cipherId, attachmentId))
+    : buildDirectUploadUrl(request, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken);
 
   return jsonResponse({
     object: 'attachment-fileUpload',
     attachmentId: attachmentId,
-    url: buildDirectUploadUrl(request, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken),
-    fileUploadType: 1,
-    cipherResponse: cipherToResponse(updatedCipher!, attachments),
+    url,
+    urlType: usePresign ? 's3-presigned' : 'direct',
+    fileUploadType: usePresign ? 0 : 1,
+    cipherResponse: cipherToResponse(updatedCipher || cipher, attachments),
   });
 }
 
