@@ -21,6 +21,70 @@ function base64UrlDecode(str: string): Uint8Array {
   return bytes;
 }
 
+export async function signHs256Jwt(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encoder = new TextEncoder();
+  const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
+  const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
+  const data = `${headerB64}.${payloadB64}`;
+  const key = await getHmacKey(secret);
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+  return `${data}.${base64UrlEncode(new Uint8Array(signature))}`;
+}
+
+export async function verifyHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [headerB64, payloadB64, signatureB64] = parts;
+    const encoder = new TextEncoder();
+    const key = await getHmacKey(secret);
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      base64UrlDecode(signatureB64),
+      encoder.encode(`${headerB64}.${payloadB64}`)
+    );
+    if (!valid) return null;
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as Record<string, unknown>;
+    const exp = payload.exp;
+    if (typeof exp === 'number' && exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export const REGISTER_VERIFY_ISSUER = 'nodewarden|register_verify';
+
+export async function createRegisterVerifyToken(
+  secret: string,
+  email: string,
+  name: string | null
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  return signHs256Jwt({
+    nbf: now,
+    exp: now + 30 * 60,
+    iss: REGISTER_VERIFY_ISSUER,
+    sub: email,
+    name,
+    verified: false,
+  }, secret);
+}
+
+export async function verifyRegisterVerifyToken(
+  token: string,
+  secret: string
+): Promise<{ email: string; name: string | null } | null> {
+  const payload = await verifyHs256Jwt(token, secret);
+  if (!payload || payload.iss !== REGISTER_VERIFY_ISSUER) return null;
+  const email = String(payload.sub || '').trim().toLowerCase();
+  if (!email) return null;
+  const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null;
+  return { email, name };
+}
+
 function getHmacKey(secret: string): Promise<CryptoKey> {
   const cacheKey = secret;
   let cached = hmacKeyCache.get(cacheKey);
