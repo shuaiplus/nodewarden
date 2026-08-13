@@ -1,7 +1,25 @@
+import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { refreshTokens } from '../db/schema';
 import type { RefreshTokenRecord } from '../types';
 
 type RefreshTokenKeyFn = (token: string) => Promise<string>;
 type CleanupExpiredFn = (nowMs: number) => Promise<void>;
+
+function mapRefreshToken(row: typeof refreshTokens.$inferSelect): RefreshTokenRecord {
+  return {
+    userId: row.userId,
+    expiresAt: row.expiresAt,
+    deviceIdentifier: row.deviceIdentifier ?? null,
+    deviceSessionStamp: row.deviceSessionStamp ?? null,
+    securityStamp: row.securityStamp ?? null,
+    createdAt: row.createdAt ?? null,
+    lastUsedAt: row.lastUsedAt ?? null,
+    absoluteExpiresAt: row.absoluteExpiresAt ?? null,
+    clientType: row.clientType ?? null,
+  };
+}
 
 export async function saveRefreshToken(
   db: D1Database,
@@ -19,27 +37,33 @@ export async function saveRefreshToken(
   await maybeCleanupExpiredRefreshTokens(Date.now());
   const tokenKey = await refreshTokenKey(token);
   const now = Date.now();
-  await db
-    .prepare(
-      'INSERT INTO refresh_tokens(token, user_id, expires_at, device_identifier, device_session_stamp, security_stamp, created_at, last_used_at, absolute_expires_at, client_type) ' +
-        'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id, expires_at=excluded.expires_at, device_identifier=excluded.device_identifier, ' +
-        'device_session_stamp=excluded.device_session_stamp, security_stamp=excluded.security_stamp, last_used_at=excluded.last_used_at, ' +
-        'absolute_expires_at=excluded.absolute_expires_at, client_type=excluded.client_type'
-    )
-    .bind(
-      tokenKey,
+  await getOrm(db)
+    .insert(refreshTokens)
+    .values({
+      token: tokenKey,
       userId,
-      expiresAtMs,
-      deviceIdentifier ?? null,
-      deviceSessionStamp ?? null,
-      securityStamp ?? null,
-      now,
-      now,
-      absoluteExpiresAtMs ?? null,
-      clientType ?? null
-    )
-    .run();
+      expiresAt: expiresAtMs,
+      deviceIdentifier: deviceIdentifier ?? null,
+      deviceSessionStamp: deviceSessionStamp ?? null,
+      securityStamp: securityStamp ?? null,
+      createdAt: now,
+      lastUsedAt: now,
+      absoluteExpiresAt: absoluteExpiresAtMs ?? null,
+      clientType: clientType ?? null,
+    })
+    .onConflictDoUpdate({
+      target: refreshTokens.token,
+      set: {
+        userId,
+        expiresAt: expiresAtMs,
+        deviceIdentifier: deviceIdentifier ?? null,
+        deviceSessionStamp: deviceSessionStamp ?? null,
+        securityStamp: securityStamp ?? null,
+        lastUsedAt: now,
+        absoluteExpiresAt: absoluteExpiresAtMs ?? null,
+        clientType: clientType ?? null,
+      },
+    });
 }
 
 export async function getRefreshTokenRecord(
@@ -52,41 +76,18 @@ export async function getRefreshTokenRecord(
   const now = Date.now();
   await maybeCleanupExpiredRefreshTokens(now);
   const tokenKey = await refreshTokenKey(token);
-
-  const row = await db
-    .prepare(
-      'SELECT user_id, expires_at, device_identifier, device_session_stamp, security_stamp, created_at, last_used_at, absolute_expires_at, client_type ' +
-        'FROM refresh_tokens WHERE token = ?'
-    )
-    .bind(tokenKey)
-    .first<{
-      user_id: string;
-      expires_at: number;
-      device_identifier: string | null;
-      device_session_stamp: string | null;
-      security_stamp: string | null;
-      created_at: number | null;
-      last_used_at: number | null;
-      absolute_expires_at: number | null;
-      client_type: string | null;
-    }>();
+  const [row] = await getOrm(db)
+    .select()
+    .from(refreshTokens)
+    .where(eq(refreshTokens.token, tokenKey))
+    .limit(1);
 
   if (!row) return null;
-  if ((row.expires_at && row.expires_at < now) || (row.absolute_expires_at && row.absolute_expires_at < now)) {
+  if ((row.expiresAt && row.expiresAt < now) || (row.absoluteExpiresAt && row.absoluteExpiresAt < now)) {
     await deleteRefreshTokenRecord(token);
     return null;
   }
-  return {
-    userId: row.user_id,
-    expiresAt: row.expires_at,
-    deviceIdentifier: row.device_identifier ?? null,
-    deviceSessionStamp: row.device_session_stamp ?? null,
-    securityStamp: row.security_stamp ?? null,
-    createdAt: row.created_at ?? null,
-    lastUsedAt: row.last_used_at ?? null,
-    absoluteExpiresAt: row.absolute_expires_at ?? null,
-    clientType: row.client_type ?? null,
-  };
+  return mapRefreshToken(row);
 }
 
 export async function extendRefreshTokenExpiry(
@@ -97,16 +98,20 @@ export async function extendRefreshTokenExpiry(
   nowMs: number
 ): Promise<boolean> {
   const tokenKey = await refreshTokenKey(token);
-  const result = await db
-    .prepare(
-      'UPDATE refresh_tokens SET ' +
-        'expires_at = CASE ' +
-        'WHEN absolute_expires_at IS NOT NULL AND absolute_expires_at < ? THEN absolute_expires_at ' +
-        'ELSE ? END, ' +
-        'last_used_at = ? ' +
-        'WHERE token = ? AND expires_at >= ? AND (absolute_expires_at IS NULL OR absolute_expires_at >= ?)'
-    )
-    .bind(requestedExpiresAtMs, requestedExpiresAtMs, nowMs, tokenKey, nowMs, nowMs)
+  const result = await getOrm(db)
+    .update(refreshTokens)
+    .set({
+      expiresAt: sql`CASE
+        WHEN ${refreshTokens.absoluteExpiresAt} IS NOT NULL AND ${refreshTokens.absoluteExpiresAt} < ${requestedExpiresAtMs}
+        THEN ${refreshTokens.absoluteExpiresAt}
+        ELSE ${requestedExpiresAtMs} END`,
+      lastUsedAt: nowMs,
+    })
+    .where(and(
+      eq(refreshTokens.token, tokenKey),
+      gte(refreshTokens.expiresAt, nowMs),
+      or(isNull(refreshTokens.absoluteExpiresAt), gte(refreshTokens.absoluteExpiresAt, nowMs)),
+    ))
     .run();
   return Number(result.meta.changes ?? 0) > 0;
 }
@@ -118,10 +123,13 @@ export async function bindRefreshTokenSecurityStamp(
   securityStamp: string
 ): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
-  await db
-    .prepare('UPDATE refresh_tokens SET security_stamp = ? WHERE token = ? AND (security_stamp IS NULL OR security_stamp = ?)')
-    .bind(securityStamp, tokenKey, '')
-    .run();
+  await getOrm(db)
+    .update(refreshTokens)
+    .set({ securityStamp })
+    .where(and(
+      eq(refreshTokens.token, tokenKey),
+      or(isNull(refreshTokens.securityStamp), eq(refreshTokens.securityStamp, '')),
+    ));
 }
 
 export async function bindRefreshTokenDeviceStamp(
@@ -131,27 +139,35 @@ export async function bindRefreshTokenDeviceStamp(
   deviceSessionStamp: string
 ): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
-  await db
-    .prepare('UPDATE refresh_tokens SET device_session_stamp = ? WHERE token = ? AND (device_session_stamp IS NULL OR device_session_stamp = ?)')
-    .bind(deviceSessionStamp, tokenKey, '')
-    .run();
+  await getOrm(db)
+    .update(refreshTokens)
+    .set({ deviceSessionStamp })
+    .where(and(
+      eq(refreshTokens.token, tokenKey),
+      or(isNull(refreshTokens.deviceSessionStamp), eq(refreshTokens.deviceSessionStamp, '')),
+    ));
 }
 
 export async function deleteRefreshToken(db: D1Database, refreshTokenKey: RefreshTokenKeyFn, token: string): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
-  await db.prepare('DELETE FROM refresh_tokens WHERE token = ?').bind(token).run();
-  await db.prepare('DELETE FROM refresh_tokens WHERE token = ?').bind(tokenKey).run();
+  const orm = getOrm(db);
+  await orm.delete(refreshTokens).where(eq(refreshTokens.token, token));
+  await orm.delete(refreshTokens).where(eq(refreshTokens.token, tokenKey));
 }
 
 export async function deleteRefreshTokensByUserId(db: D1Database, userId: string): Promise<number> {
-  const result = await db.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').bind(userId).run();
+  const result = await getOrm(db).delete(refreshTokens).where(eq(refreshTokens.userId, userId)).run();
   return Number(result.meta.changes ?? 0);
 }
 
 export async function deleteRefreshTokensByDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<number> {
-  const result = await db
-    .prepare('DELETE FROM refresh_tokens WHERE user_id = ? AND device_identifier = ?')
-    .bind(userId, deviceIdentifier)
+  const result = await getOrm(db)
+    .delete(refreshTokens)
+    .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.deviceIdentifier, deviceIdentifier)))
     .run();
   return Number(result.meta.changes ?? 0);
+}
+
+export async function deleteExpiredRefreshTokens(db: D1Database, nowMs: number): Promise<void> {
+  await getOrm(db).delete(refreshTokens).where(lt(refreshTokens.expiresAt, nowMs));
 }

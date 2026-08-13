@@ -89,6 +89,7 @@ import {
 import {
   bindRefreshTokenDeviceStamp as bindStoredRefreshTokenDeviceStamp,
   bindRefreshTokenSecurityStamp as bindStoredRefreshTokenSecurityStamp,
+  deleteExpiredRefreshTokens as deleteExpiredStoredRefreshTokens,
   deleteRefreshToken as deleteStoredRefreshToken,
   deleteRefreshTokensByDevice as deleteStoredRefreshTokensByDevice,
   deleteRefreshTokensByUserId as deleteStoredRefreshTokensByUserId,
@@ -250,7 +251,7 @@ export class StorageService {
       return;
     }
 
-    await this.db.prepare('DELETE FROM refresh_tokens WHERE expires_at < ?').bind(nowMs).run();
+    await deleteExpiredStoredRefreshTokens(this.db, nowMs);
     StorageService.lastRefreshTokenCleanupAt = nowMs;
   }
 

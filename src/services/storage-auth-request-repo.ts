@@ -1,26 +1,52 @@
+import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { authRequests } from '../db/schema';
 import type { AuthRequestRecord, AuthRequestType } from '../types';
 
 const AUTH_REQUEST_EXPIRATION_MS = 15 * 60 * 1000;
 
-function mapAuthRequestRow(row: any): AuthRequestRecord {
+function mapAuthRequestRow(row: typeof authRequests.$inferSelect): AuthRequestRecord {
   return {
     id: row.id,
-    userId: row.user_id,
-    organizationId: row.organization_id ?? null,
+    userId: row.userId,
+    organizationId: row.organizationId ?? null,
     type: Number(row.type) as AuthRequestType,
-    requestDeviceIdentifier: row.request_device_identifier,
-    requestDeviceType: Number(row.request_device_type ?? 14),
-    requestIpAddress: row.request_ip_address ?? null,
-    requestCountryName: row.request_country_name ?? null,
-    responseDeviceIdentifier: row.response_device_identifier ?? null,
-    accessCode: row.access_code,
-    publicKey: row.public_key,
+    requestDeviceIdentifier: row.requestDeviceIdentifier,
+    requestDeviceType: Number(row.requestDeviceType ?? 14),
+    requestIpAddress: row.requestIpAddress ?? null,
+    requestCountryName: row.requestCountryName ?? null,
+    responseDeviceIdentifier: row.responseDeviceIdentifier ?? null,
+    accessCode: row.accessCode,
+    publicKey: row.publicKey,
     key: row.key ?? null,
-    masterPasswordHash: row.master_password_hash ?? null,
+    masterPasswordHash: row.masterPasswordHash ?? null,
     approved: row.approved == null ? null : Number(row.approved) === 1,
-    creationDate: row.creation_date,
-    responseDate: row.response_date ?? null,
-    authenticationDate: row.authentication_date ?? null,
+    creationDate: row.creationDate,
+    responseDate: row.responseDate ?? null,
+    authenticationDate: row.authenticationDate ?? null,
+  };
+}
+
+function authRequestValues(request: AuthRequestRecord) {
+  return {
+    id: request.id,
+    userId: request.userId,
+    organizationId: request.organizationId,
+    type: request.type,
+    requestDeviceIdentifier: request.requestDeviceIdentifier,
+    requestDeviceType: request.requestDeviceType,
+    requestIpAddress: request.requestIpAddress,
+    requestCountryName: request.requestCountryName,
+    responseDeviceIdentifier: request.responseDeviceIdentifier,
+    accessCode: request.accessCode,
+    publicKey: request.publicKey,
+    key: request.key,
+    masterPasswordHash: request.masterPasswordHash,
+    approved: request.approved == null ? null : (request.approved ? 1 : 0),
+    creationDate: request.creationDate,
+    responseDate: request.responseDate,
+    authenticationDate: request.authenticationDate,
   };
 }
 
@@ -28,75 +54,78 @@ export function isAuthRequestExpired(request: AuthRequestRecord, nowMs: number =
   return new Date(request.creationDate).getTime() + AUTH_REQUEST_EXPIRATION_MS <= nowMs;
 }
 
-const AUTH_REQUEST_SELECT =
-  'SELECT id, user_id, organization_id, type, request_device_identifier, request_device_type, request_ip_address, request_country_name, ' +
-  'response_device_identifier, access_code, public_key, key, master_password_hash, approved, creation_date, response_date, authentication_date ' +
-  'FROM auth_requests';
-
 export async function createAuthRequest(db: D1Database, request: AuthRequestRecord): Promise<void> {
-  await db
-    .prepare(
-      'INSERT INTO auth_requests(' +
-        'id, user_id, organization_id, type, request_device_identifier, request_device_type, request_ip_address, request_country_name, ' +
-        'response_device_identifier, access_code, public_key, key, master_password_hash, approved, creation_date, response_date, authentication_date' +
-        ') VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-    .bind(
-      request.id,
-      request.userId,
-      request.organizationId,
-      request.type,
-      request.requestDeviceIdentifier,
-      request.requestDeviceType,
-      request.requestIpAddress,
-      request.requestCountryName,
-      request.responseDeviceIdentifier,
-      request.accessCode,
-      request.publicKey,
-      request.key,
-      request.masterPasswordHash,
-      request.approved == null ? null : (request.approved ? 1 : 0),
-      request.creationDate,
-      request.responseDate,
-      request.authenticationDate
-    )
-    .run();
+  await getOrm(db).insert(authRequests).values(authRequestValues(request));
 }
 
 export async function getAuthRequestById(db: D1Database, id: string): Promise<AuthRequestRecord | null> {
-  const row = await db.prepare(`${AUTH_REQUEST_SELECT} WHERE id = ? LIMIT 1`).bind(id).first<any>();
+  const [row] = await getOrm(db).select().from(authRequests).where(eq(authRequests.id, id)).limit(1);
   return row ? mapAuthRequestRow(row) : null;
 }
 
 export async function getAuthRequestByIdForUser(db: D1Database, id: string, userId: string): Promise<AuthRequestRecord | null> {
-  const row = await db.prepare(`${AUTH_REQUEST_SELECT} WHERE id = ? AND user_id = ? LIMIT 1`).bind(id, userId).first<any>();
+  const [row] = await getOrm(db)
+    .select()
+    .from(authRequests)
+    .where(and(eq(authRequests.id, id), eq(authRequests.userId, userId)))
+    .limit(1);
   return row ? mapAuthRequestRow(row) : null;
 }
 
 export async function listAuthRequestsByUserId(db: D1Database, userId: string): Promise<AuthRequestRecord[]> {
-  const res = await db.prepare(`${AUTH_REQUEST_SELECT} WHERE user_id = ? ORDER BY creation_date DESC`).bind(userId).all<any>();
-  return (res.results || []).map(mapAuthRequestRow);
+  const rows = await getOrm(db)
+    .select()
+    .from(authRequests)
+    .where(eq(authRequests.userId, userId))
+    .orderBy(desc(authRequests.creationDate));
+  return rows.map(mapAuthRequestRow);
 }
 
 export async function listPendingAuthRequestsByUserId(db: D1Database, userId: string, nowMs: number = Date.now()): Promise<AuthRequestRecord[]> {
   const cutoff = new Date(nowMs - AUTH_REQUEST_EXPIRATION_MS).toISOString();
-  const res = await db
-    .prepare(
-      'SELECT ar.id, ar.user_id, ar.organization_id, ar.type, ar.request_device_identifier, ar.request_device_type, ar.request_ip_address, ar.request_country_name, ' +
-        'ar.response_device_identifier, ar.access_code, ar.public_key, ar.key, ar.master_password_hash, ar.approved, ar.creation_date, ar.response_date, ar.authentication_date ' +
-        'FROM auth_requests ar ' +
-        'JOIN (' +
-        '  SELECT request_device_identifier, MAX(creation_date) AS latest_creation_date ' +
-        '  FROM auth_requests ' +
-        '  WHERE user_id = ? AND type IN (0, 1) AND approved IS NULL AND response_date IS NULL AND authentication_date IS NULL AND creation_date >= ? ' +
-        '  GROUP BY request_device_identifier' +
-        ') latest ON latest.request_device_identifier = ar.request_device_identifier AND latest.latest_creation_date = ar.creation_date ' +
-        'WHERE ar.user_id = ? AND ar.type IN (0, 1) AND ar.approved IS NULL AND ar.response_date IS NULL AND ar.authentication_date IS NULL ' +
-        'ORDER BY ar.creation_date DESC'
+  const orm = getOrm(db);
+  const ar = authRequests;
+  const latest = orm
+    .select({
+      requestDeviceIdentifier: ar.requestDeviceIdentifier,
+      latestCreationDate: sql<string>`max(${ar.creationDate})`.as('latest_creation_date'),
+    })
+    .from(ar)
+    .where(and(
+      eq(ar.userId, userId),
+      inArray(ar.type, [0, 1]),
+      isNull(ar.approved),
+      isNull(ar.responseDate),
+      isNull(ar.authenticationDate),
+      gteCreation(ar.creationDate, cutoff),
+    ))
+    .groupBy(ar.requestDeviceIdentifier)
+    .as('latest');
+
+  const rows = await orm
+    .select()
+    .from(ar)
+    .innerJoin(
+      latest,
+      and(
+        eq(latest.requestDeviceIdentifier, ar.requestDeviceIdentifier),
+        eq(latest.latestCreationDate, ar.creationDate),
+      ),
     )
-    .bind(userId, cutoff, userId)
-    .all<any>();
-  return (res.results || []).map(mapAuthRequestRow).filter((request) => !isAuthRequestExpired(request, nowMs));
+    .where(and(
+      eq(ar.userId, userId),
+      inArray(ar.type, [0, 1]),
+      isNull(ar.approved),
+      isNull(ar.responseDate),
+      isNull(ar.authenticationDate),
+    ))
+    .orderBy(desc(ar.creationDate));
+
+  return rows.map((row) => mapAuthRequestRow(row.auth_requests)).filter((request) => !isAuthRequestExpired(request, nowMs));
+}
+
+function gteCreation(column: typeof authRequests.creationDate, cutoff: string) {
+  return sql`${column} >= ${cutoff}`;
 }
 
 export async function updateAuthRequestResponse(
@@ -111,34 +140,40 @@ export async function updateAuthRequestResponse(
     responseDate?: string;
   }
 ): Promise<boolean> {
-  const result = await db
-    .prepare(
-      'UPDATE auth_requests SET approved = ?, response_device_identifier = ?, key = ?, master_password_hash = ?, response_date = ? ' +
-        'WHERE id = ? AND user_id = ? AND approved IS NULL AND response_date IS NULL AND authentication_date IS NULL'
-    )
-    .bind(
-      update.approved ? 1 : 0,
-      update.responseDeviceIdentifier,
-      update.approved ? (update.key ?? null) : null,
-      update.approved ? (update.masterPasswordHash ?? null) : null,
-      update.responseDate || new Date().toISOString(),
-      id,
-      userId
-    )
+  const result = await getOrm(db)
+    .update(authRequests)
+    .set({
+      approved: update.approved ? 1 : 0,
+      responseDeviceIdentifier: update.responseDeviceIdentifier,
+      key: update.approved ? (update.key ?? null) : null,
+      masterPasswordHash: update.approved ? (update.masterPasswordHash ?? null) : null,
+      responseDate: update.responseDate || new Date().toISOString(),
+    })
+    .where(and(
+      eq(authRequests.id, id),
+      eq(authRequests.userId, userId),
+      isNull(authRequests.approved),
+      isNull(authRequests.responseDate),
+      isNull(authRequests.authenticationDate),
+    ))
     .run();
   return Number(result.meta.changes ?? 0) > 0;
 }
 
 export async function markAuthRequestAuthenticated(db: D1Database, id: string, authenticationDate: string = new Date().toISOString()): Promise<boolean> {
-  const result = await db
-    .prepare('UPDATE auth_requests SET authentication_date = ? WHERE id = ? AND authentication_date IS NULL')
-    .bind(authenticationDate, id)
+  const result = await getOrm(db)
+    .update(authRequests)
+    .set({ authenticationDate })
+    .where(and(eq(authRequests.id, id), isNull(authRequests.authenticationDate)))
     .run();
   return Number(result.meta.changes ?? 0) > 0;
 }
 
 export async function pruneExpiredAuthRequests(db: D1Database, nowMs: number = Date.now()): Promise<number> {
   const cutoff = new Date(nowMs - AUTH_REQUEST_EXPIRATION_MS).toISOString();
-  const result = await db.prepare('DELETE FROM auth_requests WHERE creation_date < ?').bind(cutoff).run();
+  const result = await getOrm(db)
+    .delete(authRequests)
+    .where(lt(authRequests.creationDate, cutoff))
+    .run();
   return Number(result.meta.changes ?? 0);
 }
