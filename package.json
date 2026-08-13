@@ -20,9 +20,17 @@
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
+    "test:org-authz": "tsx --test src/services/org-authz.test.ts",
+    "test:register-payload": "tsx --test src/services/register-payload.test.ts",
+    "test:enterprise-license": "tsx --test src/services/enterprise-license.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:official": "playwright test e2e/official-web.spec.ts",
+    "build:official-web": "node scripts/build-official-web.mjs",
+    "dev:official-web": "node scripts/serve-official-web.mjs",
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
-    "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo"
+    "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo",
+    "deploy:official-web": "npm run build:official-web && wrangler pages deploy dist --project-name nodewarden-official-web --config official-web/wrangler.toml"
   },
   "keywords": [
     "bitwarden",
@@ -66,7 +74,8 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite": "^8.1.3",
-    "wrangler": "^4.105.0"
+    "wrangler": "^4.105.0",
+    "@playwright/test": "^1.55.0"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",
