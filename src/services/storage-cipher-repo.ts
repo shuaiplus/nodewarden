@@ -10,7 +10,6 @@ function normalizeOptionalId(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
-type SafeBind = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
 type SqlChunkSize = (fixedBindCount: number) => number;
 type UpdateRevisionDate = (userId: string) => Promise<string>;
 
@@ -105,7 +104,7 @@ export async function getCipherForUser(db: D1Database, id: string, userId: strin
   return parseCipherRow(row);
 }
 
-export async function saveCipher(db: D1Database, _safeBind: SafeBind, cipher: Cipher): Promise<void> {
+export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> {
   const folderId = normalizeOptionalId(cipher.folderId);
   const data = buildCipherData(cipher, folderId);
   const organizationId = normalizeOptionalId(cipher.organizationId ?? null);

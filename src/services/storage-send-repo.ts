@@ -4,7 +4,6 @@ import { getOrm } from '../db/client';
 import { sends } from '../db/schema';
 import type { Send } from '../types';
 
-type SafeBind = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
 type SqlChunkSize = (fixedBindCount: number) => number;
 type UpdateRevisionDate = (userId: string) => Promise<string>;
 
@@ -72,7 +71,7 @@ export async function getSendForUser(db: D1Database, id: string, userId: string)
   return row ? mapSendRow(row) : null;
 }
 
-export async function saveSend(db: D1Database, _safeBind: SafeBind, send: Send): Promise<void> {
+export async function saveSend(db: D1Database, send: Send): Promise<void> {
   const values = sendValues(send);
   await getOrm(db)
     .insert(sends)

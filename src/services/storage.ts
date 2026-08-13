@@ -201,16 +201,6 @@ export class StorageService {
 
   constructor(private db: D1Database) {}
 
-  /**
-   * D1 .bind() throws on `undefined` values. This helper converts every
-   * `undefined` in the argument list to `null` so we never hit that runtime
-   * error - especially important after the opaque-passthrough change where
-   * client-supplied JSON may omit fields we later reference as columns.
-   */
-  private safeBind(stmt: D1PreparedStatement, ...values: any[]): D1PreparedStatement {
-    return stmt.bind(...values.map(v => v === undefined ? null : v));
-  }
-
   private async hasRequiredSchemaTables(): Promise<boolean> {
     const rows = await getOrm(this.db).all(sql`
       SELECT name FROM sqlite_master
@@ -317,15 +307,15 @@ export class StorageService {
   }
 
   async saveUser(user: User): Promise<void> {
-    await saveStoredUser(this.db, this.safeBind.bind(this), user);
+    await saveStoredUser(this.db, user);
   }
 
   async createUser(user: User): Promise<void> {
-    await createStoredUser(this.db, this.safeBind.bind(this), user);
+    await createStoredUser(this.db, user);
   }
 
   async createFirstUser(user: User): Promise<boolean> {
-    return createFirstStoredUser(this.db, this.safeBind.bind(this), user);
+    return createFirstStoredUser(this.db, user);
   }
 
   async deleteUserById(id: string): Promise<boolean> {
@@ -414,7 +404,7 @@ export class StorageService {
   // --- Account passkeys / WebAuthn login credentials ---
 
   async saveAccountPasskeyCredential(credential: AccountPasskeyCredential): Promise<void> {
-    await saveStoredAccountPasskeyCredential(this.db, this.safeBind.bind(this), credential);
+    await saveStoredAccountPasskeyCredential(this.db, credential);
   }
 
   async getAccountPasskeyCredentialsByUserId(
@@ -499,7 +489,7 @@ export class StorageService {
   }
 
   async saveCipher(cipher: Cipher): Promise<void> {
-    await saveStoredCipher(this.db, this.safeBind.bind(this), cipher);
+    await saveStoredCipher(this.db, cipher);
   }
 
   async deleteCipher(id: string, userId: string): Promise<void> {
@@ -599,7 +589,7 @@ export class StorageService {
   }
 
   async saveAttachment(attachment: Attachment): Promise<void> {
-    await saveStoredAttachment(this.db, this.safeBind.bind(this), attachment);
+    await saveStoredAttachment(this.db, attachment);
   }
 
   async deleteAttachment(id: string): Promise<void> {
@@ -706,7 +696,7 @@ export class StorageService {
   }
 
   async saveSend(send: Send): Promise<void> {
-    await saveStoredSend(this.db, this.safeBind.bind(this), send);
+    await saveStoredSend(this.db, send);
   }
 
   /**

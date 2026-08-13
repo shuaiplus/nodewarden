@@ -4,8 +4,6 @@ import { getOrm } from '../db/client';
 import { users } from '../db/schema';
 import type { User } from '../types';
 
-type SafeBind = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
-
 function mapUserRow(row: typeof users.$inferSelect): User {
   return {
     id: row.id,
@@ -90,7 +88,7 @@ export async function getAllUsers(db: D1Database): Promise<User[]> {
   return rows.map(mapUserRow);
 }
 
-export async function saveUser(db: D1Database, _safeBind: SafeBind, user: User): Promise<void> {
+export async function saveUser(db: D1Database, user: User): Promise<void> {
   const values = userValues(user);
   await getOrm(db)
     .insert(users)
@@ -127,11 +125,11 @@ export async function saveUser(db: D1Database, _safeBind: SafeBind, user: User):
     });
 }
 
-export async function createUser(db: D1Database, safeBind: SafeBind, user: User): Promise<void> {
-  await saveUser(db, safeBind, user);
+export async function createUser(db: D1Database, user: User): Promise<void> {
+  await saveUser(db, user);
 }
 
-export async function createFirstUser(db: D1Database, _safeBind: SafeBind, user: User): Promise<boolean> {
+export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
   const values = userValues(user);
   const result = await getOrm(db).run(sql`
     INSERT INTO users (

@@ -4,7 +4,6 @@ import { getOrm } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
 import type { Attachment, Cipher } from '../types';
 
-type SafeBind = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
 type SqlChunkSize = (fixedBindCount: number) => number;
 type GetCipher = (id: string) => Promise<Cipher | null>;
 type SaveCipher = (cipher: Cipher) => Promise<void>;
@@ -43,7 +42,7 @@ export async function getAttachmentForUser(db: D1Database, id: string, userId: s
   return row ? mapAttachment(row) : null;
 }
 
-export async function saveAttachment(db: D1Database, _safeBind: SafeBind, attachment: Attachment): Promise<void> {
+export async function saveAttachment(db: D1Database, attachment: Attachment): Promise<void> {
   await getOrm(db)
     .insert(attachments)
     .values({

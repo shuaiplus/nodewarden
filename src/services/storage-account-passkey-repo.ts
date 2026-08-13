@@ -4,8 +4,6 @@ import { getOrm } from '../db/client';
 import { webauthnChallenges, webauthnCredentials } from '../db/schema';
 import type { AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential } from '../types';
 
-type SafeBindFn = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
-
 function parseTransports(value: string | null): string[] | null {
   if (!value) return null;
   try {
@@ -51,7 +49,6 @@ function mapChallengeRow(row: typeof webauthnChallenges.$inferSelect): AccountPa
 
 export async function saveAccountPasskeyCredential(
   db: D1Database,
-  _safeBind: SafeBindFn,
   credential: AccountPasskeyCredential
 ): Promise<void> {
   const values = {
