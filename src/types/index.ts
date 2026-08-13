@@ -3,21 +3,43 @@ export interface Env {
   DB: D1Database;
   NOTIFICATIONS_HUB: DurableObjectNamespace;
   BACKUP_TRANSFER_RUNNER: DurableObjectNamespace;
+  ORGANIZATION_HUB?: DurableObjectNamespace;
+  DIRECTORY_SYNC?: DurableObjectNamespace;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
   // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
   HIDE_WEB_VAULT?: string;
+  // Comma-separated official Bitwarden web origins (Cloudflare Pages) allowed for CORS and signup.
+  WEB_VAULT_ORIGINS?: string;
+  // Set to "1" to allow official-client signups after the first admin without invite codes.
+  ALLOW_OPEN_REGISTRATION?: string;
   // Prefer R2 when available. Optional to support KV-only deployments.
   ATTACHMENTS?: R2Bucket;
   // Optional fallback for attachment/send file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
+  CACHE_KV?: KVNamespace;
+  EVENTS_QUEUE?: Queue;
+  SECRET_CHANGES_QUEUE?: Queue;
+  DIRECTORY_SYNC_WORKFLOW?: Workflow;
   JWT_SECRET: string;
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
   YUBICO_VALIDATION_URLS?: string;
   'globalSettings__yubico__validationUrls'?: string;
+  SSO_ENABLED?: string;
+  SSO_AUTHORITY?: string;
+  SSO_CLIENT_ID?: string;
+  SSO_CLIENT_SECRET?: string;
+  SSO_SCOPES?: string;
+  SSO_SIGNUPS?: string;
+  SSO_ONLY?: string;
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_BUCKET?: string;
+  R2_JURISDICTION?: string;
 }
 
 export type UserRole = 'admin' | 'user';
@@ -246,6 +268,7 @@ export interface PasswordHistory {
 export interface Cipher {
   id: string;
   userId: string;
+  organizationId?: string | null;
   type: CipherType;
   folderId: string | null;
   name: string | null;
