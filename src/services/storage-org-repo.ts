@@ -1,4 +1,5 @@
 import type { Cipher } from '../types';
+import { hasFullCollectionAccess } from './org-authz';
 import {
   type CollectionAccess,
   type CollectionRecord,
@@ -367,6 +368,79 @@ export async function listOrgCipherIds(db: D1Database, orgId: string): Promise<s
   return (result.results || []).map((row) => row.id);
 }
 
+const ORG_CIPHER_COLUMNS = [
+  'id',
+  'user_id',
+  'organization_id',
+  'type',
+  'folder_id',
+  'name',
+  'notes',
+  'favorite',
+  'data',
+  'reprompt',
+  'key',
+  'created_at',
+  'updated_at',
+  'archived_at',
+  'deleted_at',
+];
+
+function orgCipherColumns(prefix = ''): string {
+  return ORG_CIPHER_COLUMNS.map((column) => `${prefix}${column}`).join(', ');
+}
+
+function mapOrgCipherRow(
+  row: Record<string, unknown>,
+  userId: string,
+  orgId: string,
+  collectionIds: string[]
+): Cipher | null {
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(String(row.data || '{}')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return {
+    ...(parsed as unknown as Cipher),
+    id: String(row.id),
+    userId: String(row.user_id || userId),
+    organizationId: String(row.organization_id || orgId),
+    type: Number(row.type) || 1,
+    folderId: (row.folder_id as string | null) ?? null,
+    name: (row.name as string | null) ?? null,
+    notes: (row.notes as string | null) ?? null,
+    favorite: !!row.favorite,
+    reprompt: Number(row.reprompt || 0),
+    key: (row.key as string | null) ?? null,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    archivedAt: (row.archived_at as string | null) ?? null,
+    deletedAt: (row.deleted_at as string | null) ?? null,
+    collectionIds,
+  };
+}
+
+// One query per org instead of one per cipher; binding only the org id keeps this
+// clear of the D1 bound-variable ceiling no matter how large the org vault is.
+async function listOrgCipherCollectionIds(db: D1Database, orgId: string): Promise<Map<string, string[]>> {
+  const result = await db
+    .prepare(
+      'SELECT cc.cipher_id, cc.collection_id FROM cipher_collections cc ' +
+      'INNER JOIN ciphers c ON c.id = cc.cipher_id WHERE c.organization_id = ?'
+    )
+    .bind(orgId)
+    .all<{ cipher_id: string; collection_id: string }>();
+  const map = new Map<string, string[]>();
+  for (const row of result.results || []) {
+    const list = map.get(row.cipher_id);
+    if (list) list.push(row.collection_id);
+    else map.set(row.cipher_id, [row.collection_id]);
+  }
+  return map;
+}
+
 export async function listAccessibleOrgCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
   const memberships = await listMembershipsByUser(db, userId);
   const confirmed = memberships.filter((member) => member.status === 2);
@@ -374,38 +448,33 @@ export async function listAccessibleOrgCiphers(db: D1Database, userId: string): 
 
   const ciphers: Cipher[] = [];
   for (const member of confirmed) {
-    const result = await db
-      .prepare(
-        'SELECT id, user_id, organization_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at ' +
-        'FROM ciphers WHERE organization_id = ? ORDER BY updated_at DESC'
-      )
-      .bind(member.orgId)
-      .all<Record<string, unknown>>();
-    for (const row of result.results || []) {
-      const dataRaw = String(row.data || '{}');
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = JSON.parse(dataRaw) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      ciphers.push({
-        ...(parsed as unknown as Cipher),
-        id: String(row.id),
-        userId: String(row.user_id || userId),
-        organizationId: String(row.organization_id || member.orgId),
-        type: Number(row.type) || 1,
-        folderId: (row.folder_id as string | null) ?? null,
-        name: (row.name as string | null) ?? null,
-        notes: (row.notes as string | null) ?? null,
-        favorite: !!row.favorite,
-        reprompt: Number(row.reprompt || 0),
-        key: (row.key as string | null) ?? null,
-        createdAt: String(row.created_at),
-        updatedAt: String(row.updated_at),
-        archivedAt: (row.archived_at as string | null) ?? null,
-        deletedAt: (row.deleted_at as string | null) ?? null,
-      });
+    // Members without full access only reach ciphers in collections assigned to them
+    // directly or through a group they belong to; everything else stays invisible.
+    const result = hasFullCollectionAccess(member)
+      ? await db
+          .prepare(`SELECT ${orgCipherColumns()} FROM ciphers WHERE organization_id = ? ORDER BY updated_at DESC`)
+          .bind(member.orgId)
+          .all<Record<string, unknown>>()
+      : await db
+          .prepare(
+            `SELECT DISTINCT ${orgCipherColumns('c.')} FROM ciphers c ` +
+            'INNER JOIN cipher_collections cc ON cc.cipher_id = c.id ' +
+            'WHERE c.organization_id = ? AND cc.collection_id IN (' +
+              'SELECT cu.collection_id FROM collection_users cu WHERE cu.user_id = ? ' +
+              'UNION ' +
+              'SELECT cg.collection_id FROM collection_groups cg ' +
+              'INNER JOIN org_group_members gm ON gm.group_id = cg.group_id WHERE gm.membership_id = ?' +
+            ') ORDER BY c.updated_at DESC'
+          )
+          .bind(member.orgId, userId, member.id)
+          .all<Record<string, unknown>>();
+
+    const rows = result.results || [];
+    if (rows.length === 0) continue;
+    const collectionsByCipher = await listOrgCipherCollectionIds(db, member.orgId);
+    for (const row of rows) {
+      const cipher = mapOrgCipherRow(row, userId, member.orgId, collectionsByCipher.get(String(row.id)) || []);
+      if (cipher) ciphers.push(cipher);
     }
   }
   return ciphers;

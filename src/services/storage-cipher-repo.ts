@@ -126,7 +126,9 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
     'organization_id=excluded.organization_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at ' +
-    'WHERE user_id=excluded.user_id OR organization_id=excluded.organization_id'
+    // An org overwrite is only legitimate when the stored row already belongs to that
+    // same org; a NULL organization_id must never match an incoming org cipher.
+    'WHERE user_id=excluded.user_id OR (organization_id IS NOT NULL AND organization_id=excluded.organization_id)'
   );
   await safeBind(
     stmt,

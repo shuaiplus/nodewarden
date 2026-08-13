@@ -125,12 +125,11 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
         object: 'collectionDetails',
       });
     }
-    const assignedIds = new Set(assigned.map((item) => item.collectionId));
     for (const cipher of orgCiphers.filter((item) => item.organizationId === member.orgId)) {
-      const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, cipher.id);
-      if (!canViewCipher(member, collectionIds, assignedMap) && assignedIds.size >= 0) {
-        if (!hasFullCollectionAccess(member) && !canViewCipher(member, collectionIds, assignedMap)) continue;
-      }
+      // listAccessibleOrgCiphers already scoped these to the member's collections and
+      // attached the ids; re-check here so the response layer never widens that scope.
+      const collectionIds = (cipher as { collectionIds?: string[] }).collectionIds || [];
+      if (!canViewCipher(member, collectionIds, assignedMap)) continue;
       visibleOrgCiphers.push({ ...cipher, collectionIds });
     }
   }
