@@ -62,6 +62,7 @@ import {
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
   deleteCipher as deleteStoredCipher,
+  deleteCipherById as deleteStoredCipherById,
 } from './storage-cipher-repo';
 import {
   addAttachmentToCipher as attachStoredAttachmentToCipher,
@@ -503,6 +504,10 @@ export class StorageService {
 
   async deleteCipher(id: string, userId: string): Promise<void> {
     await deleteStoredCipher(this.db, id, userId);
+  }
+
+  async deleteCipherById(id: string): Promise<void> {
+    await deleteStoredCipherById(this.db, id);
   }
 
   async bulkSoftDeleteCiphers(ids: string[], userId: string): Promise<string | null> {

@@ -28,16 +28,8 @@ import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import * as orgRepo from '../services/storage-org-repo';
-import { canEditCipher, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
-
-function canViewCipherForRead(
-  member: Parameters<typeof canViewCipher>[0],
-  collectionIds: string[],
-  assigned: Awaited<ReturnType<typeof orgRepo.listUserCollectionAccess>>
-): boolean {
-  const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
-  return hasFullCollectionAccess(member) || canViewCipher(member, collectionIds, assignedMap);
-}
+import { canEditCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
+import { deleteAuthorizedCipher, loadAccessibleCipher } from './cipher-access';
 
 // CONTRACT:
 // Cipher JSON is the highest-risk Bitwarden compatibility surface. Preserve
@@ -930,18 +922,8 @@ export async function handleGetCiphers(request: Request, env: Env, userId: strin
 // GET /api/ciphers/:id
 export async function handleGetCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  let cipher = await storage.getCipherForUser(id, userId);
-  if (!cipher) {
-    cipher = await storage.getCipher(id);
-    if (!cipher?.organizationId) return errorResponse('Cipher not found', 404);
-    const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, cipher.organizationId);
-    const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, cipher.organizationId);
-    const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, cipher.id);
-    if (!isActiveMember(member) || !canViewCipherForRead(member, collectionIds, assigned)) {
-      return errorResponse('Cipher not found', 404);
-    }
-    (cipher as { collectionIds?: string[] }).collectionIds = collectionIds;
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'read');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
   const responseOptions = cipherResponseOptionsForRequest(request);
@@ -1059,19 +1041,8 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
 // PUT /api/ciphers/:id
 export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  let existingCipher = await storage.getCipherForUser(id, userId);
-  if (!existingCipher) {
-    const candidate = await storage.getCipher(id);
-    if (!candidate?.organizationId) return errorResponse('Cipher not found', 404);
-    const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, candidate.organizationId);
-    const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, candidate.organizationId);
-    const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, candidate.id);
-    const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
-    if (!isActiveMember(member) || !canEditCipher(member, collectionIds, assignedMap)) {
-      return errorResponse('Cipher not found', 404);
-    }
-    existingCipher = candidate;
-  }
+  const existingCipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!existingCipher) return errorResponse('Cipher not found', 404);
 
   let body: any;
   try {
@@ -1184,11 +1155,8 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
 // DELETE /api/ciphers/:id
 export async function handleDeleteCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Soft delete
   cipher.deletedAt = new Date().toISOString();
@@ -1216,15 +1184,12 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
 // - If item is already soft-deleted -> hard delete.
 export async function handleDeleteCipherCompat(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   if (cipher.deletedAt) {
     await deleteAllAttachmentsForCipher(env, id);
-    await storage.deleteCipher(id, userId);
+    await deleteAuthorizedCipher(storage, cipher, userId);
     const revisionDate = await storage.updateRevisionDate(userId);
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
@@ -1243,16 +1208,13 @@ export async function handleDeleteCipherCompat(request: Request, env: Env, userI
 // DELETE /api/ciphers/:id (permanent)
 export async function handlePermanentDeleteCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Delete all attachments first
   await deleteAllAttachmentsForCipher(env, id);
 
-  await storage.deleteCipher(id, userId);
+  await deleteAuthorizedCipher(storage, cipher, userId);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
@@ -1268,11 +1230,8 @@ export async function handlePermanentDeleteCipher(request: Request, env: Env, us
 // PUT /api/ciphers/:id/restore
 export async function handleRestoreCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   cipher.deletedAt = null;
   cipher.updatedAt = new Date().toISOString();
@@ -1290,11 +1249,8 @@ export async function handleRestoreCipher(request: Request, env: Env, userId: st
 // PUT /api/ciphers/:id/partial - Update only favorite/folderId
 export async function handlePartialUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   let body: { folderId?: string | null; favorite?: boolean };
   try {
@@ -1382,11 +1338,8 @@ function parseCipherIdList(body: { ids?: unknown }): string[] | null {
 // PUT/POST /api/ciphers/:id/archive
 export async function handleArchiveCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
   if (cipher.deletedAt) {
     return errorResponse('Cannot archive a deleted cipher', 400);
   }
@@ -1408,11 +1361,8 @@ export async function handleArchiveCipher(request: Request, env: Env, userId: st
 // PUT/POST /api/ciphers/:id/unarchive
 export async function handleUnarchiveCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipherForUser(id, userId);
-
-  if (!cipher || cipher.userId !== userId) {
-    return errorResponse('Cipher not found', 404);
-  }
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!cipher) return errorResponse('Cipher not found', 404);
 
   cipher.archivedAt = null;
   cipher.updatedAt = new Date().toISOString();

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { ciphers, folders } from '../db/schema';
@@ -64,6 +64,7 @@ export async function clearFolderFromCiphers(
     .set({ folderId: null, updatedAt: now, data: folderClearedData() })
     .where(and(
       eq(ciphers.userId, userId),
+      isNull(ciphers.organizationId),
       or(
         eq(ciphers.folderId, folderId),
         sql`json_extract(${ciphers.data}, '$.folderId') = ${folderId}`,
@@ -96,6 +97,7 @@ export async function bulkDeleteFolders(
         .set({ folderId: null, updatedAt: now, data: folderClearedData() })
         .where(and(
           eq(ciphers.userId, userId),
+          isNull(ciphers.organizationId),
           or(
             inArray(ciphers.folderId, chunk),
             sql`json_extract(${ciphers.data}, '$.folderId') in (${inList})`,

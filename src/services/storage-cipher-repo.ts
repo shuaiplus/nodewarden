@@ -100,7 +100,7 @@ export async function getCipherForUser(db: D1Database, id: string, userId: strin
   const [row] = await getOrm(db)
     .select()
     .from(ciphers)
-    .where(and(eq(ciphers.id, id), eq(ciphers.userId, userId)))
+    .where(and(eq(ciphers.id, id), personalVault(userId)))
     .limit(1);
   return parseCipherRow(row);
 }
@@ -158,7 +158,11 @@ export async function saveCipher(db: D1Database, _safeBind: SafeBind, cipher: Ci
 }
 
 export async function deleteCipher(db: D1Database, id: string, userId: string): Promise<void> {
-  await getOrm(db).delete(ciphers).where(and(eq(ciphers.id, id), eq(ciphers.userId, userId)));
+  await getOrm(db).delete(ciphers).where(and(eq(ciphers.id, id), personalVault(userId)));
+}
+
+export async function deleteCipherById(db: D1Database, id: string): Promise<void> {
+  await getOrm(db).delete(ciphers).where(eq(ciphers.id, id));
 }
 
 export async function deleteCiphersByOrganization(db: D1Database, organizationId: string): Promise<void> {
@@ -184,7 +188,7 @@ async function chunkedUpdate(
     await orm
       .update(ciphers)
       .set(set)
-      .where(and(eq(ciphers.userId, userId), inArray(ciphers.id, chunk), extraWhere));
+      .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
   }
   return updateRevisionDate(userId);
 }
@@ -250,7 +254,7 @@ export async function bulkDeleteCiphers(
   const chunkSize = sqlChunkSize(1);
   for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
     const chunk = uniqueIds.slice(offset, offset + chunkSize);
-    await orm.delete(ciphers).where(and(eq(ciphers.userId, userId), inArray(ciphers.id, chunk)));
+    await orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
   }
   return updateRevisionDate(userId);
 }
@@ -310,7 +314,7 @@ export async function getCiphersByIds(
     const rows = await orm
       .select()
       .from(ciphers)
-      .where(and(eq(ciphers.userId, userId), inArray(ciphers.id, chunk)));
+      .where(and(personalVault(userId), inArray(ciphers.id, chunk)));
     out.push(
       ...rows.flatMap((row) => {
         const cipher = parseCipherRow(row);

@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
@@ -38,7 +38,7 @@ export async function getAttachmentForUser(db: D1Database, id: string, userId: s
     })
     .from(attachments)
     .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
-    .where(and(eq(attachments.id, id), eq(ciphers.userId, userId)))
+    .where(and(eq(attachments.id, id), eq(ciphers.userId, userId), isNull(ciphers.organizationId)))
     .limit(1);
   return row ? mapAttachment(row) : null;
 }
@@ -83,7 +83,7 @@ export async function deleteAttachmentForUser(db: D1Database, id: string, userId
       eq(attachments.id, id),
       sql`EXISTS (
         SELECT 1 FROM ciphers c
-        WHERE c.id = ${attachments.cipherId} AND c.user_id = ${userId}
+        WHERE c.id = ${attachments.cipherId} AND c.user_id = ${userId} AND c.organization_id IS NULL
       )`,
     ));
 }
@@ -146,7 +146,7 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
     })
     .from(attachments)
     .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
-    .where(eq(ciphers.userId, userId));
+    .where(and(eq(ciphers.userId, userId), isNull(ciphers.organizationId)));
 
   for (const item of rows.map(mapAttachment)) {
     const list = grouped.get(item.cipherId);
@@ -174,11 +174,15 @@ export async function addAttachmentToCipherForUser(
       eq(attachments.id, attachmentId),
       sql`EXISTS (
         SELECT 1 FROM ciphers target_cipher
-        WHERE target_cipher.id = ${cipherId} AND target_cipher.user_id = ${userId}
+        WHERE target_cipher.id = ${cipherId}
+          AND target_cipher.user_id = ${userId}
+          AND target_cipher.organization_id IS NULL
       )`,
       sql`EXISTS (
         SELECT 1 FROM ciphers current_cipher
-        WHERE current_cipher.id = ${attachments.cipherId} AND current_cipher.user_id = ${userId}
+        WHERE current_cipher.id = ${attachments.cipherId}
+          AND current_cipher.user_id = ${userId}
+          AND current_cipher.organization_id IS NULL
       )`,
     ));
 }
