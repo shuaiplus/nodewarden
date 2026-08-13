@@ -34,7 +34,7 @@
 
 | Feature | Bitwarden Free | NodeWarden | Notes |
 |---|---|---|---|
-| Web vault | ✅ | ✅ | **Original Web Vault UI** |
+| Web vault | ✅ | ✅ | Local Preact vault on the Worker **and** official Bitwarden web on Pages |
 | TOTP | ❌ | ✅ | Includes `steam://` support |
 | **PWA / offline** | ❌ | ✅ | **Installable, offline** |
 | **Passkey login** | ✅ | ✅ | **passwordless auth** |
@@ -50,8 +50,10 @@
 | **Multi-user** | ✅ | ✅ | Invite-code registration |
 | Domain rules | ✅ | ✅ | Equivalent domains, global exclusions |
 | Fill-assist | ✅ | ✅ | `POST /fill-assist`|
-| Organizations / collections / roles | ✅ | ❌ | Not implemented |
-| SSO / SCIM / directory | ✅ | ❌ | Not implemented |
+| Organizations / collections / roles | ✅ | ✅ | Owner/Admin/Manager/Custom + collections |
+| SSO / SCIM / directory | ✅ | ✅ | OIDC SSO; SCIM v2 Users/Groups |
+| Secrets Manager | ✅ | ✅ | Projects, secrets, machine accounts |
+| Kubernetes operator | ✅ | ✅ | Compatible `BitwardenSecret` CRD |
 
 ---
 
@@ -81,6 +83,10 @@
 - To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
 
 - In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
+
+- Optional SSO: set `SSO_ENABLED=1`, `SSO_AUTHORITY`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`.
+- Uploads larger than 100 MB use R2 S3 presigned PUTs. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET`.
+- Kubernetes: install `operator/config/crd.yaml` and run `operator/` against your NodeWarden origin.
 
 
 > [!TIP] 
@@ -116,6 +122,21 @@ npm run deploy:kv
 # Local development
 npm run dev
 npm run dev:kv
+
+# Official Bitwarden web (Cloudflare Pages frontend; keeps webapp/)
+npm run build:official-web
+WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
+npm run deploy:official-web
+```
+
+Set Worker `WEB_VAULT_ORIGINS` to the Pages / local official-web origin (`http://127.0.0.1:8080` locally). Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
+
+Official self-host web asks for a **license file** to create an organization. Download `GET /api/licenses/nodewarden-enterprise.json` while logged in and upload it. That unlocks Enterprise features (including emergency access). NodeWarden does not check Bitwarden commercial signatures.
+
+Run official-client E2E against the Worker:
+
+```bash
+npm run test:e2e:official
 ```
 
 ---
