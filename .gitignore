@@ -12,6 +12,12 @@ problem.md
 # Build output
 dist/
 build/
+official-web/dist/
+official-web/.deploy/
+
+# Test + agent state
+test-results/
+.omc/
 
 # IDE
 .vscode/
