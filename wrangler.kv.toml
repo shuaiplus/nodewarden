@@ -27,6 +27,14 @@ class_name = "NotificationsHub"
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
 
+[[durable_objects.bindings]]
+name = "ORGANIZATION_HUB"
+class_name = "OrganizationHub"
+
+[[durable_objects.bindings]]
+name = "DIRECTORY_SYNC"
+class_name = "DirectorySyncActor"
+
 [[kv_namespaces]]
 binding = "ATTACHMENTS_KV"
 
@@ -37,3 +45,7 @@ new_sqlite_classes = [ "NotificationsHub" ]
 [[migrations]]
 tag = "v2-backup-transfer-runner"
 new_sqlite_classes = [ "BackupTransferRunner" ]
+
+[[migrations]]
+tag = "v3-organization-directory"
+new_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]
