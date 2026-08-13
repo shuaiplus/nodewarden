@@ -1,6 +1,7 @@
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { deleteTwoFactorSecret, upsertCredentialAccount, upsertTwoFactorSecret } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../services/audit-events';
 import { jsonResponse, errorResponse } from '../utils/response';
@@ -343,6 +344,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     if (!created) {
       return errorResponse('Registration is temporarily unavailable, retry once', 409);
     }
+    await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
     await storage.setRegistered();
     await writeAuditEvent(storage, {
       actorUserId: user.id,
@@ -369,6 +371,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
   try {
     await storage.createUser(user);
+    await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
   } catch (error) {
     if (inviteCode) await storage.revertInviteUsed(inviteCode, user.id);
     const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -803,6 +806,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
+  await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
@@ -1045,6 +1049,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   }
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
+  await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
@@ -1348,6 +1353,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     }
     user.updatedAt = new Date().toISOString();
     await storage.saveUser(user);
+    await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode);
     await storage.deleteRefreshTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
     await writeAuditEvent(storage, {
@@ -1372,6 +1378,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     user.totpSecret = null;
     user.updatedAt = new Date().toISOString();
     await storage.saveUser(user);
+    await deleteTwoFactorSecret(env.DB, user.id);
     await storage.deleteRefreshTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
     await writeAuditEvent(storage, {

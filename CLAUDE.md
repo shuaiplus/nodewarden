@@ -5,6 +5,7 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 ## Conventions
 
 - Schema lives in `src/db/schema.ts` (+ `relations.ts`). Generate with `npm run db:generate` (drizzle-kit + embed). Bump `STORAGE_SCHEMA_VERSION` in `src/services/storage.ts`.
+- Auth engine is Better Auth (`src/auth.ts`). Bitwarden `/identity` and `/api` stay adapters. Sessions live in `session`, credentials in `account`. Access JWTs stay HS256 via `JWT_SECRET`.
 - Personal vault queries must exclude `organization_id IS NOT NULL`.
 - Do not store plaintext vault or SM values.
 - Official Bitwarden clients are the API contract; Vaultwarden is the AGPL reference.

@@ -17,7 +17,7 @@ const sql = folders
   .map((folder) => join(migrationsDir, folder, 'migration.sql'))
   .filter((path) => existsSync(path))
   .map((path) => readFileSync(path, 'utf8'))
-  .join('\n');
+  .join('\n--> statement-breakpoint\n');
 
 if (!sql.trim()) {
   throw new Error('no generated migration SQL found under migrations/');

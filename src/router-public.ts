@@ -38,6 +38,7 @@ import {
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
+import { createAuth } from './auth';
 import { StorageService } from './services/storage';
 import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
@@ -301,6 +302,10 @@ export async function handlePublicRoute(
   method: string,
   enforcePublicRateLimit: PublicRateLimiter
 ): Promise<Response | null> {
+  if (path === '/api/auth' || path.startsWith('/api/auth/')) {
+    return createAuth(env, request).handler(request);
+  }
+
   if (path === '/.well-known/appspecific/com.chrome.devtools.json' && method === 'GET') {
     return new Response('{}', {
       status: 200,

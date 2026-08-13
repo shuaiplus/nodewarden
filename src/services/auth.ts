@@ -1,13 +1,9 @@
-import { Env, JWTPayload, User } from '../types';
-import { verifyJWT, createJWT, createRefreshToken } from '../utils/jwt';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
+import { Env, JWTPayload, User } from '../types';
+import { createJWT, createRefreshToken, verifyJWT } from '../utils/jwt';
+import { hashPassword, verifyPassword } from './auth-password';
 import { StorageService } from './storage';
 
-// Server-side iterations for second-layer hashing.
-// The client already does heavy PBKDF2 (600k iterations).
-// This second layer only needs to be non-trivial, not expensive.
-const SERVER_HASH_ITERATIONS = 100_000;
-const SERVER_HASH_PREFIX = '$s$';
 const AUTH_CONTEXT_CACHE_TTL_MS = 15 * 1000;
 
 interface CachedUserEntry {
@@ -137,44 +133,12 @@ export class AuthService {
   // Second-layer hash: PBKDF2-SHA256(clientHash, email-salt, iterations).
   // Ensures database contents alone cannot be used to authenticate (pass-the-hash defense).
   // Result is prefixed to distinguish server-hashed credentials from invalid legacy rows.
-  async hashPasswordServer(clientHash: string, email: string): Promise<string> {
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(clientHash),
-      'PBKDF2',
-      false,
-      ['deriveBits']
-    );
-    const salt = new TextEncoder().encode(email.toLowerCase().trim());
-    const bits = await crypto.subtle.deriveBits(
-      { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: SERVER_HASH_ITERATIONS },
-      keyMaterial,
-      256
-    );
-    const bytes = new Uint8Array(bits);
-    let binary = '';
-    for (const b of bytes) binary += String.fromCharCode(b);
-    return SERVER_HASH_PREFIX + btoa(binary);
+  async hashPasswordServer(clientHash: string, _email?: string): Promise<string> {
+    return hashPassword(clientHash);
   }
 
-  // Verify password: new rows use server-side hashing; legacy rows store the raw client hash.
   async verifyPassword(inputHash: string, storedHash: string, email: string): Promise<boolean> {
-    if (!storedHash.startsWith(SERVER_HASH_PREFIX)) {
-      return this.constantTimeEquals(inputHash, storedHash);
-    }
-    const serverHash = await this.hashPasswordServer(inputHash, email);
-    return this.constantTimeEquals(serverHash, storedHash);
-  }
-
-  private constantTimeEquals(a: string, b: string): boolean {
-    const encA = new TextEncoder().encode(a);
-    const encB = new TextEncoder().encode(b);
-    if (encA.length !== encB.length) return false;
-    let diff = 0;
-    for (let i = 0; i < encA.length; i++) {
-      diff |= encA[i] ^ encB[i];
-    }
-    return diff === 0;
+    return verifyPassword(inputHash, storedHash, email);
   }
 
   // Generate access token

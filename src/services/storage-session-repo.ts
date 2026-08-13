@@ -1,13 +1,14 @@
 import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
-import { refreshTokens } from '../db/schema';
+import { session } from '../db/schema';
 import type { RefreshTokenRecord } from '../types';
+import { generateUUID } from '../utils/uuid';
 
 type RefreshTokenKeyFn = (token: string) => Promise<string>;
 type CleanupExpiredFn = (nowMs: number) => Promise<void>;
 
-function mapRefreshToken(row: typeof refreshTokens.$inferSelect): RefreshTokenRecord {
+function mapSession(row: typeof session.$inferSelect): RefreshTokenRecord {
   return {
     userId: row.userId,
     expiresAt: row.expiresAt,
@@ -38,30 +39,33 @@ export async function saveRefreshToken(
   const tokenKey = await refreshTokenKey(token);
   const now = Date.now();
   await getOrm(db)
-    .insert(refreshTokens)
+    .insert(session)
     .values({
+      id: generateUUID(),
       token: tokenKey,
       userId,
       expiresAt: expiresAtMs,
+      createdAt: now,
+      updatedAt: now,
       deviceIdentifier: deviceIdentifier ?? null,
       deviceSessionStamp: deviceSessionStamp ?? null,
       securityStamp: securityStamp ?? null,
-      createdAt: now,
-      lastUsedAt: now,
-      absoluteExpiresAt: absoluteExpiresAtMs ?? null,
       clientType: clientType ?? null,
+      absoluteExpiresAt: absoluteExpiresAtMs ?? null,
+      lastUsedAt: now,
     })
     .onConflictDoUpdate({
-      target: refreshTokens.token,
+      target: session.token,
       set: {
         userId,
         expiresAt: expiresAtMs,
+        updatedAt: now,
         deviceIdentifier: deviceIdentifier ?? null,
         deviceSessionStamp: deviceSessionStamp ?? null,
         securityStamp: securityStamp ?? null,
+        clientType: clientType ?? null,
         lastUsedAt: now,
         absoluteExpiresAt: absoluteExpiresAtMs ?? null,
-        clientType: clientType ?? null,
       },
     });
 }
@@ -76,18 +80,13 @@ export async function getRefreshTokenRecord(
   const now = Date.now();
   await maybeCleanupExpiredRefreshTokens(now);
   const tokenKey = await refreshTokenKey(token);
-  const [row] = await getOrm(db)
-    .select()
-    .from(refreshTokens)
-    .where(eq(refreshTokens.token, tokenKey))
-    .limit(1);
-
+  const [row] = await getOrm(db).select().from(session).where(eq(session.token, tokenKey)).limit(1);
   if (!row) return null;
   if ((row.expiresAt && row.expiresAt < now) || (row.absoluteExpiresAt && row.absoluteExpiresAt < now)) {
     await deleteRefreshTokenRecord(token);
     return null;
   }
-  return mapRefreshToken(row);
+  return mapSession(row);
 }
 
 export async function extendRefreshTokenExpiry(
@@ -99,18 +98,19 @@ export async function extendRefreshTokenExpiry(
 ): Promise<boolean> {
   const tokenKey = await refreshTokenKey(token);
   const result = await getOrm(db)
-    .update(refreshTokens)
+    .update(session)
     .set({
       expiresAt: sql`CASE
-        WHEN ${refreshTokens.absoluteExpiresAt} IS NOT NULL AND ${refreshTokens.absoluteExpiresAt} < ${requestedExpiresAtMs}
-        THEN ${refreshTokens.absoluteExpiresAt}
+        WHEN ${session.absoluteExpiresAt} IS NOT NULL AND ${session.absoluteExpiresAt} < ${requestedExpiresAtMs}
+        THEN ${session.absoluteExpiresAt}
         ELSE ${requestedExpiresAtMs} END`,
       lastUsedAt: nowMs,
+      updatedAt: nowMs,
     })
     .where(and(
-      eq(refreshTokens.token, tokenKey),
-      gte(refreshTokens.expiresAt, nowMs),
-      or(isNull(refreshTokens.absoluteExpiresAt), gte(refreshTokens.absoluteExpiresAt, nowMs)),
+      eq(session.token, tokenKey),
+      gte(session.expiresAt, nowMs),
+      or(isNull(session.absoluteExpiresAt), gte(session.absoluteExpiresAt, nowMs)),
     ))
     .run();
   return Number(result.meta.changes ?? 0) > 0;
@@ -124,11 +124,11 @@ export async function bindRefreshTokenSecurityStamp(
 ): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
   await getOrm(db)
-    .update(refreshTokens)
-    .set({ securityStamp })
+    .update(session)
+    .set({ securityStamp, updatedAt: Date.now() })
     .where(and(
-      eq(refreshTokens.token, tokenKey),
-      or(isNull(refreshTokens.securityStamp), eq(refreshTokens.securityStamp, '')),
+      eq(session.token, tokenKey),
+      or(isNull(session.securityStamp), eq(session.securityStamp, '')),
     ));
 }
 
@@ -140,34 +140,34 @@ export async function bindRefreshTokenDeviceStamp(
 ): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
   await getOrm(db)
-    .update(refreshTokens)
-    .set({ deviceSessionStamp })
+    .update(session)
+    .set({ deviceSessionStamp, updatedAt: Date.now() })
     .where(and(
-      eq(refreshTokens.token, tokenKey),
-      or(isNull(refreshTokens.deviceSessionStamp), eq(refreshTokens.deviceSessionStamp, '')),
+      eq(session.token, tokenKey),
+      or(isNull(session.deviceSessionStamp), eq(session.deviceSessionStamp, '')),
     ));
 }
 
 export async function deleteRefreshToken(db: D1Database, refreshTokenKey: RefreshTokenKeyFn, token: string): Promise<void> {
   const tokenKey = await refreshTokenKey(token);
   const orm = getOrm(db);
-  await orm.delete(refreshTokens).where(eq(refreshTokens.token, token));
-  await orm.delete(refreshTokens).where(eq(refreshTokens.token, tokenKey));
+  await orm.delete(session).where(eq(session.token, token));
+  await orm.delete(session).where(eq(session.token, tokenKey));
 }
 
 export async function deleteRefreshTokensByUserId(db: D1Database, userId: string): Promise<number> {
-  const result = await getOrm(db).delete(refreshTokens).where(eq(refreshTokens.userId, userId)).run();
+  const result = await getOrm(db).delete(session).where(eq(session.userId, userId)).run();
   return Number(result.meta.changes ?? 0);
 }
 
 export async function deleteRefreshTokensByDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<number> {
   const result = await getOrm(db)
-    .delete(refreshTokens)
-    .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.deviceIdentifier, deviceIdentifier)))
+    .delete(session)
+    .where(and(eq(session.userId, userId), eq(session.deviceIdentifier, deviceIdentifier)))
     .run();
   return Number(result.meta.changes ?? 0);
 }
 
 export async function deleteExpiredRefreshTokens(db: D1Database, nowMs: number): Promise<void> {
-  await getOrm(db).delete(refreshTokens).where(lt(refreshTokens.expiresAt, nowMs));
+  await getOrm(db).delete(session).where(lt(session.expiresAt, nowMs));
 }

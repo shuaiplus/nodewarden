@@ -99,7 +99,7 @@ import {
   extendRefreshTokenExpiry as extendStoredRefreshTokenExpiry,
   getRefreshTokenRecord as findStoredRefreshTokenRecord,
   saveRefreshToken as saveStoredRefreshToken,
-} from './storage-refresh-token-repo';
+} from './storage-session-repo';
 import {
   deleteDevice as deleteStoredDevice,
   deleteDevicesByUserId as deleteStoredDevicesByUserId,
@@ -166,7 +166,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
 // Bump this whenever src/db/schema.ts changes. Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-08-14-drizzle-baseline';
+const STORAGE_SCHEMA_VERSION = '2026-08-14-better-auth';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',

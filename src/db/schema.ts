@@ -47,9 +47,72 @@ export const users = sqliteTable('users', {
   yubikeyKey5: text('yubikey_key5'),
   yubikeyNfc: integer('yubikey_nfc').notNull().default(0),
   apiKey: text('api_key'),
+  emailVerified: integer('email_verified').notNull().default(1),
+  image: text('image'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const session = sqliteTable('session', {
+  id: text('id').primaryKey(),
+  expiresAt: integer('expires_at').notNull(),
+  token: text('token').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  userId: text('user_id').notNull(),
+  deviceIdentifier: text('device_identifier'),
+  deviceSessionStamp: text('device_session_stamp'),
+  securityStamp: text('security_stamp'),
+  clientType: text('client_type'),
+  absoluteExpiresAt: integer('absolute_expires_at'),
+  lastUsedAt: integer('last_used_at'),
+}, (table) => [
+  foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
+  index('idx_session_user').on(table.userId),
+  index('idx_session_expires').on(table.expiresAt),
+]);
+
+export const account = sqliteTable('account', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull(),
+  providerId: text('provider_id').notNull(),
+  userId: text('user_id').notNull(),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  idToken: text('id_token'),
+  accessTokenExpiresAt: integer('access_token_expires_at'),
+  refreshTokenExpiresAt: integer('refresh_token_expires_at'),
+  scope: text('scope'),
+  password: text('password'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+  foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
+  uniqueIndex('idx_account_provider_account').on(table.providerId, table.accountId),
+  index('idx_account_user').on(table.userId),
+]);
+
+export const verification = sqliteTable('verification', {
+  id: text('id').primaryKey(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  createdAt: integer('created_at'),
+  updatedAt: integer('updated_at'),
+}, (table) => [
+  index('idx_verification_identifier').on(table.identifier),
+]);
+
+export const twoFactor = sqliteTable('two_factor', {
+  id: text('id').primaryKey(),
+  secret: text('secret').notNull(),
+  backupCodes: text('backup_codes').notNull(),
+  userId: text('user_id').notNull().unique(),
+}, (table) => [
+  foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
+]);
 
 export const domainSettings = sqliteTable('domain_settings', {
   userId: text('user_id').primaryKey(),

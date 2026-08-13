@@ -22,6 +22,9 @@ export const relations = defineRelations(schema, (r) => ({
     folders: r.many.folders(),
     sends: r.many.sends(),
     refreshTokens: r.many.refreshTokens(),
+    sessions: r.many.session(),
+    accounts: r.many.account(),
+    twoFactor: r.one.twoFactor({ from: r.users.id, to: r.twoFactor.userId }),
     devices: r.many.devices(),
     authRequests: r.many.authRequests(),
     trustedTwoFactorDeviceTokens: r.many.trustedTwoFactorDeviceTokens(),
@@ -79,6 +82,18 @@ export const relations = defineRelations(schema, (r) => ({
 
   refreshTokens: {
     user: r.one.users({ from: r.refreshTokens.userId, to: r.users.id, optional: false }),
+  },
+
+  session: {
+    user: r.one.users({ from: r.session.userId, to: r.users.id, optional: false }),
+  },
+
+  account: {
+    user: r.one.users({ from: r.account.userId, to: r.users.id, optional: false }),
+  },
+
+  twoFactor: {
+    user: r.one.users({ from: r.twoFactor.userId, to: r.users.id, optional: false }),
   },
 
   invites: {
