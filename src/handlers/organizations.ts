@@ -1,5 +1,6 @@
 import type { Env, User } from '../types';
 import { StorageService } from '../services/storage';
+import { AuthService } from '../services/auth';
 import {
   canCreateCollection,
   canDeleteOrganization,
@@ -282,7 +283,7 @@ export async function handleCreateOrgCollection(request: Request, env: Env, user
   };
   if (!collection.name) return errorResponse('Name is required', 400);
   await orgRepo.saveCollection(env.DB, collection);
-  await applyCollectionAccess(env.DB, collection.id, body);
+  await applyCollectionAccess(env.DB, orgId, collection.id, body);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(collectionJson(collection));
 }
@@ -303,7 +304,7 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   collection.externalId = asString(readBody(body, ['externalId', 'ExternalId'])) || collection.externalId;
   collection.updatedAt = new Date().toISOString();
   await orgRepo.saveCollection(env.DB, collection);
-  await applyCollectionAccess(env.DB, collection.id, body);
+  await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(collectionJson(collection));
 }
@@ -321,31 +322,41 @@ export async function handleDeleteOrgCollection(env: Env, userId: string, orgId:
   return jsonResponse({});
 }
 
-async function applyCollectionAccess(db: D1Database, collectionId: string, body: Record<string, unknown>): Promise<void> {
+function accessFlags(entry: Record<string, unknown>) {
+  return {
+    readOnly: asBoolean(readBody(entry, ['readOnly', 'ReadOnly'])),
+    hidePasswords: asBoolean(readBody(entry, ['hidePasswords', 'HidePasswords'])),
+    manage: asBoolean(readBody(entry, ['manage', 'Manage'])),
+  };
+}
+
+// Membership and group ids come straight from the request body, so every referenced
+// record must be re-checked against the collection's organization before it is granted access.
+async function applyCollectionAccess(
+  db: D1Database,
+  orgId: string,
+  collectionId: string,
+  body: Record<string, unknown>
+): Promise<void> {
   const users = (readBody(body, ['users', 'Users']) as Array<Record<string, unknown>> | undefined) || [];
   const groups = (readBody(body, ['groups', 'Groups']) as Array<Record<string, unknown>> | undefined) || [];
   if (users.length) {
     const mapped = [];
     for (const entry of users) {
-      const membershipId = asString(readBody(entry, ['id', 'Id']));
-      const membership = await orgRepo.getMembership(db, membershipId);
-      if (!membership?.userId) continue;
-      mapped.push({
-        userId: membership.userId,
-        readOnly: asBoolean(readBody(entry, ['readOnly', 'ReadOnly'])),
-        hidePasswords: asBoolean(readBody(entry, ['hidePasswords', 'HidePasswords'])),
-        manage: asBoolean(readBody(entry, ['manage', 'Manage'])),
-      });
+      const membership = await orgRepo.getMembership(db, asString(readBody(entry, ['id', 'Id'])));
+      if (!membership?.userId || membership.orgId !== orgId) continue;
+      mapped.push({ userId: membership.userId, ...accessFlags(entry) });
     }
     await orgRepo.replaceCollectionUsers(db, collectionId, mapped);
   }
   if (groups.length) {
-    await orgRepo.replaceCollectionGroups(db, collectionId, groups.map((entry) => ({
-      groupId: asString(readBody(entry, ['id', 'Id'])),
-      readOnly: asBoolean(readBody(entry, ['readOnly', 'ReadOnly'])),
-      hidePasswords: asBoolean(readBody(entry, ['hidePasswords', 'HidePasswords'])),
-      manage: asBoolean(readBody(entry, ['manage', 'Manage'])),
-    })).filter((entry) => entry.groupId));
+    const mapped = [];
+    for (const entry of groups) {
+      const group = await orgRepo.getGroup(db, asString(readBody(entry, ['id', 'Id'])));
+      if (!group || group.orgId !== orgId) continue;
+      mapped.push({ groupId: group.id, ...accessFlags(entry) });
+    }
+    await orgRepo.replaceCollectionGroups(db, collectionId, mapped);
   }
 }
 
@@ -596,23 +607,43 @@ export async function handleGetPlans(): Promise<Response> {
   return jsonResponse(enterprisePlansResponse());
 }
 
+// Bitwarden guards the organization API key endpoints with a SecretVerificationRequestModel,
+// so re-authenticate the caller before minting a key instead of trusting the session alone.
+async function verifyMasterPassword(env: Env, userId: string, body: Record<string, unknown>): Promise<Response | null> {
+  const secret = asString(readBody(body, ['masterPasswordHash', 'MasterPasswordHash', 'secret', 'Secret']));
+  if (!secret) return errorResponse('masterPasswordHash is required', 400);
+  const user = await new StorageService(env.DB).getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  const valid = await new AuthService(env).verifyPassword(secret, user.masterPasswordHash, user.email);
+  return valid ? null : errorResponse('Invalid password', 400);
+}
+
 export async function handleOrgApiKey(request: Request, env: Env, userId: string, orgId: string, rotate: boolean): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  const unverified = await verifyMasterPassword(env, userId, body);
+  if (unverified) return unverified;
+
+  // Only the hash is persisted, so an existing key can never be displayed again:
+  // a non-rotating read has nothing to hand back and must be rotated instead.
   const existing = await orgRepo.getOrganizationApiKey(env.DB, orgId);
   if (!rotate && existing) {
-    return jsonResponse({ apiKey: existing.apiKey, revisionDate: new Date().toISOString(), object: 'organizationApiKey' });
+    return errorResponse('The organization API key is only shown when it is created or rotated. Rotate it to get a new key.', 409);
   }
+
   const apiKey = generateUUID().replace(/-/g, '') + generateUUID().replace(/-/g, '');
+  const revisionDate = new Date().toISOString();
   await orgRepo.saveOrganizationApiKey(env.DB, {
     id: existing?.id || generateUUID(),
     orgId,
     type: 0,
-    apiKey,
-    revisionDate: new Date().toISOString(),
+    apiKeyHash: await hashApiKey(apiKey),
+    revisionDate,
   });
-  return jsonResponse({ apiKey, revisionDate: new Date().toISOString(), object: 'organizationApiKey' });
+  return jsonResponse({ apiKey, revisionDate, object: 'organizationApiKey' });
 }
 
 export async function handleRotateScimKey(env: Env, userId: string, orgId: string): Promise<Response> {

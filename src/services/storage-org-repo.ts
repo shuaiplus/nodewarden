@@ -551,22 +551,23 @@ export async function getPolicy(db: D1Database, orgId: string, type: number): Pr
   return row ? mapPolicy(row) : null;
 }
 
+// The api_key column holds a one-way hash only; the plaintext key is shown once at mint time.
 export async function saveOrganizationApiKey(
   db: D1Database,
-  row: { id: string; orgId: string; type: number; apiKey: string; revisionDate: string }
+  row: { id: string; orgId: string; type: number; apiKeyHash: string; revisionDate: string }
 ): Promise<void> {
   await db.prepare(
     'INSERT INTO organization_api_keys(id, org_id, type, api_key, revision_date) VALUES(?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET api_key=excluded.api_key, revision_date=excluded.revision_date'
-  ).bind(row.id, row.orgId, row.type, row.apiKey, row.revisionDate).run();
+  ).bind(row.id, row.orgId, row.type, row.apiKeyHash, row.revisionDate).run();
 }
 
-export async function getOrganizationApiKey(db: D1Database, orgId: string): Promise<{ id: string; apiKey: string } | null> {
+export async function getOrganizationApiKey(db: D1Database, orgId: string): Promise<{ id: string; apiKeyHash: string } | null> {
   const row = await db
     .prepare('SELECT id, api_key FROM organization_api_keys WHERE org_id = ? ORDER BY revision_date DESC LIMIT 1')
     .bind(orgId)
     .first<{ id: string; api_key: string }>();
-  return row ? { id: row.id, apiKey: row.api_key } : null;
+  return row ? { id: row.id, apiKeyHash: row.api_key } : null;
 }
 
 export async function saveScimToken(db: D1Database, orgId: string, tokenHash: string, createdAt: string): Promise<void> {
