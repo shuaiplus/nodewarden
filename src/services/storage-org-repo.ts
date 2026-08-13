@@ -1,3 +1,22 @@
+import { and, asc, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import {
+  cipherCollections,
+  ciphers,
+  collectionGroups,
+  collections,
+  collectionUsers,
+  organizationApiKeys,
+  organizationMemberships,
+  organizations,
+  organizationScimTokens,
+  orgGroupMembers,
+  orgGroups,
+  orgPolicies,
+  ssoAuth,
+  ssoUsers,
+} from '../db/schema';
 import type { Cipher } from '../types';
 import { hasFullCollectionAccess } from './org-authz';
 import {
@@ -10,118 +29,62 @@ import {
   parsePermissions,
 } from './org-types';
 
-interface OrganizationRow {
-  id: string;
-  name: string;
-  billing_email: string;
-  identifier: string | null;
-  private_key: string | null;
-  public_key: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface MembershipRow {
-  id: string;
-  user_id: string | null;
-  org_id: string;
-  email: string | null;
-  invited_by_email: string | null;
-  access_all: number;
-  key: string;
-  status: number;
-  type: number;
-  permissions: string | null;
-  reset_password_key: string | null;
-  external_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CollectionRow {
-  id: string;
-  org_id: string;
-  name: string;
-  external_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface GroupRow {
-  id: string;
-  org_id: string;
-  name: string;
-  access_all: number;
-  external_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface PolicyRow {
-  id: string;
-  org_id: string;
-  type: number;
-  enabled: number;
-  data: string;
-  updated_at: string;
-}
-
-function mapOrganization(row: OrganizationRow): OrganizationRecord {
+function mapOrganization(row: typeof organizations.$inferSelect): OrganizationRecord {
   return {
     id: row.id,
     name: row.name,
-    billingEmail: row.billing_email,
+    billingEmail: row.billingEmail,
     identifier: row.identifier,
-    privateKey: row.private_key,
-    publicKey: row.public_key,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    privateKey: row.privateKey,
+    publicKey: row.publicKey,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function mapMembership(row: MembershipRow): MembershipRecord {
+function mapMembership(row: typeof organizationMemberships.$inferSelect): MembershipRecord {
   return {
     id: row.id,
-    userId: row.user_id,
-    orgId: row.org_id,
+    userId: row.userId,
+    orgId: row.orgId,
     email: row.email,
-    invitedByEmail: row.invited_by_email,
-    accessAll: !!row.access_all,
+    invitedByEmail: row.invitedByEmail,
+    accessAll: !!row.accessAll,
     key: row.key || '',
     status: Number(row.status),
     type: Number(row.type),
     permissions: parsePermissions(row.permissions),
-    resetPasswordKey: row.reset_password_key,
-    externalId: row.external_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    resetPasswordKey: row.resetPasswordKey,
+    externalId: row.externalId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function mapCollection(row: CollectionRow): CollectionRecord {
+function mapCollection(row: typeof collections.$inferSelect): CollectionRecord {
   return {
     id: row.id,
-    orgId: row.org_id,
+    orgId: row.orgId,
     name: row.name,
-    externalId: row.external_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    externalId: row.externalId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function mapGroup(row: GroupRow): GroupRecord {
+function mapGroup(row: typeof orgGroups.$inferSelect): GroupRecord {
   return {
     id: row.id,
-    orgId: row.org_id,
+    orgId: row.orgId,
     name: row.name,
-    accessAll: !!row.access_all,
-    externalId: row.external_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    accessAll: !!row.accessAll,
+    externalId: row.externalId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function mapPolicy(row: PolicyRow): PolicyRecord {
+function mapPolicy(row: typeof orgPolicies.$inferSelect): PolicyRecord {
   let data: Record<string, unknown> = {};
   try {
     data = JSON.parse(row.data || '{}') as Record<string, unknown>;
@@ -130,60 +93,99 @@ function mapPolicy(row: PolicyRow): PolicyRecord {
   }
   return {
     id: row.id,
-    orgId: row.org_id,
+    orgId: row.orgId,
     type: Number(row.type),
     enabled: !!row.enabled,
     data,
-    updatedAt: row.updated_at,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapAccess(row: { collectionId: string; readOnly: number; hidePasswords: number; manage: number }): CollectionAccess {
+  return {
+    collectionId: row.collectionId,
+    readOnly: !!row.readOnly,
+    hidePasswords: !!row.hidePasswords,
+    manage: !!row.manage,
   };
 }
 
 export async function insertOrganization(db: D1Database, org: OrganizationRecord): Promise<void> {
-  await db.prepare(
-    'INSERT INTO organizations(id, name, billing_email, identifier, private_key, public_key, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(org.id, org.name, org.billingEmail, org.identifier, org.privateKey, org.publicKey, org.createdAt, org.updatedAt).run();
+  await getOrm(db).insert(organizations).values({
+    id: org.id,
+    name: org.name,
+    billingEmail: org.billingEmail,
+    identifier: org.identifier,
+    privateKey: org.privateKey,
+    publicKey: org.publicKey,
+    createdAt: org.createdAt,
+    updatedAt: org.updatedAt,
+  });
 }
 
 export async function updateOrganization(db: D1Database, org: OrganizationRecord): Promise<void> {
-  await db.prepare(
-    'UPDATE organizations SET name = ?, billing_email = ?, identifier = ?, private_key = ?, public_key = ?, updated_at = ? WHERE id = ?'
-  ).bind(org.name, org.billingEmail, org.identifier, org.privateKey, org.publicKey, org.updatedAt, org.id).run();
+  await getOrm(db)
+    .update(organizations)
+    .set({
+      name: org.name,
+      billingEmail: org.billingEmail,
+      identifier: org.identifier,
+      privateKey: org.privateKey,
+      publicKey: org.publicKey,
+      updatedAt: org.updatedAt,
+    })
+    .where(eq(organizations.id, org.id));
 }
 
 export async function getOrganization(db: D1Database, id: string): Promise<OrganizationRecord | null> {
-  const row = await db.prepare('SELECT * FROM organizations WHERE id = ?').bind(id).first<OrganizationRow>();
+  const [row] = await getOrm(db).select().from(organizations).where(eq(organizations.id, id)).limit(1);
   return row ? mapOrganization(row) : null;
 }
 
 export async function deleteOrganization(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM organizations WHERE id = ?').bind(id).run();
+  await getOrm(db).delete(organizations).where(eq(organizations.id, id));
 }
 
 export async function saveMembership(db: D1Database, member: MembershipRecord): Promise<void> {
-  await db.prepare(
-    'INSERT INTO organization_memberships(id, user_id, org_id, email, invited_by_email, access_all, key, status, type, permissions, reset_password_key, external_id, created_at, updated_at) ' +
-    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, email=excluded.email, invited_by_email=excluded.invited_by_email, access_all=excluded.access_all, key=excluded.key, status=excluded.status, type=excluded.type, permissions=excluded.permissions, reset_password_key=excluded.reset_password_key, external_id=excluded.external_id, updated_at=excluded.updated_at'
-  ).bind(
-    member.id,
-    member.userId,
-    member.orgId,
-    member.email,
-    member.invitedByEmail,
-    member.accessAll ? 1 : 0,
-    member.key,
-    member.status,
-    member.type,
-    member.permissions ? JSON.stringify(member.permissions) : null,
-    member.resetPasswordKey,
-    member.externalId,
-    member.createdAt,
-    member.updatedAt
-  ).run();
+  const values = {
+    id: member.id,
+    userId: member.userId,
+    orgId: member.orgId,
+    email: member.email,
+    invitedByEmail: member.invitedByEmail,
+    accessAll: member.accessAll ? 1 : 0,
+    key: member.key,
+    status: member.status,
+    type: member.type,
+    permissions: member.permissions ? JSON.stringify(member.permissions) : null,
+    resetPasswordKey: member.resetPasswordKey,
+    externalId: member.externalId,
+    createdAt: member.createdAt,
+    updatedAt: member.updatedAt,
+  };
+  await getOrm(db)
+    .insert(organizationMemberships)
+    .values(values)
+    .onConflictDoUpdate({
+      target: organizationMemberships.id,
+      set: {
+        userId: values.userId,
+        email: values.email,
+        invitedByEmail: values.invitedByEmail,
+        accessAll: values.accessAll,
+        key: values.key,
+        status: values.status,
+        type: values.type,
+        permissions: values.permissions,
+        resetPasswordKey: values.resetPasswordKey,
+        externalId: values.externalId,
+        updatedAt: values.updatedAt,
+      },
+    });
 }
 
 export async function getMembership(db: D1Database, id: string): Promise<MembershipRecord | null> {
-  const row = await db.prepare('SELECT * FROM organization_memberships WHERE id = ?').bind(id).first<MembershipRow>();
+  const [row] = await getOrm(db).select().from(organizationMemberships).where(eq(organizationMemberships.id, id)).limit(1);
   return row ? mapMembership(row) : null;
 }
 
@@ -192,67 +194,85 @@ export async function getMembershipByUserAndOrg(
   userId: string,
   orgId: string
 ): Promise<MembershipRecord | null> {
-  const row = await db
-    .prepare('SELECT * FROM organization_memberships WHERE user_id = ? AND org_id = ?')
-    .bind(userId, orgId)
-    .first<MembershipRow>();
+  const [row] = await getOrm(db)
+    .select()
+    .from(organizationMemberships)
+    .where(and(eq(organizationMemberships.userId, userId), eq(organizationMemberships.orgId, orgId)))
+    .limit(1);
   return row ? mapMembership(row) : null;
 }
 
 export async function listMembershipsByUser(db: D1Database, userId: string): Promise<MembershipRecord[]> {
-  const result = await db
-    .prepare('SELECT * FROM organization_memberships WHERE user_id = ? ORDER BY created_at')
-    .bind(userId)
-    .all<MembershipRow>();
-  return (result.results || []).map(mapMembership);
+  const rows = await getOrm(db)
+    .select()
+    .from(organizationMemberships)
+    .where(eq(organizationMemberships.userId, userId))
+    .orderBy(asc(organizationMemberships.createdAt));
+  return rows.map(mapMembership);
 }
 
 export async function listMembershipsByOrg(db: D1Database, orgId: string): Promise<MembershipRecord[]> {
-  const result = await db
-    .prepare('SELECT * FROM organization_memberships WHERE org_id = ? ORDER BY created_at')
-    .bind(orgId)
-    .all<MembershipRow>();
-  return (result.results || []).map(mapMembership);
+  const rows = await getOrm(db)
+    .select()
+    .from(organizationMemberships)
+    .where(eq(organizationMemberships.orgId, orgId))
+    .orderBy(asc(organizationMemberships.createdAt));
+  return rows.map(mapMembership);
 }
 
 export async function deleteMembership(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM organization_memberships WHERE id = ?').bind(id).run();
+  await getOrm(db).delete(organizationMemberships).where(eq(organizationMemberships.id, id));
 }
 
 export async function countConfirmedOwners(db: D1Database, orgId: string): Promise<number> {
-  const row = await db
-    .prepare('SELECT COUNT(*) as count FROM organization_memberships WHERE org_id = ? AND type = 0 AND status = 2')
-    .bind(orgId)
-    .first<{ count: number }>();
+  const [row] = await getOrm(db)
+    .select({ count: count() })
+    .from(organizationMemberships)
+    .where(and(
+      eq(organizationMemberships.orgId, orgId),
+      eq(organizationMemberships.type, 0),
+      eq(organizationMemberships.status, 2),
+    ));
   return Number(row?.count || 0);
 }
 
 export async function saveCollection(db: D1Database, collection: CollectionRecord): Promise<void> {
-  await db.prepare(
-    'INSERT INTO collections(id, org_id, name, external_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET name=excluded.name, external_id=excluded.external_id, updated_at=excluded.updated_at'
-  ).bind(
-    collection.id,
-    collection.orgId,
-    collection.name,
-    collection.externalId,
-    collection.createdAt,
-    collection.updatedAt
-  ).run();
+  await getOrm(db)
+    .insert(collections)
+    .values({
+      id: collection.id,
+      orgId: collection.orgId,
+      name: collection.name,
+      externalId: collection.externalId,
+      createdAt: collection.createdAt,
+      updatedAt: collection.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: collections.id,
+      set: {
+        name: collection.name,
+        externalId: collection.externalId,
+        updatedAt: collection.updatedAt,
+      },
+    });
 }
 
 export async function getCollection(db: D1Database, id: string): Promise<CollectionRecord | null> {
-  const row = await db.prepare('SELECT * FROM collections WHERE id = ?').bind(id).first<CollectionRow>();
+  const [row] = await getOrm(db).select().from(collections).where(eq(collections.id, id)).limit(1);
   return row ? mapCollection(row) : null;
 }
 
 export async function listCollectionsByOrg(db: D1Database, orgId: string): Promise<CollectionRecord[]> {
-  const result = await db.prepare('SELECT * FROM collections WHERE org_id = ? ORDER BY created_at').bind(orgId).all<CollectionRow>();
-  return (result.results || []).map(mapCollection);
+  const rows = await getOrm(db)
+    .select()
+    .from(collections)
+    .where(eq(collections.orgId, orgId))
+    .orderBy(asc(collections.createdAt));
+  return rows.map(mapCollection);
 }
 
 export async function deleteCollection(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM collections WHERE id = ?').bind(id).run();
+  await getOrm(db).delete(collections).where(eq(collections.id, id));
 }
 
 export async function replaceCollectionUsers(
@@ -260,57 +280,64 @@ export async function replaceCollectionUsers(
   collectionId: string,
   users: Array<{ userId: string; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
 ): Promise<void> {
-  await db.prepare('DELETE FROM collection_users WHERE collection_id = ?').bind(collectionId).run();
-  for (const user of users) {
-    await db.prepare(
-      'INSERT INTO collection_users(user_id, collection_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?)'
-    ).bind(user.userId, collectionId, user.readOnly ? 1 : 0, user.hidePasswords ? 1 : 0, user.manage ? 1 : 0).run();
+  const orm = getOrm(db);
+  await orm.delete(collectionUsers).where(eq(collectionUsers.collectionId, collectionId));
+  if (users.length) {
+    await orm.insert(collectionUsers).values(users.map((user) => ({
+      userId: user.userId,
+      collectionId,
+      readOnly: user.readOnly ? 1 : 0,
+      hidePasswords: user.hidePasswords ? 1 : 0,
+      manage: user.manage ? 1 : 0,
+    })));
   }
 }
 
 export async function listCollectionUsers(db: D1Database, collectionId: string): Promise<CollectionAccess[]> {
-  const result = await db
-    .prepare('SELECT user_id, collection_id, read_only, hide_passwords, manage FROM collection_users WHERE collection_id = ?')
-    .bind(collectionId)
-    .all<{ user_id: string; collection_id: string; read_only: number; hide_passwords: number; manage: number }>();
-  return (result.results || []).map((row) => ({
-    collectionId: row.collection_id,
-    readOnly: !!row.read_only,
-    hidePasswords: !!row.hide_passwords,
-    manage: !!row.manage,
-    userId: row.user_id,
+  const rows = await getOrm(db)
+    .select({
+      userId: collectionUsers.userId,
+      collectionId: collectionUsers.collectionId,
+      readOnly: collectionUsers.readOnly,
+      hidePasswords: collectionUsers.hidePasswords,
+      manage: collectionUsers.manage,
+    })
+    .from(collectionUsers)
+    .where(eq(collectionUsers.collectionId, collectionId));
+  return rows.map((row) => ({
+    ...mapAccess(row),
+    userId: row.userId,
   })) as CollectionAccess[];
 }
 
 export async function listUserCollectionAccess(db: D1Database, userId: string, orgId: string): Promise<CollectionAccess[]> {
-  const result = await db.prepare(
-    'SELECT cu.collection_id, cu.read_only, cu.hide_passwords, cu.manage ' +
-    'FROM collection_users cu INNER JOIN collections c ON c.id = cu.collection_id ' +
-    'WHERE cu.user_id = ? AND c.org_id = ?'
-  ).bind(userId, orgId).all<{ collection_id: string; read_only: number; hide_passwords: number; manage: number }>();
-  const direct = (result.results || []).map((row) => ({
-    collectionId: row.collection_id,
-    readOnly: !!row.read_only,
-    hidePasswords: !!row.hide_passwords,
-    manage: !!row.manage,
-  }));
+  const orm = getOrm(db);
+  const direct = await orm
+    .select({
+      collectionId: collectionUsers.collectionId,
+      readOnly: collectionUsers.readOnly,
+      hidePasswords: collectionUsers.hidePasswords,
+      manage: collectionUsers.manage,
+    })
+    .from(collectionUsers)
+    .innerJoin(collections, eq(collections.id, collectionUsers.collectionId))
+    .where(and(eq(collectionUsers.userId, userId), eq(collections.orgId, orgId)));
 
-  const groupResult = await db.prepare(
-    'SELECT cg.collection_id, cg.read_only, cg.hide_passwords, cg.manage ' +
-    'FROM collection_groups cg ' +
-    'INNER JOIN org_group_members gm ON gm.group_id = cg.group_id ' +
-    'INNER JOIN organization_memberships m ON m.id = gm.membership_id ' +
-    'INNER JOIN collections c ON c.id = cg.collection_id ' +
-    'WHERE m.user_id = ? AND c.org_id = ?'
-  ).bind(userId, orgId).all<{ collection_id: string; read_only: number; hide_passwords: number; manage: number }>();
+  const groupRows = await orm
+    .select({
+      collectionId: collectionGroups.collectionId,
+      readOnly: collectionGroups.readOnly,
+      hidePasswords: collectionGroups.hidePasswords,
+      manage: collectionGroups.manage,
+    })
+    .from(collectionGroups)
+    .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, collectionGroups.groupId))
+    .innerJoin(organizationMemberships, eq(organizationMemberships.id, orgGroupMembers.membershipId))
+    .innerJoin(collections, eq(collections.id, collectionGroups.collectionId))
+    .where(and(eq(organizationMemberships.userId, userId), eq(collections.orgId, orgId)));
 
   const merged = new Map<string, CollectionAccess>();
-  for (const access of [...direct, ...(groupResult.results || []).map((row) => ({
-    collectionId: row.collection_id,
-    readOnly: !!row.read_only,
-    hidePasswords: !!row.hide_passwords,
-    manage: !!row.manage,
-  }))]) {
+  for (const access of [...direct, ...groupRows].map(mapAccess)) {
     const existing = merged.get(access.collectionId);
     if (!existing) {
       merged.set(access.collectionId, access);
@@ -327,18 +354,21 @@ export async function listUserCollectionAccess(db: D1Database, userId: string, o
 }
 
 export async function replaceCipherCollections(db: D1Database, cipherId: string, collectionIds: string[]): Promise<void> {
-  await db.prepare('DELETE FROM cipher_collections WHERE cipher_id = ?').bind(cipherId).run();
-  for (const collectionId of collectionIds) {
-    await db.prepare('INSERT OR IGNORE INTO cipher_collections(cipher_id, collection_id) VALUES(?, ?)').bind(cipherId, collectionId).run();
+  const orm = getOrm(db);
+  await orm.delete(cipherCollections).where(eq(cipherCollections.cipherId, cipherId));
+  if (collectionIds.length) {
+    await orm.insert(cipherCollections).values(
+      collectionIds.map((collectionId) => ({ cipherId, collectionId }))
+    ).onConflictDoNothing();
   }
 }
 
 export async function listCipherCollectionIds(db: D1Database, cipherId: string): Promise<string[]> {
-  const result = await db
-    .prepare('SELECT collection_id FROM cipher_collections WHERE cipher_id = ?')
-    .bind(cipherId)
-    .all<{ collection_id: string }>();
-  return (result.results || []).map((row) => row.collection_id);
+  const rows = await getOrm(db)
+    .select({ collectionId: cipherCollections.collectionId })
+    .from(cipherCollections)
+    .where(eq(cipherCollections.cipherId, cipherId));
+  return rows.map((row) => row.collectionId);
 }
 
 export async function listCipherCollectionIdsByCipherIds(
@@ -347,51 +377,36 @@ export async function listCipherCollectionIdsByCipherIds(
 ): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   if (cipherIds.length === 0) return map;
-  const placeholders = cipherIds.map(() => '?').join(',');
-  const result = await db
-    .prepare(`SELECT cipher_id, collection_id FROM cipher_collections WHERE cipher_id IN (${placeholders})`)
-    .bind(...cipherIds)
-    .all<{ cipher_id: string; collection_id: string }>();
-  for (const row of result.results || []) {
-    const list = map.get(row.cipher_id) || [];
-    list.push(row.collection_id);
-    map.set(row.cipher_id, list);
+  const orm = getOrm(db);
+  const chunkSize = 90;
+  for (let offset = 0; offset < cipherIds.length; offset += chunkSize) {
+    const chunk = cipherIds.slice(offset, offset + chunkSize);
+    const rows = await orm
+      .select({
+        cipherId: cipherCollections.cipherId,
+        collectionId: cipherCollections.collectionId,
+      })
+      .from(cipherCollections)
+      .where(inArray(cipherCollections.cipherId, chunk));
+    for (const row of rows) {
+      const list = map.get(row.cipherId) || [];
+      list.push(row.collectionId);
+      map.set(row.cipherId, list);
+    }
   }
   return map;
 }
 
 export async function listOrgCipherIds(db: D1Database, orgId: string): Promise<string[]> {
-  const result = await db
-    .prepare('SELECT id FROM ciphers WHERE organization_id = ?')
-    .bind(orgId)
-    .all<{ id: string }>();
-  return (result.results || []).map((row) => row.id);
-}
-
-const ORG_CIPHER_COLUMNS = [
-  'id',
-  'user_id',
-  'organization_id',
-  'type',
-  'folder_id',
-  'name',
-  'notes',
-  'favorite',
-  'data',
-  'reprompt',
-  'key',
-  'created_at',
-  'updated_at',
-  'archived_at',
-  'deleted_at',
-];
-
-function orgCipherColumns(prefix = ''): string {
-  return ORG_CIPHER_COLUMNS.map((column) => `${prefix}${column}`).join(', ');
+  const rows = await getOrm(db)
+    .select({ id: ciphers.id })
+    .from(ciphers)
+    .where(eq(ciphers.organizationId, orgId));
+  return rows.map((row) => row.id);
 }
 
 function mapOrgCipherRow(
-  row: Record<string, unknown>,
+  row: typeof ciphers.$inferSelect,
   userId: string,
   orgId: string,
   collectionIds: string[]
@@ -404,41 +419,79 @@ function mapOrgCipherRow(
   }
   return {
     ...(parsed as unknown as Cipher),
-    id: String(row.id),
-    userId: String(row.user_id || userId),
-    organizationId: String(row.organization_id || orgId),
+    id: row.id,
+    userId: row.userId || userId,
+    organizationId: row.organizationId || orgId,
     type: Number(row.type) || 1,
-    folderId: (row.folder_id as string | null) ?? null,
-    name: (row.name as string | null) ?? null,
-    notes: (row.notes as string | null) ?? null,
+    folderId: row.folderId ?? null,
+    name: row.name ?? null,
+    notes: row.notes ?? null,
     favorite: !!row.favorite,
     reprompt: Number(row.reprompt || 0),
-    key: (row.key as string | null) ?? null,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-    archivedAt: (row.archived_at as string | null) ?? null,
-    deletedAt: (row.deleted_at as string | null) ?? null,
+    key: row.key ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt ?? null,
+    deletedAt: row.deletedAt ?? null,
     collectionIds,
   };
 }
 
-// One query per org instead of one per cipher; binding only the org id keeps this
-// clear of the D1 bound-variable ceiling no matter how large the org vault is.
 async function listOrgCipherCollectionIds(db: D1Database, orgId: string): Promise<Map<string, string[]>> {
-  const result = await db
-    .prepare(
-      'SELECT cc.cipher_id, cc.collection_id FROM cipher_collections cc ' +
-      'INNER JOIN ciphers c ON c.id = cc.cipher_id WHERE c.organization_id = ?'
-    )
-    .bind(orgId)
-    .all<{ cipher_id: string; collection_id: string }>();
+  const rows = await getOrm(db)
+    .select({
+      cipherId: cipherCollections.cipherId,
+      collectionId: cipherCollections.collectionId,
+    })
+    .from(cipherCollections)
+    .innerJoin(ciphers, eq(ciphers.id, cipherCollections.cipherId))
+    .where(eq(ciphers.organizationId, orgId));
   const map = new Map<string, string[]>();
-  for (const row of result.results || []) {
-    const list = map.get(row.cipher_id);
-    if (list) list.push(row.collection_id);
-    else map.set(row.cipher_id, [row.collection_id]);
+  for (const row of rows) {
+    const list = map.get(row.cipherId);
+    if (list) list.push(row.collectionId);
+    else map.set(row.cipherId, [row.collectionId]);
   }
   return map;
+}
+
+async function listRestrictedOrgCiphers(
+  db: D1Database,
+  userId: string,
+  membershipId: string,
+  orgId: string
+): Promise<Array<typeof ciphers.$inferSelect>> {
+  const orm = getOrm(db);
+  const direct = await orm
+    .select({ collectionId: collectionUsers.collectionId })
+    .from(collectionUsers)
+    .where(eq(collectionUsers.userId, userId));
+  const grouped = await orm
+    .select({ collectionId: collectionGroups.collectionId })
+    .from(collectionGroups)
+    .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, collectionGroups.groupId))
+    .where(eq(orgGroupMembers.membershipId, membershipId));
+  const allowed = [...new Set([...direct, ...grouped].map((row) => row.collectionId))];
+  if (!allowed.length) return [];
+
+  const rows = await orm
+    .select({ cipher: ciphers })
+    .from(ciphers)
+    .innerJoin(cipherCollections, eq(cipherCollections.cipherId, ciphers.id))
+    .where(and(
+      eq(ciphers.organizationId, orgId),
+      inArray(cipherCollections.collectionId, allowed),
+    ))
+    .orderBy(desc(ciphers.updatedAt));
+
+  const seen = new Set<string>();
+  const unique: Array<typeof ciphers.$inferSelect> = [];
+  for (const row of rows) {
+    if (seen.has(row.cipher.id)) continue;
+    seen.add(row.cipher.id);
+    unique.push(row.cipher);
+  }
+  return unique;
 }
 
 export async function listAccessibleOrgCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
@@ -446,71 +499,85 @@ export async function listAccessibleOrgCiphers(db: D1Database, userId: string): 
   const confirmed = memberships.filter((member) => member.status === 2);
   if (confirmed.length === 0) return [];
 
-  const ciphers: Cipher[] = [];
+  const orgCiphers: Cipher[] = [];
   for (const member of confirmed) {
     // Members without full access only reach ciphers in collections assigned to them
     // directly or through a group they belong to; everything else stays invisible.
-    const result = hasFullCollectionAccess(member)
-      ? await db
-          .prepare(`SELECT ${orgCipherColumns()} FROM ciphers WHERE organization_id = ? ORDER BY updated_at DESC`)
-          .bind(member.orgId)
-          .all<Record<string, unknown>>()
-      : await db
-          .prepare(
-            `SELECT DISTINCT ${orgCipherColumns('c.')} FROM ciphers c ` +
-            'INNER JOIN cipher_collections cc ON cc.cipher_id = c.id ' +
-            'WHERE c.organization_id = ? AND cc.collection_id IN (' +
-              'SELECT cu.collection_id FROM collection_users cu WHERE cu.user_id = ? ' +
-              'UNION ' +
-              'SELECT cg.collection_id FROM collection_groups cg ' +
-              'INNER JOIN org_group_members gm ON gm.group_id = cg.group_id WHERE gm.membership_id = ?' +
-            ') ORDER BY c.updated_at DESC'
-          )
-          .bind(member.orgId, userId, member.id)
-          .all<Record<string, unknown>>();
+    const rows = hasFullCollectionAccess(member)
+      ? await getOrm(db)
+        .select()
+        .from(ciphers)
+        .where(eq(ciphers.organizationId, member.orgId))
+        .orderBy(desc(ciphers.updatedAt))
+      : await listRestrictedOrgCiphers(db, userId, member.id, member.orgId);
 
-    const rows = result.results || [];
     if (rows.length === 0) continue;
     const collectionsByCipher = await listOrgCipherCollectionIds(db, member.orgId);
     for (const row of rows) {
-      const cipher = mapOrgCipherRow(row, userId, member.orgId, collectionsByCipher.get(String(row.id)) || []);
-      if (cipher) ciphers.push(cipher);
+      const cipher = mapOrgCipherRow(row, userId, member.orgId, collectionsByCipher.get(row.id) || []);
+      if (cipher) orgCiphers.push(cipher);
     }
   }
-  return ciphers;
+  return orgCiphers;
 }
 
 export async function saveGroup(db: D1Database, group: GroupRecord): Promise<void> {
-  await db.prepare(
-    'INSERT INTO org_groups(id, org_id, name, access_all, external_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET name=excluded.name, access_all=excluded.access_all, external_id=excluded.external_id, updated_at=excluded.updated_at'
-  ).bind(group.id, group.orgId, group.name, group.accessAll ? 1 : 0, group.externalId, group.createdAt, group.updatedAt).run();
+  await getOrm(db)
+    .insert(orgGroups)
+    .values({
+      id: group.id,
+      orgId: group.orgId,
+      name: group.name,
+      accessAll: group.accessAll ? 1 : 0,
+      externalId: group.externalId,
+      createdAt: group.createdAt,
+      updatedAt: group.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: orgGroups.id,
+      set: {
+        name: group.name,
+        accessAll: group.accessAll ? 1 : 0,
+        externalId: group.externalId,
+        updatedAt: group.updatedAt,
+      },
+    });
 }
 
 export async function getGroup(db: D1Database, id: string): Promise<GroupRecord | null> {
-  const row = await db.prepare('SELECT * FROM org_groups WHERE id = ?').bind(id).first<GroupRow>();
+  const [row] = await getOrm(db).select().from(orgGroups).where(eq(orgGroups.id, id)).limit(1);
   return row ? mapGroup(row) : null;
 }
 
 export async function listGroupsByOrg(db: D1Database, orgId: string): Promise<GroupRecord[]> {
-  const result = await db.prepare('SELECT * FROM org_groups WHERE org_id = ? ORDER BY name').bind(orgId).all<GroupRow>();
-  return (result.results || []).map(mapGroup);
+  const rows = await getOrm(db)
+    .select()
+    .from(orgGroups)
+    .where(eq(orgGroups.orgId, orgId))
+    .orderBy(asc(orgGroups.name));
+  return rows.map(mapGroup);
 }
 
 export async function deleteGroup(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM org_groups WHERE id = ?').bind(id).run();
+  await getOrm(db).delete(orgGroups).where(eq(orgGroups.id, id));
 }
 
 export async function replaceGroupMembers(db: D1Database, groupId: string, membershipIds: string[]): Promise<void> {
-  await db.prepare('DELETE FROM org_group_members WHERE group_id = ?').bind(groupId).run();
-  for (const membershipId of membershipIds) {
-    await db.prepare('INSERT OR IGNORE INTO org_group_members(group_id, membership_id) VALUES(?, ?)').bind(groupId, membershipId).run();
+  const orm = getOrm(db);
+  await orm.delete(orgGroupMembers).where(eq(orgGroupMembers.groupId, groupId));
+  if (membershipIds.length) {
+    await orm.insert(orgGroupMembers).values(
+      membershipIds.map((membershipId) => ({ groupId, membershipId }))
+    ).onConflictDoNothing();
   }
 }
 
 export async function listGroupMemberIds(db: D1Database, groupId: string): Promise<string[]> {
-  const result = await db.prepare('SELECT membership_id FROM org_group_members WHERE group_id = ?').bind(groupId).all<{ membership_id: string }>();
-  return (result.results || []).map((row) => row.membership_id);
+  const rows = await getOrm(db)
+    .select({ membershipId: orgGroupMembers.membershipId })
+    .from(orgGroupMembers)
+    .where(eq(orgGroupMembers.groupId, groupId));
+  return rows.map((row) => row.membershipId);
 }
 
 export async function replaceCollectionGroups(
@@ -518,36 +585,64 @@ export async function replaceCollectionGroups(
   collectionId: string,
   groups: Array<{ groupId: string; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
 ): Promise<void> {
-  await db.prepare('DELETE FROM collection_groups WHERE collection_id = ?').bind(collectionId).run();
-  for (const group of groups) {
-    await db.prepare(
-      'INSERT INTO collection_groups(collection_id, group_id, read_only, hide_passwords, manage) VALUES(?, ?, ?, ?, ?)'
-    ).bind(collectionId, group.groupId, group.readOnly ? 1 : 0, group.hidePasswords ? 1 : 0, group.manage ? 1 : 0).run();
+  const orm = getOrm(db);
+  await orm.delete(collectionGroups).where(eq(collectionGroups.collectionId, collectionId));
+  if (groups.length) {
+    await orm.insert(collectionGroups).values(groups.map((group) => ({
+      collectionId,
+      groupId: group.groupId,
+      readOnly: group.readOnly ? 1 : 0,
+      hidePasswords: group.hidePasswords ? 1 : 0,
+      manage: group.manage ? 1 : 0,
+    })));
   }
 }
 
 export async function savePolicy(db: D1Database, policy: PolicyRecord): Promise<void> {
-  await db.prepare(
-    'INSERT INTO org_policies(id, org_id, type, enabled, data, updated_at) VALUES(?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(org_id, type) DO UPDATE SET enabled=excluded.enabled, data=excluded.data, updated_at=excluded.updated_at'
-  ).bind(policy.id, policy.orgId, policy.type, policy.enabled ? 1 : 0, JSON.stringify(policy.data || {}), policy.updatedAt).run();
+  await getOrm(db)
+    .insert(orgPolicies)
+    .values({
+      id: policy.id,
+      orgId: policy.orgId,
+      type: policy.type,
+      enabled: policy.enabled ? 1 : 0,
+      data: JSON.stringify(policy.data || {}),
+      updatedAt: policy.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: [orgPolicies.orgId, orgPolicies.type],
+      set: {
+        enabled: policy.enabled ? 1 : 0,
+        data: JSON.stringify(policy.data || {}),
+        updatedAt: policy.updatedAt,
+      },
+    });
 }
 
 export async function listPoliciesByOrg(db: D1Database, orgId: string): Promise<PolicyRecord[]> {
-  const result = await db.prepare('SELECT * FROM org_policies WHERE org_id = ?').bind(orgId).all<PolicyRow>();
-  return (result.results || []).map(mapPolicy);
+  const rows = await getOrm(db).select().from(orgPolicies).where(eq(orgPolicies.orgId, orgId));
+  return rows.map(mapPolicy);
 }
 
 export async function listEnabledPoliciesForUser(db: D1Database, userId: string): Promise<PolicyRecord[]> {
-  const result = await db.prepare(
-    'SELECT p.* FROM org_policies p INNER JOIN organization_memberships m ON m.org_id = p.org_id ' +
-    'WHERE m.user_id = ? AND m.status = 2 AND p.enabled = 1'
-  ).bind(userId).all<PolicyRow>();
-  return (result.results || []).map(mapPolicy);
+  const rows = await getOrm(db)
+    .select({ policy: orgPolicies })
+    .from(orgPolicies)
+    .innerJoin(organizationMemberships, eq(organizationMemberships.orgId, orgPolicies.orgId))
+    .where(and(
+      eq(organizationMemberships.userId, userId),
+      eq(organizationMemberships.status, 2),
+      eq(orgPolicies.enabled, 1),
+    ));
+  return rows.map((row) => mapPolicy(row.policy));
 }
 
 export async function getPolicy(db: D1Database, orgId: string, type: number): Promise<PolicyRecord | null> {
-  const row = await db.prepare('SELECT * FROM org_policies WHERE org_id = ? AND type = ?').bind(orgId, type).first<PolicyRow>();
+  const [row] = await getOrm(db)
+    .select()
+    .from(orgPolicies)
+    .where(and(eq(orgPolicies.orgId, orgId), eq(orgPolicies.type, type)))
+    .limit(1);
   return row ? mapPolicy(row) : null;
 }
 
@@ -556,30 +651,48 @@ export async function saveOrganizationApiKey(
   db: D1Database,
   row: { id: string; orgId: string; type: number; apiKeyHash: string; revisionDate: string }
 ): Promise<void> {
-  await db.prepare(
-    'INSERT INTO organization_api_keys(id, org_id, type, api_key, revision_date) VALUES(?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET api_key=excluded.api_key, revision_date=excluded.revision_date'
-  ).bind(row.id, row.orgId, row.type, row.apiKeyHash, row.revisionDate).run();
+  await getOrm(db)
+    .insert(organizationApiKeys)
+    .values({
+      id: row.id,
+      orgId: row.orgId,
+      type: row.type,
+      apiKey: row.apiKeyHash,
+      revisionDate: row.revisionDate,
+    })
+    .onConflictDoUpdate({
+      target: organizationApiKeys.id,
+      set: { apiKey: row.apiKeyHash, revisionDate: row.revisionDate },
+    });
 }
 
 export async function getOrganizationApiKey(db: D1Database, orgId: string): Promise<{ id: string; apiKeyHash: string } | null> {
-  const row = await db
-    .prepare('SELECT id, api_key FROM organization_api_keys WHERE org_id = ? ORDER BY revision_date DESC LIMIT 1')
-    .bind(orgId)
-    .first<{ id: string; api_key: string }>();
-  return row ? { id: row.id, apiKeyHash: row.api_key } : null;
+  const [row] = await getOrm(db)
+    .select({ id: organizationApiKeys.id, apiKey: organizationApiKeys.apiKey })
+    .from(organizationApiKeys)
+    .where(eq(organizationApiKeys.orgId, orgId))
+    .orderBy(desc(organizationApiKeys.revisionDate))
+    .limit(1);
+  return row ? { id: row.id, apiKeyHash: row.apiKey } : null;
 }
 
 export async function saveScimToken(db: D1Database, orgId: string, tokenHash: string, createdAt: string): Promise<void> {
-  await db.prepare(
-    'INSERT INTO organization_scim_tokens(org_id, token_hash, created_at) VALUES(?, ?, ?) ' +
-    'ON CONFLICT(org_id) DO UPDATE SET token_hash=excluded.token_hash, created_at=excluded.created_at'
-  ).bind(orgId, tokenHash, createdAt).run();
+  await getOrm(db)
+    .insert(organizationScimTokens)
+    .values({ orgId, tokenHash, createdAt })
+    .onConflictDoUpdate({
+      target: organizationScimTokens.orgId,
+      set: { tokenHash, createdAt },
+    });
 }
 
 export async function getScimTokenHash(db: D1Database, orgId: string): Promise<string | null> {
-  const row = await db.prepare('SELECT token_hash FROM organization_scim_tokens WHERE org_id = ?').bind(orgId).first<{ token_hash: string }>();
-  return row?.token_hash || null;
+  const [row] = await getOrm(db)
+    .select({ tokenHash: organizationScimTokens.tokenHash })
+    .from(organizationScimTokens)
+    .where(eq(organizationScimTokens.orgId, orgId))
+    .limit(1);
+  return row?.tokenHash || null;
 }
 
 export async function saveSsoAuth(
@@ -597,22 +710,34 @@ export async function saveSsoAuth(
     updatedAt: string;
   }
 ): Promise<void> {
-  await db.prepare(
-    'INSERT INTO sso_auth(state, code_challenge, redirect_uri, client_id, binding_hash, identifier, code_response, code_response_error, created_at, updated_at) ' +
-    'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(state) DO UPDATE SET code_challenge=excluded.code_challenge, redirect_uri=excluded.redirect_uri, client_id=excluded.client_id, binding_hash=excluded.binding_hash, identifier=excluded.identifier, code_response=excluded.code_response, code_response_error=excluded.code_response_error, updated_at=excluded.updated_at'
-  ).bind(
-    row.state,
-    row.codeChallenge,
-    row.redirectUri,
-    row.clientId,
-    row.bindingHash,
-    row.identifier || null,
-    row.codeResponse || null,
-    row.codeResponseError || null,
-    row.createdAt,
-    row.updatedAt
-  ).run();
+  const values = {
+    state: row.state,
+    codeChallenge: row.codeChallenge,
+    redirectUri: row.redirectUri,
+    clientId: row.clientId,
+    bindingHash: row.bindingHash,
+    identifier: row.identifier || null,
+    codeResponse: row.codeResponse || null,
+    codeResponseError: row.codeResponseError || null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+  await getOrm(db)
+    .insert(ssoAuth)
+    .values(values)
+    .onConflictDoUpdate({
+      target: ssoAuth.state,
+      set: {
+        codeChallenge: values.codeChallenge,
+        redirectUri: values.redirectUri,
+        clientId: values.clientId,
+        bindingHash: values.bindingHash,
+        identifier: values.identifier,
+        codeResponse: values.codeResponse,
+        codeResponseError: values.codeResponseError,
+        updatedAt: values.updatedAt,
+      },
+    });
 }
 
 export async function getSsoAuth(db: D1Database, state: string): Promise<{
@@ -625,50 +750,54 @@ export async function getSsoAuth(db: D1Database, state: string): Promise<{
   codeResponse: string | null;
   codeResponseError: string | null;
 } | null> {
-  const row = await db.prepare('SELECT * FROM sso_auth WHERE state = ?').bind(state).first<{
-    state: string;
-    code_challenge: string | null;
-    redirect_uri: string;
-    client_id: string;
-    binding_hash: string | null;
-    identifier: string | null;
-    code_response: string | null;
-    code_response_error: string | null;
-  }>();
+  const [row] = await getOrm(db).select().from(ssoAuth).where(eq(ssoAuth.state, state)).limit(1);
   if (!row) return null;
   return {
     state: row.state,
-    codeChallenge: row.code_challenge,
-    redirectUri: row.redirect_uri,
-    clientId: row.client_id,
-    bindingHash: row.binding_hash,
+    codeChallenge: row.codeChallenge,
+    redirectUri: row.redirectUri,
+    clientId: row.clientId,
+    bindingHash: row.bindingHash,
     identifier: row.identifier,
-    codeResponse: row.code_response,
-    codeResponseError: row.code_response_error,
+    codeResponse: row.codeResponse,
+    codeResponseError: row.codeResponseError,
   };
 }
 
 export async function saveSsoUser(db: D1Database, userId: string, identifier: string, createdAt: string): Promise<void> {
-  await db.prepare(
-    'INSERT INTO sso_users(user_id, identifier, created_at) VALUES(?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET identifier=excluded.identifier'
-  ).bind(userId, identifier, createdAt).run();
+  await getOrm(db)
+    .insert(ssoUsers)
+    .values({ userId, identifier, createdAt })
+    .onConflictDoUpdate({
+      target: ssoUsers.userId,
+      set: { identifier },
+    });
 }
 
 export async function getSsoUserByIdentifier(db: D1Database, identifier: string): Promise<{ userId: string; identifier: string } | null> {
-  const row = await db.prepare('SELECT user_id, identifier FROM sso_users WHERE identifier = ?').bind(identifier).first<{ user_id: string; identifier: string }>();
-  return row ? { userId: row.user_id, identifier: row.identifier } : null;
+  const [row] = await getOrm(db)
+    .select({ userId: ssoUsers.userId, identifier: ssoUsers.identifier })
+    .from(ssoUsers)
+    .where(eq(ssoUsers.identifier, identifier))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function getSsoUserByUserId(db: D1Database, userId: string): Promise<{ userId: string; identifier: string } | null> {
-  const row = await db.prepare('SELECT user_id, identifier FROM sso_users WHERE user_id = ?').bind(userId).first<{ user_id: string; identifier: string }>();
-  return row ? { userId: row.user_id, identifier: row.identifier } : null;
+  const [row] = await getOrm(db)
+    .select({ userId: ssoUsers.userId, identifier: ssoUsers.identifier })
+    .from(ssoUsers)
+    .where(eq(ssoUsers.userId, userId))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function bumpOrgMemberRevisions(db: D1Database, orgId: string): Promise<void> {
   const now = new Date().toISOString();
-  await db.prepare(
-    'INSERT INTO user_revisions(user_id, revision_date) ' +
-    'SELECT user_id, ? FROM organization_memberships WHERE org_id = ? AND user_id IS NOT NULL ' +
-    'ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date'
-  ).bind(now, orgId).run();
+  await getOrm(db).run(sql`
+    INSERT INTO user_revisions(user_id, revision_date)
+    SELECT user_id, ${now} FROM organization_memberships
+    WHERE org_id = ${orgId} AND user_id IS NOT NULL
+    ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date
+  `);
 }
