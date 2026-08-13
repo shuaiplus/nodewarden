@@ -1,7 +1,7 @@
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
-import { ensureStorageSchema } from './storage-schema';
+import { ensureStorageSchema } from '../db/migrate';
 import {
   getConfigValue as getStoredConfigValue,
   isRegistered as getRegisteredFlag,
@@ -161,10 +161,9 @@ import {
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
-// Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
-// changes. Existing D1 installs only rerun ensureStorageSchema() when this value
-// differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-08-13-enterprise-emergency-access';
+// Bump this whenever src/db/schema.ts changes. Existing D1 installs only
+// rerun ensureStorageSchema() when this value differs from config.schema.version.
+const STORAGE_SCHEMA_VERSION = '2026-08-14-drizzle-baseline';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',

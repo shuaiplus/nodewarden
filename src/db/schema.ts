@@ -1,9 +1,9 @@
 // Drizzle v1 schema for the NodeWarden D1 database.
 //
-// Table and column names are the historical snake_case names created by the
-// pre-Drizzle bootstrap (src/services/storage-schema.ts) and migrations
-// 0001..0003, so every column passes its DB name explicitly rather than relying
-// on a casing helper. Renaming any of them is a breaking data migration.
+// Table and column names are the historical snake_case names from the
+// pre-Drizzle D1 schema, so every column passes its DB name explicitly rather
+// than relying on a casing helper. Renaming any of them is a breaking data
+// migration.
 import { sql } from 'drizzle-orm';
 import {
   foreignKey,

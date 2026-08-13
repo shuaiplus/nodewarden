@@ -39,12 +39,14 @@ these areas, check the related files before calling the work complete.
 
 ### Database Changes
 
-Runtime schema lives in `src/services/storage-schema.ts`. The initial D1 schema
-lives in `migrations/0001_init.sql`.
+Runtime schema lives in `src/db/schema.ts`. drizzle-kit emits
+`migrations/<id>/migration.sql`; `npm run db:generate` also embeds that SQL
+for the Worker bootstrap in `src/db/baseline.sql.ts`.
 
 If you add or change a table, column, or index:
 
-- Update both schema files.
+- Edit `src/db/schema.ts` (and `relations.ts` when a foreign key changes).
+- Run `npm run db:generate` and `npm run test:db-schema`.
 - Bump `STORAGE_SCHEMA_VERSION` in `src/services/storage.ts`.
 - Decide whether the data should be included in instance backup.
 

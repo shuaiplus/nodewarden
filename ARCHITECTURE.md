@@ -13,7 +13,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 ## Runtime
 
 - Worker: `src/index.ts` → `src/router.ts`
-- Data: D1 (`src/services/storage*.ts`, `migrations/`)
+- Data: D1 via Drizzle v1 (`src/db/`, `src/services/storage*.ts`, `migrations/`)
 - Blobs: R2 or KV (`src/services/blob-store.ts`)
 - Push: `NotificationsHub` Durable Object
 - Backups: `BackupTransferRunner` Durable Object
