@@ -23,6 +23,9 @@ WEB_VAULT_ORIGINS = "https://nodewarden-official-web.pages.dev"
 binding = "DB"
 database_name = "nodewarden-db"
 database_id = "7f33ae0e-0f62-4e5b-914f-dd22350f36cd"
+# drizzle-kit v1 writes one folder per migration; the pattern opts wrangler in.
+migrations_dir = "migrations"
+migrations_pattern = "migrations/*/migration.sql"
 
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"

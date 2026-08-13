@@ -18,6 +18,9 @@ crons = [ "*/5 * * * *" ]
 [[d1_databases]]
 binding = "DB"
 database_name = "nodewarden-db"
+# drizzle-kit v1 writes one folder per migration; the pattern opts wrangler in.
+migrations_dir = "migrations"
+migrations_pattern = "migrations/*/migration.sql"
 
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"
