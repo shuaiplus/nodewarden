@@ -4,48 +4,18 @@ const workerOrigin = process.env.E2E_ORIGIN || 'http://127.0.0.1:8787';
 const officialWebOrigin = process.env.OFFICIAL_WEB_ORIGIN || 'http://127.0.0.1:8080';
 
 test.describe('official Bitwarden web against NodeWarden', () => {
-  test('identity register/send-verification and finish work without email', async ({ request }) => {
-    const suffix = Date.now();
-    const email = `official-${suffix}@example.com`;
-    const origin = workerOrigin;
-
-    const start = await request.post(`${origin}/identity/accounts/register/send-verification-email`, {
-      headers: { Origin: origin, 'Content-Type': 'application/json' },
+  test('identity send-verification-email does not return an inline JWT', async ({ request }) => {
+    const email = `official-${Date.now()}@example.com`;
+    const start = await request.post(`${workerOrigin}/identity/accounts/register/send-verification-email`, {
+      headers: { Origin: workerOrigin, 'Content-Type': 'application/json' },
       data: { email, name: 'Official', receiveMarketingEmails: false },
     });
     expect(start.ok(), await start.text()).toBeTruthy();
-    const token = await start.json();
-    expect(typeof token).toBe('string');
-    expect(String(token).split('.').length).toBe(3);
-
-    const finish = await request.post(`${origin}/identity/accounts/register/finish`, {
-      headers: { Origin: origin, 'Content-Type': 'application/json' },
-      data: {
-        email,
-        name: 'Official',
-        emailVerificationToken: token,
-        userAsymmetricKeys: {
-          publicKey: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw',
-          encryptedPrivateKey: '2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-        },
-        masterPasswordAuthentication: {
-          salt: email,
-          kdf: { kdfType: 0, iterations: 600000 },
-          masterPasswordAuthenticationHash: 'x'.repeat(64),
-        },
-        masterPasswordUnlock: {
-          salt: email,
-          kdf: { kdfType: 0, iterations: 600000 },
-          masterKeyWrappedUserKey: '2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-        },
-      },
-    });
-    expect(finish.ok(), await finish.text()).toBeTruthy();
-    const body = await finish.json();
-    expect(body.object).toBe('register');
+    const body = await start.json();
+    expect(body).toBe('');
   });
 
-  test('official web vault loads and talks to the worker config API', async ({ page, request }) => {
+  test('official web vault signup waits for the verification email', async ({ page, request }) => {
     const config = await request.get(`${officialWebOrigin}/api/config`, {
       headers: { 'Accept-Encoding': 'identity' },
     });
@@ -54,8 +24,12 @@ test.describe('official Bitwarden web against NodeWarden', () => {
     expect(payload.object).toBe('config');
     expect(payload.environment?.api).toContain('/api');
 
+    const email = `official-ui-${Date.now()}@example.com`;
     await page.goto(officialWebOrigin);
     await expect(page).toHaveTitle(/Bitwarden Web vault/i);
-    await expect(page.getByLabel(/Email address/i)).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('link', { name: /create account/i }).click();
+    await page.getByLabel(/email address/i).fill(email);
+    await page.getByRole('button', { name: /create account|continue/i }).click();
+    await expect(page.getByText(/check your email/i)).toBeVisible({ timeout: 30_000 });
   });
 });

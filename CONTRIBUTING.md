@@ -77,6 +77,9 @@ Official Bitwarden clients may send or expect fields that are not used directly
 by the web vault. Cipher and sync changes should preserve unknown client fields
 unless they are known-invalid or server-owned.
 
+Official web signup must send Cloudflare Email and must not return a
+register-verify JWT from `send-verification-email`.
+
 Check these files when changing vault item shape or sync behavior:
 
 - `src/handlers/ciphers.ts`

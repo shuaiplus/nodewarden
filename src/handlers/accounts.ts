@@ -14,6 +14,12 @@ import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
 import { createRegisterVerifyToken, verifyRegisterVerifyToken } from '../utils/jwt';
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
+import {
+  getEmailSender,
+  isReservedDocumentationEmail,
+  registerVerifyVaultOrigin,
+  sendRegisterVerificationEmail,
+} from '../services/mail';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -252,7 +258,11 @@ function keysResponse(user: User): Record<string, unknown> {
 // POST /api/accounts/register
 // - First user becomes admin.
 // - Any subsequent user must provide a valid inviteCode.
-export async function handleRegister(request: Request, env: Env): Promise<Response> {
+export async function handleRegister(
+  request: Request,
+  env: Env,
+  options: { requireEmailVerification?: boolean } = {}
+): Promise<Response> {
   const storage = new StorageService(env.DB);
 
   const unsafe = jwtSecretUnsafeReason(env);
@@ -282,6 +292,9 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   const inviteCode = parsed.inviteCode;
   const masterPasswordHint = normalizeMasterPasswordHint(parsed.masterPasswordHint);
 
+  if (options.requireEmailVerification && !parsed.emailVerificationToken) {
+    return errorResponse('Email verification token is required', 400);
+  }
   if (parsed.emailVerificationToken) {
     const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, env.JWT_SECRET);
     if (!claims || claims.email !== email) {
@@ -438,12 +451,32 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
     return errorResponse('Registration is invite-only', 403);
   }
 
+  const existing = await storage.getUser(email);
+  if (existing || isReservedDocumentationEmail(email)) {
+    // Same empty body as a real send so clients cannot enumerate accounts.
+    return jsonResponse('');
+  }
+
+  if (!env.EMAIL || !getEmailSender(env)) {
+    return errorResponse('Email sending is not configured', 503);
+  }
+
   const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
-  return jsonResponse(token);
+  try {
+    await sendRegisterVerificationEmail(env, email, registerVerifyVaultOrigin(request, env), token);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Register verification email failed:', message);
+    return errorResponse('Unable to send verification email', 502);
+  }
+
+  // Official clients treat a non-empty string as an inline token (no SMTP).
+  // An empty JSON string means "check your email".
+  return jsonResponse('');
 }
 
 export async function handleRegisterFinish(request: Request, env: Env): Promise<Response> {
-  return handleRegister(request, env);
+  return handleRegister(request, env, { requireEmailVerification: true });
 }
 
 // POST /api/accounts/password-hint

@@ -19,6 +19,11 @@ crons = [ "*/5 * * * *" ]
 [vars]
 ALLOW_OPEN_REGISTRATION = "1"
 WEB_VAULT_ORIGINS = "https://nodewarden-official-web.pages.dev"
+EMAIL_FROM = "noreply@stevefan1999.tech"
+EMAIL_FROM_NAME = "NodeWarden"
+
+[[send_email]]
+name = "EMAIL"
 
 [[d1_databases]]
 binding = "DB"

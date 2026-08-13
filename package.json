@@ -27,6 +27,7 @@
     "test:auth-password": "tsx --test src/services/auth-password.test.ts",
     "test:org-authz": "tsx --test src/services/org-authz.test.ts",
     "test:register-payload": "tsx --test src/services/register-payload.test.ts",
+    "test:mail": "tsx --test src/services/mail.test.ts",
     "test:enterprise-license": "tsx --test src/services/enterprise-license.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:official": "playwright test e2e/official-web.spec.ts",

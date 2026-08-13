@@ -37,6 +37,11 @@ WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
 Set `WEB_VAULT_ORIGINS=http://127.0.0.1:8080` on the Worker so CORS and signup
 accept the official-web origin.
 
+Official signup emails are sent by the Worker via Cloudflare Email Sending
+(`EMAIL` binding, `EMAIL_FROM` on an onboarded domain). The send-verification
+endpoint returns an empty JSON string; `/finish` requires the token from the
+email link (`/redirect-connector.html#finish-signup?...`).
+
 ## Deploy
 
 ```bash

@@ -19,6 +19,18 @@ export interface Env {
   // Optional fallback for attachment/send file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
   CACHE_KV?: KVNamespace;
+  EMAIL?: {
+    send(message: {
+      to: string | { email: string; name?: string } | Array<string | { email: string; name?: string }>;
+      from: string | { email: string; name?: string };
+      subject: string;
+      html?: string;
+      text?: string;
+      replyTo?: string | { email: string; name?: string };
+    }): Promise<{ messageId: string }>;
+  };
+  EMAIL_FROM?: string;
+  EMAIL_FROM_NAME?: string;
   EVENTS_QUEUE?: Queue;
   SECRET_CHANGES_QUEUE?: Queue;
   DIRECTORY_SYNC_WORKFLOW?: Workflow;
