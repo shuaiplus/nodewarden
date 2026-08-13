@@ -28,8 +28,11 @@ test.describe('official Bitwarden web against NodeWarden', () => {
     await page.goto(officialWebOrigin);
     await expect(page).toHaveTitle(/Bitwarden Web vault/i);
     await page.getByRole('link', { name: /create account/i }).click();
+    await expect(page.getByRole('heading', { name: /create account/i })).toBeVisible();
     await page.getByLabel(/email address/i).fill(email);
-    await page.getByRole('button', { name: /create account|continue/i }).click();
+    const nameField = page.getByLabel(/^name$/i);
+    if (await nameField.count()) await nameField.fill('Official');
+    await page.getByRole('button', { name: /^continue$/i }).click();
     await expect(page.getByText(/check your email/i)).toBeVisible({ timeout: 30_000 });
   });
 });
