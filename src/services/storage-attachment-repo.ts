@@ -1,76 +1,91 @@
+import { and, eq, inArray, sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { attachments, ciphers } from '../db/schema';
 import type { Attachment, Cipher } from '../types';
 
-type SafeBind = (stmt: D1PreparedStatement, ...values: any[]) => D1PreparedStatement;
+type SafeBind = (stmt: D1PreparedStatement, ...values: unknown[]) => D1PreparedStatement;
 type SqlChunkSize = (fixedBindCount: number) => number;
 type GetCipher = (id: string) => Promise<Cipher | null>;
 type SaveCipher = (cipher: Cipher) => Promise<void>;
 type UpdateRevisionDate = (userId: string) => Promise<string>;
 
-export async function getAttachment(db: D1Database, id: string): Promise<Attachment | null> {
-  const row = await db
-    .prepare('SELECT id, cipher_id, file_name, size, size_name, key FROM attachments WHERE id = ?')
-    .bind(id)
-    .first<any>();
-  if (!row) return null;
+function mapAttachment(row: typeof attachments.$inferSelect): Attachment {
   return {
     id: row.id,
-    cipherId: row.cipher_id,
-    fileName: row.file_name,
+    cipherId: row.cipherId,
+    fileName: row.fileName,
     size: row.size,
-    sizeName: row.size_name,
+    sizeName: row.sizeName,
     key: row.key,
   };
+}
+
+export async function getAttachment(db: D1Database, id: string): Promise<Attachment | null> {
+  const [row] = await getOrm(db).select().from(attachments).where(eq(attachments.id, id)).limit(1);
+  return row ? mapAttachment(row) : null;
 }
 
 export async function getAttachmentForUser(db: D1Database, id: string, userId: string): Promise<Attachment | null> {
-  const row = await db
-    .prepare(
-      `SELECT a.id, a.cipher_id, a.file_name, a.size, a.size_name, a.key
-       FROM attachments a
-       INNER JOIN ciphers c ON c.id = a.cipher_id
-       WHERE a.id = ? AND c.user_id = ?`
-    )
-    .bind(id, userId)
-    .first<any>();
-  if (!row) return null;
-  return {
-    id: row.id,
-    cipherId: row.cipher_id,
-    fileName: row.file_name,
-    size: row.size,
-    sizeName: row.size_name,
-    key: row.key,
-  };
+  const [row] = await getOrm(db)
+    .select({
+      id: attachments.id,
+      cipherId: attachments.cipherId,
+      fileName: attachments.fileName,
+      size: attachments.size,
+      sizeName: attachments.sizeName,
+      key: attachments.key,
+    })
+    .from(attachments)
+    .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
+    .where(and(eq(attachments.id, id), eq(ciphers.userId, userId)))
+    .limit(1);
+  return row ? mapAttachment(row) : null;
 }
 
-export async function saveAttachment(db: D1Database, safeBind: SafeBind, attachment: Attachment): Promise<void> {
-  const stmt = db.prepare(
-    'INSERT INTO attachments(id, cipher_id, file_name, size, size_name, key) VALUES(?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key ' +
-    'WHERE EXISTS (' +
-    'SELECT 1 FROM ciphers current_cipher INNER JOIN ciphers next_cipher ON next_cipher.id = excluded.cipher_id ' +
-    'WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = next_cipher.user_id' +
-    ')'
-  );
-  await safeBind(stmt, attachment.id, attachment.cipherId, attachment.fileName, attachment.size, attachment.sizeName, attachment.key).run();
+export async function saveAttachment(db: D1Database, _safeBind: SafeBind, attachment: Attachment): Promise<void> {
+  await getOrm(db)
+    .insert(attachments)
+    .values({
+      id: attachment.id,
+      cipherId: attachment.cipherId,
+      fileName: attachment.fileName,
+      size: attachment.size,
+      sizeName: attachment.sizeName,
+      key: attachment.key,
+    })
+    .onConflictDoUpdate({
+      target: attachments.id,
+      set: {
+        cipherId: attachment.cipherId,
+        fileName: attachment.fileName,
+        size: attachment.size,
+        sizeName: attachment.sizeName,
+        key: attachment.key,
+      },
+      where: sql`EXISTS (
+        SELECT 1 FROM ciphers current_cipher
+        INNER JOIN ciphers next_cipher ON next_cipher.id = excluded.cipher_id
+        WHERE current_cipher.id = ${attachments.cipherId}
+          AND current_cipher.user_id = next_cipher.user_id
+      )`,
+    });
 }
 
 export async function deleteAttachment(db: D1Database, id: string): Promise<void> {
-  await db.prepare('DELETE FROM attachments WHERE id = ?').bind(id).run();
+  await getOrm(db).delete(attachments).where(eq(attachments.id, id));
 }
 
 export async function deleteAttachmentForUser(db: D1Database, id: string, userId: string): Promise<void> {
-  await db
-    .prepare(
-      `DELETE FROM attachments
-       WHERE id = ?
-         AND EXISTS (
-           SELECT 1 FROM ciphers c
-           WHERE c.id = attachments.cipher_id AND c.user_id = ?
-         )`
-    )
-    .bind(id, userId)
-    .run();
+  await getOrm(db)
+    .delete(attachments)
+    .where(and(
+      eq(attachments.id, id),
+      sql`EXISTS (
+        SELECT 1 FROM ciphers c
+        WHERE c.id = ${attachments.cipherId} AND c.user_id = ${userId}
+      )`,
+    ));
 }
 
 export async function bulkDeleteAttachmentsByIds(
@@ -80,28 +95,18 @@ export async function bulkDeleteAttachmentsByIds(
 ): Promise<void> {
   const uniqueIds = [...new Set(attachmentIds.map((id) => String(id || '').trim()).filter(Boolean))];
   if (!uniqueIds.length) return;
+  const orm = getOrm(db);
   const chunkSize = sqlChunkSize(0);
 
-  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
-    const chunk = uniqueIds.slice(i, i + chunkSize);
-    const placeholders = chunk.map(() => '?').join(',');
-    await db.prepare(`DELETE FROM attachments WHERE id IN (${placeholders})`).bind(...chunk).run();
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    await orm.delete(attachments).where(inArray(attachments.id, chunk));
   }
 }
 
 export async function getAttachmentsByCipher(db: D1Database, cipherId: string): Promise<Attachment[]> {
-  const res = await db
-    .prepare('SELECT id, cipher_id, file_name, size, size_name, key FROM attachments WHERE cipher_id = ?')
-    .bind(cipherId)
-    .all<any>();
-  return (res.results || []).map((r) => ({
-    id: r.id,
-    cipherId: r.cipher_id,
-    fileName: r.file_name,
-    size: r.size,
-    sizeName: r.size_name,
-    key: r.key,
-  }));
+  const rows = await getOrm(db).select().from(attachments).where(eq(attachments.cipherId, cipherId));
+  return rows.map(mapAttachment);
 }
 
 export async function getAttachmentsByCipherIds(
@@ -110,28 +115,15 @@ export async function getAttachmentsByCipherIds(
   cipherIds: string[]
 ): Promise<Map<string, Attachment[]>> {
   const grouped = new Map<string, Attachment[]>();
-  if (cipherIds.length === 0) return grouped;
-
   const uniqueCipherIds = [...new Set(cipherIds)];
+  if (!uniqueCipherIds.length) return grouped;
+  const orm = getOrm(db);
   const chunkSize = sqlChunkSize(0);
 
-  for (let i = 0; i < uniqueCipherIds.length; i += chunkSize) {
-    const chunk = uniqueCipherIds.slice(i, i + chunkSize);
-    const placeholders = chunk.map(() => '?').join(',');
-    const res = await db
-      .prepare(`SELECT id, cipher_id, file_name, size, size_name, key FROM attachments WHERE cipher_id IN (${placeholders})`)
-      .bind(...chunk)
-      .all<any>();
-
-    for (const row of res.results || []) {
-      const item: Attachment = {
-        id: row.id,
-        cipherId: row.cipher_id,
-        fileName: row.file_name,
-        size: row.size,
-        sizeName: row.size_name,
-        key: row.key,
-      };
+  for (let offset = 0; offset < uniqueCipherIds.length; offset += chunkSize) {
+    const chunk = uniqueCipherIds.slice(offset, offset + chunkSize);
+    const rows = await orm.select().from(attachments).where(inArray(attachments.cipherId, chunk));
+    for (const item of rows.map(mapAttachment)) {
       const list = grouped.get(item.cipherId);
       if (list) list.push(item);
       else grouped.set(item.cipherId, [item]);
@@ -143,25 +135,20 @@ export async function getAttachmentsByCipherIds(
 
 export async function getAttachmentsByUserId(db: D1Database, userId: string): Promise<Map<string, Attachment[]>> {
   const grouped = new Map<string, Attachment[]>();
-  const res = await db
-    .prepare(
-      `SELECT a.id, a.cipher_id, a.file_name, a.size, a.size_name, a.key
-       FROM attachments a
-       INNER JOIN ciphers c ON c.id = a.cipher_id
-       WHERE c.user_id = ?`
-    )
-    .bind(userId)
-    .all<any>();
+  const rows = await getOrm(db)
+    .select({
+      id: attachments.id,
+      cipherId: attachments.cipherId,
+      fileName: attachments.fileName,
+      size: attachments.size,
+      sizeName: attachments.sizeName,
+      key: attachments.key,
+    })
+    .from(attachments)
+    .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
+    .where(eq(ciphers.userId, userId));
 
-  for (const row of res.results || []) {
-    const item: Attachment = {
-      id: row.id,
-      cipherId: row.cipher_id,
-      fileName: row.file_name,
-      size: row.size,
-      sizeName: row.size_name,
-      key: row.key,
-    };
+  for (const item of rows.map(mapAttachment)) {
     const list = grouped.get(item.cipherId);
     if (list) list.push(item);
     else grouped.set(item.cipherId, [item]);
@@ -171,7 +158,7 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
 }
 
 export async function addAttachmentToCipher(db: D1Database, cipherId: string, attachmentId: string): Promise<void> {
-  await db.prepare('UPDATE attachments SET cipher_id = ? WHERE id = ?').bind(cipherId, attachmentId).run();
+  await getOrm(db).update(attachments).set({ cipherId }).where(eq(attachments.id, attachmentId));
 }
 
 export async function addAttachmentToCipherForUser(
@@ -180,26 +167,24 @@ export async function addAttachmentToCipherForUser(
   attachmentId: string,
   userId: string
 ): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE attachments
-       SET cipher_id = ?
-       WHERE id = ?
-         AND EXISTS (
-           SELECT 1 FROM ciphers target_cipher
-           WHERE target_cipher.id = ? AND target_cipher.user_id = ?
-         )
-         AND EXISTS (
-           SELECT 1 FROM ciphers current_cipher
-           WHERE current_cipher.id = attachments.cipher_id AND current_cipher.user_id = ?
-         )`
-    )
-    .bind(cipherId, attachmentId, cipherId, userId, userId)
-    .run();
+  await getOrm(db)
+    .update(attachments)
+    .set({ cipherId })
+    .where(and(
+      eq(attachments.id, attachmentId),
+      sql`EXISTS (
+        SELECT 1 FROM ciphers target_cipher
+        WHERE target_cipher.id = ${cipherId} AND target_cipher.user_id = ${userId}
+      )`,
+      sql`EXISTS (
+        SELECT 1 FROM ciphers current_cipher
+        WHERE current_cipher.id = ${attachments.cipherId} AND current_cipher.user_id = ${userId}
+      )`,
+    ));
 }
 
 export async function deleteAllAttachmentsByCipher(db: D1Database, cipherId: string): Promise<void> {
-  await db.prepare('DELETE FROM attachments WHERE cipher_id = ?').bind(cipherId).run();
+  await getOrm(db).delete(attachments).where(eq(attachments.cipherId, cipherId));
 }
 
 export async function updateCipherRevisionDate(

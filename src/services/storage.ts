@@ -131,7 +131,6 @@ import {
   updateAuthRequestResponse as updateStoredAuthRequestResponse,
 } from './storage-auth-request-repo';
 import {
-  ensureUsedAttachmentDownloadTokenTable as ensureStoredAttachmentTokenTable,
   consumeAttachmentDownloadToken as consumeStoredAttachmentDownloadToken,
 } from './storage-attachment-token-repo';
 import {
@@ -183,7 +182,6 @@ const REQUIRED_SCHEMA_TABLES = [
 // - Revision date is maintained per user for Bitwarden sync.
 
 export class StorageService {
-  private static attachmentTokenTableReady = false;
   private static schemaVerified = false;
   private static lastRefreshTokenCleanupAt = 0;
   private static lastAttachmentTokenCleanupAt = 0;
@@ -950,19 +948,9 @@ export class StorageService {
     return updateStoredRevisionDate(this.db, userId);
   }
 
-  // --- One-time attachment download tokens ---
-
-  private async ensureUsedAttachmentDownloadTokenTable(): Promise<void> {
-    if (StorageService.attachmentTokenTableReady) return;
-    await ensureStoredAttachmentTokenTable(this.db);
-
-    StorageService.attachmentTokenTableReady = true;
-  }
-
   // Marks an attachment download token JTI as consumed.
   // Returns true only on first use. Reuse returns false.
   async consumeAttachmentDownloadToken(jti: string, expUnixSeconds: number): Promise<boolean> {
-    await this.ensureUsedAttachmentDownloadTokenTable();
     const result = await consumeStoredAttachmentDownloadToken(
       this.db,
       this.shouldRunPeriodicCleanup.bind(this),
