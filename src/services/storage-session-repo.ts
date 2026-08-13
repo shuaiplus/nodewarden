@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { session } from '../db/schema';
@@ -169,5 +169,8 @@ export async function deleteRefreshTokensByDevice(db: D1Database, userId: string
 }
 
 export async function deleteExpiredRefreshTokens(db: D1Database, nowMs: number): Promise<void> {
-  await getOrm(db).delete(session).where(lt(session.expiresAt, nowMs));
+  await getOrm(db).delete(session).where(or(
+    lt(session.expiresAt, nowMs),
+    and(isNotNull(session.absoluteExpiresAt), lt(session.absoluteExpiresAt, nowMs)),
+  ));
 }
