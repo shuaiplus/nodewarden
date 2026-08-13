@@ -41,7 +41,7 @@ these areas, check the related files before calling the work complete.
 
 Runtime schema lives in `src/db/schema.ts`. drizzle-kit emits
 `migrations/<id>/migration.sql`; `npm run db:generate` also embeds that SQL
-for the Worker bootstrap in `src/db/baseline.sql.ts`.
+for the Worker bootstrap in `src/db/baseline.ts`.
 
 If you add or change a table, column, or index:
 

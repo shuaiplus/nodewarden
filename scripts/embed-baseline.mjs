@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const migrationsDir = join(repoRoot, 'migrations');
-const outFile = join(repoRoot, 'src/db/baseline.sql.ts');
+const outFile = join(repoRoot, 'src/db/baseline.ts');
 
 const folders = readdirSync(migrationsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())

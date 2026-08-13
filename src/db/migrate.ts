@@ -1,6 +1,6 @@
 import { asc, eq } from 'drizzle-orm';
 
-import { BASELINE_MIGRATION_SQL } from './baseline.sql';
+import { BASELINE_MIGRATION_SQL } from './baseline';
 import { getOrm } from './client';
 import { users } from './schema';
 
