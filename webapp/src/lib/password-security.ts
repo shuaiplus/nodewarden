@@ -331,6 +331,9 @@ export async function inspectVaultPasswordSecurity(
 
   const items = candidates.map((candidate) => {
     const exposure = exposureByHash.get(candidate.hash) || { count: null, available: false };
+    // A directory miss only means the site was never evaluated — the catalogs are curated lists
+    // (~3k sites), not an exhaustive survey. Keep null so unlisted sites are not reported as
+    // lacking 2FA; only an existing entry without methods is a confirmed "no 2FA".
     let twoFactorSupported: boolean | null = null;
     let twoFactorDocumentation: string | null = null;
     if (twoFactorDirectory && candidate.hostname) {
@@ -338,11 +341,7 @@ export async function inspectVaultPasswordSecurity(
       if (entry) {
         twoFactorSupported = Array.isArray(entry.methods) && entry.methods.length > 0;
         twoFactorDocumentation = entry.documentation || null;
-      } else {
-        twoFactorSupported = false;
       }
-    } else if (!twoFactorDirectory && !twoFactorDataError) {
-      twoFactorSupported = null;
     }
     let passkeySupported: boolean | null = null;
     let passkeyDocumentation: string | null = null;
@@ -351,11 +350,7 @@ export async function inspectVaultPasswordSecurity(
       if (entry) {
         passkeySupported = entry.passwordless === 'allowed' || entry.mfa === 'allowed';
         passkeyDocumentation = entry.documentation || null;
-      } else {
-        passkeySupported = false;
       }
-    } else if (!passkeyDirectory && !passkeyDataError) {
-      passkeySupported = null;
     }
     return {
       cipherId: candidate.cipherId,
