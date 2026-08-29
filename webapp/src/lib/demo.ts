@@ -20,6 +20,7 @@ import type {
   VaultDraft,
 } from '@/lib/types';
 import { t } from '@/lib/i18n';
+import { LoginLinkedId } from '@/lib/linked-fields';
 import { dispatchBackupProgress } from '@/lib/backup-restore-progress';
 
 type Notify = (type: 'success' | 'error' | 'warning', text: string) => void;
@@ -102,6 +103,7 @@ export const DEMO_CIPHERS: Cipher[] = [
     fields: [
       { type: 0, name: 'Recovery email', value: 'ops@nodewarden.app', decName: 'Recovery email', decValue: 'ops@nodewarden.app' },
       { type: 1, name: 'Backup code', value: 'NW-DEMO-2026', decName: 'Backup code', decValue: 'NW-DEMO-2026' },
+      { type: 3, name: 'Login username (linked)', value: '', decName: 'Login username (linked)', decValue: '', linkedId: LoginLinkedId.Username },
     ],
     passwordHistory: [
       { password: 'old-demo-password', decPassword: 'old-demo-password', lastUsedDate: '2026-04-01T12:00:00.000Z' },
@@ -1065,6 +1067,7 @@ function cipherFromDraft(draft: VaultDraft, current?: Cipher | null): Cipher {
     value: field.value,
     decName: field.label,
     decValue: field.value,
+    linkedId: field.type === 3 ? field.linkedId ?? null : null,
   }));
 
   return next;

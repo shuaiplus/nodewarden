@@ -1238,6 +1238,10 @@ select.input.duplicate-mode-toolbar-select {
   overflow-wrap: anywhere;
 }
 
+.custom-field-masked {
+  @apply block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold;
+}
+
 .custom-field-check {
   @apply mb-0 inline-flex items-center gap-2;
 }
@@ -1249,6 +1253,14 @@ select.input.duplicate-mode-toolbar-select {
 
 .custom-field-remove {
   @apply whitespace-nowrap;
+}
+
+.linked-field-badge {
+  @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold;
+  background: #e0f2fe;
+  color: #0369a1;
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .notes {

@@ -5,6 +5,7 @@ import jsQR from 'jsqr';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
 import { normalizeTotpInput } from '@/lib/crypto';
+import { linkedFieldOptionsForType } from '@/lib/linked-fields';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';
@@ -751,10 +752,7 @@ export default function VaultEditor(props: VaultEditorProps) {
             <Plus size={14} className="btn-icon" /> {t('txt_add_field')}
           </button>
         </div>
-        {props.draft.customFields
-          .map((field, originalIndex) => ({ field, originalIndex }))
-          .filter((entry) => entry.field.type !== 3)
-          .map(({ field, originalIndex }) => (
+        {props.draft.customFields.map((field, originalIndex) => (
             <div key={`field-${originalIndex}`} className="custom-field-card">
               <label className="field custom-field-label">
                 <span>{t('txt_field_label')}</span>
@@ -762,7 +760,25 @@ export default function VaultEditor(props: VaultEditorProps) {
               </label>
               <div className="custom-field-body">
                 <div className="custom-field-value">
-                  {field.type === 2 ? (
+                {field.type === 3 ? (
+                  <label className="field">
+                    <span>{t('txt_link_to_field')}</span>
+                    <select
+                      className="input"
+                      value={field.linkedId ?? ''}
+                      onInput={(e) => props.onPatchDraftCustomField(originalIndex, { linkedId: Number((e.currentTarget as HTMLSelectElement).value) })}
+                    >
+                      <option value="" disabled>
+                        {t('txt_select_linked_field')}
+                      </option>
+                      {linkedFieldOptionsForType(props.draft.type).map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {t(option.labelKey)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : field.type === 2 ? (
                     <label className="check-line cf-check custom-field-check">
                       <input
                         type="checkbox"

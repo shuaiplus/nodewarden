@@ -12,6 +12,7 @@ import {
 } from 'lucide-preact';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { t } from '@/lib/i18n';
+import { supportsLinkedFields } from '@/lib/linked-fields';
 import type { Cipher, CipherAttachment, CustomFieldType, VaultDraft, VaultDraftField, VaultDraftLoginUri } from '@/lib/types';
 import { firstCipherUri, hostFromUri, websiteIconUrl } from '@/lib/website-utils';
 import { normalizeEquivalentDomain } from '@shared/domain-normalize';
@@ -187,12 +188,16 @@ export function getFolderSortOptions(): Array<{ value: VaultSortMode; label: str
   ];
 }
 
-export function getFieldTypeOptions(): Array<{ value: CustomFieldType; label: string }> {
-  return [
+export function getFieldTypeOptions(cipherType?: number): Array<{ value: CustomFieldType; label: string }> {
+  const options: Array<{ value: CustomFieldType; label: string }> = [
     { value: 0, label: t('txt_text') },
     { value: 1, label: t('txt_hidden') },
     { value: 2, label: t('txt_boolean') },
   ];
+  if (cipherType !== undefined && supportsLinkedFields(cipherType)) {
+    options.push({ value: 3, label: t('txt_linked') });
+  }
+  return options;
 }
 
 export function getWebsiteMatchOptions(): Array<{ value: number | null; label: string }> {
@@ -658,6 +663,7 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
     type: parseFieldType(field.type),
     label: field.decName || '',
     value: field.decValue || '',
+    linkedId: field.linkedId ?? null,
   }));
 
   return draft;

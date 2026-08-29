@@ -97,6 +97,7 @@ export default function VaultPage(props: VaultPageProps) {
   const [fieldType, setFieldType] = useState<CustomFieldType>(0);
   const [fieldLabel, setFieldLabel] = useState('');
   const [fieldValue, setFieldValue] = useState('');
+  const [fieldLinkedId, setFieldLinkedId] = useState<number | null>(null);
   const [localError, setLocalError] = useState('');
   const [pendingArchive, setPendingArchive] = useState<Cipher | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Cipher | null>(null);
@@ -1376,6 +1377,8 @@ const folderName = useCallback((id: string | null | undefined): string => {
         fieldType={fieldType}
         fieldLabel={fieldLabel}
         fieldValue={fieldValue}
+        fieldLinkedId={fieldLinkedId}
+        draftType={draft?.type ?? 1}
         archiveConfirmOpen={!!pendingArchive}
         bulkArchiveOpen={bulkArchiveOpen}
         pendingDeleteOpen={!!pendingDelete}
@@ -1400,18 +1403,24 @@ const folderName = useCallback((id: string | null | undefined): string => {
             setLocalError(t('txt_field_label_is_required'));
             return;
           }
+          if (fieldType === 3 && fieldLinkedId == null) {
+            setLocalError(t('txt_field_linked_id_is_required'));
+            return;
+          }
           updateDraftCustomFields([
             ...draft.customFields,
             {
               type: fieldType,
               label: fieldLabel.trim(),
               value: fieldType === 2 ? (fieldValue === 'true' ? 'true' : 'false') : fieldValue,
+              linkedId: fieldType === 3 ? fieldLinkedId : null,
             },
           ]);
           setFieldModalOpen(false);
           setFieldType(0);
           setFieldLabel('');
           setFieldValue('');
+          setFieldLinkedId(null);
           setLocalError('');
         }}
         onCancelFieldModal={() => {
@@ -1419,10 +1428,12 @@ const folderName = useCallback((id: string | null | undefined): string => {
           setFieldType(0);
           setFieldLabel('');
           setFieldValue('');
+          setFieldLinkedId(null);
         }}
         onFieldTypeChange={setFieldType}
         onFieldLabelChange={setFieldLabel}
         onFieldValueChange={setFieldValue}
+        onFieldLinkedIdChange={setFieldLinkedId}
         onConfirmArchive={() => void confirmArchiveSelected()}
         onCancelArchive={() => setPendingArchive(null)}
         onConfirmBulkArchive={() => void confirmBulkArchive()}
