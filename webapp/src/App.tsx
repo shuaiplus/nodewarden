@@ -139,6 +139,7 @@ function normalizeRoutePath(path: string): string {
   return normalized.length > 1 ? normalized.replace(/\/+$/, '') : '/';
 }
 const THEME_STORAGE_KEY = 'nodewarden.theme.preference.v1';
+const HIDE_TOTP_STORAGE_KEY = 'nodewarden.totp.hide-by-default.v1';
 const SIGNALR_RECORD_SEPARATOR = String.fromCharCode(0x1e);
 const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE = 0;
 const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE = 1;
@@ -190,6 +191,15 @@ function readSessionTimeoutAction(): SessionTimeoutAction {
   if (typeof window === 'undefined') return 'lock';
   const value = String(window.localStorage.getItem(SESSION_TIMEOUT_ACTION_STORAGE_KEY) || '').trim();
   return value === 'logout' ? 'logout' : 'lock';
+}
+
+function readHideTotpByDefault(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(HIDE_TOTP_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 export default function App() {
@@ -252,6 +262,7 @@ export default function App() {
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(() => resolveSystemTheme());
   const [lockTimeoutMinutes, setLockTimeoutMinutesState] = useState<LockTimeoutMinutes>(() => readLockTimeoutMinutes());
   const [sessionTimeoutAction, setSessionTimeoutActionState] = useState<SessionTimeoutAction>(() => readSessionTimeoutAction());
+  const [hideTotpByDefault, setHideTotpByDefault] = useState<boolean>(() => readHideTotpByDefault());
   const [unlockPreparing, setUnlockPreparing] = useState(() => initialBootstrap.phase === 'locked' && !initialBootstrap.session?.email);
   const [lockedSessionRefreshError, setLockedSessionRefreshError] = useState('');
   const [lockedSessionRetryKey, setLockedSessionRetryKey] = useState(0);
@@ -404,6 +415,15 @@ export default function App() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(SESSION_TIMEOUT_ACTION_STORAGE_KEY, sessionTimeoutAction);
   }, [sessionTimeoutAction]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(HIDE_TOTP_STORAGE_KEY, hideTotpByDefault ? '1' : '0');
+    } catch {
+      // ignore storage errors
+    }
+  }, [hideTotpByDefault]);
 
   function handleToggleTheme() {
     setThemePreference((prev) => {
@@ -2038,6 +2058,7 @@ export default function App() {
     passkey2faEnabled: !!twoFactorStatusQuery.data?.passkeyEnabled,
     lockTimeoutMinutes,
     sessionTimeoutAction,
+    hideTotpByDefault,
     authorizedDevices: authorizedDevicesQuery.data || [],
     currentDeviceIdentifier: getCurrentDeviceIdentifier(),
     authorizedDevicesLoading: authorizedDevicesQuery.isFetching,
@@ -2049,6 +2070,7 @@ export default function App() {
     onLogout: handleLogout,
     onNotify: pushToast,
     onThemePreferenceChange: setThemePreference,
+    onHideTotpByDefaultChange: setHideTotpByDefault,
     onImport: vaultSendActions.importVault,
     onImportEncryptedRaw: vaultSendActions.importEncryptedRaw,
     onExport: vaultSendActions.exportVault,

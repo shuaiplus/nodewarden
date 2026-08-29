@@ -68,6 +68,7 @@ interface VaultPageProps {
   uploadingAttachmentName: string;
   attachmentUploadPercent: number | null;
   mobileSidebarToggleKey: number;
+  hideTotpByDefault: boolean;
 }
 
 
@@ -89,6 +90,7 @@ export default function VaultPage(props: VaultPageProps) {
   const [selectedMap, setSelectedMap] = useState<Record<string, boolean>>({});
   const pendingFocusCipherIdRef = useRef<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [showTotp, setShowTotp] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -272,6 +274,7 @@ export default function VaultPage(props: VaultPageProps) {
     setRepromptPassword('');
     setRepromptOpen(false);
     setShowPassword(false);
+    setShowTotp(false);
     setHiddenFieldVisibleMap({});
   }, [selectedCipherId]);
 
@@ -1335,11 +1338,14 @@ const folderName = useCallback((id: string | null | undefined): string => {
                 repromptApprovedCipherId={repromptApprovedCipherId}
                 showPassword={showPassword}
                 totpLive={totpLive}
+                hideTotpByDefault={props.hideTotpByDefault}
+                showTotp={showTotp}
                 passkeyCreatedAt={firstPasskeyCreationTime(selectedCipher)}
                 hiddenFieldVisibleMap={hiddenFieldVisibleMap}
                 folderName={folderName}
                 onOpenReprompt={() => setRepromptOpen(true)}
                 onToggleShowPassword={() => setShowPassword((value) => !value)}
+                onToggleShowTotp={() => setShowTotp((value) => !value)}
                 onToggleHiddenField={(index) => setHiddenFieldVisibleMap((prev) => ({ ...prev, [index]: !prev[index] }))}
                 onDownloadAttachment={(cipher, attachmentId) => void props.onDownloadAttachment(cipher, attachmentId)}
                 downloadingAttachmentKey={props.downloadingAttachmentKey}

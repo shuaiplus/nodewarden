@@ -12,9 +12,11 @@ interface SettingsPageProps {
   yubikeyEnabled: boolean;
   passkey2faEnabled: boolean;
   themePreference: ThemePreference;
+  hideTotpByDefault: boolean;
   lockTimeoutMinutes: 0 | 1 | 5 | 15 | 30;
   sessionTimeoutAction: 'lock' | 'logout';
   onThemePreferenceChange: (preference: ThemePreference) => void;
+  onHideTotpByDefaultChange: (value: boolean) => void;
   onVerifyMasterPassword: (email: string, password: string) => Promise<void>;
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
@@ -570,6 +572,20 @@ export default function SettingsPage(props: SettingsPageProps) {
                   </select>
                   <div className="field-help">{t('txt_theme_saved_locally')}</div>
                 </label>
+              </section>
+
+              <section className="settings-submodule">
+                <div className="settings-checkbox-block">
+                  <label className="checkbox-inline">
+                    <input
+                      type="checkbox"
+                      checked={props.hideTotpByDefault}
+                      onInput={(e) => props.onHideTotpByDefaultChange((e.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>{t('txt_hide_totp_by_default')}</span>
+                  </label>
+                  <div className="field-help">{t('txt_hide_totp_by_default_help')}</div>
+                </div>
               </section>
 
               <section className="settings-submodule">

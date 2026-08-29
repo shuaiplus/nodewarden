@@ -27,6 +27,8 @@ const zhTW: Record<string, string> = {
   "txt_light_theme": "淺色",
   "txt_dark_theme": "深色",
   "txt_theme_saved_locally": "為您的網頁密碼庫選擇一個主題。",
+  "txt_hide_totp_by_default": "預設隱藏驗證碼",
+  "txt_hide_totp_by_default_help": "遮罩 TOTP 驗證碼，直到您選擇顯示。",
   "txt_display_language_help": "更改網頁密碼庫的語言。",
   "txt_two_step_login": "兩步登入",
   "txt_keys": "密鑰",

@@ -24,6 +24,8 @@ const sv: Record<string, string> = {
   "txt_light_theme": "Ljust",
   "txt_dark_theme": "Mörkt",
   "txt_theme_saved_locally": "Välj ett tema för ditt webbvalv.",
+  "txt_hide_totp_by_default": "Dölj verifieringskoder som standard",
+  "txt_hide_totp_by_default_help": "Maskera TOTP-koder tills du väljer att visa dem.",
   "txt_display_language_help": "Ändra webbvalvets språk.",
   "txt_two_step_login": "Tvåstegsinloggning",
   "txt_keys": "Nycklar",

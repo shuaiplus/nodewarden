@@ -24,6 +24,8 @@ const fi: Record<string, string> = {
   "txt_light_theme": "Vaalea",
   "txt_dark_theme": "Tumma",
   "txt_theme_saved_locally": "Valitse teema web-holvillesi.",
+  "txt_hide_totp_by_default": "Piilota vahvistuskoodit oletuksena",
+  "txt_hide_totp_by_default_help": "Peitä TOTP-koodit, kunnes valitset niiden näyttämisen.",
   "txt_display_language_help": "Vaihda web-holvin kieltä.",
   "txt_two_step_login": "Kaksivaiheinen kirjautuminen",
   "txt_keys": "Avaimet",

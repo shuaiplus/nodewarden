@@ -24,6 +24,8 @@ const de: Record<string, string> = {
   "txt_light_theme": "Hell",
   "txt_dark_theme": "Dunkel",
   "txt_theme_saved_locally": "Wählen Sie ein Design für Ihren Web-Tresor.",
+  "txt_hide_totp_by_default": "Verifizierungscodes standardmäßig ausblenden",
+  "txt_hide_totp_by_default_help": "TOTP-Codes maskieren, bis du sie einblendest.",
   "txt_display_language_help": "Ändern Sie die Sprache des Web-Tresors.",
   "txt_two_step_login": "Zweistufige Anmeldung",
   "txt_keys": "Schlüssel",

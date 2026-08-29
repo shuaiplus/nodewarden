@@ -42,6 +42,7 @@ export interface AppMainRoutesProps {
   mobileLayout: boolean;
   mobileSidebarToggleKey: number;
   themePreference: 'system' | 'light' | 'dark';
+  hideTotpByDefault: boolean;
   importRoute: string;
   settingsHomeRoute: string;
   settingsAccountRoute: string;
@@ -61,6 +62,7 @@ export interface AppMainRoutesProps {
   passkey2faEnabled: boolean;
   lockTimeoutMinutes: 0 | 1 | 5 | 15 | 30;
   sessionTimeoutAction: 'lock' | 'logout';
+  onHideTotpByDefaultChange: (value: boolean) => void;
   authorizedDevices: AuthorizedDevice[];
   currentDeviceIdentifier: string;
   authorizedDevicesLoading: boolean;
@@ -248,7 +250,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
       </Route>
       <Route path="/vault/totp">
         <Suspense fallback={<RouteContentFallback />}>
-          <TotpCodesPage ciphers={props.decryptedCiphers} loading={props.ciphersLoading} onNotify={props.onNotify} />
+          <TotpCodesPage ciphers={props.decryptedCiphers} loading={props.ciphersLoading} onNotify={props.onNotify} hideTotpByDefault={props.hideTotpByDefault} />
         </Suspense>
       </Route>
       <Route path="/vault">
@@ -284,6 +286,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
             uploadingAttachmentName={props.uploadingAttachmentName}
             attachmentUploadPercent={props.attachmentUploadPercent}
             mobileSidebarToggleKey={props.mobileSidebarToggleKey}
+            hideTotpByDefault={props.hideTotpByDefault}
           />
         </Suspense>
       </Route>
@@ -305,9 +308,11 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                 yubikeyEnabled={props.yubikeyEnabled}
                 passkey2faEnabled={props.passkey2faEnabled}
                 themePreference={props.themePreference}
+                hideTotpByDefault={props.hideTotpByDefault}
                 lockTimeoutMinutes={props.lockTimeoutMinutes}
                 sessionTimeoutAction={props.sessionTimeoutAction}
                 onThemePreferenceChange={props.onThemePreferenceChange}
+                onHideTotpByDefaultChange={props.onHideTotpByDefaultChange}
                 onVerifyMasterPassword={props.onVerifyMasterPassword}
                 onChangePassword={props.onChangePassword}
                 onSavePasswordHint={props.onSavePasswordHint}
