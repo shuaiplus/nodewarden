@@ -27,8 +27,9 @@ class_name = "NotificationsHub"
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
 
-[[kv_namespaces]]
-binding = "ATTACHMENTS_KV"
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "nodewarden-attachments"
 
 [[migrations]]
 tag = "v1-notifications-hub"
