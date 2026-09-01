@@ -1463,5 +1463,6 @@ Object.assign(fr, {
 Object.assign(fr, { "txt_password_security_last_checked": "Dernière vérification : {value}" });
 Object.assign(fr, { "txt_no_password_risks_in_filter": "Aucun risque de mot de passe dans cette catégorie" });
 Object.assign(fr, { "txt_password_security_show_all": "Tout afficher", "txt_password_security_hide_all": "Tout masquer", "txt_password_security_jump": "Ouvrir", "txt_password_security_exposed_short": "Exposé {count} fois", "txt_password_security_weak_short": "Mot de passe faible", "txt_password_security_reused_short": "Réutilisé" });
+Object.assign(fr, { "txt_two_factor_missing": "Pas de 2FA", "txt_two_factor_missing_short": "Pas de 2FA", "txt_two_factor_supported": "2FA pris en charge", "txt_passkey_available": "Passkey", "txt_passkey_supported": "Passkey pris en charge", "txt_passkey_supported_short": "Passkey", "txt_two_factor_cdn_unavailable": "Répertoire 2FA inaccessible. La prise en charge 2FA n'a pas pu être vérifiée.", "txt_passkey_cdn_unavailable": "Répertoire Passkey inaccessible. La prise en charge Passkey n'a pas pu être vérifiée." });
 
 export default fr;
