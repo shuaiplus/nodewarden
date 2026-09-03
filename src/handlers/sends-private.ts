@@ -748,6 +748,7 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
     return errorResponse('Send not found', 404);
   }
 
+  await setSendPassword(send, null);
   send.authType = SendAuthType.None;
   send.emails = null;
   send.updatedAt = new Date().toISOString();
