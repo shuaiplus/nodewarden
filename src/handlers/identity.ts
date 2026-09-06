@@ -558,6 +558,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         user.updatedAt = new Date().toISOString();
         await storage.saveUser(user);
         await storage.deleteRefreshTokensByUserId(user.id);
+        await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
         AuthService.invalidateUserCache(user.id);
         rememberRequested = false;
       } else {
