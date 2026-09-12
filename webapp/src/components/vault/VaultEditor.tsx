@@ -99,11 +99,13 @@ function WebsiteRow(props: WebsiteRowProps) {
       </div>
       <input
         className="input"
+        aria-label={t('txt_website')}
         value={props.uriEntry.uri}
         onInput={(e) => props.onUpdateUri(props.index, (e.currentTarget as HTMLInputElement).value)}
       />
       <select
         className="input website-match-select"
+        aria-label={t('txt_uri_match_type')}
         value={props.uriEntry.match == null ? '' : String(props.uriEntry.match)}
         onInput={(e) => {
           const raw = (e.currentTarget as HTMLSelectElement).value;
@@ -408,7 +410,7 @@ export default function VaultEditor(props: VaultEditorProps) {
           <label className="field">
             <span>{t('txt_totp_secret')}</span>
             <div className="input-action-wrap">
-              <input className="input" value={props.draft.loginTotp} onInput={(e) => props.onUpdateDraft({ loginTotp: (e.currentTarget as HTMLInputElement).value })} />
+              <input className="input" aria-label={t('txt_totp_secret')} value={props.draft.loginTotp} onInput={(e) => props.onUpdateDraft({ loginTotp: (e.currentTarget as HTMLInputElement).value })} />
               <button
                 type="button"
                 className="input-icon-btn"

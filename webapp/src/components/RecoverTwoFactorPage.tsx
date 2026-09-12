@@ -40,12 +40,13 @@ export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
             <div className="password-wrap">
               <input
                 className="input"
+                aria-label={t('txt_password')}
                 type={showPassword ? 'text' : 'password'}
                 value={props.values.password}
                 autoComplete="current-password"
                 onInput={(e) => props.onChange({ ...props.values, password: (e.currentTarget as HTMLInputElement).value })}
               />
-              <button type="button" className="eye-btn" onClick={() => setShowPassword((v) => !v)}>
+              <button type="button" className="eye-btn" title={showPassword ? t('txt_hide') : t('txt_reveal')} aria-label={showPassword ? t('txt_hide') : t('txt_reveal')} onClick={() => setShowPassword((v) => !v)}>
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>

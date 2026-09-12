@@ -1,3 +1,13 @@
+/* 1181–1400px 区间：三栏最小宽度之和（270 + 400 + 400 + 24）超过可用宽度，
+   会把网格轨道顶出容器，导致详情面板被截断、「删除」等按钮无法点到。
+   这里收窄侧栏并下调两栏最小宽度，保证三栏始终放得下。
+   注意：本块必须位于下方 @media (max-width: 1180px) 之前，好让单列规则在其后覆盖它。 */
+@media (max-width: 1400px) {
+  .vault-grid {
+    grid-template-columns: 230px minmax(280px, 36%) minmax(280px, 1fr);
+  }
+}
+
 @media (max-width: 1180px) {
   .app-page {
     @apply p-2;

@@ -401,3 +401,63 @@
   background: color-mix(in srgb, var(--primary) 12%, var(--panel));
   border-color: color-mix(in srgb, var(--primary) 34%, var(--line));
 }
+
+/* ============================================================
+   对比度修复（逐条依据见 .vscode/TOFIX.md）
+   说明：以下规则特异性均为 (0,3,0)，可稳定压过浅色层的
+   :hover / 类选择器（(0,1,0) ~ (0,2,0)），无需 !important。
+   ============================================================ */
+
+/* #12 确认弹窗正文：原 #475467 在暗色下仅 2.25:1，影响 33/34 个 ConfirmDialog。
+   必须排除 .warning 变体 —— 它在 styles.css 已有 (0,3,0) 的 var(--text) 覆盖，
+   若不排除，本条同特异性且后加载会把它降级为 --muted-strong。 */
+:root[data-theme='dark'] .dialog-message:not(.warning) {
+  color: var(--muted-strong);
+}
+
+/* #1 全站共享空态：原 #667085 在暗色下仅 3.48:1 */
+:root[data-theme='dark'] .empty {
+  color: var(--muted);
+}
+
+/* #2 / #3 图标按钮：原 @apply text-slate-700 把浅色值烧进规则，暗色下仅 1.67:1。
+   注意：下面的基色规则特异性 (0,3,0) 与 .input-icon-btn:hover:not(:disabled) 相同、
+   且 dark.css 最后加载，会压过浅色层的悬停规则 → 必须同时补悬停态，否则暗色下丢失悬停反馈。 */
+:root[data-theme='dark'] .input-icon-btn,
+:root[data-theme='dark'] .eye-btn {
+  color: var(--muted-strong);
+}
+:root[data-theme='dark'] .input-icon-btn:hover:not(:disabled),
+:root[data-theme='dark'] .eye-btn:hover {
+  color: var(--primary);
+}
+
+/* #14 Toast 自动关闭进度条：原 rgba(15,23,42,.2) 叠在暗色上合成 ≈1.0:1，不可见 */
+:root[data-theme='dark'] .toast-progress {
+  background: var(--line);
+}
+
+/* #15 Toast 关闭按钮交互反馈：原为黑色半透明叠加，在暗色上无视觉变化 */
+:root[data-theme='dark'] .toast-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme='dark'] .toast-close:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* #16 文件夹行按钮悬停背景：原 #fee2e2 / #dbeafe 是浅色淡彩，
+   暗色下灰图标压浅底仅 2.1:1。改为在暗色面板上混入少量语义色。 */
+:root[data-theme='dark'] .folder-delete-btn:hover {
+  background: color-mix(in srgb, var(--danger) 22%, var(--panel));
+}
+:root[data-theme='dark'] .folder-edit-btn:hover,
+:root[data-theme='dark'] .folder-sort-btn:hover {
+  background: color-mix(in srgb, var(--primary) 22%, var(--panel));
+}
+
+/* #20 导入摘要关闭按钮的**悬停**色：overlays.css 写的是 #0f172a（= 浅色 --text）
+   且未随主题切换，暗色下悬停会变成近黑色压暗底，与 #16 同类。
+   注：基色已由上方 dark.css:264-271 的 .import-summary-close 规则设为 var(--text)，此处无需重复。 */
+:root[data-theme='dark'] .import-summary-close:hover {
+  color: var(--text);
+}

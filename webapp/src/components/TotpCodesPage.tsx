@@ -70,7 +70,12 @@ function TotpRow(props: TotpRowProps) {
           </svg>
           <span className="totp-timer-value">{props.live ? props.live.remain : 0}</span>
         </div>
-        <button type="button" className="btn btn-secondary small totp-copy-btn" onClick={() => props.onCopy(props.live?.code || '')} aria-label={t('txt_copy')}>
+        <button
+          type="button"
+          className="btn btn-secondary small totp-copy-btn"
+          onClick={() => props.onCopy(props.live?.code || '')}
+          aria-label={`${t('txt_copy')}: ${name}`}
+        >
           <Clipboard size={14} className="btn-icon" />
         </button>
       </div>

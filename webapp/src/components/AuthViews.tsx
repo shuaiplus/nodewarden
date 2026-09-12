@@ -69,6 +69,7 @@ function PasswordField(props: {
       <div className="password-wrap">
         <input
           className="input"
+          aria-label={props.label}
           type={show ? 'text' : 'password'}
           value={props.value}
           onInput={(e) => props.onInput((e.currentTarget as HTMLInputElement).value)}
@@ -76,7 +77,7 @@ function PasswordField(props: {
           autoComplete={props.autoComplete}
           placeholder={props.placeholder}
         />
-        <button type="button" className="eye-btn" onClick={() => setShow((v) => !v)}>
+        <button type="button" className="eye-btn" title={show ? t('txt_hide') : t('txt_reveal')} aria-label={show ? t('txt_hide') : t('txt_reveal')} onClick={() => setShow((v) => !v)}>
           {show ? <EyeOff size={16} /> : <Eye size={16} />}
         </button>
       </div>

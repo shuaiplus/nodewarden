@@ -510,6 +510,7 @@ export default function DomainRulesPage(props: DomainRulesPageProps) {
               <div key={entry.type} className={`domain-rule-row domain-rule-readonly-row${expandedGlobalRules.has(entry.type) ? ' domain-rule-row-expanded' : ''}`}>
                 <input
                   type="checkbox"
+                  aria-label={entry.domains.join(', ')}
                   checked={!excludedTypes.has(entry.type)}
                   onChange={() => toggleGlobal(entry.type)}
                 />

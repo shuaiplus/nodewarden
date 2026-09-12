@@ -902,7 +902,7 @@ export default function SettingsPage(props: SettingsPageProps) {
               <label className="field">
                 <span>{t('txt_authenticator_key')}</span>
                 <div className="totp-secret-input-wrap">
-                  <input className="input totp-secret-input" value={secret} disabled={totpLocked} onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value.toUpperCase())} />
+                  <input className="input totp-secret-input" aria-label={t('txt_authenticator_key')} value={secret} disabled={totpLocked} onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value.toUpperCase())} />
                   <div className="totp-secret-actions">
                     <button
                       type="button"

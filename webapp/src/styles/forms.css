@@ -106,7 +106,9 @@ input[type='file'].input::file-selector-button:hover {
 }
 
 .password-toggle {
-  @apply absolute right-2 top-1/2 grid cursor-pointer place-items-center border-0 bg-transparent text-blue-700 transition;
+  @apply absolute right-2 top-1/2 grid cursor-pointer place-items-center border-0 bg-transparent transition;
+  /* 与 .eye-btn 同语义（中性色、悬停转主色），但改用主题变量以适配暗色；原 text-blue-700 在暗色下仅 2.58:1。 */
+  color: var(--muted-strong);
   transform: translateY(-50%);
 }
 
@@ -119,6 +121,17 @@ input[type='file'].input::file-selector-button:hover {
 .eye-btn:hover {
   color: var(--primary);
   transform: translateY(-50%) scale(1.04);
+}
+
+/* #11 「移除密码」按钮：原先靠组件里写 text-red-600 表达红色意图，
+   但 .password-toggle 的 color 把它覆盖了（同为单类选择器，styles.css 后加载）
+   → 从未生效。改为显式变体类，并让悬停色不退回主色。 */
+.password-toggle.danger {
+  color: var(--danger);
+}
+
+.password-toggle.danger:hover {
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
 }
 
 .btn {

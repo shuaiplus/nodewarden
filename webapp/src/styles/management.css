@@ -59,7 +59,8 @@
 
 .backup-recommendations-summary small {
   @apply text-xs font-semibold;
-  color: #64748b;
+  /* #9 修正：原 #64748b 硬编码（= 浅色 --muted），暗色下仅 3.78:1。改用变量后浅色取值不变、暗色自动适配。 */
+  color: var(--muted);
 }
 
 .backup-recommendations-summary-icon {
@@ -1687,7 +1688,8 @@
 
 .send-options {
   @apply grid gap-2;
-  color: #3a4a64;
+  /* 用主题变量而非硬编码色：否则暗色下沿用浅色文字色，对比度仅 1.93:1，几乎不可见。 */
+  color: var(--muted-strong);
 }
 
 .send-options label {

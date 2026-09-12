@@ -959,8 +959,9 @@ select.input.duplicate-mode-toolbar-select {
   stroke-width: 3;
 }
 
+/* 用主题变量而非固定浅灰，否则暗色主题下会呈现刺眼的高对比白圈。 */
 .totp-ring-track {
-  stroke: #d9e2ef;
+  stroke: var(--line);
 }
 
 .totp-ring-progress {
@@ -1081,21 +1082,22 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .totp-codes-list {
-  @apply grid w-full items-start gap-2.5;
-  grid-template-columns: repeat(var(--totp-columns, 1), minmax(0, 1fr));
+  @apply grid w-full items-start justify-start gap-2.5;
+  /* 列宽设上限，避免超宽屏下卡片被拉伸得过于空旷；列数仍由 --totp-columns 决定。 */
+  grid-template-columns: repeat(var(--totp-columns, 1), minmax(0, 420px));
+}
+
+/* 加载骨架与空态需要横跨整行，否则宽屏下只占第一列，数据到达时会产生布局跳变。 */
+.totp-codes-list > .loading-state,
+.totp-codes-list > .empty {
+  grid-column: 1 / -1;
 }
 
 .totp-code-row {
   @apply grid w-full min-w-0 max-w-none items-center gap-2.5 rounded-xl border p-3;
   grid-template-columns: minmax(0, 1fr) auto;
-  border-color: #e2e8f0;
-  background: #f8fafc;
-  transition:
-    transform 220ms var(--ease-out-soft),
-    box-shadow var(--dur-fast) var(--ease-out-soft),
-    border-color var(--dur-fast) var(--ease-smooth),
-    background-color var(--dur-fast) var(--ease-smooth),
-    opacity var(--dur-fast) var(--ease-smooth);
+  border-color: var(--line);
+  background: var(--panel);
 }
 
 .totp-code-info {
@@ -1109,6 +1111,8 @@ select.input.duplicate-mode-toolbar-select {
 .totp-code-main strong {
   @apply min-w-0 whitespace-nowrap text-[22px] leading-none;
   letter-spacing: 0.04em;
+  /* 等宽数字：验证码每秒刷新时避免字宽变化导致整块数字左右抖动。 */
+  font-variant-numeric: tabular-nums;
 }
 
 .totp-code-meta {

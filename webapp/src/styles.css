@@ -781,7 +781,9 @@ h4 {
 
 .status-ok,
 .device-status-pill.online {
-  color: var(--success);
+  /* #8 修正：原为 color: var(--success)，浅色下在 11% 淡绿底上仅约 3.3–3.8:1（下文非大字号）。
+     改为与 shell.css:58 既有模式一致的混色，浅/暗两主题均达标。 */
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
   background: color-mix(in srgb, var(--success) 11%, var(--panel));
 }
 

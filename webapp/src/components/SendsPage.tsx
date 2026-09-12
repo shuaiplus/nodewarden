@@ -361,6 +361,7 @@ export default function SendsPage(props: SendsPageProps) {
                 type="checkbox"
                 className="row-check"
                 checked={!!selectedMap[send.id]}
+                aria-label={t('txt_select_device_name', { name: send.decName || t('txt_no_name') })}
                 onClick={(event) => event.stopPropagation()}
                 onInput={(e) =>
                   setSelectedMap((prev) => ({
@@ -483,17 +484,17 @@ export default function SendsPage(props: SendsPageProps) {
                 <span>{t('txt_password')}</span>
                 {draft.hasPassword ? (
                   <div className="password-wrap">
-                    <input className="input" type="password" value="••••••••" disabled />
+                    <input className="input" aria-label={t('txt_password')} type="password" value="••••••••" disabled />
                     {!isCreating && (
-                      <button type="button" className="password-toggle text-red-600 hover:text-red-700" onClick={() => setDraft({ ...draft, hasPassword: false, password: '' })} title={t('txt_remove')}>
+                      <button type="button" className="password-toggle danger" onClick={() => setDraft({ ...draft, hasPassword: false, password: '' })} title={t('txt_remove')}>
                         <Trash2 size={16} />
                       </button>
                     )}
                   </div>
                 ) : (
                   <div className="password-wrap">
-                    <input className="input" type={showPassword ? 'text' : 'password'} value={draft.password} onInput={(e) => setDraft({ ...draft, password: (e.currentTarget as HTMLInputElement).value })} />
-                    <button type="button" className="password-toggle" onClick={() => setShowPassword((v) => !v)}>
+                    <input className="input" aria-label={t('txt_password')} type={showPassword ? 'text' : 'password'} value={draft.password} onInput={(e) => setDraft({ ...draft, password: (e.currentTarget as HTMLInputElement).value })} />
+                    <button type="button" className="password-toggle" title={showPassword ? t('txt_hide') : t('txt_reveal')} aria-label={showPassword ? t('txt_hide') : t('txt_reveal')} onClick={() => setShowPassword((v) => !v)}>
                       {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>

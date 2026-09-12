@@ -132,6 +132,7 @@ const CipherListItem = memo(function CipherListItem(props: CipherListItemProps) 
         type="checkbox"
         className="row-check"
         checked={props.checked}
+        aria-label={t('txt_select_device_name', { name: props.cipher.decName || t('txt_no_name') })}
         onClick={(event) => event.stopPropagation()}
         onInput={(e) => props.onToggleSelected(props.cipher.id, (e.currentTarget as HTMLInputElement).checked)}
       />
