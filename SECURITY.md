@@ -60,6 +60,42 @@ We aim to acknowledge valid private reports within 72 hours, investigate the iss
 
 Please do not publicly disclose vulnerability details before a fix or mitigation is available.
 
+## Administrator Bootstrap and Role Assignment
+
+NodeWarden has no separate setup step or setup token. Administrator privilege is
+assigned as follows.
+
+**First account.** The first account that registers on an instance is granted the
+`admin` role, and the instance is then marked as registered. This is recorded in
+the security audit log as `user.register.first_admin`.
+
+**Later accounts.** After the first account exists, registration requires an
+invite code (`Invite code is required`, HTTP 403) and the new account gets the
+default `user` role. These are recorded as `user.register.invite`. Registration
+can therefore not be used to obtain administrator privilege on an existing
+instance.
+
+**Recovery when no administrator exists.** If an instance ends up with no account
+holding the `admin` role — for example the last administrator account was deleted
+— the database bootstrap promotes the **earliest-created** account back to `admin`
+on its next schema initialization. This is a system action with no actor, and is
+recorded in the security audit log as `user.bootstrap.admin_promoted`.
+
+Two properties of that recovery path are worth knowing:
+
+* **Administrator accounts are not protected against deletion.** NodeWarden does
+  not block deleting the last administrator. The bootstrap exists so an instance
+  cannot become permanently unmanageable, but it is not a substitute for
+  administrative care on a multi-user instance.
+* **The account that regains the role is selected by account creation time, not
+  by trust.** On a multi-user instance, make sure you intend to delete an
+  administrator account before doing so.
+
+The bootstrap only runs when the runtime schema is initialized or re-initialized
+(for example after a schema version change), not on every request. Operators who
+need tighter control over administrator assignment should edit the `users.role`
+column directly and treat the bootstrap as a recovery mechanism only.
+
 ## Supported Versions
 
 Security fixes are generally provided for the latest release and the latest code on the default branch.
