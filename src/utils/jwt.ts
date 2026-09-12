@@ -42,7 +42,7 @@ function getHmacKey(secret: string): Promise<CryptoKey> {
 export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' | 'premium' | 'email_verified' | 'amr'>, secret: string, expiresIn: number = LIMITS.auth.accessTokenTtlSeconds): Promise<string> {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
-  
+
   const fullPayload: JWTPayload = {
     ...payload,
     email_verified: true,  // required by mobile client
@@ -56,14 +56,14 @@ export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' 
   const encoder = new TextEncoder();
   const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(fullPayload)));
-  
+
   const data = `${headerB64}.${payloadB64}`;
-  
+
   const key = await getHmacKey(secret);
-  
+
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
-  
+
   return `${data}.${signatureB64}`;
 }
 
@@ -75,17 +75,17 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
 
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
-    
+
     const key = await getHmacKey(secret);
-    
+
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
-    
+
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
     const payload: JWTPayload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
-    
+
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
@@ -126,7 +126,7 @@ export async function createFileDownloadToken(
 ): Promise<string> {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
-  
+
   const payload: FileDownloadClaims = {
     cipherId,
     attachmentId,
@@ -137,14 +137,14 @@ export async function createFileDownloadToken(
   const encoder = new TextEncoder();
   const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
-  
+
   const data = `${headerB64}.${payloadB64}`;
-  
+
   const key = await getHmacKey(secret);
-  
+
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
-  
+
   return `${data}.${signatureB64}`;
 }
 
@@ -159,17 +159,23 @@ export async function verifyFileDownloadToken(
 
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
-    
+
     const key = await getHmacKey(secret);
-    
+
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
-    
+
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
     const payload: FileDownloadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
-    
+
+    // 用途隔离显式化：本令牌与访问令牌共用 JWT_SECRET，这里主动拒绝
+    // 访问令牌（其特征为携带 sstamp / sub），避免隔离仅依赖
+    // 「调用方随后还会比对 cipherId」这一隐式约定。
+    const raw = payload as unknown as Record<string, unknown>;
+    if (raw.sstamp || raw.sub) return null;
+
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
@@ -226,6 +232,15 @@ export async function verifyAttachmentUploadToken(
     if (!valid) return null;
 
     const payload: AttachmentUploadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    // 同上：显式拒绝访问令牌，保持用途隔离为显式契约。
+    //
+    // 这里同时看 `sstamp` 与 `sub`：访问令牌两者都有，但 `sstamp` 来自
+    // `users.security_stamp`（库定义是 `TEXT NOT NULL`，**并不排除空串**），
+    // 只查它会在 securityStamp 为空时漏掉。`sub` 恒为用户 id、不可能为空，
+    // 因此与 `verifyFileDownloadToken` 保持一致地两样都查。
+    // 上行令牌的声明里没有 `sub`（见 AttachmentUploadClaims），不会误伤合法令牌。
+    const rawUploadClaims = payload as unknown as Record<string, unknown>;
+    if (rawUploadClaims.sstamp || rawUploadClaims.sub) return null;
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
     if (!payload.userId || !payload.cipherId || !payload.attachmentId) return null;

@@ -114,7 +114,7 @@ export function applyCors(
     headers.delete('X-Frame-Options');
     headers.set(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+      "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
     );
   } else {
     headers.set('X-Frame-Options', 'DENY');

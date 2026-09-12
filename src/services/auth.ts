@@ -223,6 +223,13 @@ export class AuthService {
     const payload = await verifyJWT(parts[1], this.env.JWT_SECRET);
     if (!payload) return null;
 
+    // 用途隔离显式化：访问令牌不得携带附件/下载类专用令牌的字段。
+    // 两者共用 JWT_SECRET，故此处直接拒绝，把隐式约定升级为显式契约。
+    const rawPayload = payload as unknown as Record<string, unknown>;
+    if (rawPayload.cipherId || rawPayload.attachmentId || rawPayload.sendId || rawPayload.fileId) {
+      return null;
+    }
+
     let user = await this.getCachedUser(payload.sub);
     if (!user || user.status !== 'active' || payload.sstamp !== user.securityStamp) {
       user = await this.getFreshUser(payload.sub);
