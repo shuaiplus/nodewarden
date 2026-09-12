@@ -23,7 +23,6 @@ interface VaultDialogsProps {
   renameFolderOpen: boolean;
   renameFolderName: string;
   pendingDeleteFolder: Folder | null;
-  deleteAllFoldersOpen: boolean;
   repromptOpen: boolean;
   repromptPassword: string;
   deletePasskeyOpen: boolean;
@@ -51,8 +50,6 @@ interface VaultDialogsProps {
   onRenameFolderNameChange: (value: string) => void;
   onConfirmDeleteFolder: () => void;
   onCancelDeleteFolder: () => void;
-  onConfirmDeleteAllFolders: () => void;
-  onCancelDeleteAllFolders: () => void;
   onConfirmReprompt: () => void;
   onCancelReprompt: () => void;
   onRepromptPasswordChange: (value: string) => void;
@@ -227,19 +224,6 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         cancelDisabled={props.busy}
         onConfirm={props.onConfirmDeleteFolder}
         onCancel={props.onCancelDeleteFolder}
-      />
-
-      <ConfirmDialog
-        open={props.deleteAllFoldersOpen}
-        title={t('txt_delete_all_folders')}
-        message={t('txt_delete_all_folders_message')}
-        confirmText={t('txt_delete')}
-        cancelText={t('txt_cancel')}
-        danger
-        confirmDisabled={props.busy}
-        cancelDisabled={props.busy}
-        onConfirm={props.onConfirmDeleteAllFolders}
-        onCancel={props.onCancelDeleteAllFolders}
       />
 
       <ConfirmDialog

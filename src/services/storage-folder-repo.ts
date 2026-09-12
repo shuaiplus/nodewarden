@@ -64,49 +64,6 @@ export async function clearFolderFromCiphers(
     .run();
 }
 
-export async function bulkDeleteFolders(
-  db: D1Database,
-  userId: string,
-  ids: string[],
-  sqlChunkSize: (fixedBindCount: number, bindCountPerItem?: number) => number,
-  updateRevisionDate: (userId: string) => Promise<string>
-): Promise<string | null> {
-  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
-  if (!uniqueIds.length) return null;
-
-  const now = new Date().toISOString();
-  // Each folder ID is bound in all three compatibility predicates below.
-  const chunkSize = sqlChunkSize(2, 3);
-  const statements: D1PreparedStatement[] = [];
-
-  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
-    const chunk = uniqueIds.slice(i, i + chunkSize);
-    const placeholders = chunk.map(() => '?').join(',');
-    statements.push(
-      db.prepare(
-        `UPDATE ciphers
-         SET folder_id = NULL, updated_at = ?,
-             data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ?
-           AND (
-             folder_id IN (${placeholders})
-             OR json_extract(data, '$.folderId') IN (${placeholders})
-             OR json_extract(data, '$.folder_id') IN (${placeholders})
-           )`
-      )
-      .bind(now, userId, ...chunk, ...chunk, ...chunk)
-    );
-    statements.push(
-      db.prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
-        .bind(userId, ...chunk)
-    );
-  }
-
-  await db.batch(statements);
-
-  return updateRevisionDate(userId);
-}
-
 export async function getAllFolders(db: D1Database, userId: string): Promise<Folder[]> {
   const res = await db
     .prepare('SELECT id, user_id, name, created_at, updated_at FROM folders WHERE user_id = ? ORDER BY updated_at DESC')

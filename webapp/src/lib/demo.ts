@@ -1385,12 +1385,6 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
       state.setCiphers((prev) => prev.map((cipher) => (cipher.folderId === folderId ? { ...cipher, folderId: null } : cipher)));
       notify('success', t('txt_folder_deleted'));
     },
-    onBulkDeleteFolders: async (folderIds) => {
-      const idSet = new Set(folderIds);
-      state.setFolders((prev) => prev.filter((folder) => !idSet.has(folder.id)));
-      state.setCiphers((prev) => prev.map((cipher) => (cipher.folderId && idSet.has(cipher.folderId) ? { ...cipher, folderId: null } : cipher)));
-      notify('success', t('txt_folders_deleted'));
-    },
     onDownloadVaultAttachment: async () => {
       notify('success', t('txt_demo_download_prepared'));
     },

@@ -99,7 +99,6 @@ export interface AppMainRoutesProps {
   onCreateFolder: (name: string) => Promise<void>;
   onRenameFolder: (folderId: string, name: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  onBulkDeleteFolders: (folderIds: string[]) => Promise<void>;
   onDownloadVaultAttachment: (cipher: Cipher, attachmentId: string) => Promise<void>;
   downloadingAttachmentKey: string;
   attachmentDownloadPercent: number | null;
@@ -277,7 +276,6 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
             onCreateFolder={props.onCreateFolder}
             onRenameFolder={props.onRenameFolder}
             onDeleteFolder={props.onDeleteFolder}
-            onBulkDeleteFolders={props.onBulkDeleteFolders}
             onDownloadAttachment={props.onDownloadVaultAttachment}
             downloadingAttachmentKey={props.downloadingAttachmentKey}
             attachmentDownloadPercent={props.attachmentDownloadPercent}

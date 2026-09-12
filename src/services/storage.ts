@@ -36,7 +36,6 @@ import {
   revertInviteUsed as revertStoredInviteUsed,
 } from './storage-admin-repo';
 import {
-  bulkDeleteFolders as deleteStoredFolders,
   clearFolderFromCiphers as clearStoredFolderFromCiphers,
   deleteFolder as deleteStoredFolder,
   getAllFolders as listStoredFolders,
@@ -547,16 +546,6 @@ export class StorageService {
 
   async deleteFolder(id: string, userId: string): Promise<void> {
     await deleteStoredFolder(this.db, id, userId);
-  }
-
-  async bulkDeleteFolders(ids: string[], userId: string): Promise<string | null> {
-    return deleteStoredFolders(
-      this.db,
-      userId,
-      ids,
-      this.sqlChunkSize.bind(this),
-      this.updateRevisionDate.bind(this)
-    );
   }
 
   // Clear folder references from all ciphers owned by the user.

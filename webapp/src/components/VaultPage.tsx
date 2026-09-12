@@ -61,7 +61,6 @@ interface VaultPageProps {
   onCreateFolder: (name: string) => Promise<void>;
   onRenameFolder: (folderId: string, name: string) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  onBulkDeleteFolders: (folderIds: string[]) => Promise<void>;
   onDownloadAttachment: (cipher: Cipher, attachmentId: string) => Promise<void>;
   downloadingAttachmentKey: string;
   attachmentDownloadPercent: number | null;
@@ -109,7 +108,6 @@ export default function VaultPage(props: VaultPageProps) {
   const [pendingRenameFolder, setPendingRenameFolder] = useState<Folder | null>(null);
   const [renameFolderName, setRenameFolderName] = useState('');
   const [pendingDeleteFolder, setPendingDeleteFolder] = useState<Folder | null>(null);
-  const [deleteAllFoldersOpen, setDeleteAllFoldersOpen] = useState(false);
   const [totpLive, setTotpLive] = useState<TotpCodeResult | null>(null);
   const [hiddenFieldVisibleMap, setHiddenFieldVisibleMap] = useState<Record<number, boolean>>({});
   const [attachmentQueue, setAttachmentQueue] = useState<File[]>([]);
@@ -1089,22 +1087,6 @@ const folderName = useCallback((id: string | null | undefined): string => {
     }
   }
 
-  async function confirmDeleteAllFolders(): Promise<void> {
-    if (!props.folders.length) return;
-    setBusy(true);
-    try {
-      await props.onBulkDeleteFolders(props.folders.map((folder) => folder.id));
-      if (sidebarFilter.kind === 'folder') {
-        setSidebarFilter({ kind: 'all' });
-      }
-      setDeleteAllFoldersOpen(false);
-    } catch {
-      // The action layer already shows the user-facing error toast.
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const handleClearSearch = useCallback(() => setSearchInput(''), []);
   const handleSearchCompositionStart = useCallback(() => setSearchComposing(true), []);
   const handleSearchCompositionEnd = useCallback((value: string) => {
@@ -1181,7 +1163,6 @@ const folderName = useCallback((id: string | null | undefined): string => {
     setMobileSidebarOpen(false);
   }, [isEditing, isCreating, cancelEdit, isMobileLayout]);
   const handleCloseMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
-  const handleOpenDeleteAllFolders = useCallback(() => setDeleteAllFoldersOpen(true), []);
   const handleOpenCreateFolder = useCallback(() => setCreateFolderOpen(true), []);
   const handleOpenRenameFolder = useCallback((folder: Folder) => {
     setPendingRenameFolder(folder);
@@ -1217,7 +1198,6 @@ const folderName = useCallback((id: string | null | undefined): string => {
           folderSortMenuRef={folderSortMenuRef}
           onCloseMobileSidebar={handleCloseMobileSidebar}
           onChangeFilter={setSidebarFilter}
-          onOpenDeleteAllFolders={handleOpenDeleteAllFolders}
           onOpenCreateFolder={handleOpenCreateFolder}
           onOpenRenameFolder={handleOpenRenameFolder}
           onOpenDeleteFolder={setPendingDeleteFolder}
@@ -1392,7 +1372,6 @@ const folderName = useCallback((id: string | null | undefined): string => {
         renameFolderOpen={!!pendingRenameFolder}
         renameFolderName={renameFolderName}
         pendingDeleteFolder={pendingDeleteFolder}
-        deleteAllFoldersOpen={deleteAllFoldersOpen}
         repromptOpen={repromptOpen}
         repromptPassword={repromptPassword}
         deletePasskeyOpen={pendingDeletePasskeyIndex != null}
@@ -1450,8 +1429,6 @@ const folderName = useCallback((id: string | null | undefined): string => {
         onRenameFolderNameChange={setRenameFolderName}
         onConfirmDeleteFolder={() => void confirmDeleteFolder()}
         onCancelDeleteFolder={() => setPendingDeleteFolder(null)}
-        onConfirmDeleteAllFolders={() => void confirmDeleteAllFolders()}
-        onCancelDeleteAllFolders={() => setDeleteAllFoldersOpen(false)}
         onConfirmReprompt={() => void verifyReprompt()}
         onCancelReprompt={() => {
           setRepromptOpen(false);
@@ -1464,4 +1441,3 @@ const folderName = useCallback((id: string | null | undefined): string => {
     </>
   );
 }
-

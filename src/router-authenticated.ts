@@ -50,7 +50,6 @@ import {
   handleCreateFolder,
   handleUpdateFolder,
   handleDeleteFolder,
-  handleBulkDeleteFolders,
 } from './handlers/folders';
 import {
   handleGetSends,
@@ -366,10 +365,6 @@ export async function handleAuthenticatedRoute(
     if (method === 'GET') return handleGetFolders(request, env, userId);
     if (method === 'POST') return handleCreateFolder(request, env, userId);
     return null;
-  }
-
-  if (path === '/api/folders/delete' && method === 'POST') {
-    return handleBulkDeleteFolders(request, env, userId);
   }
 
   const folderMatch = path.match(/^\/api\/folders\/([a-f0-9-]+)$/i);

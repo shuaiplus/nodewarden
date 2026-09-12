@@ -28,7 +28,6 @@ import {
   buildCipherImportPayload,
   bulkArchiveCiphers,
   bulkDeleteCiphers,
-  bulkDeleteFolders,
   bulkMoveCiphers,
   bulkPermanentDeleteCiphers,
   bulkRestoreCiphers,
@@ -911,30 +910,6 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           onNotify('success', t('txt_deleted_selected_items_permanently'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_permanent_delete_failed'));
-          throw error;
-        }
-      },
-
-      async bulkDeleteFolders(folderIds: string[]) {
-        const ids = Array.from(new Set(folderIds.map((id) => String(id || '').trim()).filter(Boolean)));
-        if (!ids.length) return;
-        try {
-          requireOnlineWrite();
-        } catch (error) {
-          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
-          throw error;
-        }
-        try {
-          await bulkDeleteFolders(authedFetch, ids);
-          const removedIds = new Set(ids);
-          patchEncryptedFolders((prev) => prev.filter((folder) => !removedIds.has(folder.id)));
-          patchEncryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId && removedIds.has(cipher.folderId) ? { ...cipher, folderId: null } : cipher)));
-          patchDecryptedFolders((prev) => prev.filter((folder) => !removedIds.has(folder.id)));
-          patchDecryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId && removedIds.has(cipher.folderId) ? { ...cipher, folderId: null } : cipher)));
-          void refreshVaultRevisionStamp();
-          onNotify('success', t('txt_folders_deleted'));
-        } catch (error) {
-          onNotify('error', error instanceof Error ? error.message : t('txt_delete_all_folders_failed'));
           throw error;
         }
       },

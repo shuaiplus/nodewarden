@@ -17,13 +17,11 @@ import {
   LayoutGrid,
   Pencil,
   ShieldUser,
-  ShieldCheck,
   Star,
   StickyNote,
   Trash2,
   X,
 } from 'lucide-preact';
-import { Link } from 'wouter';
 import type { Folder } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { getFolderSortOptions, type SidebarFilter, type VaultSortMode } from '@/components/vault/vault-page-helpers';
@@ -39,7 +37,6 @@ interface VaultSidebarProps {
   folderSortMenuRef: RefObject<HTMLDivElement>;
   onCloseMobileSidebar: () => void;
   onChangeFilter: (filter: SidebarFilter) => void;
-  onOpenDeleteAllFolders: () => void;
   onOpenCreateFolder: () => void;
   onOpenRenameFolder: (folder: Folder) => void;
   onOpenDeleteFolder: (folder: Folder) => void;
@@ -97,9 +94,6 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         </div>
       )}
       <div className="sidebar-block">
-        <Link href="/security/password-health" className="tree-btn">
-          <ShieldCheck size={14} className="tree-icon" /> <span className="tree-label">{t('nav_password_security')}</span>
-        </Link>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'all' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'all' })}>
           <LayoutGrid size={14} className="tree-icon" /> <span className="tree-label">{t('txt_all_items')}</span>
         </button>
@@ -177,15 +171,11 @@ export default function VaultSidebar(props: VaultSidebarProps) {
             </div>
             <button
               type="button"
-              className="folder-delete-btn"
-              title={t('txt_delete_all_folders')}
-              aria-label={t('txt_delete_all_folders')}
-              disabled={props.busy || props.folders.length === 0}
-              onClick={props.onOpenDeleteAllFolders}
+              className="folder-add-btn"
+              title={t('txt_create_folder')}
+              aria-label={t('txt_create_folder')}
+              onClick={props.onOpenCreateFolder}
             >
-              <X size={14} />
-            </button>
-            <button type="button" className="folder-add-btn" onClick={props.onOpenCreateFolder}>
               <FolderPlus size={14} />
             </button>
           </div>

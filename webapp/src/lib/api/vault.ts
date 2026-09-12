@@ -75,18 +75,6 @@ export async function deleteFolder(authedFetch: AuthedFetch, folderId: string): 
   if (!resp.ok) throw new Error('Delete folder failed');
 }
 
-export async function bulkDeleteFolders(authedFetch: AuthedFetch, ids: string[]): Promise<void> {
-  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
-  for (const chunk of chunkArray(uniqueIds, BULK_API_CHUNK_SIZE)) {
-    const resp = await authedFetch('/api/folders/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: chunk }),
-    });
-    if (!resp.ok) throw new Error('Bulk delete folders failed');
-  }
-}
-
 export async function updateFolder(
   authedFetch: AuthedFetch,
   session: SessionState,

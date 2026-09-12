@@ -2076,7 +2076,6 @@ export default function App() {
     onCreateFolder: vaultSendActions.createFolder,
     onRenameFolder: vaultSendActions.renameFolder,
     onDeleteFolder: vaultSendActions.deleteFolder,
-    onBulkDeleteFolders: vaultSendActions.bulkDeleteFolders,
     onDownloadVaultAttachment: vaultSendActions.downloadVaultAttachment,
     downloadingAttachmentKey: vaultSendActions.downloadingAttachmentKey,
     attachmentDownloadPercent: vaultSendActions.attachmentDownloadPercent,
