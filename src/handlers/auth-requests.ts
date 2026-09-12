@@ -321,11 +321,23 @@ export async function handleListPendingAuthRequests(request: Request, env: Env, 
   const storage = new StorageService(env.DB);
   await storage.pruneExpiredAuthRequests();
   const authRequests = await storage.listPendingAuthRequestsByUserId(userId);
-  const rows = await Promise.all(authRequests.map(async (authRequest) => {
-    const device = await storage.getDevice(userId, authRequest.requestDeviceIdentifier);
-    return toAuthRequestResponse(request, authRequest, device?.deviceIdentifier ?? authRequest.requestDeviceIdentifier);
-  }));
-  return jsonResponse(listResponse(rows));
+
+  // 这里曾对每条请求调一次 `storage.getDevice(userId, authRequest.requestDeviceIdentifier)`，
+  // 再把结果回退成 `device?.deviceIdentifier ?? authRequest.requestDeviceIdentifier`。
+  //
+  // 但 `getDevice` 正是**按 deviceIdentifier 查**的
+  // （`WHERE user_id = ? AND device_identifier = ?`），返回值的 deviceIdentifier
+  // 必定等于入参 —— 也就是说那 N 次查询的结果恒等于入参本身，整个循环是在做白工。
+  //
+  // 而本路径是客户端"登录审批"的**轮询**接口，每条待处理请求都会触发一次查询。
+  // 本轮直接去掉：保留入参作为 `requestDeviceId`，行为完全一致。
+  return jsonResponse(
+    listResponse(
+      authRequests.map((authRequest) =>
+        toAuthRequestResponse(request, authRequest, authRequest.requestDeviceIdentifier)
+      )
+    )
+  );
 }
 
 export async function handleUpdateAuthRequest(request: Request, env: Env, userId: string, id: string): Promise<Response> {

@@ -96,20 +96,22 @@ export async function handleAdminListUsers(
   }
 
   const storage = new StorageService(env.DB);
-  const users = await storage.getAllUsers();
-  const data = await Promise.all(users.map(async user => {
-    const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      status: user.status,
-      twoFactorEnabled: !!user.totpSecret || Boolean(user.yubikeyKey1 || user.yubikeyKey2 || user.yubikeyKey3 || user.yubikeyKey4 || user.yubikeyKey5) || hasTwoFactorPasskey,
-      creationDate: user.createdAt,
-      revisionDate: user.updatedAt,
-      object: 'user',
-    };
+  // 曾经是：先取全部用户，再对**每个用户**调一次 countAccountPasskeyCredentialsByUserId()
+  // —— 用户表有多大，就发多少条 SQL。列表只需要"有没有"，一次 DISTINCT 即可。
+  const [users, twoFactorPasskeyUserIds] = await Promise.all([
+    storage.getAllUsers(),
+    storage.listAccountPasskeyUserIds('twoFactor'),
+  ]);
+  const data = users.map(user => ({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    status: user.status,
+    twoFactorEnabled: !!user.totpSecret || Boolean(user.yubikeyKey1 || user.yubikeyKey2 || user.yubikeyKey3 || user.yubikeyKey4 || user.yubikeyKey5) || twoFactorPasskeyUserIds.has(user.id),
+    creationDate: user.createdAt,
+    revisionDate: user.updatedAt,
+    object: 'user',
   }));
   return jsonResponse({
     data,

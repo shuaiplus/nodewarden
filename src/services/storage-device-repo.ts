@@ -3,6 +3,7 @@ import { generateUUID } from '../utils/uuid';
 
 type GetUserByEmail = (email: string) => Promise<User | null>;
 type TrustedTokenKeyFn = (token: string) => Promise<string>;
+type SqlChunkSize = (fixedBindCount: number) => number;
 
 function mapDeviceRow(row: any): Device {
   return {
@@ -139,6 +140,52 @@ export async function updateDeviceKeys(
     )
     .run();
   return Number(result.meta.changes ?? 0) > 0;
+}
+
+export interface DeviceKeyUpdate {
+  deviceIdentifier: string;
+  keys: {
+    encryptedUserKey?: string | null;
+    encryptedPublicKey?: string | null;
+    encryptedPrivateKey?: string | null;
+  };
+}
+
+/**
+ * 批量更新多台设备的密钥，返回实际改动的行数。
+ *
+ * 为什么需要它：调用方原来在 handler 里逐台 `await updateDeviceKeys(...)`，
+ * 等待轮数 = 设备数。而这个列表来自**客户端请求体**，没有天然上界 ——
+ * 1000 个条目就是 1000 次串行往返。改成一条 batch 后等待轮数恒为 1。
+ *
+ * 调用方需自行保证 `updates.length` 有上界（见 LIMITS.device.maxBulkIdentifiers）。
+ */
+export async function updateDeviceKeysBatch(
+  db: D1Database,
+  userId: string,
+  updates: ReadonlyArray<DeviceKeyUpdate>
+): Promise<number> {
+  if (updates.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  const statements = updates.map((update) =>
+    db
+      .prepare(
+        'UPDATE devices SET encrypted_user_key = ?, encrypted_public_key = ?, encrypted_private_key = ?, updated_at = ? ' +
+          'WHERE user_id = ? AND device_identifier = ?'
+      )
+      .bind(
+        update.keys.encryptedUserKey ?? null,
+        update.keys.encryptedPublicKey ?? null,
+        update.keys.encryptedPrivateKey ?? null,
+        now,
+        userId,
+        update.deviceIdentifier
+      )
+  );
+
+  const results = await db.batch(statements);
+  return results.reduce((sum, result) => sum + Number(result.meta?.changes ?? 0), 0);
 }
 
 export async function clearDeviceKeys(
@@ -310,6 +357,43 @@ export async function deleteTrustedTwoFactorTokensByUserId(db: D1Database, userI
     .bind(userId)
     .run();
   return Number(result.meta.changes ?? 0);
+}
+
+/**
+ * 一次删掉多台设备的"记住此设备"令牌。
+ *
+ * 为什么需要它：`handleUntrustDevices` 原来对每台设备 `await deleteTrustedTwoFactorTokensByDevice(...)`，
+ * 等待轮数 = 请求体里的设备数 —— 而那个列表是客户端可控的。
+ * 改用一条 `IN (...)` 后等待轮数恒为 1。
+ *
+ * `sqlChunkSize` 用于遵守 D1 的单语句变量上限（同 `deleteStoredSends` 等函数）。
+ */
+export async function deleteTrustedTwoFactorTokensByDevices(
+  db: D1Database,
+  userId: string,
+  deviceIdentifiers: ReadonlyArray<string>,
+  sqlChunkSize: SqlChunkSize
+): Promise<number> {
+  const uniqueIdentifiers = [...new Set(deviceIdentifiers.filter(Boolean))];
+  if (uniqueIdentifiers.length === 0) return 0;
+
+  // user_id 占 1 个固定变量
+  const chunkSize = sqlChunkSize(1);
+  let deleted = 0;
+
+  for (let index = 0; index < uniqueIdentifiers.length; index += chunkSize) {
+    const chunk = uniqueIdentifiers.slice(index, index + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    const result = await db
+      .prepare(
+        `DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ? AND device_identifier IN (${placeholders})`
+      )
+      .bind(userId, ...chunk)
+      .run();
+    deleted += Number(result.meta.changes ?? 0);
+  }
+
+  return deleted;
 }
 
 export async function updateTrustedTwoFactorTokensExpiryByDevice(

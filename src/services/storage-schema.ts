@@ -11,7 +11,9 @@
 // - Keep statements idempotent; D1 may execute them again on later requests.
 import { generateUUID } from '../utils/uuid';
 
-const SCHEMA_STATEMENTS: readonly string[] = [
+// 导出供工具使用：scripts/migration-upgrade.test.ts 需要据此机械推导出「哪些列是后来
+// 加的」，才能构造出「老库」形态并验证 bootstrap 能补齐 —— 这样测试不会随代码演进失效。
+export const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE TABLE IF NOT EXISTS users (' +
   'id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, master_password_hint TEXT, master_password_hash TEXT NOT NULL, ' +
   'key TEXT NOT NULL, private_key TEXT, public_key TEXT, kdf_type INTEGER NOT NULL, ' +
@@ -79,6 +81,9 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL, device_identifier TEXT, device_session_stamp TEXT, security_stamp TEXT, created_at INTEGER, last_used_at INTEGER, absolute_expires_at INTEGER, client_type TEXT, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)',
+  // 清理用：`DELETE FROM refresh_tokens WHERE expires_at < ?` 是周期性全表跑的，
+  // 只按 expires_at 过滤，所以 idx_refresh_tokens_user 帮不上忙（最左列是 user_id）。
+  'CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at)',
   'ALTER TABLE refresh_tokens ADD COLUMN device_identifier TEXT',
   'ALTER TABLE refresh_tokens ADD COLUMN device_session_stamp TEXT',
   'ALTER TABLE refresh_tokens ADD COLUMN security_stamp TEXT',
@@ -140,11 +145,17 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS idx_auth_requests_user_created ON auth_requests(user_id, creation_date)',
   'CREATE INDEX IF NOT EXISTS idx_auth_requests_user_pending ON auth_requests(user_id, approved, response_date, authentication_date, creation_date)',
   'CREATE INDEX IF NOT EXISTS idx_auth_requests_device_pending ON auth_requests(user_id, request_device_identifier, creation_date)',
+  // 清理用：`DELETE FROM auth_requests WHERE creation_date < ?` 不带 user_id，
+  // 上面三个索引的最左列都是 user_id，因此都用不上。
+  'CREATE INDEX IF NOT EXISTS idx_auth_requests_creation_date ON auth_requests(creation_date)',
 
   'CREATE TABLE IF NOT EXISTS trusted_two_factor_device_tokens (' +
   'token TEXT PRIMARY KEY, user_id TEXT NOT NULL, device_identifier TEXT NOT NULL, expires_at INTEGER NOT NULL, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_trusted_two_factor_device_tokens_user_device ON trusted_two_factor_device_tokens(user_id, device_identifier)',
+  // 清理用：`DELETE FROM trusted_two_factor_device_tokens WHERE expires_at < ?`
+  // 只按 expires_at 过滤（同样用不上以 user_id 开头的索引）。
+  'CREATE INDEX IF NOT EXISTS idx_trusted_two_factor_device_tokens_expires ON trusted_two_factor_device_tokens(expires_at)',
 
   'CREATE TABLE IF NOT EXISTS totp_login_replays (' +
   'user_id TEXT NOT NULL, time_counter INTEGER NOT NULL, consumed_at INTEGER NOT NULL, ' +
@@ -166,12 +177,22 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'challenge_hash TEXT PRIMARY KEY, scope TEXT NOT NULL, user_id TEXT, expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL)',
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope ON webauthn_challenges(user_id, scope)',
+  // 清理用的语句原来是 `WHERE expires_at < ? OR used_at IS NOT NULL`（单条）。
+  // 实测：只要 OR 里有一侧没有可用索引，SQLite 就整个退化成全表扫 ——
+  // 连上面那个 expires_at 索引都白建了。已改成两条 DELETE（见
+  // storage-account-passkey-repo.ts），因此这里补上第二侧所需的索引。
+  'CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_used_at ON webauthn_challenges(used_at)',
 
   'CREATE TABLE IF NOT EXISTS login_attempts_ip (' +
   'ip TEXT PRIMARY KEY, attempts INTEGER NOT NULL, locked_until INTEGER, updated_at INTEGER NOT NULL)',
+  // 清理用：`DELETE FROM login_attempts_ip WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)`
+  // 只按 updated_at 过滤，主键（ip）帮不上忙。
+  'CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_updated_at ON login_attempts_ip(updated_at)',
 
   'CREATE TABLE IF NOT EXISTS used_attachment_download_tokens (' +
   'jti TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)',
+  // 清理用：`DELETE FROM used_attachment_download_tokens WHERE expires_at < ?`
+  'CREATE INDEX IF NOT EXISTS idx_used_attachment_download_tokens_expires ON used_attachment_download_tokens(expires_at)',
 ];
 
 async function executeSchemaStatement(db: D1Database, statement: string): Promise<void> {

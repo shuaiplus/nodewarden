@@ -3,6 +3,7 @@ import { Env } from '../types';
 import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications-hub';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { LIMITS } from '../config/limits';
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
 import { StorageService } from '../services/storage';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -561,21 +562,31 @@ export async function handleUpdateDeviceTrust(
   }
 
   if (Array.isArray(body?.otherDevices)) {
+    // 这份列表来自请求体，没有天然上界；不设限时下面的"逐条读 + 逐条写"
+    // 就会变成客户端可控的线性放大器。超限直接拒绝，而不是静默截断
+    // （静默截断会让客户端以为全部更新成功）。
+    if (body.otherDevices.length > LIMITS.device.maxBulkIdentifiers) {
+      return errorResponse(`Too many devices in one request (max ${LIMITS.device.maxBulkIdentifiers})`, 400);
+    }
+
+    // 一次取回该用户的全部设备，避免"每台设备查一次"。
+    // 原来这里是 `await storage.getDevice(...)` 写在循环里。
+    const existingByIdentifier = new Map(
+      (await storage.getDevicesByUserId(userId)).map((device) => [device.deviceIdentifier, device])
+    );
+
     for (const item of body.otherDevices) {
       const deviceIdentifier = normalizeIdentifier(item?.deviceId);
       if (!deviceIdentifier) continue;
       updates.push({
         deviceIdentifier,
-        keys: parseKeysBody(item, await storage.getDevice(userId, deviceIdentifier) || undefined),
+        keys: parseKeysBody(item, existingByIdentifier.get(deviceIdentifier) || undefined),
       });
     }
   }
 
-  let updatedCount = 0;
-  for (const update of updates) {
-    const ok = await storage.updateDeviceKeys(userId, update.deviceIdentifier, update.keys);
-    if (ok) updatedCount++;
-  }
+  // 一次 batch 写完，等待轮数恒为 1（原来是 `for` 里逐条 await）
+  const updatedCount = await storage.updateDeviceKeysBatch(userId, updates);
 
   return jsonResponse({ success: true, updated: updatedCount });
 }
@@ -589,11 +600,15 @@ export async function handleUntrustDevices(
   const body = await readJsonBody(request);
   const storage = new StorageService(env.DB);
   const devices = Array.isArray(body?.devices) ? body.devices.map((id: unknown) => normalizeIdentifier(String(id))) : [];
-  const removed = await storage.clearDeviceKeys(userId, devices);
-  for (const deviceIdentifier of devices) {
-    if (!deviceIdentifier) continue;
-    await storage.deleteTrustedTwoFactorTokensByDevice(userId, deviceIdentifier);
+
+  // 同 handleUpdateDeviceKeys：这份列表来自请求体，必须先设上界
+  if (devices.length > LIMITS.device.maxBulkIdentifiers) {
+    return errorResponse(`Too many devices in one request (max ${LIMITS.device.maxBulkIdentifiers})`, 400);
   }
+
+  const removed = await storage.clearDeviceKeys(userId, devices);
+  // 一次删完，等待轮数恒为 1（原来是 `for` 里逐台 await）
+  await storage.deleteTrustedTwoFactorTokensByDevices(userId, devices);
   await writeAuditEvent(storage, {
     actorUserId: userId,
     action: 'device.trust.revoke_batch',
@@ -726,4 +741,3 @@ export async function handleClearDeviceToken(
 
   return new Response(null, { status: 200 });
 }
-

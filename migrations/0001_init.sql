@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+-- 清理用：DELETE FROM refresh_tokens WHERE expires_at < ?
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
@@ -230,6 +232,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_requests_user_pending
   ON auth_requests(user_id, approved, response_date, authentication_date, creation_date);
 CREATE INDEX IF NOT EXISTS idx_auth_requests_device_pending
   ON auth_requests(user_id, request_device_identifier, creation_date);
+-- 清理用：DELETE FROM auth_requests WHERE creation_date < ?（不带 user_id）
+CREATE INDEX IF NOT EXISTS idx_auth_requests_creation_date
+  ON auth_requests(creation_date);
 
 CREATE TABLE IF NOT EXISTS trusted_two_factor_device_tokens (
   token TEXT PRIMARY KEY,
@@ -240,6 +245,9 @@ CREATE TABLE IF NOT EXISTS trusted_two_factor_device_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_trusted_two_factor_device_tokens_user_device
   ON trusted_two_factor_device_tokens(user_id, device_identifier);
+-- 清理用：DELETE FROM trusted_two_factor_device_tokens WHERE expires_at < ?
+CREATE INDEX IF NOT EXISTS idx_trusted_two_factor_device_tokens_expires
+  ON trusted_two_factor_device_tokens(expires_at);
 
 CREATE TABLE IF NOT EXISTS totp_login_replays (
   user_id TEXT NOT NULL,
@@ -289,6 +297,10 @@ CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires
   ON webauthn_challenges(expires_at);
 CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_user_scope
   ON webauthn_challenges(user_id, scope);
+-- 清理用的语句已拆成两条（见 storage-account-passkey-repo.ts）：
+-- `WHERE expires_at < ? OR used_at IS NOT NULL` 里的 OR 会让索引全部失效。
+CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_used_at
+  ON webauthn_challenges(used_at);
 
 -- Rate limiting
 CREATE TABLE IF NOT EXISTS login_attempts_ip (
@@ -297,11 +309,18 @@ CREATE TABLE IF NOT EXISTS login_attempts_ip (
   locked_until INTEGER,
   updated_at INTEGER NOT NULL
 );
+-- 清理用（storage-schema.ts 的 maybeCleanupLoginAttempts）：
+-- DELETE FROM login_attempts_ip WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_updated_at
+  ON login_attempts_ip(updated_at);
 
 CREATE TABLE IF NOT EXISTS used_attachment_download_tokens (
   jti TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
 );
+-- 清理用：DELETE FROM used_attachment_download_tokens WHERE expires_at < ?
+CREATE INDEX IF NOT EXISTS idx_used_attachment_download_tokens_expires
+  ON used_attachment_download_tokens(expires_at);
 
 -- 严格限流预算（storage-schema.ts 的 RateLimitService 使用）。
 -- 与 storage-schema.ts 的运行时定义保持一致（原先仅运行时建表包含此表）。

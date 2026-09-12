@@ -1,6 +1,5 @@
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
-import { ensurePushInstallationCredentials } from './push-relay';
 import { ensureStorageSchema } from './storage-schema';
 import {
   getConfigValue as getStoredConfigValue,
@@ -101,6 +100,7 @@ import {
   clearDevicePushToken as clearStoredDevicePushToken,
   clearDeviceKeys as clearStoredDeviceKeys,
   deleteTrustedTwoFactorTokensByDevice as deleteStoredTrustedTokensByDevice,
+  deleteTrustedTwoFactorTokensByDevices as deleteStoredTrustedTokensByDevices,
   deleteTrustedTwoFactorTokensByUserId as deleteStoredTrustedTokensByUserId,
   getDevice as findStoredDevice,
   getDevicePushUuid as findStoredDevicePushUuid,
@@ -115,6 +115,8 @@ import {
   upsertDevice as saveStoredDevice,
   updateDeviceName as updateStoredDeviceName,
   updateDeviceKeys as updateStoredDeviceKeys,
+  updateDeviceKeysBatch as updateStoredDeviceKeysBatch,
+  type DeviceKeyUpdate,
   updateDevicePushToken as updateStoredDevicePushToken,
   updateTrustedTwoFactorTokensExpiryByDevice as updateStoredTrustedTokensExpiryByDevice,
   userHasPushDevice as getUserHasPushDevice,
@@ -147,6 +149,7 @@ import {
 import {
   consumeAccountPasskeyChallenge as consumeStoredAccountPasskeyChallenge,
   countAccountPasskeyCredentialsByUserId as countStoredAccountPasskeyCredentialsByUserId,
+  listAccountPasskeyUserIdsByPurpose as listStoredAccountPasskeyUserIdsByPurpose,
   deleteAccountPasskeyCredential as deleteStoredAccountPasskeyCredential,
   getAccountPasskeyCredentialByCredentialId as findStoredAccountPasskeyCredentialByCredentialId,
   getAccountPasskeyCredentialById as findStoredAccountPasskeyCredentialById,
@@ -163,7 +166,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-07-13-refresh-session-reuse';
+const STORAGE_SCHEMA_VERSION = '2026-09-13-cleanup-indexes-2';
 const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays'] as const;
 
 // D1-backed storage.
@@ -263,7 +266,17 @@ export class StorageService {
       await ensureStorageSchema(this.db);
       await saveConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);
     }
-    await ensurePushInstallationCredentials(this.db);
+
+    // 刻意不在这里注册 Bitwarden 的 push installation。
+    //
+    // 此处曾调用 `ensurePushInstallationCredentials(this.db)`，但它会在缺少缓存凭据时
+    // 向 `api.bitwarden.com/installations` 发起真实出站 POST —— 而本函数是每个 isolate
+    // **首次请求**的必经之路，于是冷启动平白依赖一个第三方服务（失败被吞掉、不影响功能，
+    // 但会增加延迟，实测这一步耗时 1-2 秒）。
+    //
+    // 而真正需要凭据的两处（`getPushAccessToken`、设备注册）都会自己先调
+    // `ensurePushInstallationCredentials`，因此移除这里的预热不会影响推送功能。
+    // 另：`/config` 硬编码 `pushTechnology: 0` 与 `'web-push': false`，客户端本就不会使用推送。
 
     StorageService.schemaVerified = true;
   }
@@ -425,6 +438,14 @@ export class StorageService {
     purpose: AccountPasskeyCredential['purpose'] = 'login'
   ): Promise<number> {
     return countStoredAccountPasskeyCredentialsByUserId(this.db, userId, purpose);
+  }
+
+  /**
+   * 一次拿回"所有配了指定用途 passkey 的用户"。
+   * 用于列表类场景，避免逐用户调 `countAccountPasskeyCredentialsByUserId()` 的 N+1。
+   */
+  async listAccountPasskeyUserIds(purpose: AccountPasskeyCredential['purpose'] = 'login'): Promise<Set<string>> {
+    return listStoredAccountPasskeyUserIdsByPurpose(this.db, purpose);
   }
 
   async updateAccountPasskeyCounter(
@@ -784,6 +805,24 @@ export class StorageService {
     }
   ): Promise<boolean> {
     return updateStoredDeviceKeys(this.db, userId, deviceIdentifier, keys);
+  }
+
+  /** 批量更新多台设备的密钥，返回改动的行数（等待轮数恒为 1，不随设备数增长） */
+  async updateDeviceKeysBatch(userId: string, updates: ReadonlyArray<DeviceKeyUpdate>): Promise<number> {
+    return updateStoredDeviceKeysBatch(this.db, userId, updates);
+  }
+
+  /** 一次删掉多台设备的"记住此设备"令牌 */
+  async deleteTrustedTwoFactorTokensByDevices(
+    userId: string,
+    deviceIdentifiers: ReadonlyArray<string>
+  ): Promise<number> {
+    return deleteStoredTrustedTokensByDevices(
+      this.db,
+      userId,
+      deviceIdentifiers,
+      (fixedBindCount) => this.sqlChunkSize(fixedBindCount)
+    );
   }
 
   async updateDeviceName(userId: string, deviceIdentifier: string, name: string): Promise<boolean> {
