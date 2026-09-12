@@ -7,6 +7,7 @@ import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
 import {
   getAttachmentObjectKey,
   getBlobStorageKind,
+  getBlobObject,
 } from './blob-store';
 
 // CONTRACT:
@@ -36,6 +37,17 @@ const MAX_BACKUP_ARCHIVE_ENTRY_COUNT = 10_000;
 const MAX_BACKUP_EXTRACTED_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_DB_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_BACKUP_PATH_SEGMENT_LENGTH = 128;
+/**
+ * 内联导出（本地下载 zip）时，`db.json` + 全部附件解压后的**总字节**上限。
+ *
+ * 内联导出会把每个附件整块读进内存，`zipSync` 再产出等大的一份，
+ * 峰值内存约为该总量的 **2 倍**；Worker 每 isolate 内存上限 128 MB，
+ * 因此取 32 MiB（峰值 ≈ 64 MiB），为同 isolate 内的其他数据留出一半余量。
+ *
+ * 注意：这**收紧了**原先的实际能力（旧代码按附件 ≤ 64 MiB 放行，峰值可达 128 MB）。
+ * 要放宽只需调大写这里的值，但必须同时复核峰值内存 ≈ 2 倍总量。
+ */
+const MAX_BACKUP_INLINE_TOTAL_BYTES = 32 * 1024 * 1024;
 
 export interface BackupManifest {
   formatVersion: 1;
@@ -90,6 +102,17 @@ export interface BackupFileIntegrityCheckResult {
 
 export interface BuildBackupArchiveOptions {
   includeAttachments?: boolean;
+  /**
+   * 把附件 blob 内联进归档（zip 内 `attachments/<cipherId>/<attachmentId>.bin`）。
+   *
+   * 默认为 false，因为**远端备份依赖外部增量上传**：`handlers/backup.ts` 用
+   * `manifest.attachmentBlobs` 枚举待上传项、按 size 与远端已有对象比对去重，
+   * 附件字节**不**进归档。若默认内联，会破坏该设计并把附件重复存一份。
+   *
+   * 本地导出（用户下载 zip）必须置 true —— 否则归档声称 `includes.attachments: true`
+   * 却没有任何附件字节，且会被本地导入以 `missing required file` 拒绝。
+   */
+  inlineAttachmentBlobs?: boolean;
   progress?: BackupArchiveBuildProgressReporter;
   timeZone?: string;
 }
@@ -289,6 +312,59 @@ function createZipEntries(files: Record<string, Uint8Array>): Record<string, Uin
   return entries;
 }
 
+/**
+ * 归档声明含附件、但附件字节存放在远端 —— 这是**远端备份的正常形态**（见
+ * `BuildBackupArchiveOptions.inlineAttachmentBlobs`：远端依赖单独增量上传）。
+ *
+ * 本地导入要求附件内联，因此这种归档必然无法本地恢复。此时给出**可操作**的提示，
+ * 而不是通用的 `missing required file`（后者无法告诉用户该怎么办）。
+ *
+ * 该文案已接入前端 i18n 映射表（`webapp/src/lib/i18n.ts` →
+ * `txt_backup_error_archive_missing_attachment_files`）；修改文案时必须同步更新映射表。
+ */
+const MISSING_ATTACHMENT_FILES_MESSAGE =
+  'Backup archive has no attachment files; restore it from the remote destination instead';
+
+/**
+ * 内联导出体积超限的文案前缀。
+ *
+ * 完整文案带具体字节数（数字随体积变化），无法用精确查表本地化，
+ * 因此前端用「前缀 + 数字」正则匹配（`webapp/src/lib/i18n.ts` →
+ * `txt_backup_error_archive_export_too_large`）；修改前缀时必须同步更新该正则。
+ */
+export const TOO_LARGE_TO_EXPORT_MESSAGE_PREFIX = 'Backup archive is too large to export';
+
+/**
+ * 内联导出时附件允许占用的字节预算（`db.json` 已从总量上限中扣除）。
+ *
+ * 必须**同时**满足两条约束，缺一就会产出「导出成功、但本地导入必然失败」的归档：
+ * 1. **内存**：内联导出的峰值内存约为「解压后总量」的 2 倍，见 `MAX_BACKUP_INLINE_TOTAL_BYTES`；
+ * 2. **可恢复性**：恢复侧按「所有条目解压后总字节」判定上限，见 `createBackupUnzipFilter`。
+ *
+ * 返回值可能为负：说明 `db.json` 自身已超出恢复侧的**单条目**上限
+ * （`MAX_BACKUP_DB_JSON_BYTES`），此时任何附件都不允许内联。
+ */
+export function resolveInlineAttachmentBudgetBytes(dbPayloadBytes: number): number {
+  return (
+    Math.min(MAX_BACKUP_INLINE_TOTAL_BYTES, MAX_BACKUP_EXTRACTED_BYTES) - Math.max(0, dbPayloadBytes)
+  );
+}
+
+/**
+ * 由 manifest 声明的「外部附件」路径集合。
+ *
+ * 注意：这里**不看** `allowExternalAttachmentBlobs` —— 目的是区分「归档形态是远端元数据式」
+ * 与「归档真的损坏了」。前者应给出可操作提示，后者才是通用报错。
+ */
+function declaredAttachmentBlobPaths(manifest: BackupManifest): Set<string> {
+  return new Set(
+    (manifest.attachmentBlobs || []).map(
+      (item) =>
+        `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`
+    )
+  );
+}
+
 export interface ParseBackupArchiveOptions {
   allowExternalAttachmentBlobs?: boolean;
 }
@@ -347,14 +423,14 @@ export function parseBackupArchive(
   }
   const db = normalizeParsedBackupDb(rawDb);
 
-  const externalAttachmentKeys = new Set<string>(
-    options.allowExternalAttachmentBlobs
-      ? (manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
-      : []
-  );
+  const declaredBlobs = declaredAttachmentBlobPaths(manifest);
+  // 只读集合（下面只用 `.has()`），因此可以直接复用同一个实例，不必再复制一层
+  const externalAttachmentKeys = options.allowExternalAttachmentBlobs ? declaredBlobs : new Set<string>();
   const requiredEntries = getRequiredZipEntries(db).filter((entry) => !externalAttachmentKeys.has(entry));
   for (const entry of requiredEntries) {
     if (!zipped[entry]) {
+      // 声明含附件却没内联 → 远端形态的归档，不是损坏；提示用户改用「从远端恢复」
+      if (declaredBlobs.has(entry)) throw new Error(MISSING_ATTACHMENT_FILES_MESSAGE);
       throw new Error(`Backup archive is missing required file: ${entry}`);
     }
   }
@@ -382,11 +458,9 @@ export function validateBackupPayloadContents(
   const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
   const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
   const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
-  const externalAttachmentKeys = new Set<string>(
-    options.allowExternalAttachmentBlobs
-      ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
-      : []
-  );
+  const declaredBlobs = declaredAttachmentBlobPaths(payload.manifest);
+  // 同 parseBackupArchive：只读集合，直接复用
+  const externalAttachmentKeys = options.allowExternalAttachmentBlobs ? declaredBlobs : new Set<string>();
 
   const userIds = new Set<string>();
   for (const row of userRows) {
@@ -451,6 +525,7 @@ export function validateBackupPayloadContents(
     }
     const attachmentPath = `attachments/${cipherId}/${id}.bin`;
     if (!files[attachmentPath] && !externalAttachmentKeys.has(attachmentPath)) {
+      if (declaredBlobs.has(attachmentPath)) throw new Error(MISSING_ATTACHMENT_FILES_MESSAGE);
       throw new Error(`Backup archive is missing required file: attachments/${cipherId}/${id}.bin`);
     }
   }
@@ -562,6 +637,35 @@ export async function buildBackupArchive(
       : 'txt_backup_archive_progress_package_detail',
     includeAttachments,
   });
+
+  if (includeAttachments && options.inlineAttachmentBlobs) {
+    // 本地导出：把附件字节内联进归档，使 zip 自包含、可被本地导入恢复。
+    // 远端备份不走这里（它依赖外部增量上传，见 BuildBackupArchiveOptions 注释）。
+    //
+    // 先做体积预检：预算必须同时扣掉 db.json（恢复侧按解压后**总**字节判定）并留出内存余量，
+    // 否则会产出一个自家人无法恢复的备份。详见 resolveInlineAttachmentBudgetBytes。
+    const dbPayloadBytes = files['db.json'].byteLength;
+    const totalAttachmentBytes = attachmentBlobs.reduce((sum, item) => sum + item.sizeBytes, 0);
+    const inlineBudgetBytes = resolveInlineAttachmentBudgetBytes(dbPayloadBytes);
+    if (totalAttachmentBytes > inlineBudgetBytes) {
+      throw new Error(
+        `${TOO_LARGE_TO_EXPORT_MESSAGE_PREFIX}: ${dbPayloadBytes} database bytes plus ${totalAttachmentBytes} attachment bytes exceed the ${Math.max(0, inlineBudgetBytes)} byte budget`
+      );
+    }
+
+    for (const item of attachmentBlobs) {
+      const object = await getBlobObject(env, item.blobName);
+      if (!object?.body) {
+        // 措辞与 durable/backup-transfer-runner.ts 保持一致：handlers/backup.ts 依赖
+        // 'blob missing' 子串把它映射为 409 而不是 500
+        throw new Error(`Attachment blob missing for ${item.blobName}`);
+      }
+      files[`attachments/${item.cipherId}/${item.attachmentId}.bin`] = new Uint8Array(
+        await new Response(object.body).arrayBuffer()
+      );
+    }
+  }
+
   const bytes = zipSync(createZipEntries(files));
   const fileHashPrefix = (await sha256Hex(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
   const backupTimeZone = options.timeZone || 'UTC';

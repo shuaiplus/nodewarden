@@ -1201,6 +1201,11 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
     };
     archive = await buildBackupArchive(env, new Date(), {
       includeAttachments: !!body?.includeAttachments,
+      // 本地导出给用户的是一个可下载、可再导入的 zip，附件必须内联进归档；
+      // 否则归档会声称 includes.attachments: true 却没有任何附件字节，
+      // 且会被本地导入以 "missing required file" 拒绝。
+      // （远端备份不走这里，它依赖 manifest.attachmentBlobs 做单独增量上传。）
+      inlineAttachmentBlobs: !!body?.includeAttachments,
       progress,
     });
   } catch (error) {

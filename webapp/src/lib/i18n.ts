@@ -144,6 +144,21 @@ export function translateServerError(message: string | null | undefined, fallbac
     });
   }
 
+  // 该文案带具体字节数，无法用「英文原文 → 键」的精确查表，故用前缀 + 数字正则（
+  // 后端见 backup-archive.ts 的 TOO_LARGE_TO_EXPORT_MESSAGE_PREFIX）；改动前缀时必须同步更新本正则。
+  const backupArchiveExportTooLargeMatch = normalized.match(
+    /^Backup archive is too large to export: (\d+) database bytes plus (\d+) attachment bytes exceed the (\d+) byte budget$/i
+  );
+  if (backupArchiveExportTooLargeMatch) {
+    // 后端给的是字节数，直接展示可读性太差，这里统一换算成 MB。
+    const toMegabytes = (bytes: string): string => (Number(bytes) / (1024 * 1024)).toFixed(1);
+    return t('txt_backup_error_archive_export_too_large', {
+      database: toMegabytes(backupArchiveExportTooLargeMatch[1]),
+      attachments: toMegabytes(backupArchiveExportTooLargeMatch[2]),
+      limit: toMegabytes(backupArchiveExportTooLargeMatch[3]),
+    });
+  }
+
   const remoteAttachmentStatusMatch = normalized.match(/^Remote attachment (download|batch download) failed: (\d+)$/i);
   if (remoteAttachmentStatusMatch) {
     return t(
@@ -165,6 +180,8 @@ export function translateServerError(message: string | null | undefined, fallbac
     'Account is disabled': 'txt_server_error_account_disabled',
     'Another backup or restore run is already in progress': 'txt_backup_error_another_backup_or_restore_running',
     'Another backup run is already in progress': 'txt_backup_error_another_backup_running',
+    'Backup archive has no attachment files; restore it from the remote destination instead':
+      'txt_backup_error_archive_missing_attachment_files',
     'Backup archive upload failed': 'txt_backup_error_archive_upload_failed',
     'Backup attachment blob is invalid': 'txt_backup_error_attachment_blob_invalid',
     'Backup attachment blob is required': 'txt_backup_error_attachment_blob_required',
