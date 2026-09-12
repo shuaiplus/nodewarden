@@ -22,6 +22,7 @@ import {
   getRemoteBrowserCacheKey,
   getVisibleDestinations,
   invalidateRemoteBrowserCacheForDestination,
+  isBackupDestinationConfigured,
   isReplaceRequiredError,
   loadPersistedRemoteBrowserState,
   persistRemoteBrowserState,
@@ -316,6 +317,14 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
 
   useEffect(() => {
     if (!savedSelectedDestination) return;
+    // 「尚未配置」不等于「错误」。
+    // 新建 / 迁移时会自动生成一个 baseUrl 为空的目标（见 shared/backup-schema.ts 的
+    // createDefaultBackupSettings）。若进入页面就自动列举远端目录，服务端会因
+    // 「WebDAV server URL is required」返回 409，前端随即把它当错误弹出，
+    // 用户每次进页都会看到「请填写 WebDAV 服务地址。」。
+    // 因此这里对未配置的目标直接跳过；用户主动点「刷新」或保存后触发的加载不受影响，
+    // 仍会执行并如实报出真实错误。
+    if (!isBackupDestinationConfigured(savedSelectedDestination)) return;
     const destinationId = savedSelectedDestination.id;
     const path = remoteBrowserPathByDestination[destinationId] || '';
     const cacheKey = getRemoteBrowserCacheKey(destinationId, path);

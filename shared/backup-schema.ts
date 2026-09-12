@@ -161,3 +161,19 @@ export function createDefaultBackupSettings(
     ],
   };
 }
+
+/**
+ * 目标是否已完成必要配置。
+ *
+ * 新建 / 迁移时会由 createDefaultBackupSettings 自动生成一个「配置为空」的占位目标
+ * （WebDAV 的 baseUrl 为空、S3 的 endpoint/bucket 为空）。这类目标尚不具备远端访问
+ * 能力，调远端接口必然失败，而失败原因并不是真正的错误。
+ * 调用方据此跳过自动列举，避免把「尚未配置」当成错误提示给用户。
+ */
+export function isBackupDestinationConfigured(destination: BackupDestinationRecord): boolean {
+  const config = destination.destination as unknown as Record<string, unknown>;
+  if (destination.type === 's3') {
+    return String(config.endpoint ?? '').trim() !== '' && String(config.bucket ?? '').trim() !== '';
+  }
+  return String(config.baseUrl ?? '').trim() !== '';
+}

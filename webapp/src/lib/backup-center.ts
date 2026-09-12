@@ -5,8 +5,11 @@ import {
   type BackupSettings,
   createBackupDestinationRecord,
   createDefaultBackupSettings,
+  isBackupDestinationConfigured,
 } from '@shared/backup-schema';
 import type { RemoteBackupBrowserResponse, RemoteBackupItem } from './api/backup';
+
+export { isBackupDestinationConfigured };
 import { t } from './i18n';
 
 export interface PersistedRemoteBrowserState {
