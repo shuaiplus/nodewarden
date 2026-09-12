@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS users (
   verify_devices INTEGER NOT NULL DEFAULT 0,
   totp_secret TEXT,
   totp_recovery_code TEXT,
+  -- YubiKey OTP：最多 5 个密钥槽 + NFC 开关。
+  -- 与 storage-schema.ts 的运行时定义保持一致（原先仅运行时建表包含这 6 列）。
+  yubikey_key1 TEXT,
+  yubikey_key2 TEXT,
+  yubikey_key3 TEXT,
+  yubikey_key4 TEXT,
+  yubikey_key5 TEXT,
+  yubikey_nfc INTEGER NOT NULL DEFAULT 0,
   api_key TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -294,3 +302,14 @@ CREATE TABLE IF NOT EXISTS used_attachment_download_tokens (
   jti TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
 );
+
+-- 严格限流预算（storage-schema.ts 的 RateLimitService 使用）。
+-- 与 storage-schema.ts 的运行时定义保持一致（原先仅运行时建表包含此表）。
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+  bucket_key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_buckets_expires
+  ON rate_limit_buckets(expires_at);

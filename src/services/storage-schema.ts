@@ -9,6 +9,8 @@
 // - If the new table stores persistent data, update the backup export/import
 //   contract in src/services/backup-archive.ts and backup-import.ts.
 // - Keep statements idempotent; D1 may execute them again on later requests.
+import { generateUUID } from '../utils/uuid';
+
 const SCHEMA_STATEMENTS: readonly string[] = [
   'CREATE TABLE IF NOT EXISTS users (' +
   'id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT, master_password_hint TEXT, master_password_hash TEXT NOT NULL, ' +
@@ -184,6 +186,33 @@ async function executeSchemaStatement(db: D1Database, statement: string): Promis
   }
 }
 
+// 兜底提权时补写审计事件。
+// 注意：此处运行在 schema 初始化阶段，只有裸 D1Database，无法通过
+// writeAuditEvent 写入（需要 StorageService，且会造成模块循环依赖），
+// 因此直接插入 audit_logs。审计写入失败不得中断数据库初始化。
+async function writeBootstrapAdminAuditEvent(db: D1Database, userId: string): Promise<void> {
+  try {
+    await db
+      .prepare(
+        'INSERT INTO audit_logs (id, actor_user_id, action, category, level, target_type, target_id, metadata, created_at) ' +
+        'VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .bind(
+        generateUUID(),
+        'user.bootstrap.admin_promoted',
+        'security',
+        'security',
+        'user',
+        userId,
+        JSON.stringify({ reason: 'no_admin_present' }),
+        new Date().toISOString(),
+      )
+      .run();
+  } catch (error) {
+    console.error('bootstrap admin audit log write failed', error);
+  }
+}
+
 async function ensureAdminUserExists(db: D1Database): Promise<void> {
   const admin = await db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").first<{ id: string }>();
   if (admin?.id) return;
@@ -197,6 +226,8 @@ async function ensureAdminUserExists(db: D1Database): Promise<void> {
     .prepare("UPDATE users SET role = 'admin', updated_at = ? WHERE id = ?")
     .bind(new Date().toISOString(), firstUser.id)
     .run();
+
+  await writeBootstrapAdminAuditEvent(db, firstUser.id);
 }
 
 export async function ensureStorageSchema(db: D1Database): Promise<void> {
