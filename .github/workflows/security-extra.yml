@@ -48,35 +48,11 @@ jobs:
       upload-sarif: true
       fail-on-vuln: true
 
-  pnpm-audit:
-    name: pnpm audit
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 22
-
-      - name: Run pnpm audit
-        shell: bash
-        run: |
-          if [ ! -f pnpm-lock.yaml ]; then
-            echo "pnpm-lock.yaml not found, skip pnpm audit."
-            exit 0
-          fi
-
-          corepack enable
-          corepack prepare pnpm@10 --activate
-          pnpm audit --audit-level=high
+  # 说明：这里原本还有一个 `pnpm audit` job，但本仓库使用 npm（仅有
+  # package-lock.json，无 pnpm-lock.yaml），该 job 的守卫 `if [ ! -f pnpm-lock.yaml ]`
+  # 必然直接 exit 0 —— 永远不执行任何审计。实测上方 osv job 的
+  # `scan source --recursive` 会扫到 package-lock.json（321 个包），
+  # 覆盖范围等价，故移除该冗余 job。
 
   semgrep:
     name: Semgrep CE Scan

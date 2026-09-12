@@ -11,19 +11,24 @@ on:
         default: "main"
         type: string
 
-permissions:
-  contents: write
-  pull-requests: write
+# 权限一律在 job 级声明：工作流级声明会让所有 job 共享同一套过宽权限。
+permissions: {}
 
 jobs:
   sync-global-domains:
     runs-on: ubuntu-latest
+    # 需要建分支/提交（contents）并创建 PR（pull-requests）——
+    # 这也是本文件的 checkout **不能**加 persist-credentials: false 的原因（与 verify.yml 相反）。
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          # 与 verify.yml、Cloudflare Workers Builds 共用同一版本来源（.nvmrc）。
+          node-version-file: '.nvmrc'
 
       - name: Sync generated Bitwarden domains
         env:

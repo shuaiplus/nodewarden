@@ -1,0 +1,20 @@
+{
+  // 类型检查 scripts/** 下的测试脚本。
+  //
+  // 为什么不并进根 tsconfig.json：scripts 会 import '../webapp/src/lib/...'，
+  // 一旦把 scripts 加进根配置，webapp/** 会被一并拉进来，而根配置没有 DOM lib
+  // → 约 110 个与 scripts 无关的报错。
+  //
+  // 为什么不在这里加 DOM lib：@cloudflare/workers-types 与 DOM 在
+  // CacheStorage / BodyInit / BufferSource 等全局声明上不兼容，加 DOM 会让
+  // src/** 自身产生 29 个真实报错（实测）。
+  //
+  // exclude 说明：web-crypto-availability.test.ts 会 import webapp 代码，
+  // 需要 DOM lib，因此无法纳入本配置，仍由 tsx 运行但不做类型检查。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["src/**/*", "shared/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "scripts/web-crypto-availability.test.ts"]
+}

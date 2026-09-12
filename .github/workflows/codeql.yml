@@ -5,16 +5,19 @@ on:
     branches:
       - "**"
 
-permissions:
-  contents: read
-  actions: read
-  security-events: write
-  packages: read
+# 权限一律在 job 级声明：工作流级声明会让所有 job（含未来的新 job）共享同一套权限，
+# 而 security-events: write 只有上传分析结果的那一步需要。
+permissions: {}
 
 jobs:
   analyze:
     name: CodeQL Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
 
     strategy:
       fail-fast: false

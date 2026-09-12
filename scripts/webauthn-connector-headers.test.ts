@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import test from 'node:test';
 
 import type { Env } from '../src/types';
@@ -37,11 +38,11 @@ test('official Bitwarden desktop origin receives credentialed CORS', () => {
 });
 
 test('Worker assets preserve exact official connector .html paths', async () => {
-  for (const configUrl of [
-    new URL('../wrangler.toml', import.meta.url),
-    new URL('../wrangler.kv.toml', import.meta.url),
-  ]) {
-    const config = await readFile(configUrl, 'utf8');
+  for (const fileName of ['wrangler.toml', 'wrangler.kv.toml']) {
+    // 用字符串路径而非 `readFile(new URL(...))`：Workers 的全局 `URL` 与
+    // `node:url` 的 `URL` 类型不兼容（`URLSearchParams` 迭代器缺 `Symbol.dispose`），
+    // 传 URL 会让 tsc 报 TS2769。
+    const config = await readFile(path.join(import.meta.dirname, '..', fileName), 'utf8');
     const assetsSection = config.match(/\[assets\]([\s\S]*?)(?=\n\[|$)/)?.[1] || '';
     assert.match(assetsSection, /^\s*html_handling\s*=\s*"none"\s*$/m);
   }

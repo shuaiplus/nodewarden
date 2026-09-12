@@ -21,6 +21,13 @@
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
+    "test:security-audit-api-key": "tsx scripts/security-audit-api-key-semantics.mjs",
+    "test:security-audit-backup-state": "tsx scripts/security-audit-backup-auth-state.mjs",
+    "test:security-audit-backup-endpoint": "tsx --test scripts/security-audit-backup-endpoint.test.ts",
+    "test:security-audit": "npm run test:security-audit-api-key && npm run test:security-audit-backup-state && npm run test:security-audit-backup-endpoint",
+    "test": "npm run test:config-compatibility && npm run test:web-crypto && npm run test:notifications-security && npm run test:webauthn-connectors && npm run test:security-audit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p webapp/tsconfig.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "verify": "npm run typecheck && npm run i18n:validate && npm test && npm run build",
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo"
@@ -49,12 +56,13 @@
     }
   },
   "overrides": {
-    "nanoid": "3.3.18",
-    "undici": "8.9.0",
+    "nanoid": "^3.3.18",
+    "undici": "^8.9.0",
     "@babel/core": ">=7.29.6",
     "esbuild": ">=0.28.1",
-    "ws": "8.21.0",
-    "sharp": "0.35.0"
+    "ws": "^8.21.0",
+    "sharp": "^0.35.4",
+    "browserslist": "^4.28.9"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260630.1",
@@ -80,5 +88,9 @@
     "preact": "^10.29.3",
     "qrcode-generator": "^2.0.4",
     "wouter": "^3.10.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260625.1": true
   }
 }

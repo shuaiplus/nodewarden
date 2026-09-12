@@ -1,0 +1,45 @@
+name: Verify
+
+# 说明：本仓库已有一套测试与校验脚本（类型检查 / i18n 对齐 / 通知与 WebAuthn
+# 安全测试 / 构建），但在本次补充前，CI 中没有任何一个 workflow 执行它们 ——
+# 测试写了却无人自动运行，回归不会被拦截。此外 `pnpm audit` 步骤因项目使用 npm
+# （仅有 package-lock.json）而被守卫跳过。此 workflow 补上“验证”这一环。
+#
+# 另：scripts/security-audit-*.mjs 三个安全回归脚本此前在 CI、npm scripts 与
+# 文档中均无引用（死资产），现已通过 `test:security-audit` 纳入 `npm test`。
+#
+# 本地复现：npm run verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 仅需读取仓库内容
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Type check, i18n, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          # 本 job 不需要 git push，因此不把 GITHUB_TOKEN 写进 .git/config。
+          # 否则 npm ci 期间任何依赖包的 postinstall 脚本都能读到该令牌。
+          # 与 codeql.yml / security-extra.yml 保持一致。
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          # 版本来源单一化：.nvmrc 同时被本 workflow 与 Cloudflare Workers Builds
+          # 的构建镜像读取（官方文档：NODE_VERSION / .nvmrc / .node-version）。
+          # 24.18.0 是 Cloudflare 构建镜像预装的版本，因此三方零分叉、零下载。
+          node-version-file: '.nvmrc'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify (typecheck + i18n + tests + build)
+        run: npm run verify

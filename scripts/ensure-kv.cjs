@@ -7,15 +7,20 @@
  * on first deploy. In non-interactive builds, wrangler may try to create the
  * same namespace again on later builds and fail with code 10014.
  */
-const { execSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const CONFIG = path.resolve(__dirname, '..', 'wrangler.kv.toml');
 const BINDING = 'ATTACHMENTS_KV';
 
+// Windows 下 npm 的可执行文件带 .cmd 后缀，execFileSync 不经 shell 解析。
+const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+
+// 用 execFileSync + 参数数组，不再把参数拼进 shell 字符串 —— title 源自
+// wrangler.kv.toml 的 name，虽属本地配置，但没有理由让它经过 shell 解释。
 const wrangler = (args) =>
-  execSync(`npx wrangler ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  execFileSync(NPX, ['wrangler', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
 function bindingBlockHasId(toml) {
   const blocks = toml.match(/\[\[kv_namespaces\]\][^[]*/g) || [];
@@ -29,7 +34,7 @@ function expectedTitle(toml) {
 }
 
 function resolveId(title) {
-  const list = JSON.parse(wrangler('kv namespace list'));
+  const list = JSON.parse(wrangler(['kv', 'namespace', 'list']));
   const hit =
     list.find((namespace) => namespace.title === title) ||
     list.find((namespace) => typeof namespace.title === 'string' && namespace.title.endsWith('attachments-kv'));
@@ -38,7 +43,7 @@ function resolveId(title) {
     return hit.id;
   }
 
-  const out = wrangler(`kv namespace create "${title}"`);
+  const out = wrangler(['kv', 'namespace', 'create', title]);
   const id = (out.match(/id\s*=\s*"([0-9a-fA-F]{32})"/) || [])[1];
   if (!id) throw new Error(`[ensure-kv] could not parse new namespace id from:\n${out}`);
   console.log(`[ensure-kv] created namespace "${title}" (${id})`);
