@@ -90,20 +90,29 @@ export class BackupTransferRunner {
 
   private async acquireJob(reason: string): Promise<string | null> {
     const nowMs = Date.now();
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
-    if (current?.expiresAtMs && current.expiresAtMs > nowMs) {
-      return null;
-    }
-
     const token = crypto.randomUUID();
     const nowIso = new Date(nowMs).toISOString();
-    await this.state.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
-      token,
-      reason,
-      acquiredAt: nowIso,
-      touchedAt: nowIso,
-      expiresAtMs: nowMs + BACKUP_JOB_LEASE_MS,
+
+    // 「读租约 → 判断 → 写租约」必须在同一个事务内完成。
+    // 若写成 await get() 之后再 await put()，两个并发请求可能都读到「当前无租约」，
+    // 于是双双拿到 token，导致两个备份同时运行 —— 而本 DO 的唯一职责就是阻止这件事。
+    // 与 notifications-hub.ts 中 ws-token 的单次消费同构（那里也注明了必须放进事务）。
+    const acquired = await this.state.storage.transaction(async (txn) => {
+      const current = await txn.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+      if (current?.expiresAtMs && current.expiresAtMs > nowMs) {
+        return false;
+      }
+      await txn.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
+        token,
+        reason,
+        acquiredAt: nowIso,
+        touchedAt: nowIso,
+        expiresAtMs: nowMs + BACKUP_JOB_LEASE_MS,
+      });
+      return true;
     });
+
+    if (!acquired) return null;
     this.lastHeartbeatAt = 0;
     return token;
   }
@@ -113,21 +122,29 @@ export class BackupTransferRunner {
     if (nowMs - this.lastHeartbeatAt < BACKUP_JOB_HEARTBEAT_MS) return;
     this.lastHeartbeatAt = nowMs;
 
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
-    if (current?.token !== token) return;
+    // 事务内比对 token 后再续期，避免用过期快照覆盖掉新持有者的租约。
+    await this.state.storage.transaction(async (txn) => {
+      const current = await txn.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+      if (current?.token !== token) return;
 
-    await this.state.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
-      ...current,
-      touchedAt: new Date(nowMs).toISOString(),
-      expiresAtMs: nowMs + BACKUP_JOB_LEASE_MS,
+      await txn.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
+        ...current,
+        touchedAt: new Date(nowMs).toISOString(),
+        expiresAtMs: nowMs + BACKUP_JOB_LEASE_MS,
+      });
     });
   }
 
   private async releaseJob(token: string): Promise<void> {
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
-    if (current?.token === token) {
-      await this.state.storage.delete(BACKUP_JOB_STATE_KEY);
-    }
+    // 必须在事务内「比对 token → 删除」。否则存在该交错：
+    //   A: get() 读到 token=A → B: acquireJob() 覆盖为 token=B
+    //   → A: 依据先前快照判断通过 → delete() 把 B 的租约删掉，并发保护失效。
+    await this.state.storage.transaction(async (txn) => {
+      const current = await txn.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+      if (current?.token === token) {
+        await txn.delete(BACKUP_JOB_STATE_KEY);
+      }
+    });
   }
 
   private async runConfiguredBackup(request: Request): Promise<Response> {
