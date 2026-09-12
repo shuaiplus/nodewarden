@@ -1,0 +1,23 @@
+{
+  // 类型检查「测 webapp 纯逻辑」的测试脚本（§3.5 方案 A）。
+  //
+  // 为什么需要**第四份**配置：项目里已有三份，各自解决一个互斥问题：
+  //   · tsconfig.json          —— src/**（Cloudflare Workers），无 DOM
+  //   · webapp/tsconfig.json   —— webapp/**，有 DOM，但会被 src/** 拉进来
+  //   · tsconfig.scripts.json  —— scripts/** + src/**，无 DOM
+  //
+  // 而本目录的测试同时需要「DOM lib」和「不包含 src/**」：
+  //   · 有 DOM：webapp 代码用到 DOM 类型
+  //   · 不含 src/**：@cloudflare/workers-types 与 DOM 在 CacheStorage / BodyInit /
+  //     BufferSource 等全局声明上互斥，混在一起会产生 29 个真实报错（实测）
+  //
+  // 所以这里 extends webapp 的配置（继承 DOM lib 与 paths），并把 include 收窄成
+  // webapp + shared + scripts/webapp。
+  "extends": "./webapp/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // webapp 配置里是 vite/client；补上 node 以便使用 node:test / node:assert
+    "types": ["node", "vite/client"]
+  },
+  "include": ["webapp/src/**/*", "shared/**/*", "scripts/webapp/**/*"]
+}

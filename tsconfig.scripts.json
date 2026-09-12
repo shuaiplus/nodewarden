@@ -9,12 +9,14 @@
   // CacheStorage / BodyInit / BufferSource 等全局声明上不兼容，加 DOM 会让
   // src/** 自身产生 29 个真实报错（实测）。
   //
-  // exclude 说明：web-crypto-availability.test.ts 会 import webapp 代码，
-  // 需要 DOM lib，因此无法纳入本配置，仍由 tsx 运行但不做类型检查。
+  // exclude 说明：
+  // · web-crypto-availability.test.ts 会 import webapp 代码，需要 DOM lib
+  // · scripts/webapp/** 同理（§3.5 的前端纯逻辑测试）
+  // 两者都无法纳入本配置（无 DOM），改由 tsconfig.webapp-tests.json 检查。
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node"]
   },
   "include": ["src/**/*", "shared/**/*", "scripts/**/*"],
-  "exclude": ["node_modules", "scripts/web-crypto-availability.test.ts"]
+  "exclude": ["node_modules", "scripts/web-crypto-availability.test.ts", "scripts/webapp/**"]
 }
