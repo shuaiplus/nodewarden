@@ -135,7 +135,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   // Create folders and build index -> id mapping
   const folderIdMap = new Map<number, string>();
   const folderRows: Folder[] = [];
-  
+
   for (let i = 0; i < folders.length; i++) {
     const importedFolder = folders[i] && typeof folders[i] === 'object' ? folders[i] : null;
     const folderId = generateUUID();
@@ -152,19 +152,15 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
     folderRows.push(folder);
   }
 
-  if (folderRows.length > 0) {
-    const folderStatements = folderRows.map(folder =>
-      env.DB
-        .prepare(
-          'INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, name=excluded.name, updated_at=excluded.updated_at'
-        )
-        .bind(folder.id, folder.userId, folder.name, folder.createdAt, folder.updatedAt)
-    );
-    await runBatchInChunks(env.DB, folderStatements, batchChunkSize);
-  }
-
-  // Build cipher index -> folder id mapping from relationships
+  // 注意执行顺序：**先把所有条目构造并校验完，再落任何库**。
+  //
+  // 原来这里直接先把 folders 批量写库，然后才在循环里逐条校验 ciphers ——
+  // 于是一条非法条目会让函数返回 400，而**文件夹已经写进去了**。用户看到"导入失败"，
+  // 库里却多出几个空文件夹；重试一次多一批（每次都是新的 UUID，不会冲突，只会累积）。
+  //
+  // 现在把写入统一挪到校验之后：导入要么整体成功，要么什么都不留下。
+  // （无法做到真事务：D1 的 batch 只保证单批原子，跨批次需要显式事务，
+  //   而 5000 条一次性塞进一个事务并不合适。前移校验足以覆盖"入参非法"这一唯一失败原因。）
   const cipherFolderMap = new Map<number, string>();
   for (const rel of folderRelationships) {
     if (!rel || typeof rel !== 'object') continue;
@@ -173,9 +169,11 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       cipherFolderMap.set(rel.key, folderId);
     }
   }
+  // 取"进入本函数时"已存在的文件夹。本批新建的文件夹用的是全新 UUID，
+  // 客户端不可能在 `folderId` 里引用到它们，所以先后顺序不影响判定结果。
   const existingFolderIds = new Set((await storage.getAllFolders(userId)).map((folder) => folder.id));
 
-  // Create ciphers
+  // 构造并校验 ciphers（此阶段不写库）
   const cipherRows: Cipher[] = [];
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
@@ -279,6 +277,19 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
 
     cipherRows.push(cipher);
     cipherMapRows.push({ index: i, sourceId, id: cipher.id });
+  }
+
+  // 到这里所有入参都已校验通过，可以安全落库了
+  if (folderRows.length > 0) {
+    const folderStatements = folderRows.map(folder =>
+      env.DB
+        .prepare(
+          'INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, name=excluded.name, updated_at=excluded.updated_at'
+        )
+        .bind(folder.id, folder.userId, folder.name, folder.createdAt, folder.updatedAt)
+    );
+    await runBatchInChunks(env.DB, folderStatements, batchChunkSize);
   }
 
   if (cipherRows.length > 0) {
