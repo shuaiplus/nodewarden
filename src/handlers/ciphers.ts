@@ -1057,6 +1057,9 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     return errorResponse('Cipher key encryption is not supported by this server. Resync the client and try again.', 400);
   }
 
+  // 注：带附件迁移元数据的请求会跳过上面的 stale 检查。原因是附件上传流程
+  // 可能携带旧的 revisionDate，而此处不应因此拒绝。该豁免仅使得「用户覆盖
+  // 自己的数据」成为可能（应用层并发），不构成跳用户影响；请勿扩大豁免范围。
   if (!hasAttachmentMigrationMetadata && isStaleCipherUpdate(existingCipher.updatedAt, incomingRevisionDate)) {
     return errorResponse('The client copy of this cipher is out of date. Resync the client and try again.', 400);
   }

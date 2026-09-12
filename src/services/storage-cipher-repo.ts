@@ -125,7 +125,7 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     'type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at ' +
     'WHERE user_id=excluded.user_id'
   );
-  await safeBind(
+  const result = await safeBind(
     stmt,
     cipher.id,
     cipher.userId,
@@ -142,6 +142,15 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     cipher.archivedAt ?? null,
     cipher.deletedAt
   ).run();
+
+  // `ON CONFLICT(id) DO UPDATE ... WHERE user_id=excluded.user_id` 用于阻止跨用户覆盖：
+  // 当该 id 已被他人占用时，该语句既不更新也不报错，静默 no-op。
+  // 这里显式检查受影响行数，避免把「写入被拒绝」当成保存成功。
+  // 正常路径不会命中：handler 均先经 getCipherForUser 校验归属；
+  // updateCipherRevisionDate 传入的是刚从库中读出的对象，user_id 必然一致。
+  if (!result?.meta?.changes) {
+    throw new Error('Cipher could not be saved');
+  }
 }
 
 function sanitizeIds(ids: string[]): string[] {

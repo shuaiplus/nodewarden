@@ -158,6 +158,19 @@ function isBlockedIpv6Address(hostname: string): boolean {
   if (!hextets) return true;
   const firstHextet = Number.parseInt(hextets[0], 16);
   if (!Number.isFinite(firstHextet)) return true;
+
+  // NAT64 prefix: 64:ff9b::/96 (RFC 6052 well-known prefix) 与 64:ff9b:1::/48
+  // (RFC 8215 local-use prefix) 都会把 IPv6 地址映射回 IPv4。前者格式固定，
+  // 末两个 hextet 即内嵌 IPv4，解出后按 IPv4 规则判定；后者前缀长度可变、
+  // 无法可靠解出，因此整段拒绝。
+  if (hextets[0] === '0064' && hextets[1] === 'ff9b') {
+    if (hextets[2] !== '0000') return true;
+    const hi = Number.parseInt(hextets[6], 16);
+    const lo = Number.parseInt(hextets[7], 16);
+    if (!Number.isFinite(hi) || !Number.isFinite(lo)) return true;
+    return isBlockedIpv4Address([(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff]);
+  }
+
   // After expansion, loopback (::1) and unspecified (::) have first hextet 0.
   return (
     firstHextet === 0 ||
