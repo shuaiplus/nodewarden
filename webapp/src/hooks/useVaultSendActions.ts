@@ -55,6 +55,10 @@ import { deriveLoginHash, getPreloginKdfConfig, verifyMasterPassword } from '@/l
 import type { AuthedFetch } from '@/lib/api/shared';
 import { downloadBytesAsFile } from '@/lib/download';
 import type { Cipher, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, VaultDraft } from '@/lib/types';
+import {
+  copyImportedCreationDate,
+  copyImportedPasswordRevisionDate,
+} from '@shared/import-metadata';
 
 type Notify = (type: 'success' | 'error' | 'warning', text: string) => void;
 
@@ -1097,6 +1101,8 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           const raw = (payload.ciphers[i] || {}) as Record<string, unknown>;
           const draft = importCipherToDraft(raw, mode === 'target' ? targetFolderId : null);
           const cipherPayload = await buildCipherImportPayload(session, draft);
+          copyImportedCreationDate(raw, cipherPayload);
+          copyImportedPasswordRevisionDate(raw, cipherPayload);
           const sourceId = String(raw.id || '').trim();
           if (sourceId) cipherPayload.id = sourceId;
           nextPayload.ciphers.push(cipherPayload);

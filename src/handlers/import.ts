@@ -6,6 +6,10 @@ import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
+import {
+  normalizeImportedCreationDate,
+  normalizeImportedPasswordRevisionDate,
+} from '../../shared/import-metadata';
 
 // Bitwarden client import request format
 interface CiphersImportRequest {
@@ -219,7 +223,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
         autofillOnPageLoad: login.autofillOnPageLoad ?? null,
         fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
         uri: login.uri ?? null,
-        passwordRevisionDate: login.passwordRevisionDate ?? null,
+        passwordRevisionDate: normalizeImportedPasswordRevisionDate(login),
       } : null,
       card: card ? {
         ...card,
@@ -266,7 +270,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       driversLicense: driversLicense ?? null,
       passport: passport ?? null,
       key: key ?? null,
-      createdAt: now,
+      createdAt: normalizeImportedCreationDate(c, now),
       updatedAt: now,
       archivedAt: null,
       deletedAt: null,

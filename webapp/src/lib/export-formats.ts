@@ -317,6 +317,7 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
       username: await decryptMaybe(cipher.login.username ?? null, keyParts.enc, keyParts.mac),
       password: await decryptMaybe(cipher.login.password ?? null, keyParts.enc, keyParts.mac),
       totp: await decryptMaybe(cipher.login.totp ?? null, keyParts.enc, keyParts.mac),
+      passwordRevisionDate: cipher.login.passwordRevisionDate ?? null,
       uris: Array.isArray(cipher.login.uris)
         ? await Promise.all(
             cipher.login.uris.map(async (uri) => ({
