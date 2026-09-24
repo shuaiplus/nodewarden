@@ -1,6 +1,10 @@
 .vault-grid {
   @apply grid h-full min-h-0 gap-3 p-0.5;
-  grid-template-columns: 270px minmax(400px, 36%) minmax(400px, 1fr);
+  /* The list and detail panes already scroll internally (overflow: auto), which
+     zeroes their automatic minimum size. Keeping the track minimums at 0 lets the
+     grid fit the content area at any width instead of overflowing the page; wide
+     viewports are unaffected because 36%/1fr were never binding there. */
+  grid-template-columns: 270px minmax(0, 36%) minmax(0, 1fr);
 }
 
 .sidebar,
