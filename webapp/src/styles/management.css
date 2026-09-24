@@ -30,6 +30,14 @@
   border-color: var(--line);
 }
 
+/* The detail panel is only as wide as the viewport minus the app sidebar and the
+   two backup sidebars (~858px of chrome), so viewport breakpoints cannot tell when
+   the remote backup list no longer fits. Query the panel's own width instead. */
+.backup-detail-panel {
+  container-type: inline-size;
+  container-name: backup-detail;
+}
+
 .backup-actions-stack {
   @apply grid gap-2.5;
 }
@@ -371,13 +379,21 @@
 }
 
 .backup-browser-list {
-  @apply overflow-hidden rounded-lg border bg-white;
+  @apply rounded-lg border bg-white;
   border: 1px solid var(--line);
+  /* Never clip silently: if a row still overflows (long locale labels, different
+     font metrics), scroll instead of hiding the action buttons. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.backup-browser-head,
+.backup-browser-row {
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(92px, 0.4fr) minmax(220px, auto);
 }
 
 .backup-browser-head {
   @apply grid items-center gap-3 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.08em];
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(92px, 0.4fr) minmax(220px, auto);
   border-bottom: 1px solid var(--line);
   color: #64748b;
   background: #f8fafc;
@@ -404,7 +420,6 @@
 
 .backup-browser-row {
   @apply grid items-center gap-3 px-3 py-2;
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(92px, 0.4fr) minmax(220px, auto);
   min-height: 48px;
 }
 
@@ -434,7 +449,42 @@
 
 .backup-browser-actions {
   justify-content: flex-end;
-  flex-wrap: nowrap;
+  /* Wrap instead of clipping: three non-shrinking buttons overflow the 220px
+     actions track once the panel is narrow, hiding Delete entirely. */
+  flex-wrap: wrap;
+}
+
+.backup-browser-actions .btn.small {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Must stay after every base .backup-browser-* rule above: container queries add
+   no specificity, so source order decides which declaration wins.
+   The four tracks need ~702px, plus headroom for the widest locale label
+   (fr "Restauration en cours..." pushes a button past the 220px actions track).
+   Below that, stack the row into a card and drop the column header. */
+@container backup-detail (max-width: 820px) {
+  .backup-browser-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .backup-browser-head {
+    display: none;
+  }
+
+  .backup-browser-meta {
+    text-align: left;
+  }
+
+  .backup-browser-actions {
+    justify-content: flex-start;
+  }
+
+  .backup-browser-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .backup-browser-empty {

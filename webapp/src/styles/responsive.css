@@ -41,27 +41,8 @@
     justify-self: start;
   }
 
-  .import-export-panels,
-  .backup-browser-row {
+  .import-export-panels {
     grid-template-columns: 1fr;
-  }
-
-  .backup-browser-head {
-    display: none;
-  }
-
-  .backup-browser-meta {
-    text-align: left;
-  }
-
-  .backup-browser-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .backup-browser-nav {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .settings-twofactor-grid {
@@ -1248,27 +1229,8 @@
     gap: 7px;
   }
 
-  .backup-browser-row,
   .field-grid {
     grid-template-columns: 1fr;
-  }
-
-  .backup-browser-head {
-    display: none;
-  }
-
-  .backup-browser-meta {
-    text-align: left;
-  }
-
-  .backup-browser-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .backup-browser-nav {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .backup-grid {
