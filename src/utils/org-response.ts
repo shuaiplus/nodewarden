@@ -131,6 +131,9 @@ export function policyResponse(policy: PolicyRecord) {
     type: policy.type,
     enabled: policy.enabled,
     data: policy.data,
+    // Clients build `new Date(revisionDate)` and call toISOString() on every stored policy, so a
+    // missing value throws RangeError for the whole account (clients policy.ts toSdkPolicyView).
+    revisionDate: policy.updatedAt,
     object: 'policy',
   };
 }
