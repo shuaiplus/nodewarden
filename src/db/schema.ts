@@ -443,6 +443,20 @@ export const collectionUsers = sqliteTable('collection_users', {
   foreignKey({ columns: [table.collectionId], foreignColumns: [collections.id] }).onDelete('cascade'),
 ]);
 
+// collection_users is keyed by user, but an invited member has no user until accept binds one.
+// Their direct collection access waits here and moves to collection_users on accept.
+export const pendingCollectionUsers = sqliteTable('pending_collection_users', {
+  membershipId: text('membership_id').notNull(),
+  collectionId: text('collection_id').notNull(),
+  readOnly: integer('read_only').notNull().default(0),
+  hidePasswords: integer('hide_passwords').notNull().default(0),
+  manage: integer('manage').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.membershipId, table.collectionId] }),
+  foreignKey({ columns: [table.membershipId], foreignColumns: [organizationMemberships.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.collectionId], foreignColumns: [collections.id] }).onDelete('cascade'),
+]);
+
 export const cipherCollections = sqliteTable('cipher_collections', {
   cipherId: text('cipher_id').notNull(),
   collectionId: text('collection_id').notNull(),

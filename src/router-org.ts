@@ -11,6 +11,7 @@ import {
   handleDeleteOrganization,
   handleEditMember,
   handleGetAutoEnrollStatus,
+  handleGetMember,
   handleGetOrganization,
   handleGetOrganizationKeys,
   handleGetPlans,
@@ -134,6 +135,7 @@ export async function handleOrganizationRoute(
     if (action === 'confirm' && method === 'POST') return handleConfirmMember(request, env, userId, orgId, memberId);
     if (action === 'revoke' && method === 'PUT') return handleRevokeMember(env, userId, orgId, memberId);
     if ((action === 'restore' || action === 'restore/vnext') && method === 'PUT') return handleRestoreMember(env, userId, orgId, memberId);
+    if (method === 'GET' && !action) return handleGetMember(request, env, userId, orgId, memberId);
     if ((method === 'PUT' || method === 'POST') && !action) return handleEditMember(request, env, userId, orgId, memberId);
     if (method === 'DELETE') return handleDeleteMember(env, userId, orgId, memberId);
   }

@@ -109,7 +109,7 @@ export async function inviteMembers(authedFetch: AuthedFetch, orgId: string, ema
   const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/users/invite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ emails, type, accessAll: type <= 1 }),
+    body: JSON.stringify({ emails, type }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Invite failed'));
 }

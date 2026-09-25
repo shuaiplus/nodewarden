@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
@@ -168,7 +168,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
 // Bump this whenever src/db/schema.ts changes. Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-09-25-user-key-id';
+const STORAGE_SCHEMA_VERSION = '2026-09-26-pending-collection-users';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',
@@ -192,7 +192,6 @@ export class StorageService {
   private static lastRefreshTokenCleanupAt = 0;
   private static lastAttachmentTokenCleanupAt = 0;
   private static lastTotpReplayCleanupAt = 0;
-  private static readonly MAX_D1_SQL_VARIABLES = 100;
 
   private static readonly REFRESH_TOKEN_CLEANUP_INTERVAL_MS = LIMITS.cleanup.refreshTokenCleanupIntervalMs;
   private static readonly ATTACHMENT_TOKEN_CLEANUP_INTERVAL_MS = LIMITS.cleanup.attachmentTokenCleanupIntervalMs;
@@ -218,7 +217,7 @@ export class StorageService {
       1,
       Math.min(
         LIMITS.performance.bulkMoveChunkSize,
-        Math.floor((StorageService.MAX_D1_SQL_VARIABLES - safeFixedBindCount) / safeBindCountPerItem)
+        Math.floor((D1_MAX_BOUND_PARAMETERS - safeFixedBindCount) / safeBindCountPerItem)
       )
     );
   }

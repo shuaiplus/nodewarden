@@ -7,9 +7,17 @@ import {
   canManageMembers,
   confirmMemberCheck,
   hasFullCollectionAccess,
+  memberRoleChangeCheck,
   resolveCollectionPermission,
 } from './org-authz';
-import { MembershipStatus, MembershipType, revokeStatus, type MembershipRecord } from './org-types';
+import {
+  EMPTY_PERMISSIONS,
+  MembershipStatus,
+  MembershipType,
+  revokeStatus,
+  type MembershipRecord,
+  type OrgPermissions,
+} from './org-types';
 
 function member(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
   return {
@@ -102,4 +110,39 @@ test('only an Accepted row bound to a user in the same org can be confirmed', ()
   assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Accepted, userId: null }), 'o1'), notValid);
   assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Accepted }), 'o2'), notValid);
   assert.deepEqual(confirmMemberCheck(null, 'o1'), notValid);
+});
+
+test('only Owners touch Owner roles, and Custom managers stay within Users, Custom and their own permissions', () => {
+  const { Owner, Admin, User, Custom } = MembershipType;
+  const allowed = { ok: true };
+  const onlyOwners = { ok: false, message: "Only an Owner can manage another Owner's account." };
+  const notAdmins = { ok: false, message: 'Custom users can not manage Admins or Owners.' };
+  const ownPermissions = { ok: false, message: 'Custom users can only grant the same custom permissions that they have.' };
+  const owner = member({ type: Owner });
+  const admin = member({ type: Admin });
+  const manager = member({ type: Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, accessReports: true } });
+  const reports = { ...EMPTY_PERMISSIONS, accessReports: true };
+  const policies = { ...EMPTY_PERMISSIONS, managePolicies: true };
+  const cases: Array<[MembershipRecord, number, number, OrgPermissions, object]> = [
+    [owner, User, Owner, EMPTY_PERMISSIONS, allowed],
+    [owner, Owner, User, EMPTY_PERMISSIONS, allowed],
+    [admin, User, Owner, EMPTY_PERMISSIONS, onlyOwners],
+    [admin, Owner, Admin, EMPTY_PERMISSIONS, onlyOwners],
+    [admin, User, Admin, EMPTY_PERMISSIONS, allowed],
+    [admin, User, Custom, policies, allowed],
+    [manager, User, Owner, EMPTY_PERMISSIONS, onlyOwners],
+    [manager, User, Admin, EMPTY_PERMISSIONS, notAdmins],
+    [manager, Admin, User, EMPTY_PERMISSIONS, notAdmins],
+    [manager, User, Custom, policies, ownPermissions],
+    [manager, User, Custom, reports, allowed],
+    [manager, Custom, User, EMPTY_PERMISSIONS, allowed],
+    [member({ type: Custom, permissions: reports }), User, User, EMPTY_PERMISSIONS, notAdmins],
+  ];
+  cases.forEach(([actor, currentType, newType, permissions, expected]) => {
+    assert.deepEqual(memberRoleChangeCheck(actor, currentType, newType, permissions, 'update'), expected, `${actor.type}: ${currentType} -> ${newType}`);
+  });
+  assert.deepEqual(memberRoleChangeCheck(admin, Owner, Owner, EMPTY_PERMISSIONS, 'invite'), {
+    ok: false,
+    message: "Only an Owner can configure another Owner's account.",
+  });
 });

@@ -12,14 +12,18 @@ import {
   confirmMemberCheck,
   hasFullCollectionAccess,
   isActiveMember,
+  memberRoleChangeCheck,
   resolveCollectionPermission,
   resolvePermissions,
 } from '../services/org-authz';
 import {
+  clientMembershipType,
+  EMPTY_PERMISSIONS,
   MembershipStatus,
   MembershipType,
   type CollectionAccess,
   type MembershipRecord,
+  type OrgPermissions,
   publicMembershipStatus,
   revokeStatus,
   restoreStatus,
@@ -82,6 +86,10 @@ function asString(value: unknown): string {
 
 function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 async function requireMember(
@@ -380,8 +388,8 @@ async function applyCollectionAccess(
     const mapped = [];
     for (const entry of users) {
       const membership = await orgRepo.getMembership(db, asString(readBody(entry, ['id', 'Id'])));
-      if (!membership?.userId || membership.orgId !== orgId) continue;
-      mapped.push({ userId: membership.userId, ...accessFlags(entry) });
+      if (!membership || membership.orgId !== orgId) continue;
+      mapped.push({ member: membership, ...accessFlags(entry) });
     }
     await orgRepo.replaceCollectionUsers(db, collectionId, mapped);
   }
@@ -394,6 +402,59 @@ async function applyCollectionAccess(
     }
     await orgRepo.replaceCollectionGroups(db, collectionId, mapped);
   }
+}
+
+// Upstream deleted Manager (3), so EnumDataType on the request's Type rejects it like any unknown value.
+const ASSIGNABLE_MEMBER_TYPES: number[] = Object.values(MembershipType).filter((type) => type !== MembershipType.Manager);
+
+type MemberChange =
+  | { ok: true; type: number; permissions: OrgPermissions; collections?: CollectionAccess[]; groupIds?: string[] }
+  | { ok: false; status: number; message: string };
+
+// The role, custom permissions, collections and groups that OrganizationUserInviteRequestModel and
+// OrganizationUserUpdateRequestModel share. An omitted collections or groups list leaves that access as is.
+async function readMemberChange(db: D1Database, orgId: string, body: Record<string, unknown>): Promise<MemberChange> {
+  const type = readBody(body, ['type', 'Type']);
+  if (type == null) return { ok: false, status: 400, message: 'The Type field is required.' };
+  if (typeof type !== 'number' || !ASSIGNABLE_MEMBER_TYPES.includes(type)) {
+    return { ok: false, status: 400, message: 'The field Type is invalid.' };
+  }
+  const permissionSource = asRecord(readBody(body, ['permissions', 'Permissions']));
+  const permissions: OrgPermissions = {
+    ...EMPTY_PERMISSIONS,
+    ...Object.fromEntries(Object.keys(EMPTY_PERMISSIONS).map((name) => [
+      name,
+      asBoolean(readBody(permissionSource, [name, name[0].toUpperCase() + name.slice(1)])),
+    ])),
+  };
+  const rawCollections = readBody(body, ['collections', 'Collections']);
+  const collections = Array.isArray(rawCollections)
+    ? rawCollections.map(asRecord).map((entry) => ({ collectionId: asString(readBody(entry, ['id', 'Id'])), ...accessFlags(entry) }))
+    : undefined;
+  const rawGroups = readBody(body, ['groups', 'Groups']);
+  const groupIds = Array.isArray(rawGroups) ? rawGroups.map(asString) : undefined;
+  // Upstream 735cc5db4: every id must belong to this organization, and missing or foreign ids fail
+  // alike so the response cannot probe other organizations.
+  const orgCollectionIds = new Set((await orgRepo.listCollectionsByOrg(db, orgId)).map((collection) => collection.id));
+  const orgGroupIds = new Set((await orgRepo.listGroupsByOrg(db, orgId)).map((group) => group.id));
+  const foreignCollection = collections?.some(({ collectionId }) => !orgCollectionIds.has(collectionId));
+  if (foreignCollection || groupIds?.some((groupId) => !orgGroupIds.has(groupId))) {
+    return { ok: false, status: 404, message: 'Resource not found.' };
+  }
+  // Upstream CollectionAccessSelection.Valid: Manage already includes seeing and editing every item.
+  if (collections?.some(({ manage, readOnly, hidePasswords }) => manage && (readOnly || hidePasswords))) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'The Manage property is mutually exclusive and cannot be true while the ReadOnly or HidePasswords properties are also true.',
+    };
+  }
+  return { ok: true, type, permissions, collections, groupIds };
+}
+
+// Upstream stores custom permissions only for the Custom role, so a demoted member keeps no stale grants.
+function storedPermissions(change: { type: number; permissions: OrgPermissions }): OrgPermissions | null {
+  return change.type === MembershipType.Custom ? change.permissions : null;
 }
 
 export async function handleListMembers(env: Env, userId: string, orgId: string): Promise<Response> {
@@ -423,6 +484,40 @@ export async function handleListMembers(env: Env, userId: string, orgId: string)
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
+// Upstream OrganizationUsersController.Get: the OrganizationUserDetailsResponseModel that official
+// web's edit-member dialog loads with includeGroups=true before it can open.
+export async function handleGetMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const membership = await orgRepo.getMembership(env.DB, memberId);
+  if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
+  const account = membership.userId ? await new StorageService(env.DB).getUserById(membership.userId) : null;
+  const type = clientMembershipType(membership.type);
+  const collections = await orgRepo.listMemberCollectionAccess(env.DB, membership);
+  const includeGroups = new URL(request.url).searchParams.get('includeGroups') === 'true';
+  return jsonResponse({
+    id: membership.id,
+    userId: membership.userId,
+    type,
+    status: publicMembershipStatus(membership.status),
+    externalId: membership.externalId,
+    accessSecretsManager: membership.type <= MembershipType.Admin,
+    accessPam: false,
+    permissions: type === MembershipType.Custom ? resolvePermissions(membership) : null,
+    resetPasswordEnrolled: !!membership.resetPasswordKey,
+    usesKeyConnector: false,
+    hasMasterPassword: !!account?.masterPasswordHash,
+    claimedByOrganization: false,
+    ssoExternalId: null,
+    collections: collections.map(({ collectionId, ...flags }) => ({ id: collectionId, ...flags })),
+    // Upstream omits groups unless asked for them.
+    ...(includeGroups ? { groups: await orgRepo.listMembershipGroupIds(env.DB, membership.id) } : {}),
+    creationDate: membership.createdAt,
+    object: 'organizationUserDetails',
+  });
+}
+
 export async function handleInviteMembers(request: Request, env: Env, user: User, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, user.id, orgId);
   if (member instanceof Response) return member;
@@ -432,30 +527,33 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   const emails = ((readBody(body, ['emails', 'Emails']) as string[]) || []).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
   const emailsCheck = inviteEmailsCheck(emails);
   if (!emailsCheck.ok) return errorResponse(emailsCheck.message, 400);
-  const type = Number(readBody(body, ['type', 'Type']) ?? MembershipType.User);
-  const accessAll = asBoolean(readBody(body, ['accessAll', 'AccessAll']));
+  const change = await readMemberChange(env.DB, orgId, body);
+  if (!change.ok) return errorResponse(change.message, change.status);
+  // Upstream InviteUsersAsync runs the same role guard; an invite has no current role, so the
+  // requested one stands on both sides.
+  const roleCheck = memberRoleChangeCheck(member, change.type, change.type, change.permissions, 'invite');
+  if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
   const now = new Date().toISOString();
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
   const invites = emails.map((email) => ({ id: generateUUID(), email }));
-  for (const { id, email } of invites) {
-    await orgRepo.saveMembership(env.DB, {
-      id,
-      userId: null,
-      orgId,
-      email,
-      invitedByEmail: user.email,
-      accessAll,
-      key: '',
-      status: MembershipStatus.Invited,
-      type: type === MembershipType.Custom ? MembershipType.Custom : type,
-      permissions: null,
-      resetPasswordKey: null,
-      externalId: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+  await orgRepo.insertInvitedMemberships(env.DB, invites.map(({ id, email }) => ({
+    id,
+    userId: null,
+    orgId,
+    email,
+    invitedByEmail: user.email,
+    // Upstream's invite request has no AccessAll either; see handleEditMember.
+    accessAll: false,
+    key: '',
+    status: MembershipStatus.Invited,
+    type: change.type,
+    permissions: storedPermissions(change),
+    resetPasswordKey: null,
+    externalId: null,
+    createdAt: now,
+    updatedAt: now,
+  })), change);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   if (!env.EMAIL || !getEmailSender(env)) return jsonResponse({});
   const vaultOrigin = organizationInviteVaultOrigin(request, env);
@@ -504,12 +602,13 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
     organization?.name ?? ''
   );
   if (!check.ok) return errorResponse(check.message, 400);
-  const accepted = check.member;
-  accepted.userId = user.id;
-  accepted.email = user.email;
-  accepted.status = MembershipStatus.Accepted;
-  accepted.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, accepted);
+  await orgRepo.saveAcceptedMembership(env.DB, {
+    ...check.member,
+    userId: user.id,
+    email: user.email,
+    status: MembershipStatus.Accepted,
+    updatedAt: new Date().toISOString(),
+  });
   // The invitee now sees the org in their profile, so their cached sync must refresh.
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
@@ -543,10 +642,24 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-  if (readBody(body, ['type', 'Type']) != null) membership.type = Number(readBody(body, ['type', 'Type']));
-  if (readBody(body, ['accessAll', 'AccessAll']) != null) membership.accessAll = asBoolean(readBody(body, ['accessAll', 'AccessAll']));
+  const change = await readMemberChange(env.DB, orgId, body);
+  if (!change.ok) return errorResponse(change.message, change.status);
+  const roleCheck = memberRoleChangeCheck(actor, clientMembershipType(membership.type), change.type, change.permissions, 'update');
+  if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
+  // Upstream HasConfirmedOwnersExceptAsync: leaving Owner must leave another confirmed owner behind.
+  const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
+  const otherConfirmedOwners = (await orgRepo.countConfirmedOwners(env.DB, orgId)) - (isConfirmedOwner ? 1 : 0);
+  if (change.type !== MembershipType.Owner && otherConfirmedOwners < 1) {
+    return errorResponse('Organization must have at least one confirmed owner.', 400);
+  }
+  membership.type = change.type;
+  membership.permissions = storedPermissions(change);
+  // Upstream's update request has no AccessAll: Owners and Admins get full access from their type,
+  // and a body flag would let a Custom manageUsers member grant every collection permission past
+  // memberRoleChangeCheck. Clearing it also stops a demoted org creator keeping full access.
+  membership.accessAll = false;
   membership.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, membership);
+  await orgRepo.saveMembershipWithAccess(env.DB, membership, change);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }

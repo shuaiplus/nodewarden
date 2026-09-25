@@ -63,6 +63,51 @@ export function canManageMembers(member: MembershipRecord): boolean {
   );
 }
 
+// Upstream OrganizationUserValidationService.IsAuthorizedByRole: Owners manage anyone, Admins anyone
+// but Owners, and Custom manageUsers members only Users and other Custom members.
+function canManageMemberType(actor: MembershipRecord, type: number): boolean {
+  if (actor.type === MembershipType.Owner) return true;
+  if (actor.type === MembershipType.Admin) return type !== MembershipType.Owner;
+  return actor.type === MembershipType.Custom
+    && resolvePermissions(actor).manageUsers
+    && (type === MembershipType.User || type === MembershipType.Custom);
+}
+
+export type RoleChangeCheck = { ok: true } | { ok: false; message: string };
+
+// Upstream words the Owner rejection per route: the v2 UpdateOrganizationUserValidator says
+// "manage", while invite still runs OrganizationService.ValidateOrganizationUserUpdatePermissions.
+const ONLY_OWNERS_MESSAGES = {
+  update: "Only an Owner can manage another Owner's account.",
+  invite: "Only an Owner can configure another Owner's account.",
+} as const;
+
+// Upstream OrganizationUserValidationService.CanManageRoleChange (v2 UpdateOrganizationUserValidator):
+// the actor must manage both the member's current and requested type, so nobody but an Owner can
+// grant, edit or demote an Owner, and a Custom actor may only grant permissions it holds itself.
+export function memberRoleChangeCheck(
+  actor: MembershipRecord,
+  currentType: number,
+  newType: number,
+  newPermissions: OrgPermissions,
+  route: keyof typeof ONLY_OWNERS_MESSAGES
+): RoleChangeCheck {
+  if (!canManageMemberType(actor, currentType) || !canManageMemberType(actor, newType)) {
+    const touchesOwner = currentType === MembershipType.Owner || newType === MembershipType.Owner;
+    return {
+      ok: false,
+      message: touchesOwner ? ONLY_OWNERS_MESSAGES[route] : 'Custom users can not manage Admins or Owners.',
+    };
+  }
+  const actorPermissions = resolvePermissions(actor);
+  const grantsUnheld = actor.type === MembershipType.Custom
+    && newType === MembershipType.Custom
+    && (Object.keys(newPermissions) as Array<keyof OrgPermissions>).some((name) => newPermissions[name] && !actorPermissions[name]);
+  return grantsUnheld
+    ? { ok: false, message: 'Custom users can only grant the same custom permissions that they have.' }
+    : { ok: true };
+}
+
 export function canManageGroups(member: MembershipRecord): boolean {
   return isActiveMember(member) && (
     member.type === MembershipType.Owner

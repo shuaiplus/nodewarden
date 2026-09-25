@@ -1,6 +1,7 @@
-import { and, asc, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, getColumns, inArray, isNotNull, sql, type Table } from 'drizzle-orm';
+import type { BatchItem } from 'drizzle-orm/batch';
 
-import { getOrm } from '../db/client';
+import { D1_MAX_BOUND_PARAMETERS, getOrm, type Orm } from '../db/client';
 import {
   cipherCollections,
   ciphers,
@@ -14,6 +15,7 @@ import {
   orgGroupMembers,
   orgGroups,
   orgPolicies,
+  pendingCollectionUsers,
   ssoAuth,
   ssoUsers,
 } from '../db/schema';
@@ -101,6 +103,16 @@ function mapPolicy(row: typeof orgPolicies.$inferSelect): PolicyRecord {
   };
 }
 
+function columnCount(table: Table): number {
+  return Object.keys(getColumns(table)).length;
+}
+
+// Splits multi-row INSERT values so each statement stays within D1's bound-parameter limit.
+function chunkRows<T>(rows: T[], columnsPerRow: number): T[][] {
+  const size = Math.floor(D1_MAX_BOUND_PARAMETERS / columnsPerRow);
+  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
+}
+
 function mapAccess(row: { collectionId: string; readOnly: number; hidePasswords: number; manage: number }): CollectionAccess {
   return {
     collectionId: row.collectionId,
@@ -146,7 +158,7 @@ export async function deleteOrganization(db: D1Database, id: string): Promise<vo
   await getOrm(db).delete(organizations).where(eq(organizations.id, id));
 }
 
-export async function saveMembership(db: D1Database, member: MembershipRecord): Promise<void> {
+function membershipUpsert(orm: Orm, member: MembershipRecord) {
   const values = {
     id: member.id,
     userId: member.userId,
@@ -163,7 +175,7 @@ export async function saveMembership(db: D1Database, member: MembershipRecord): 
     createdAt: member.createdAt,
     updatedAt: member.updatedAt,
   };
-  await getOrm(db)
+  return orm
     .insert(organizationMemberships)
     .values(values)
     .onConflictDoUpdate({
@@ -182,6 +194,10 @@ export async function saveMembership(db: D1Database, member: MembershipRecord): 
         updatedAt: values.updatedAt,
       },
     });
+}
+
+export async function saveMembership(db: D1Database, member: MembershipRecord): Promise<void> {
+  await membershipUpsert(getOrm(db), member);
 }
 
 export async function getMembership(db: D1Database, id: string): Promise<MembershipRecord | null> {
@@ -275,22 +291,18 @@ export async function deleteCollection(db: D1Database, id: string): Promise<void
   await getOrm(db).delete(collections).where(eq(collections.id, id));
 }
 
+// Replaces every member's direct access to one collection, invited members included.
 export async function replaceCollectionUsers(
   db: D1Database,
   collectionId: string,
-  users: Array<{ userId: string; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
+  users: Array<{ member: MembershipRecord; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
 ): Promise<void> {
   const orm = getOrm(db);
-  await orm.delete(collectionUsers).where(eq(collectionUsers.collectionId, collectionId));
-  if (users.length) {
-    await orm.insert(collectionUsers).values(users.map((user) => ({
-      userId: user.userId,
-      collectionId,
-      readOnly: user.readOnly ? 1 : 0,
-      hidePasswords: user.hidePasswords ? 1 : 0,
-      manage: user.manage ? 1 : 0,
-    })));
-  }
+  await orm.batch([
+    orm.delete(collectionUsers).where(eq(collectionUsers.collectionId, collectionId)),
+    orm.delete(pendingCollectionUsers).where(eq(pendingCollectionUsers.collectionId, collectionId)),
+    ...memberAccessInserts(orm, users.map((user) => ({ ...user, collectionId }))),
+  ]);
 }
 
 export async function listCollectionUsers(db: D1Database, collectionId: string): Promise<CollectionAccess[]> {
@@ -351,6 +363,130 @@ export async function listUserCollectionAccess(db: D1Database, userId: string, o
     });
   }
   return [...merged.values()];
+}
+
+// A member's direct collection access (group grants excluded), as the edit-member dialog shows it.
+export async function listMemberCollectionAccess(db: D1Database, member: MembershipRecord): Promise<CollectionAccess[]> {
+  const orm = getOrm(db);
+  const rows = member.userId
+    ? await orm
+      .select({
+        collectionId: collectionUsers.collectionId,
+        readOnly: collectionUsers.readOnly,
+        hidePasswords: collectionUsers.hidePasswords,
+        manage: collectionUsers.manage,
+      })
+      .from(collectionUsers)
+      .innerJoin(collections, eq(collections.id, collectionUsers.collectionId))
+      .where(and(eq(collectionUsers.userId, member.userId), eq(collections.orgId, member.orgId)))
+    : await orm
+      .select({
+        collectionId: pendingCollectionUsers.collectionId,
+        readOnly: pendingCollectionUsers.readOnly,
+        hidePasswords: pendingCollectionUsers.hidePasswords,
+        manage: pendingCollectionUsers.manage,
+      })
+      .from(pendingCollectionUsers)
+      .where(eq(pendingCollectionUsers.membershipId, member.id));
+  return rows.map(mapAccess);
+}
+
+type MemberGrant = CollectionAccess & { member: MembershipRecord };
+
+// An invited member has no user for collection_users yet, so its direct access waits in
+// pending_collection_users keyed by membership until accept binds a user. Each table gets as few
+// multi-row INSERTs as the bound-parameter limit allows, since D1 also caps statements per invocation.
+function memberAccessInserts(orm: Orm, grants: MemberGrant[]): BatchItem<'sqlite'>[] {
+  const flags = ({ collectionId, readOnly, hidePasswords, manage }: CollectionAccess) =>
+    ({ collectionId, readOnly: Number(readOnly), hidePasswords: Number(hidePasswords), manage: Number(manage) });
+  const boundRows = grants.flatMap(({ member, ...access }) => member.userId ? [{ ...flags(access), userId: member.userId }] : []);
+  const pendingRows = grants.flatMap(({ member, ...access }) => member.userId ? [] : [{ ...flags(access), membershipId: member.id }]);
+  return [
+    ...chunkRows(boundRows, columnCount(collectionUsers))
+      .map((chunk) => orm.insert(collectionUsers).values(chunk).onConflictDoNothing()),
+    ...chunkRows(pendingRows, columnCount(pendingCollectionUsers))
+      .map((chunk) => orm.insert(pendingCollectionUsers).values(chunk).onConflictDoNothing()),
+  ];
+}
+
+function pendingAccessDelete(orm: Orm, membershipId: string) {
+  return orm.delete(pendingCollectionUsers).where(eq(pendingCollectionUsers.membershipId, membershipId));
+}
+
+// collection_users has no membership key, so removing a member leaves these rows behind; they are
+// cleared whenever the user's direct access to the org is replaced.
+function userOrgAccessDelete(orm: Orm, userId: string, orgId: string) {
+  const orgCollectionIds = orm.select({ id: collections.id }).from(collections).where(eq(collections.orgId, orgId));
+  return orm.delete(collectionUsers).where(and(eq(collectionUsers.userId, userId), inArray(collectionUsers.collectionId, orgCollectionIds)));
+}
+
+// Clears a member's direct access to this org's collections. Pending rows are always dropped, so
+// once a user is bound the two tables never disagree.
+function memberAccessDeletes(orm: Orm, member: MembershipRecord) {
+  const clearPending = pendingAccessDelete(orm, member.id);
+  return member.userId ? [clearPending, userOrgAccessDelete(orm, member.userId, member.orgId)] : [clearPending];
+}
+
+function membershipGroupInserts(orm: Orm, membershipId: string, groupIds: string[]) {
+  return chunkRows(groupIds, columnCount(orgGroupMembers))
+    .map((chunk) => orm.insert(orgGroupMembers).values(chunk.map((groupId) => ({ groupId, membershipId }))).onConflictDoNothing());
+}
+
+// A member's direct collection access and group ids; an omitted list is left as is.
+export interface MemberAccessChange {
+  collections?: CollectionAccess[];
+  groupIds?: string[];
+}
+
+// Saves a membership and replaces the given access lists in one batch, so a failed write cannot
+// leave the row changed while its access is not.
+export async function saveMembershipWithAccess(db: D1Database, member: MembershipRecord, change: MemberAccessChange): Promise<void> {
+  const orm = getOrm(db);
+  await orm.batch([
+    membershipUpsert(orm, member),
+    ...(change.collections
+      ? [...memberAccessDeletes(orm, member), ...memberAccessInserts(orm, change.collections.map((access) => ({ ...access, member })))]
+      : []),
+    ...(change.groupIds
+      ? [orm.delete(orgGroupMembers).where(eq(orgGroupMembers.membershipId, member.id)), ...membershipGroupInserts(orm, member.id, change.groupIds)]
+      : []),
+  ]);
+}
+
+// A bulk invite writes every new membership with its access in one batch: all or none are created,
+// and new rows have nothing to clear first. Memberships go first for the access rows' foreign keys.
+export async function insertInvitedMemberships(db: D1Database, members: MembershipRecord[], change: MemberAccessChange): Promise<void> {
+  const orm = getOrm(db);
+  const grants = members.flatMap((member) => (change.collections ?? []).map((access) => ({ ...access, member })));
+  const statements = [
+    ...members.map((member) => membershipUpsert(orm, member)),
+    ...memberAccessInserts(orm, grants),
+    ...members.flatMap((member) => membershipGroupInserts(orm, member.id, change.groupIds ?? [])),
+  ];
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+}
+
+// Accept binds a user to an invited membership and moves its pending access to collection_users.
+// The copy is an INSERT ... SELECT inside the batch, so a collection save between a separate read
+// and this write cannot be lost.
+export async function saveAcceptedMembership(db: D1Database, member: MembershipRecord & { userId: string }): Promise<void> {
+  const orm = getOrm(db);
+  const pendingAccess = orm
+    .select({
+      userId: sql<string>`${member.userId}`.as(collectionUsers.userId.name),
+      collectionId: pendingCollectionUsers.collectionId,
+      readOnly: pendingCollectionUsers.readOnly,
+      hidePasswords: pendingCollectionUsers.hidePasswords,
+      manage: pendingCollectionUsers.manage,
+    })
+    .from(pendingCollectionUsers)
+    .where(eq(pendingCollectionUsers.membershipId, member.id));
+  await orm.batch([
+    membershipUpsert(orm, member),
+    userOrgAccessDelete(orm, member.userId, member.orgId),
+    orm.insert(collectionUsers).select(pendingAccess),
+    pendingAccessDelete(orm, member.id),
+  ]);
 }
 
 export async function replaceCipherCollections(db: D1Database, cipherId: string, collectionIds: string[]): Promise<void> {
@@ -578,6 +714,14 @@ export async function listGroupMemberIds(db: D1Database, groupId: string): Promi
     .from(orgGroupMembers)
     .where(eq(orgGroupMembers.groupId, groupId));
   return rows.map((row) => row.membershipId);
+}
+
+export async function listMembershipGroupIds(db: D1Database, membershipId: string): Promise<string[]> {
+  const rows = await getOrm(db)
+    .select({ groupId: orgGroupMembers.groupId })
+    .from(orgGroupMembers)
+    .where(eq(orgGroupMembers.membershipId, membershipId));
+  return rows.map((row) => row.groupId);
 }
 
 export async function replaceCollectionGroups(
