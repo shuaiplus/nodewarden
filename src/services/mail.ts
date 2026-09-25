@@ -1,7 +1,9 @@
 import type { Env } from '../types';
+import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 import {
   getConfiguredWebVaultOrigins,
   isConfiguredWebVaultOrigin,
+  normalizeOrigin,
   requestPublicOrigin,
 } from '../utils/origins';
 
@@ -55,6 +57,15 @@ export function registerVerifyVaultOrigin(request: Request, env: Pick<Env, 'WEB_
   return getConfiguredWebVaultOrigins(env)[0] || forwarded;
 }
 
+// Any org admin picks the invite recipients and the mail comes from EMAIL_FROM, so its link only
+// ever points at a configured web vault (upstream BaseServiceUri.VaultWithHash). Falling back to
+// the caller-controlled X-Forwarded-Host would make the instance a phishing relay.
+export function organizationInviteVaultOrigin(request: Request, env: Pick<Env, 'WEB_VAULT_ORIGINS'>): string | null {
+  const configured = getConfiguredWebVaultOrigins(env);
+  const requested = normalizeOrigin(request.headers.get('Origin'));
+  return configured.find((origin) => origin === requested) ?? configured[0] ?? null;
+}
+
 // Official web redirect-connector turns the fragment into /#/finish-signup?...
 export function buildRegisterVerifyUrl(vaultOrigin: string, email: string, token: string): string {
   const origin = vaultOrigin.replace(/\/+$/, '');
@@ -105,5 +116,72 @@ export async function sendRegisterVerificationEmail(
     subject: body.subject,
     text: body.text,
     html: body.html,
+  });
+}
+
+// .NET's \w matches any Unicode letter, so an IDN like "evil.éxample" is defused too.
+const EMAIL_DOT_PATTERN = /\.([\p{L}\p{N}_])/gu;
+const EMAIL_SCHEME_PATTERN = /(^|\b)\w*:\/\//gi;
+
+// Upstream CoreHelpers.SanitizeForEmail. Text another user chose (an org name) goes out from
+// EMAIL_FROM, so it must not carry anything a mail client would turn into a link or address.
+// Schemes are stripped until none remain because removing one can join the text around it into
+// another ("https:x:////" leaves "https://").
+export function sanitizeForEmail(value: string): string {
+  const stripSchemes = (text: string): string => {
+    const stripped = text.replace(EMAIL_SCHEME_PATTERN, '');
+    return stripped === text ? text : stripSchemes(stripped);
+  };
+  return stripSchemes(value.replace(/@/g, '[at]').replace(EMAIL_DOT_PATTERN, '[dot]$1'));
+}
+
+export interface OrganizationInvite {
+  vaultOrigin: string;
+  organizationId: string;
+  organizationUserId: string;
+  organizationName: string;
+  email: string;
+  token: string;
+  hasExistingUser: boolean;
+}
+
+// Upstream OrganizationUserInvitedViewModel.Url. Official web's /#/accept-organization route
+// requires every param (DirectOrganizationInvite.fromUrlParams) and sends existing users to
+// login instead of signup.
+function buildOrganizationInviteUrl(invite: OrganizationInvite): string {
+  const params = new URLSearchParams({
+    organizationId: invite.organizationId,
+    organizationUserId: invite.organizationUserId,
+    email: invite.email,
+    organizationName: invite.organizationName,
+    token: invite.token,
+    initOrganization: 'false',
+    orgUserHasExistingUser: String(invite.hasExistingUser),
+  });
+  return `${invite.vaultOrigin.replace(/\/+$/, '')}/#/accept-organization?${params.toString()}`;
+}
+
+export async function sendOrganizationInviteEmail(
+  env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME'>,
+  invite: OrganizationInvite
+): Promise<void> {
+  const sender = getEmailSender(env);
+  if (!env.EMAIL || !sender) {
+    throw new Error('Email sending is not configured');
+  }
+  // Text only: the organization name is chosen by the inviting admin, so it never reaches HTML.
+  // The link keeps the raw name, URL-encoded, because official web displays it on the accept page.
+  const organizationName = sanitizeForEmail(invite.organizationName);
+  await env.EMAIL.send({
+    to: invite.email,
+    from: sender,
+    subject: `Join ${organizationName}`,
+    text: [
+      `You have been invited to join the ${organizationName} organization.`,
+      '',
+      buildOrganizationInviteUrl(invite),
+      '',
+      `This link expires in ${ORG_INVITE_TTL_DAYS} days.`,
+    ].join('\n'),
   });
 }

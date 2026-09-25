@@ -39,3 +39,7 @@ Better Auth owns credential hashing (`$s2$` via `src/services/auth-password.ts`)
 Official-web signup emails go through the Cloudflare Email Sending binding (`env.EMAIL.send()`). `EMAIL_FROM` must be on an onboarded sending domain. The Worker returns an empty JSON string from `send-verification-email` (never the JWT). Official self-host web still continues to the password form; the email link uses `/redirect-connector.html#finish-signup`. RFC documentation addresses such as `@example.com` get the same empty response without a send.
 
 `better-auth-cloudflare` `withCloudflare()` is not used: its bundled drizzle types clash with 1.0-rc. `src/auth.ts` wires `drizzleAdapter`, KV secondary storage, and `cf-connecting-ip` directly. Worker `nodejs_compat` is required.
+
+## Organization invites
+
+Members move Invited (0) → Accepted (1) → Confirmed (2), as upstream. Invite, and SCIM for an existing account, stores an Invited row with no user. Only the invitee can accept it, with the emailed `ORG_INVITE_TTL_DAYS` token, and only Accepted rows can be confirmed. Invite takes 1 to 20 valid addresses per request, as upstream. Invite mail needs `EMAIL`, `EMAIL_FROM` and `WEB_VAULT_ORIGINS`; the link never follows `X-Forwarded-Host`, the org name in the subject and body is defused with `sanitizeForEmail`, and RFC documentation addresses are skipped. Without mail, invites cannot be accepted yet. Upgrading from earlier builds: they auto-Accepted existing accounts without consent, so review Accepted (status 1) members and delete and re-invite any you did not expect.

@@ -2,12 +2,14 @@ import type { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import {
+  acceptInviteCheck,
   canCreateCollection,
   canDeleteOrganization,
   canManageGroups,
   canManageMembers,
   canManagePolicies,
   canManageScim,
+  confirmMemberCheck,
   hasFullCollectionAccess,
   isActiveMember,
   resolveCollectionPermission,
@@ -30,6 +32,42 @@ import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
 import { publishPlatformEvent } from '../services/queue-publisher';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
+import { createOrgInviteToken, verifyOrgInviteToken } from '../utils/jwt';
+import {
+  getEmailSender,
+  isReservedDocumentationEmail,
+  organizationInviteVaultOrigin,
+  sendOrganizationInviteEmail,
+} from '../services/mail';
+
+// Official clients always wrap a member's org key with that member's RSA public key (EncString
+// types 3-6). Any other type, such as a symmetric type 2, leaves the member unable to decrypt.
+const MEMBER_ORG_KEY_PATTERN = /^[3-6]\./;
+
+// Upstream StrictEmailAddressListAttribute on OrganizationUserInviteRequestModel.Emails. Every
+// invite sends mail from EMAIL_FROM, so the batch is capped and bad addresses are rejected before
+// any row is written.
+const MAX_INVITE_EMAILS = 20;
+const MAX_INVITE_EMAIL_LENGTH = 256;
+// Upstream EmailValidation.IsValidEmail: a local part of printable ASCII other than "@", one "@",
+// and a dotted host that ends in a letter.
+const INVITE_EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@]+\.\p{L}+$/u;
+
+type InviteEmailsCheck = { ok: true } | { ok: false; message: string };
+
+function inviteEmailsCheck(emails: string[]): InviteEmailsCheck {
+  if (!emails.length) return { ok: false, message: 'An email is required.' };
+  if (emails.length > MAX_INVITE_EMAILS) {
+    return { ok: false, message: `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.` };
+  }
+  // Upstream reports the first failing address, checking its format before its length.
+  const [message] = emails.flatMap((email, index) => {
+    if (!INVITE_EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
+    if (email.length > MAX_INVITE_EMAIL_LENGTH) return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
+    return [];
+  });
+  return message ? { ok: false, message } : { ok: true };
+}
 
 function readBody(source: Record<string, unknown>, names: string[]): unknown {
   for (const name of names) {
@@ -392,21 +430,24 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   const emails = ((readBody(body, ['emails', 'Emails']) as string[]) || []).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
+  const emailsCheck = inviteEmailsCheck(emails);
+  if (!emailsCheck.ok) return errorResponse(emailsCheck.message, 400);
   const type = Number(readBody(body, ['type', 'Type']) ?? MembershipType.User);
   const accessAll = asBoolean(readBody(body, ['accessAll', 'AccessAll']));
-  const storage = new StorageService(env.DB);
   const now = new Date().toISOString();
-  for (const email of emails) {
-    const existingUser = await storage.getUser(email);
+  // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
+  // an existing account, so the invitee stays hidden until they accept with the emailed token.
+  const invites = emails.map((email) => ({ id: generateUUID(), email }));
+  for (const { id, email } of invites) {
     await orgRepo.saveMembership(env.DB, {
-      id: generateUUID(),
-      userId: existingUser?.id || null,
+      id,
+      userId: null,
       orgId,
       email,
       invitedByEmail: user.email,
       accessAll,
       key: '',
-      status: existingUser ? MembershipStatus.Accepted : MembershipStatus.Invited,
+      status: MembershipStatus.Invited,
       type: type === MembershipType.Custom ? MembershipType.Custom : type,
       permissions: null,
       resetPasswordKey: null,
@@ -416,25 +457,61 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     });
   }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  if (!env.EMAIL || !getEmailSender(env)) return jsonResponse({});
+  const vaultOrigin = organizationInviteVaultOrigin(request, env);
+  if (!vaultOrigin) {
+    console.warn('Organization invite email skipped: WEB_VAULT_ORIGINS is not set');
+    return jsonResponse({});
+  }
+
+  const organization = await orgRepo.getOrganization(env.DB, orgId);
+  const storage = new StorageService(env.DB);
+  // Documentation domains bounce and hurt sender reputation, as in register verification.
+  const deliverable = invites.filter(({ email }) => !isReservedDocumentationEmail(email));
+  try {
+    await Promise.all(deliverable.map(async ({ id, email }) => sendOrganizationInviteEmail(env, {
+      vaultOrigin,
+      organizationId: orgId,
+      organizationUserId: id,
+      organizationName: organization?.name ?? '',
+      email,
+      token: await createOrgInviteToken(env.JWT_SECRET, id, email),
+      hasExistingUser: !!(await storage.getUser(email)),
+    })));
+  } catch (error) {
+    console.error('Organization invite email failed:', error instanceof Error ? error.message : String(error));
+    return errorResponse('Unable to send invitation email', 502);
+  }
   return jsonResponse({});
 }
 
 export async function handleAcceptInvite(request: Request, env: Env, user: User, orgId: string, memberId: string): Promise<Response> {
   const membership = await orgRepo.getMembership(env.DB, memberId);
-  if (!membership || membership.orgId !== orgId) return errorResponse('Invitation not found', 404);
-  if (membership.email && membership.email.toLowerCase() !== user.email.toLowerCase() && membership.userId !== user.id) {
-    return errorResponse('Invitation not found', 404);
-  }
-  membership.userId = user.id;
-  membership.email = user.email;
-  membership.status = MembershipStatus.Accepted;
-  membership.updatedAt = new Date().toISOString();
+  if (!membership || membership.orgId !== orgId) return errorResponse('Organization user mismatch', 404);
   const body = await parseJsonBody(request);
-  if (!(body instanceof Response)) {
-    const token = asString(readBody(body, ['token', 'Token']));
-    void token;
-  }
-  await orgRepo.saveMembership(env.DB, membership);
+  if (body instanceof Response) return body;
+  // The emailed token is the only proof that this user owns the invited mailbox (upstream
+  // OrganizationUserAcceptRequestModel.Token is [Required]).
+  const token = asString(readBody(body, ['token', 'Token']));
+  if (!token) return errorResponse('The Token field is required.', 400);
+  const tokenCheck = await verifyOrgInviteToken(token, env.JWT_SECRET, membership.id, membership.email);
+  if (!tokenCheck.ok) return errorResponse(tokenCheck.message, 400);
+  const organization = await orgRepo.getOrganization(env.DB, orgId);
+  const check = acceptInviteCheck(
+    membership,
+    user.email,
+    await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId),
+    organization?.name ?? ''
+  );
+  if (!check.ok) return errorResponse(check.message, 400);
+  const accepted = check.member;
+  accepted.userId = user.id;
+  accepted.email = user.email;
+  accepted.status = MembershipStatus.Accepted;
+  accepted.updatedAt = new Date().toISOString();
+  await orgRepo.saveMembership(env.DB, accepted);
+  // The invitee now sees the org in their profile, so their cached sync must refresh.
+  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
 
@@ -442,15 +519,18 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo.getMembership(env.DB, memberId);
-  if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
+  const check = confirmMemberCheck(await orgRepo.getMembership(env.DB, memberId), orgId);
+  if (!check.ok) return errorResponse(check.message, 400);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-  membership.key = asString(readBody(body, ['key', 'Key']));
-  if (!membership.key) return errorResponse('Key is required', 400);
-  membership.status = MembershipStatus.Confirmed;
-  membership.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, membership);
+  const key = asString(readBody(body, ['key', 'Key']));
+  if (!key) return errorResponse('Key is required', 400);
+  if (!MEMBER_ORG_KEY_PATTERN.test(key)) return errorResponse('Key is not a valid encrypted string.', 400);
+  const confirmed = check.member;
+  confirmed.key = key;
+  confirmed.status = MembershipStatus.Confirmed;
+  confirmed.updatedAt = new Date().toISOString();
+  await orgRepo.saveMembership(env.DB, confirmed);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }

@@ -70,15 +70,17 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     if (!email) return scimError(400, 'userName is required');
     const existingUser = await storage.getUser(email);
     const now = new Date().toISOString();
+    // Upstream PostUserCommand never binds the account: only the invitee's own accept may do that,
+    // otherwise any org owner could mint a SCIM token and force an existing user into the org.
     const member = {
       id: generateUUID(),
-      userId: existingUser?.id || null,
+      userId: null,
       orgId,
       email,
       invitedByEmail: 'scim',
       accessAll: false,
       key: '',
-      status: existingUser ? MembershipStatus.Accepted : MembershipStatus.Staged,
+      status: existingUser ? MembershipStatus.Invited : MembershipStatus.Staged,
       type: MembershipType.User,
       permissions: null,
       resetPasswordKey: null,

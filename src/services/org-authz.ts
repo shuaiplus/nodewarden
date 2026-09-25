@@ -166,3 +166,39 @@ export function canEditCipher(
     return assigned ? !assigned.readOnly : false;
   });
 }
+
+// A membership transition guard: the row that may move on, or the upstream 400 message.
+export type MemberCheck = { ok: true; member: MembershipRecord } | { ok: false; message: string };
+
+// Upstream AcceptOrgUserCommand.AcceptOrgUserByEmailTokenAsync + AcceptOrgUserAsync, in the same
+// order, run after the invite token is verified. Only an Invited row may move to Accepted: any
+// other status would let a revoked or staged member reinstate themselves.
+export function acceptInviteCheck(
+  invite: MembershipRecord,
+  userEmail: string,
+  existingMembership: MembershipRecord | null,
+  orgName: string
+): MemberCheck {
+  if (existingMembership) {
+    const message = invite.status === MembershipStatus.Accepted
+      ? 'Invitation already accepted. You will receive an email when your organization membership is confirmed.'
+      : 'You are already part of this organization.';
+    return { ok: false, message };
+  }
+  if (!invite.email || invite.email.toLowerCase() !== userEmail.toLowerCase()) {
+    return { ok: false, message: 'User email does not match invite.' };
+  }
+  if (publicMembershipStatus(invite.status) === MembershipStatus.Revoked) {
+    return { ok: false, message: `Your access to the ${orgName} vault has been revoked.` };
+  }
+  if (invite.status !== MembershipStatus.Invited) return { ok: false, message: 'Already accepted.' };
+  return { ok: true, member: invite };
+}
+
+// Upstream ConfirmOrganizationUserCommand only confirms Accepted rows of this org that are bound
+// to a user, since the org key is wrapped for that user's public key.
+export function confirmMemberCheck(membership: MembershipRecord | null, orgId: string): MemberCheck {
+  return membership?.status === MembershipStatus.Accepted && membership.orgId === orgId && membership.userId
+    ? { ok: true, member: membership }
+    : { ok: false, message: 'User not valid.' };
+}

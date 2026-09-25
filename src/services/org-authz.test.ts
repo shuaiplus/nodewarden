@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canCreateCollection, canEditCipher, canManageMembers, hasFullCollectionAccess, resolveCollectionPermission } from './org-authz';
-import { MembershipStatus, MembershipType, type MembershipRecord } from './org-types';
+import {
+  acceptInviteCheck,
+  canCreateCollection,
+  canEditCipher,
+  canManageMembers,
+  confirmMemberCheck,
+  hasFullCollectionAccess,
+  resolveCollectionPermission,
+} from './org-authz';
+import { MembershipStatus, MembershipType, revokeStatus, type MembershipRecord } from './org-types';
 
 function member(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
   return {
@@ -44,4 +52,54 @@ test('revoked members lose access', () => {
   const revoked = member({ type: MembershipType.Admin, status: MembershipStatus.Revoked, accessAll: true });
   assert.equal(hasFullCollectionAccess(revoked), false);
   assert.equal(canManageMembers(revoked), false);
+});
+
+const ORG_NAME = 'Acme';
+const INVITEE_EMAIL = 'a@example.com';
+const REVOKED_MESSAGE = `Your access to the ${ORG_NAME} vault has been revoked.`;
+
+test('only an Invited row whose email matches the user can be accepted', () => {
+  const invited = member({ status: MembershipStatus.Invited, userId: null });
+  assert.deepEqual(acceptInviteCheck(invited, INVITEE_EMAIL.toUpperCase(), null, ORG_NAME), { ok: true, member: invited });
+  assert.deepEqual(
+    acceptInviteCheck(invited, 'b@example.com', null, ORG_NAME),
+    { ok: false, message: 'User email does not match invite.' },
+  );
+  assert.deepEqual(
+    acceptInviteCheck(member({ status: MembershipStatus.Invited, email: null }), INVITEE_EMAIL, null, ORG_NAME),
+    { ok: false, message: 'User email does not match invite.' },
+  );
+  [MembershipStatus.Accepted, MembershipStatus.Confirmed, MembershipStatus.Staged].forEach((status) => {
+    assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), { ok: false, message: 'Already accepted.' });
+  });
+});
+
+test('a revoked member cannot un-revoke themselves by accepting again', () => {
+  [revokeStatus(MembershipStatus.Confirmed), revokeStatus(MembershipStatus.Invited), MembershipStatus.Revoked].forEach((status) => {
+    assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), { ok: false, message: REVOKED_MESSAGE });
+  });
+});
+
+test('a user who already belongs to the org cannot accept a second invite', () => {
+  const existing = member({ id: 'm0', status: MembershipStatus.Confirmed });
+  assert.deepEqual(
+    acceptInviteCheck(member({ status: MembershipStatus.Invited }), INVITEE_EMAIL, existing, ORG_NAME),
+    { ok: false, message: 'You are already part of this organization.' },
+  );
+  assert.deepEqual(
+    acceptInviteCheck(member({ status: MembershipStatus.Accepted }), INVITEE_EMAIL, existing, ORG_NAME),
+    { ok: false, message: 'Invitation already accepted. You will receive an email when your organization membership is confirmed.' },
+  );
+});
+
+test('only an Accepted row bound to a user in the same org can be confirmed', () => {
+  const notValid = { ok: false, message: 'User not valid.' };
+  const accepted = member({ status: MembershipStatus.Accepted });
+  assert.deepEqual(confirmMemberCheck(accepted, 'o1'), { ok: true, member: accepted });
+  assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Invited }), 'o1'), notValid);
+  assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Confirmed }), 'o1'), notValid);
+  assert.deepEqual(confirmMemberCheck(member({ status: revokeStatus(MembershipStatus.Accepted) }), 'o1'), notValid);
+  assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Accepted, userId: null }), 'o1'), notValid);
+  assert.deepEqual(confirmMemberCheck(member({ status: MembershipStatus.Accepted }), 'o2'), notValid);
+  assert.deepEqual(confirmMemberCheck(null, 'o1'), notValid);
 });

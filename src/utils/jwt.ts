@@ -32,7 +32,9 @@ export async function signHs256Jwt(payload: Record<string, unknown>, secret: str
   return `${data}.${base64UrlEncode(new Uint8Array(signature))}`;
 }
 
-export async function verifyHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+// Signature and JSON only. Callers that must tell an expired token from a forged one check exp
+// themselves; everyone else uses verifyHs256Jwt.
+async function decodeSignedHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -46,13 +48,19 @@ export async function verifyHs256Jwt(token: string, secret: string): Promise<Rec
       encoder.encode(`${headerB64}.${payloadB64}`)
     );
     if (!valid) return null;
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as Record<string, unknown>;
-    const exp = payload.exp;
-    if (typeof exp === 'number' && exp < Math.floor(Date.now() / 1000)) return null;
-    return payload;
+    return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+function isExpired(payload: Record<string, unknown>): boolean {
+  return typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000);
+}
+
+export async function verifyHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  const payload = await decodeSignedHs256Jwt(token, secret);
+  return payload && !isExpired(payload) ? payload : null;
 }
 
 export const REGISTER_VERIFY_ISSUER = 'nodewarden|register_verify';
@@ -83,6 +91,42 @@ export async function verifyRegisterVerifyToken(
   if (!email) return null;
   const name = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : null;
   return { email, name };
+}
+
+const ORG_INVITE_ISSUER = 'nodewarden|org_invite';
+const SECONDS_PER_DAY = 24 * 60 * 60;
+// Upstream OrgUserInviteTokenable.GetTokenLifetime(). The invite email quotes it too.
+export const ORG_INVITE_TTL_DAYS = 5;
+const ORG_INVITE_TTL_SECONDS = ORG_INVITE_TTL_DAYS * SECONDS_PER_DAY;
+
+// Upstream TokenableValidationError messages; official web's accept page branches on them.
+export type OrgInviteTokenCheck = { ok: true } | { ok: false; message: 'Expired token.' | 'Invalid token.' };
+
+// Binds an emailed invite to one membership row and the address it was sent to, as upstream
+// OrgUserInviteTokenable does, so only that mailbox's owner can accept the row.
+export async function createOrgInviteToken(secret: string, orgUserId: string, email: string): Promise<string> {
+  return signHs256Jwt({
+    exp: Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_SECONDS,
+    iss: ORG_INVITE_ISSUER,
+    sub: orgUserId,
+    email: email.toLowerCase(),
+  }, secret);
+}
+
+export async function verifyOrgInviteToken(
+  token: string,
+  secret: string,
+  orgUserId: string,
+  email: string | null
+): Promise<OrgInviteTokenCheck> {
+  const payload = await decodeSignedHs256Jwt(token, secret);
+  // Upstream OrgUserInviteTokenable.ValidateOrgUserInvite reports expiry before the row binding.
+  if (payload?.iss === ORG_INVITE_ISSUER && isExpired(payload)) return { ok: false, message: 'Expired token.' };
+  const bound = !!payload && !!email
+    && payload.iss === ORG_INVITE_ISSUER
+    && payload.sub === orgUserId
+    && payload.email === email.toLowerCase();
+  return bound ? { ok: true } : { ok: false, message: 'Invalid token.' };
 }
 
 function getHmacKey(secret: string): Promise<CryptoKey> {

@@ -5,7 +5,9 @@ import {
   buildRegisterVerifyUrl,
   getEmailSender,
   isReservedDocumentationEmail,
+  organizationInviteVaultOrigin,
   registerVerifyVaultOrigin,
+  sanitizeForEmail,
 } from './mail';
 
 test('treats RFC documentation addresses as non-deliverable', () => {
@@ -52,4 +54,23 @@ test('prefers the official web origin for the verification link', () => {
     env
   );
   assert.equal(fromForwarded, 'https://nodewarden-official-web.pages.dev');
+});
+
+test('invite links use the caller Origin only when it is a configured web vault', () => {
+  const env = { WEB_VAULT_ORIGINS: 'https://a.stevefan1999.tech,https://b.stevefan1999.tech' };
+  const inviteRequest = (origin: string) => new Request('https://nodewarden.stevefan1999.workers.dev/api/organizations/o/users/invite', {
+    headers: { Origin: origin, 'X-Forwarded-Host': 'evil.example', 'X-Forwarded-Proto': 'https' },
+  });
+  assert.equal(organizationInviteVaultOrigin(inviteRequest('https://b.stevefan1999.tech'), env), 'https://b.stevefan1999.tech');
+  assert.equal(organizationInviteVaultOrigin(inviteRequest('https://evil.example'), env), 'https://a.stevefan1999.tech');
+  assert.equal(organizationInviteVaultOrigin(inviteRequest('https://b.stevefan1999.tech'), {}), null);
+});
+
+test('defuses addresses, domains and links in text that another user chose', () => {
+  assert.equal(sanitizeForEmail('Acme Inc'), 'Acme Inc');
+  assert.equal(
+    sanitizeForEmail('Unlock at https://evil.example/x or mail help@evil.example.'),
+    'Unlock at evil[dot]example/x or mail help[at]evil[dot]example.'
+  );
+  assert.equal(sanitizeForEmail('https:x:////evil.éxample'), 'evil[dot]éxample');
 });
