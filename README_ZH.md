@@ -91,6 +91,24 @@
 >   | KV | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
 
 
+## 常见问题：
+- **Fork 完仓库后，在 Cloudflare 连接 GitHub 账户时看不到自己的仓库，或者选择仓库后返回 404？**  
+  这通常与 GitHub Fork 仓库的识别或 Cloudflare 对仓库的授权/同步有关。如果 Fork 后仓库名称、描述等信息与上游项目高度一致，可能更容易触发相关限制或异常。建议在 Fork 时就将仓库名称修改为与上游不同的名称，并同时修改仓库描述，例如改为 `2233warden`。如果已经完成 Fork，也可以直接在 GitHub 仓库设置中修改名称和描述，然后重新尝试在 Cloudflare 中连接。
+
+- **我删掉部署后重新部署，为什么注册又开始要求邀请码了？**  
+  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库和 KV 命名空间中的用户、邀请码及相关配置仍然存在，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
+  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 KV 命名空间**。
+
+- **我配置了 `JWT_SECRET`，为什么页面仍然提示缺少？**  
+  请将 `JWT_SECRET` 配置在 Cloudflare Workers 的 **Settings → Variables and Secrets** 中，并确保它属于 **Runtime variables and secrets**，而不是 **Build variables**。  
+  Build 阶段的变量只在项目构建过程中可用，Worker 实际运行时无法通过运行时环境读取，因此即使构建能够正常完成，页面仍可能提示 `JWT_SECRET` 缺失。
+
+- **为什么升级或重新部署后，`JWT_SECRET` 好像消失了？**  
+  建议将 `JWT_SECRET` 配置为 **Secret**，而不是普通的明文变量。`JWT_SECRET` 属于敏感的运行时凭据，也不应该出现在代码仓库中。  
+  如果部署流程会重新生成或覆盖 Worker 的变量配置，普通变量可能受到影响；使用 Secret 更适合保存这类需要在多次部署之间持续存在的敏感配置。重新部署后如果仍提示缺失，请检查当前 Worker 的 **Variables and Secrets** 中是否仍存在该 Secret。
+
+---
+
 ## 更新方法：
 - 手动：打开你 Fork 的 GitHub 仓库，看到顶部同步提示后，点击 `Sync fork` ➜ `Update branch`
 

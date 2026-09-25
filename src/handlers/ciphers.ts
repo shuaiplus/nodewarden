@@ -30,6 +30,7 @@ import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events'
 import * as orgRepo from '../services/storage-org-repo';
 import { canEditCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import { deleteAuthorizedCipher, loadAccessibleCipher } from './cipher-access';
+import { readNullableFullUpdateField } from './cipher-full-update';
 
 // CONTRACT:
 // Cipher JSON is the highest-risk Bitwarden compatibility surface. Preserve
@@ -1119,16 +1120,10 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     cipher.passwordHistory = incomingPasswordHistory.value ?? null;
   }
 
-  // Custom fields deletion compatibility:
-  // - Accept both camelCase "fields" and PascalCase "Fields".
-  // - For full update (PUT/POST on this endpoint), missing fields means cleared fields.
-  //   This prevents stale custom fields from being resurrected by merge fallback.
-  const incomingFields = getAliasedProp(cipherData, ['fields', 'Fields']);
-  if (incomingFields.present) {
-    cipher.fields = incomingFields.value ?? null;
-  } else if (request.method === 'PUT' || request.method === 'POST') {
-    cipher.fields = null;
-  }
+  // Nullable fields use replacement semantics on this full-update endpoint.
+  // Some clients omit cleared values, so merge fallback must not resurrect them.
+  cipher.notes = readNullableFullUpdateField<string>(cipherData, ['notes', 'Notes']);
+  cipher.fields = readNullableFullUpdateField<Cipher['fields']>(cipherData, ['fields', 'Fields']);
   normalizeCipherForStorage(cipher);
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
   if (compatibilityError) return errorResponse(compatibilityError, 400);
