@@ -416,6 +416,20 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
 // POST /api/accounts/password-hint
 export async function handleGetPasswordHint(request: Request, env: Env): Promise<Response> {
+  // Password hints are an optional convenience feature. Keep the endpoint
+  // schema-compatible while returning a non-disclosing result by default.
+  if (env.PASSWORD_HINTS_ENABLED !== '1') {
+    return jsonResponse(
+      {
+        object: 'passwordHint',
+        hasHint: false,
+        masterPasswordHint: null,
+      },
+      200,
+      { 'Cache-Control': 'no-store' }
+    );
+  }
+
   const storage = new StorageService(env.DB);
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier) {
