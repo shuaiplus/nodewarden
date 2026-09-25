@@ -7,7 +7,7 @@ import { jsonResponse, errorResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash } from '../utils/api-key';
-import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
+import { findMatchingTotpCounter, isTotpEnabled, isTotpRotation, isValidTotpSecret, recoveryCodeMintRequiresStepUp, totpRotationRequiresStepUp } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
@@ -116,39 +116,61 @@ async function hmacSha256(secret: string, data: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)));
 }
 
-async function createTotpUserVerificationToken(env: Env, user: User, key: string): Promise<string> {
-  const payload = {
+// Proves the caller may set up or replace an authenticator. `via` records which second factor
+// proved it, so the commit can consume the recovery code without re-prompting.
+interface TotpUserVerificationPayload {
+  sub: string;
+  stamp: string;
+  exp: number;
+  via?: TotpSecondFactorMatch;
+}
+
+export async function createTotpUserVerificationToken(
+  env: Env,
+  user: User,
+  via?: TotpSecondFactorMatch
+): Promise<string> {
+  const payload: TotpUserVerificationPayload = {
     sub: user.id,
-    key,
     stamp: user.securityStamp,
     exp: Date.now() + TOTP_USER_VERIFICATION_TOKEN_TTL_MS,
+    ...(via ? { via } : {}),
   };
   const payloadB64 = base64UrlEncodeBytes(new TextEncoder().encode(JSON.stringify(payload)));
   const signatureB64 = base64UrlEncodeBytes(await hmacSha256(env.JWT_SECRET, payloadB64));
   return `${payloadB64}.${signatureB64}`;
 }
 
-async function verifyTotpUserVerificationToken(env: Env, user: User, key: string, token: string): Promise<boolean> {
+// Returns the claims only when the token is authentic, unexpired and bound to this exact user.
+export async function readTotpUserVerificationToken(
+  env: Env,
+  user: User,
+  token: string
+): Promise<TotpUserVerificationPayload | null> {
   try {
     const [payloadB64, signatureB64] = String(token || '').split('.');
-    if (!payloadB64 || !signatureB64) return false;
+    if (!payloadB64 || !signatureB64) return null;
     const expected = base64UrlEncodeBytes(await hmacSha256(env.JWT_SECRET, payloadB64));
-    if (expected !== signatureB64) return false;
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecodeBytes(payloadB64))) as {
-      sub?: string;
-      key?: string;
-      stamp?: string;
-      exp?: number;
+    if (expected !== signatureB64) return null;
+    const payload = JSON.parse(
+      new TextDecoder().decode(base64UrlDecodeBytes(payloadB64))
+    ) as Partial<TotpUserVerificationPayload>;
+    if (
+      payload.sub !== user.id ||
+      payload.stamp !== user.securityStamp ||
+      typeof payload.exp !== 'number' ||
+      payload.exp < Date.now()
+    ) {
+      return null;
+    }
+    return {
+      sub: user.id,
+      stamp: user.securityStamp,
+      exp: payload.exp,
+      ...(payload.via === 'totp' || payload.via === 'recovery' ? { via: payload.via } : {}),
     };
-    return (
-      payload.sub === user.id &&
-      payload.key === key &&
-      payload.stamp === user.securityStamp &&
-      typeof payload.exp === 'number' &&
-      payload.exp >= Date.now()
-    );
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -178,12 +200,57 @@ async function verifyUserSecret(
   return auth.verifyPassword(normalized, user.masterPasswordHash, user.email);
 }
 
+// Turning the authenticator off or replacing it needs a current authenticator or recovery code;
+// the master password alone is never accepted. Matching never consumes anything.
+type TotpSecondFactorMatch = 'totp' | 'recovery';
+
+async function matchTotpSecondFactor(
+  user: User,
+  input: { token: string; recoveryCode: string }
+): Promise<TotpSecondFactorMatch | null> {
+  const token = String(input.token || '').trim();
+  const activeSecret = user.totpSecret || '';
+  if (token && isTotpEnabled(activeSecret)) {
+    // Deliberately not consuming the login replay counter: this is not a login, and marking the
+    // current step as used would reject the next login made with the very same code.
+    if (await findMatchingTotpCounter(activeSecret, token) != null) return 'totp';
+  }
+  if (recoveryCodeEquals(normalizeRecoveryCodeInput(input.recoveryCode), user.totpRecoveryCode)) {
+    return 'recovery';
+  }
+  return null;
+}
+
+async function verifyTotpSecondFactor(
+  user: User,
+  input: { token: string; recoveryCode: string }
+): Promise<boolean> {
+  return await matchTotpSecondFactor(user, input) != null;
+}
+
+// The recovery code stays relevant as long as any second factor relies on it, so it is only dropped
+// once the authenticator was the last one.
+async function hasOtherTwoFactorProvider(storage: StorageService, user: User): Promise<boolean> {
+  if (isYubiKeyEnabled(user)) return true;
+  const credentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+  return credentials.length > 0;
+}
+
 function readBodyString(body: Record<string, unknown>, names: string[]): string {
   for (const name of names) {
     const value = body[name];
     if (typeof value === 'string') return value;
   }
   return '';
+}
+
+function readBodyFlag(body: Record<string, unknown>, names: string[]): boolean {
+  for (const name of names) {
+    const value = body[name];
+    if (value === true) return true;
+    if (typeof value === 'string' && value.toLowerCase() === 'true') return true;
+  }
+  return false;
 }
 
 function readNestedString(source: unknown, path: string[]): string {
@@ -903,12 +970,37 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
   }
 
   const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
-  if (!verified) return errorResponse('User verification failed.', 400);
 
-  const key = normalizeTotpSecret(user.totpSecret || '') || randomBase32Secret();
-  const userVerificationToken = await createTotpUserVerificationToken(env, user, key);
-  return jsonResponse(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
+  const activeKey = normalizeTotpSecret(user.totpSecret || '');
+  // Rotation hands out a new key without writing it; only PUT /api/two-factor/authenticator
+  // commits, after the caller proves it can generate a valid code. Abandoning the dialog breaks nothing.
+  const rotating = isTotpEnabled(activeKey) && readBodyFlag(body, ['regenerate', 'Regenerate', 'rotate', 'Rotate']);
+  // Which credential opened this setup, carried in `userVerificationToken` so the commit knows
+  // whether to consume the recovery code.
+  let secondFactor: TotpSecondFactorMatch | null = null;
+  if (rotating) {
+    // Replacing the authenticator requires a current authenticator or recovery code. Nothing is
+    // consumed here — an abandoned rotation must leave both untouched.
+    const token = readBodyString(body, ['token', 'Token', 'code', 'Code', 'otp', 'OTP']);
+    const recoveryCode = readBodyString(body, ['recoveryCode', 'RecoveryCode', 'recovery_code']);
+    // The dialog's single field accepts either an authenticator code or a recovery code.
+    secondFactor = await matchTotpSecondFactor(user, { token, recoveryCode: recoveryCode || token });
+    if (!secondFactor) {
+      return errorResponse('Invalid authenticator code', 400);
+    }
+  } else {
+    // Everything else just reveals the current key (or mints the first), behind the master password.
+    const verified = await verifyUserSecret(auth, user, secret);
+    if (!verified) return errorResponse('User verification failed.', 400);
+  }
+
+  const key = rotating ? randomBase32Secret() : (activeKey || randomBase32Secret());
+  const userVerificationToken = await createTotpUserVerificationToken(env, user, secondFactor ?? undefined);
+  return jsonResponse({
+    ...twoFactorAuthenticatorResponse(isTotpEnabled(activeKey), key, userVerificationToken),
+    Rotating: rotating,
+    rotating,
+  });
 }
 
 // POST /api/two-factor/get-yubikey
@@ -1001,34 +1093,70 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!key || !token || !userVerificationToken) {
     return errorResponse('Key, token and userVerificationToken are required', 400);
   }
-  if (!await verifyTotpUserVerificationToken(env, user, key, userVerificationToken)) {
+  const verification = await readTotpUserVerificationToken(env, user, userVerificationToken);
+  if (!verification) {
     return errorResponse('User verification failed.', 400);
   }
-  if (!isTotpEnabled(key)) return errorResponse('Invalid TOTP secret', 400);
-  const matchedCounter = await findMatchingTotpCounter(key, token);
-  if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
+  // The key is hand-editable, so re-validate it: it must be decodable Base32, not merely non-empty.
+  if (!isValidTotpSecret(key)) return errorResponse('Invalid TOTP secret', 400);
+  // Replacing an existing secret requires the current second factor, never the master password alone.
+  if (totpRotationRequiresStepUp(user.totpSecret, key, verification.via)) {
+    return errorResponse('A current authenticator code or recovery code is required to replace the authenticator', 400);
+  }
+  const replacedExistingKey = isTotpRotation(user.totpSecret, key);
+  // Provisioning is not a login, so the login replay counter is left untouched.
+  if (await findMatchingTotpCounter(key, token) == null) {
     return errorResponse('Invalid token.', 400);
+  }
+  // A fresh recovery code can later clear every second factor, so minting one for an existing
+  // authenticator needs a current second factor, not the master password alone.
+  if (recoveryCodeMintRequiresStepUp(user.totpSecret, user.totpRecoveryCode, verification.via)) {
+    return errorResponse('A current authenticator code or recovery code is required to issue a recovery code', 400);
   }
 
   user.totpSecret = key;
-  if (!user.totpRecoveryCode) {
+  // The recovery code is minted on first enable and replaced when authorized with the recovery code;
+  // a TOTP-authorized rotation leaves it untouched.
+  const recoveryCodeWasMissing = !user.totpRecoveryCode;
+  if (recoveryCodeWasMissing) {
     user.totpRecoveryCode = createRecoveryCode();
   }
+  // A recovery-authorized rotation consumes the code only after the new key proves valid.
+  const recoveryCodeConsumed = verification.via === 'recovery';
+  if (recoveryCodeConsumed) {
+    user.totpRecoveryCode = createRecoveryCode();
+  }
+  const recoveryCodeChanged = recoveryCodeWasMissing || recoveryCodeConsumed;
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
-    action: 'account.totp.enable',
+    action: replacedExistingKey ? 'account.totp.rotate' : 'account.totp.enable',
     category: 'security',
     level: 'security',
     targetType: 'user',
     targetId: user.id,
-    metadata: auditRequestMetadata(request),
+    metadata: {
+      ...auditRequestMetadata(request),
+      ...(recoveryCodeConsumed ? { recoveryCodeConsumed: true } : {}),
+    },
   });
 
-  return jsonResponse(twoFactorAuthenticatorResponse(true, key));
+  return jsonResponse({
+    ...twoFactorAuthenticatorResponse(true, key),
+    // NodeWarden extension, present only when the recovery code changed, so the caller can hand the
+    // user the new value. `RecoveryCodeConsumed` marks a consumed-and-replaced code vs a fresh mint.
+    ...(recoveryCodeChanged
+      ? {
+          RecoveryCode: user.totpRecoveryCode,
+          recoveryCode: user.totpRecoveryCode,
+          RecoveryCodeConsumed: recoveryCodeConsumed,
+          recoveryCodeConsumed,
+        }
+      : {}),
+  });
 }
 
 // PUT/POST /api/two-factor/yubikey
@@ -1232,7 +1360,22 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   if (!verified) return errorResponse('User verification failed.', 400);
 
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
+    // The master password alone cannot drop the second factor: prove it with a current code or the
+    // recovery code.
+    const code = readBodyString(body, ['token', 'Token', 'code', 'Code', 'totp', 'Totp']);
+    const recoveryCode = readBodyString(body, ['recoveryCode', 'RecoveryCode', 'recovery_code']);
+    const secondFactorOk = await verifyTotpSecondFactor(user, {
+      token: code,
+      // Same single-field convention as the settings dialog: the recovery code may arrive in `code`.
+      recoveryCode: recoveryCode || code,
+    });
+    if (!secondFactorOk) {
+      return errorResponse('A current authenticator code or recovery code is required.', 400);
+    }
     user.totpSecret = null;
+    if (!await hasOtherTwoFactorProvider(storage, user)) {
+      user.totpRecoveryCode = null;
+    }
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
     user.yubikeyKey1 = null;
     user.yubikeyKey2 = null;
@@ -1269,7 +1412,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
 // PUT /api/accounts/totp
 // enable: { enabled: true, secret: "...", token: "123456", masterPasswordHash?: "...", userVerificationToken?: "..." }
-// disable: { enabled: false, masterPasswordHash: "..." }
+// disable: { enabled: false, token: "123456" | recoveryCode: "...", masterPasswordHash?: "..." }
 export async function handleSetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
@@ -1299,19 +1442,37 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!body.token) {
       return errorResponse('TOTP token is required', 400);
     }
-    let verifiedUser = false;
-    if (userVerificationToken) {
-      verifiedUser = await verifyTotpUserVerificationToken(env, user, normalizedSecret, userVerificationToken);
+
+    // Replacing an existing secret requires the current second factor; first-time enable keeps
+    // accepting master-password proof.
+    const replacingExisting = isTotpRotation(user.totpSecret, normalizedSecret);
+    const verification = userVerificationToken
+      ? await readTotpUserVerificationToken(env, user, userVerificationToken)
+      : null;
+
+    if (replacingExisting) {
+      if (!verification || (verification.via !== 'totp' && verification.via !== 'recovery')) {
+        return errorResponse('A current authenticator code or recovery code is required to replace TOTP', 400);
+      }
+    } else {
+      let verifiedUser = false;
+      if (verification) {
+        verifiedUser = true;
+      } else if (masterPasswordHash) {
+        verifiedUser = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
+      }
+      if (!verifiedUser) {
+        return errorResponse('User verification failed.', 400);
+      }
     }
-    if (!verifiedUser && masterPasswordHash) {
-      verifiedUser = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
-    }
-    if (!verifiedUser) {
-      return errorResponse('User verification failed.', 400);
-    }
+
     const matchedCounter = await findMatchingTotpCounter(normalizedSecret, body.token);
     if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
       return errorResponse('Invalid TOTP token', 400);
+    }
+    // Minting a recovery code for an existing authenticator requires a current second factor.
+    if (recoveryCodeMintRequiresStepUp(user.totpSecret, user.totpRecoveryCode, verification?.via)) {
+      return errorResponse('A current authenticator code or recovery code is required to issue a recovery code', 400);
     }
     user.totpSecret = normalizedSecret;
     if (!user.totpRecoveryCode) {
@@ -1334,13 +1495,26 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
   }
 
   if (body.enabled === false) {
-    if (!body.masterPasswordHash) {
-      return errorResponse('masterPasswordHash is required to disable TOTP', 400);
+    const token = readBodyString(body, ['token', 'Token', 'code', 'Code', 'otp', 'OTP']);
+    const recoveryCode = readBodyString(body, ['recoveryCode', 'RecoveryCode', 'recovery_code']);
+    // Disabling takes a current authenticator or recovery code; the master password is never enough
+    // alone.
+    if (!token.trim() && !normalizeRecoveryCodeInput(recoveryCode)) {
+      return errorResponse('A current authenticator code or recovery code is required to disable TOTP', 400);
     }
-    const valid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
-    if (!valid) return errorResponse('Invalid password', 400);
+    if (body.masterPasswordHash) {
+      const valid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
+      if (!valid) return errorResponse('Invalid password', 400);
+    }
+    // The dialog's single field accepts either an authenticator code or a recovery code.
+    if (!await verifyTotpSecondFactor(user, { token, recoveryCode: recoveryCode || token })) {
+      return errorResponse('Invalid authenticator code', 400);
+    }
 
     user.totpSecret = null;
+    if (!await hasOtherTwoFactorProvider(storage, user)) {
+      user.totpRecoveryCode = null;
+    }
     user.updatedAt = new Date().toISOString();
     await storage.saveUser(user);
     await storage.deleteRefreshTokensByUserId(user.id);
@@ -1384,6 +1558,15 @@ export async function handleGetTotpRecoveryCode(request: Request, env: Env, user
   if (!currentHash) return errorResponse('masterPasswordHash is required', 400);
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
+
+  // Minting a recovery code for an existing authenticator requires a current second factor.
+  const userVerificationToken = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
+  const verification = userVerificationToken
+    ? await readTotpUserVerificationToken(env, user, userVerificationToken)
+    : null;
+  if (recoveryCodeMintRequiresStepUp(user.totpSecret, user.totpRecoveryCode, verification?.via)) {
+    return errorResponse('A current authenticator code or recovery code is required to issue a recovery code', 400);
+  }
 
   if (!user.totpRecoveryCode) {
     user.totpRecoveryCode = createRecoveryCode();
