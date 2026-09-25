@@ -324,6 +324,16 @@ export default defineConfig(({ mode }) => {
         '/config': 'http://127.0.0.1:8787',
         '/notifications': 'http://127.0.0.1:8787',
         '/.well-known': 'http://127.0.0.1:8787',
+        '/cdn-2fa': {
+          target: 'https://api.2fa.directory',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/cdn-2fa/, ''),
+        },
+        '/cdn-passkey': {
+          target: 'https://passkeys-api.2fa.directory',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/cdn-passkey/, ''),
+        },
       },
     },
   };

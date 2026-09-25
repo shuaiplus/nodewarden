@@ -1463,5 +1463,6 @@ Object.assign(sv, {
 Object.assign(sv, { "txt_password_security_last_checked": "Senast kontrollerad: {value}" });
 Object.assign(sv, { "txt_no_password_risks_in_filter": "Inga lösenordsrisker i denna kategori" });
 Object.assign(sv, { "txt_password_security_show_all": "Show all", "txt_password_security_hide_all": "Hide all", "txt_password_security_jump": "Go to item", "txt_password_security_exposed_short": "Exposed {count} times", "txt_password_security_weak_short": "Weak password", "txt_password_security_reused_short": "Reused" });
+Object.assign(sv, { "txt_two_factor_missing": "No 2FA", "txt_two_factor_missing_short": "No 2FA", "txt_two_factor_supported": "2FA supported", "txt_passkey_available": "Passkey", "txt_passkey_supported": "Passkey supported", "txt_passkey_supported_short": "Passkey", "txt_two_factor_cdn_unavailable": "Could not reach the 2FA directory. 2FA support could not be checked.", "txt_passkey_cdn_unavailable": "Could not reach the passkey directory. Passkey support could not be checked." });
 
 export default sv;

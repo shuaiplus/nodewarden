@@ -117,7 +117,7 @@ export async function initI18n(): Promise<void> {
 }
 
 export function t(key: string, params?: I18nParams): string {
-  const template = activeMessages[key] ?? key;
+  const template = activeMessages[key] ?? enMessages[key] ?? key;
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? ''));
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { AlertTriangle, CheckCircle2, ExternalLink, Eye, EyeOff, RefreshCw, ScanSearch, ShieldAlert, ShieldCheck, Unplug } from 'lucide-preact';
+import { AlertTriangle, CheckCircle2, ExternalLink, Eye, EyeOff, Fingerprint, KeyRound, RefreshCw, ScanSearch, ShieldAlert, ShieldCheck, Unplug } from 'lucide-preact';
 import { Link } from 'wouter';
 import { maskSecret } from '@/components/vault/vault-page-helpers';
 import { getPasswordSecurityState, readPasswordSecurityState, startPasswordSecurityScan, subscribePasswordSecurityState } from '@/lib/password-security-cache';
@@ -11,7 +11,7 @@ interface PasswordSecurityPageProps {
   loading: boolean;
 }
 
-type PasswordSecurityFilter = 'exposed' | 'reused' | 'weak' | 'all';
+type PasswordSecurityFilter = 'exposed' | 'reused' | 'weak' | 'twoFactorMissing' | 'passkeyAvailable' | 'all';
 
 function vaultFingerprint(ciphers: Cipher[]): string {
   return JSON.stringify(ciphers.map((cipher) => ({
@@ -52,6 +52,8 @@ export default function PasswordSecurityPage(props: PasswordSecurityPageProps) {
     if (!report || filter === 'all') return report?.items || [];
     if (filter === 'exposed') return report.items.filter((item) => (item.exposedCount || 0) > 0);
     if (filter === 'reused') return report.items.filter((item) => item.reusedCount > 1);
+    if (filter === 'twoFactorMissing') return report.items.filter((item) => item.twoFactorSupported === false);
+    if (filter === 'passkeyAvailable') return report.items.filter((item) => item.passkeySupported === true);
     return report.items.filter((item) => item.weak);
   }, [filter, report]);
   const allPasswordsVisible = !!report?.items.length && report.items.every((item) => revealedPasswordIds.has(item.cipherId));
@@ -110,6 +112,8 @@ export default function PasswordSecurityPage(props: PasswordSecurityPageProps) {
           <SecurityMetric icon={<ShieldAlert size={18} />} tone="danger" label={t('txt_exposed_passwords')} value={report?.exposedCount ?? 0} active={filter === 'exposed'} disabled={!report} onClick={() => setFilter('exposed')} />
           <SecurityMetric icon={<AlertTriangle size={18} />} tone="warning" label={t('txt_reused_passwords')} value={report?.reusedCount ?? 0} active={filter === 'reused'} disabled={!report} onClick={() => setFilter('reused')} />
           <SecurityMetric icon={<AlertTriangle size={18} />} tone="warning" label={t('txt_weak_passwords')} value={report?.weakCount ?? 0} active={filter === 'weak'} disabled={!report} onClick={() => setFilter('weak')} />
+          <SecurityMetric icon={<KeyRound size={18} />} tone="warning" label={t('txt_two_factor_missing')} value={report?.twoFactorMissingCount ?? 0} active={filter === 'twoFactorMissing'} disabled={!report} onClick={() => setFilter('twoFactorMissing')} />
+          <SecurityMetric icon={<Fingerprint size={18} />} tone="primary" label={t('txt_passkey_available')} value={report?.passkeyAvailableCount ?? 0} active={filter === 'passkeyAvailable'} disabled={!report} onClick={() => setFilter('passkeyAvailable')} />
           <SecurityMetric icon={<CheckCircle2 size={18} />} tone="primary" label={t('txt_passwords_checked')} value={`${scanning ? progress.checked : report?.checkedCount || 0} / ${scanning ? progress.total : report?.eligibleCount || 0}`} active={filter === 'all'} disabled={!report} onClick={() => setFilter('all')} />
         </div>
       )}
@@ -120,6 +124,12 @@ export default function PasswordSecurityPage(props: PasswordSecurityPageProps) {
         <section className="password-security-results card">
           {report.unavailableCount > 0 && (
             <div className="password-security-notice warning"><Unplug size={16} />{t('txt_password_security_unavailable', { count: report.unavailableCount })}</div>
+          )}
+          {report.twoFactorUnavailable && (
+            <div className="password-security-notice warning"><Unplug size={16} />{t('txt_two_factor_cdn_unavailable')}</div>
+          )}
+          {report.passkeyUnavailable && (
+            <div className="password-security-notice warning"><Unplug size={16} />{t('txt_passkey_cdn_unavailable')}</div>
           )}
           {!report.items.length ? (
             <div className="password-security-empty compact"><CheckCircle2 size={25} /><strong>{t('txt_no_password_risks')}</strong></div>
@@ -141,6 +151,8 @@ export default function PasswordSecurityPage(props: PasswordSecurityPageProps) {
                         {(item.exposedCount || 0) > 0 && <span className="risk-badge danger">{t('txt_password_security_exposed_short', { count: item.exposedCount || 0 })}</span>}
                         {item.weak && <span className="risk-badge weak">{t('txt_password_security_weak_short')}</span>}
                         {item.reusedCount > 1 && <span className="risk-badge reused">{t('txt_password_security_reused_short')}</span>}
+                        {item.twoFactorSupported === false && <span className="risk-badge twofactor">{t('txt_two_factor_missing_short')}</span>}
+                        {item.passkeySupported === true && <span className="risk-badge passkey">{t('txt_passkey_supported_short')}</span>}
                       </div>
                     </div>
                     <span className="password-security-password">{passwordVisible ? password : maskSecret(password)}</span>
