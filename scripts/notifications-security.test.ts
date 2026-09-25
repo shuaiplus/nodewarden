@@ -44,15 +44,29 @@ function createTestEnv() {
   };
 
   const db = {
-    prepare() {
-      return {
-        bind() {
-          return this;
+    prepare(sql: string) {
+      const statement = {
+        bound: [] as unknown[],
+        bind(...values: unknown[]) {
+          statement.bound = values;
+          return statement;
         },
+        // Drizzle's D1 session reads SELECT results with raw(), as positional
+        // column arrays. first() remains for any direct D1 lookup.
         async first() {
           return userRow;
         },
+        async raw() {
+          const selected = sql.match(/select\s+([\s\S]+?)\s+from\s+/i)?.[1];
+          if (!selected || statement.bound[0] !== userRow.id) return [];
+          const columns = selected.split(',').map((part) => {
+            const names = [...part.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+            return names.at(-1) ?? '';
+          });
+          return [columns.map((column) => (column in userRow ? userRow[column as keyof typeof userRow] : null))];
+        },
       };
+      return statement;
     },
   } as unknown as D1Database;
 
