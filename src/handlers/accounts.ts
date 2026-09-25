@@ -217,6 +217,89 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+type MasterPasswordUpdate =
+  | { ok: true; masterPasswordHash: string; key: string }
+  | { ok: false; response: Response };
+
+// A new master password arrives either as web 2026.9's nested authenticationData/unlockData
+// (server MasterPasswordAuthenticationData/UnlockData) or as legacy newMasterPasswordHash + key.
+// Password change and emergency takeover share this parse: the nested halves must agree with each
+// other and with the user's stored KDF and email salt, otherwise the stored hash and wrapped user
+// key stop matching what clients derive at the next login.
+export function parseMasterPasswordUpdate(body: unknown, user: User): MasterPasswordUpdate {
+  const reject = (message: string): MasterPasswordUpdate => ({ ok: false, response: errorResponse(message, 400) });
+  if (!isRecord(body)) return reject('Request body must be a JSON object');
+  const hasAuthenticationData = isRecord(body.authenticationData);
+  const hasUnlockData = isRecord(body.unlockData);
+  if (hasAuthenticationData !== hasUnlockData) {
+    return reject('authenticationData and unlockData must be provided together');
+  }
+
+  const legacyMasterPasswordHash = typeof body.newMasterPasswordHash === 'string'
+    ? body.newMasterPasswordHash.trim()
+    : '';
+  const legacyKey = typeof body.newKey === 'string' && body.newKey.trim()
+    ? body.newKey.trim()
+    : typeof body.key === 'string'
+      ? body.key.trim()
+      : '';
+  let newMasterPasswordHash: string;
+  let nextKey: string;
+
+  if (hasAuthenticationData && hasUnlockData) {
+    newMasterPasswordHash = readNestedString(body, ['authenticationData', 'masterPasswordAuthenticationHash']).trim();
+    nextKey = readNestedString(body, ['unlockData', 'masterKeyWrappedUserKey']).trim();
+    if (!newMasterPasswordHash || !nextKey) {
+      return reject('authenticationData and unlockData are incomplete');
+    }
+
+    const authKdf = readNestedNumber(body, ['authenticationData', 'kdf', 'kdfType']);
+    const authIterations = readNestedNumber(body, ['authenticationData', 'kdf', 'iterations']);
+    const authMemory = readNestedNumber(body, ['authenticationData', 'kdf', 'memory']);
+    const authParallelism = readNestedNumber(body, ['authenticationData', 'kdf', 'parallelism']);
+    const unlockKdf = readNestedNumber(body, ['unlockData', 'kdf', 'kdfType']);
+    const unlockIterations = readNestedNumber(body, ['unlockData', 'kdf', 'iterations']);
+    const unlockMemory = readNestedNumber(body, ['unlockData', 'kdf', 'memory']);
+    const unlockParallelism = readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
+    const authSalt = readNestedString(body, ['authenticationData', 'salt']);
+    const unlockSalt = readNestedString(body, ['unlockData', 'salt']);
+    const expectedSalt = user.email.trim().toLowerCase();
+
+    if (authKdf === undefined || authIterations === undefined || unlockKdf === undefined || unlockIterations === undefined) {
+      return reject('authenticationData and unlockData must include KDF settings');
+    }
+    if (
+      authKdf !== unlockKdf ||
+      authIterations !== unlockIterations ||
+      authMemory !== unlockMemory ||
+      authParallelism !== unlockParallelism
+    ) {
+      return reject('authenticationData and unlockData must use the same KDF settings');
+    }
+    if (!authSalt || authSalt !== unlockSalt || authSalt !== expectedSalt) {
+      return reject('Invalid master password salt');
+    }
+    if (
+      authKdf !== user.kdfType ||
+      authIterations !== user.kdfIterations ||
+      (authKdf === 1 && (authMemory !== user.kdfMemory || authParallelism !== user.kdfParallelism))
+    ) {
+      return reject('KDF settings cannot be changed with the password endpoint');
+    }
+  } else {
+    if (!legacyMasterPasswordHash || !legacyKey) {
+      return reject('newMasterPasswordHash and key must be provided together');
+    }
+    newMasterPasswordHash = legacyMasterPasswordHash;
+    nextKey = legacyKey;
+  }
+
+  if (!looksLikeEncString(nextKey)) {
+    return reject('new key is not a valid encrypted string');
+  }
+  return { ok: true, masterPasswordHash: newMasterPasswordHash, key: nextKey };
+}
+
 async function readRequestBody(request: Request): Promise<Record<string, unknown>> {
   const contentType = request.headers.get('content-type') || '';
   if (contentType.includes('application/x-www-form-urlencoded')) {
@@ -738,76 +821,11 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
 
-  const hasAuthenticationData = isRecord(body.authenticationData);
-  const hasUnlockData = isRecord(body.unlockData);
-  if (hasAuthenticationData !== hasUnlockData) {
-    return errorResponse('authenticationData and unlockData must be provided together', 400);
-  }
-
-  const legacyMasterPasswordHash = typeof body.newMasterPasswordHash === 'string'
-    ? body.newMasterPasswordHash.trim()
-    : '';
-  const legacyKey = typeof body.newKey === 'string' && body.newKey.trim()
-    ? body.newKey.trim()
-    : typeof body.key === 'string'
-      ? body.key.trim()
-      : '';
-  let newMasterPasswordHash: string;
-  let nextKey: string;
-
-  if (hasAuthenticationData && hasUnlockData) {
-    newMasterPasswordHash = readNestedString(body, ['authenticationData', 'masterPasswordAuthenticationHash']).trim();
-    nextKey = readNestedString(body, ['unlockData', 'masterKeyWrappedUserKey']).trim();
-    if (!newMasterPasswordHash || !nextKey) {
-      return errorResponse('authenticationData and unlockData are incomplete', 400);
-    }
-
-    const authKdf = readNestedNumber(body, ['authenticationData', 'kdf', 'kdfType']);
-    const authIterations = readNestedNumber(body, ['authenticationData', 'kdf', 'iterations']);
-    const authMemory = readNestedNumber(body, ['authenticationData', 'kdf', 'memory']);
-    const authParallelism = readNestedNumber(body, ['authenticationData', 'kdf', 'parallelism']);
-    const unlockKdf = readNestedNumber(body, ['unlockData', 'kdf', 'kdfType']);
-    const unlockIterations = readNestedNumber(body, ['unlockData', 'kdf', 'iterations']);
-    const unlockMemory = readNestedNumber(body, ['unlockData', 'kdf', 'memory']);
-    const unlockParallelism = readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
-    const authSalt = readNestedString(body, ['authenticationData', 'salt']);
-    const unlockSalt = readNestedString(body, ['unlockData', 'salt']);
-    const expectedSalt = user.email.trim().toLowerCase();
-
-    if (authKdf === undefined || authIterations === undefined || unlockKdf === undefined || unlockIterations === undefined) {
-      return errorResponse('authenticationData and unlockData must include KDF settings', 400);
-    }
-    if (
-      authKdf !== unlockKdf ||
-      authIterations !== unlockIterations ||
-      authMemory !== unlockMemory ||
-      authParallelism !== unlockParallelism
-    ) {
-      return errorResponse('authenticationData and unlockData must use the same KDF settings', 400);
-    }
-    if (!authSalt || authSalt !== unlockSalt || authSalt !== expectedSalt) {
-      return errorResponse('Invalid master password salt', 400);
-    }
-    if (
-      authKdf !== user.kdfType ||
-      authIterations !== user.kdfIterations ||
-      (authKdf === 1 && (authMemory !== user.kdfMemory || authParallelism !== user.kdfParallelism))
-    ) {
-      return errorResponse('KDF settings cannot be changed with the password endpoint', 400);
-    }
-  } else {
-    if (!legacyMasterPasswordHash || !legacyKey) {
-      return errorResponse('newMasterPasswordHash and key must be provided together', 400);
-    }
-    newMasterPasswordHash = legacyMasterPasswordHash;
-    nextKey = legacyKey;
-  }
+  const update = parseMasterPasswordUpdate(body, user);
+  if (!update.ok) return update.response;
 
   const nextPrivateKey = body.newEncryptedPrivateKey || body.encryptedPrivateKey;
   const nextPublicKey = body.newPublicKey || body.publicKey;
-  if (!looksLikeEncString(nextKey)) {
-    return errorResponse('new key is not a valid encrypted string', 400);
-  }
   if (nextPrivateKey && !looksLikeEncString(nextPrivateKey)) {
     return errorResponse('new encryptedPrivateKey is not a valid encrypted string', 400);
   }
@@ -826,8 +844,8 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
     return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
   }
 
-  user.masterPasswordHash = await auth.hashPasswordServer(newMasterPasswordHash, user.email);
-  user.key = nextKey;
+  user.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, user.email);
+  user.key = update.key;
   if (nextPrivateKey) user.privateKey = nextPrivateKey;
   if (nextPublicKey) user.publicKey = nextPublicKey;
   if (shouldUpdateHint) {

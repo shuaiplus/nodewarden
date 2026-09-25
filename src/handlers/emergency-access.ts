@@ -4,7 +4,9 @@ import { AuthService } from '../services/auth';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { verifyRegisterVerifyToken } from '../utils/jwt';
+import { upsertCredentialAccount } from '../services/auth-accounts';
 import { cipherToResponse } from './ciphers';
+import { parseMasterPasswordUpdate } from './accounts';
 import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
@@ -242,6 +244,8 @@ export async function handleEmergencyAccessRoute(
       kdfMemory: grantor.kdfMemory ?? null,
       kdfParallelism: grantor.kdfParallelism ?? null,
       keyEncrypted: record.keyEncrypted,
+      // Web 2026.9 salts the new password with this and only falls back to the email it was given.
+      salt: grantor.email.toLowerCase(),
       object: 'emergencyAccessTakeover',
     });
   }
@@ -249,13 +253,21 @@ export async function handleEmergencyAccessRoute(
     if (!canAct(record, user.id, EmergencyAccessType.Takeover)) return errorResponse('Emergency access not valid', 400);
     const grantor = await storage.getUserById(record.grantorId);
     if (!grantor) return errorResponse('Grantor user not found', 404);
-    const body = await request.json() as Record<string, unknown>;
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return errorResponse('Invalid JSON', 400);
+    }
+    const update = parseMasterPasswordUpdate(body, grantor);
+    if (!update.ok) return update.response;
     const auth = new AuthService(env);
-    grantor.masterPasswordHash = await auth.hashPasswordServer(String(body.newMasterPasswordHash || ''), grantor.email);
-    grantor.key = String(body.key || grantor.key);
+    grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, grantor.email);
+    grantor.key = update.key;
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
     await storage.saveUser(grantor);
+    await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash);
     await storage.deleteRefreshTokensByUserId(grantor.id);
     AuthService.invalidateUserCache(grantor.id);
     return new Response(null, { status: 200 });
