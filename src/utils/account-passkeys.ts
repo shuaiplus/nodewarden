@@ -235,7 +235,9 @@ export function normalizeRegistrationResponse(raw: unknown): RegistrationRespons
   const response = input?.response && typeof input.response === 'object' ? input.response as Record<string, any> : null;
   if (!input || !response) return null;
   const clientDataJSON = response.clientDataJSON || response.clientDataJson;
-  if (!input.id || !input.rawId || !clientDataJSON || !response.attestationObject) return null;
+  // Official clients send PascalCase AttestationObject for 2FA WebAuthn enrollment.
+  const attestationObject = response.attestationObject || response.AttestationObject;
+  if (!input.id || !input.rawId || !clientDataJSON || !attestationObject) return null;
   return {
     id: normalizeWebAuthnBase64(input.id),
     rawId: normalizeWebAuthnBase64(input.rawId),
@@ -243,7 +245,7 @@ export function normalizeRegistrationResponse(raw: unknown): RegistrationRespons
     authenticatorAttachment: input.authenticatorAttachment,
     clientExtensionResults: input.clientExtensionResults || input.extensions || {},
     response: {
-      attestationObject: normalizeWebAuthnBase64(response.attestationObject),
+      attestationObject: normalizeWebAuthnBase64(attestationObject),
       clientDataJSON: normalizeWebAuthnBase64(clientDataJSON),
       authenticatorData: response.authenticatorData ? normalizeWebAuthnBase64(response.authenticatorData) : undefined,
       transports: Array.isArray(response.transports) ? response.transports.map(String) as AuthenticatorTransportFuture[] : undefined,
