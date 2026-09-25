@@ -614,6 +614,28 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
   return jsonResponse({});
 }
 
+// Upstream OrganizationUsersController.UserPublicKeys: official web's bulk confirm dialog wraps the
+// org key with each selected member's public key before it posts the confirm.
+export async function handleListMemberPublicKeys(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  // Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an
+  // empty list, so an absent field fails MinLength and only an explicit null fails Required.
+  const sentIds = readBody(body, ['ids', 'Ids']);
+  const ids = sentIds === undefined ? [] : sentIds;
+  if (!Array.isArray(ids)) return errorResponse('The Ids field is required.', 400);
+  if (!ids.length) return errorResponse("The field Ids must be a string or array type with a minimum length of '1'.", 400);
+  const keys = await orgRepo.listAcceptedMemberPublicKeys(env.DB, orgId, ids.map(asString));
+  return jsonResponse({
+    data: keys.map(({ publicKey, ...member }) => ({ ...member, key: publicKey, object: 'organizationUserPublicKeyResponseModel' })),
+    object: 'list',
+    continuationToken: null,
+  });
+}
+
 export async function handleConfirmMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;

@@ -4,6 +4,7 @@ import {
   handleGetProfile,
   handleUpdateProfile,
   handleGetKeys,
+  handleGetUserPublicKey,
   handleSetKeys,
   handleGetRevisionDate,
   handleSetUserKeyId,
@@ -170,6 +171,11 @@ export async function handleAuthenticatedRoute(
     if (method === 'GET') return handleGetKeys(request, env, userId);
     if (method === 'POST') return handleSetKeys(request, env, userId);
     return errorResponse('Method not allowed', 405);
+  }
+
+  const userPublicKeyMatch = path.match(/^\/api\/users\/([a-f0-9-]+)\/public-key$/i);
+  if (userPublicKeyMatch && method === 'GET') {
+    return handleGetUserPublicKey(env, userPublicKeyMatch[1]);
   }
 
   if (path === '/api/accounts/totp') {

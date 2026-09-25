@@ -19,6 +19,7 @@ import {
   handleInviteMembers,
   handleLeaveOrganization,
   handleListGroups,
+  handleListMemberPublicKeys,
   handleListMembers,
   handleListOrgCollections,
   handleListPolicies,
@@ -128,6 +129,7 @@ export async function handleOrganizationRoute(
 
   if (sub === '/users' && method === 'GET') return handleListMembers(env, userId, orgId);
   if (sub === '/users/invite' && method === 'POST') return handleInviteMembers(request, env, currentUser, orgId);
+  if (sub === '/users/public-keys' && method === 'POST') return handleListMemberPublicKeys(request, env, userId, orgId);
   const userMatch = sub.match(/^\/users\/([a-f0-9-]+)(?:\/(accept|confirm|revoke|restore|restore\/vnext))?$/i);
   if (userMatch) {
     const memberId = userMatch[1];

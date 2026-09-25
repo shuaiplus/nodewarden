@@ -722,6 +722,15 @@ export async function handleGetKeys(request: Request, env: Env, userId: string):
   return jsonResponse(keysResponse(user));
 }
 
+// GET /api/users/{id}/public-key: upstream UsersController.GetPublicKeyAsync. Official clients
+// wrap keys for another account (emergency access and org member confirm) with it, so any
+// logged-in caller may read it.
+export async function handleGetUserPublicKey(env: Env, id: string): Promise<Response> {
+  const user = await new StorageService(env.DB).getUserById(id);
+  if (!user?.publicKey) return errorResponse('Resource not found.', 404);
+  return jsonResponse({ userId: user.id, publicKey: user.publicKey, object: 'userKey' });
+}
+
 // POST /api/accounts/keys
 export async function handleSetKeys(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);

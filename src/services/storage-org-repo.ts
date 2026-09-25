@@ -18,10 +18,12 @@ import {
   pendingCollectionUsers,
   ssoAuth,
   ssoUsers,
+  users,
 } from '../db/schema';
 import type { Cipher } from '../types';
 import { hasFullCollectionAccess } from './org-authz';
 import {
+  MembershipStatus,
   type CollectionAccess,
   type CollectionRecord,
   type GroupRecord,
@@ -250,6 +252,24 @@ export async function countConfirmedOwners(db: D1Database, orgId: string): Promi
       eq(organizationMemberships.status, 2),
     ));
   return Number(row?.count || 0);
+}
+
+// Upstream User_ReadPublicKeysByOrganizationUserIds: only Accepted members are awaiting confirm,
+// so the bulk confirm dialog gets no keys for anyone else.
+export async function listAcceptedMemberPublicKeys(
+  db: D1Database,
+  orgId: string,
+  memberIds: string[]
+): Promise<Array<{ id: string; userId: string; publicKey: string | null }>> {
+  // The caller picks how many ids to send, so filter the org's Accepted members in memory instead
+  // of binding the ids: one statement with two parameters, however long the list.
+  const rows = await getOrm(db)
+    .select({ id: organizationMemberships.id, userId: users.id, publicKey: users.publicKey })
+    .from(organizationMemberships)
+    .innerJoin(users, eq(users.id, organizationMemberships.userId))
+    .where(and(eq(organizationMemberships.orgId, orgId), eq(organizationMemberships.status, MembershipStatus.Accepted)));
+  const wanted = new Set(memberIds);
+  return rows.filter(({ id }) => wanted.has(id));
 }
 
 export async function saveCollection(db: D1Database, collection: CollectionRecord): Promise<void> {
