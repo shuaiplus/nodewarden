@@ -457,30 +457,45 @@ function storedPermissions(change: { type: number; permissions: OrgPermissions }
   return change.type === MembershipType.Custom ? change.permissions : null;
 }
 
+// The OrganizationUserUserMiniDetailsResponseModel fields, which the full member listing extends.
+// Named after the bound account, with the invited email standing in until an account accepts.
+function memberMiniDetails(item: MembershipRecord, account: Pick<User, 'name' | 'email'> | null) {
+  return {
+    id: item.id,
+    userId: item.userId,
+    type: clientMembershipType(item.type),
+    status: publicMembershipStatus(item.status),
+    name: account?.name || null,
+    email: account?.email || item.email,
+  };
+}
+
 export async function handleListMembers(env: Env, userId: string, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const storage = new StorageService(env.DB);
-  const members = await orgRepo.listMembershipsByOrg(env.DB, orgId);
-  const data = [];
-  for (const item of members) {
-    const account = item.userId ? await storage.getUserById(item.userId) : null;
-    data.push({
-      id: item.id,
-      userId: item.userId,
-      name: account?.name || null,
-      email: account?.email || item.email,
-      externalId: item.externalId,
-      status: publicMembershipStatus(item.status),
-      type: item.type === MembershipType.Manager ? MembershipType.Custom : item.type,
-      accessAll: item.accessAll,
-      twoFactorEnabled: !!(account?.totpSecret),
-      resetPasswordEnrolled: !!item.resetPasswordKey,
-      permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
-      accessSecretsManager: item.type <= MembershipType.Admin,
-      object: 'organizationUserUserDetails',
-    });
-  }
+  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account }) => ({
+    ...memberMiniDetails(item, account),
+    externalId: item.externalId,
+    accessAll: item.accessAll,
+    twoFactorEnabled: !!(account?.totpSecret),
+    resetPasswordEnrolled: !!item.resetPasswordKey,
+    permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
+    accessSecretsManager: item.type <= MembershipType.Admin,
+    object: 'organizationUserUserDetails',
+  }));
+  return jsonResponse({ data, object: 'list', continuationToken: null });
+}
+
+// Upstream OrganizationUsersController.GetMiniDetails: open to every confirmed member because
+// official web's collection, group, event log and sponsorship dialogs all look members up here,
+// so it carries no keys, permissions or 2FA state.
+export async function handleListMemberMiniDetails(env: Env, userId: string, orgId: string): Promise<Response> {
+  const member = await requireMember(env.DB, userId, orgId);
+  if (member instanceof Response) return member;
+  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account }) => ({
+    ...memberMiniDetails(item, account),
+    object: 'organizationUserUserMiniDetails',
+  }));
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 

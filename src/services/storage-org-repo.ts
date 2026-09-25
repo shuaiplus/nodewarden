@@ -20,7 +20,7 @@ import {
   ssoUsers,
   users,
 } from '../db/schema';
-import type { Attachment, Cipher } from '../types';
+import type { Attachment, Cipher, User } from '../types';
 import { hasFullCollectionAccess, type CollectionAssignmentPlan } from './org-authz';
 import { attachmentUpsert } from './storage-attachment-repo';
 import { cipherUpsert } from './storage-cipher-repo';
@@ -239,6 +239,24 @@ export async function listMembershipsByOrg(db: D1Database, orgId: string): Promi
     .where(eq(organizationMemberships.orgId, orgId))
     .orderBy(asc(organizationMemberships.createdAt));
   return rows.map(mapMembership);
+}
+
+// Upstream OrganizationUserUserDetailsView: one LEFT JOIN rather than a user lookup per member,
+// which would hit the Workers per-invocation D1 query cap in large orgs. Invited rows have no account.
+export async function listMembershipsWithAccountsByOrg(
+  db: D1Database,
+  orgId: string
+): Promise<Array<{ item: MembershipRecord; account: Pick<User, 'name' | 'email' | 'totpSecret'> | null }>> {
+  const rows = await getOrm(db)
+    .select({
+      membership: organizationMemberships,
+      account: { name: users.name, email: users.email, totpSecret: users.totpSecret },
+    })
+    .from(organizationMemberships)
+    .leftJoin(users, eq(users.id, organizationMemberships.userId))
+    .where(eq(organizationMemberships.orgId, orgId))
+    .orderBy(asc(organizationMemberships.createdAt));
+  return rows.map(({ membership, account }) => ({ item: mapMembership(membership), account }));
 }
 
 export async function deleteMembership(db: D1Database, id: string): Promise<void> {
