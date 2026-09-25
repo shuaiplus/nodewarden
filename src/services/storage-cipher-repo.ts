@@ -104,7 +104,8 @@ export async function getCipherForUser(db: D1Database, id: string, userId: strin
   return parseCipherRow(row);
 }
 
-export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> {
+// The upsert as an unexecuted statement, so callers can batch it with related writes.
+export function cipherUpsert(db: D1Database, cipher: Cipher) {
   const folderId = normalizeOptionalId(cipher.folderId);
   const data = buildCipherData(cipher, folderId);
   const organizationId = normalizeOptionalId(cipher.organizationId ?? null);
@@ -125,7 +126,7 @@ export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> 
     archivedAt: cipher.archivedAt ?? null,
     deletedAt: cipher.deletedAt,
   };
-  await getOrm(db)
+  return getOrm(db)
     .insert(ciphers)
     .values(values)
     .onConflictDoUpdate({
@@ -154,6 +155,10 @@ export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> 
         ),
       ),
     });
+}
+
+export async function saveCipher(db: D1Database, cipher: Cipher): Promise<void> {
+  await cipherUpsert(db, cipher);
 }
 
 export async function deleteCipher(db: D1Database, id: string, userId: string): Promise<void> {

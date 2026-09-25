@@ -13,6 +13,7 @@ import {
   Attachment,
   PasswordHistory,
 } from '../types';
+import { LIMITS } from '../config/limits';
 import { StorageService } from '../services/storage';
 import {
   notifyUserCipherCreate,
@@ -29,7 +30,7 @@ import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import * as orgRepo from '../services/storage-org-repo';
 import { canEditCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
-import { deleteAuthorizedCipher, loadAccessibleCipher } from './cipher-access';
+import { checkCollectionAssignment, deleteAuthorizedCipher, loadAccessibleCipher } from './cipher-access';
 import { readNullableFullUpdateField } from './cipher-full-update';
 
 // CONTRACT:
@@ -662,16 +663,12 @@ function hasIncomingAttachmentMetadata(source: any): boolean {
   return readIncomingAttachmentMetadata(source).length > 0;
 }
 
-async function syncIncomingAttachmentMetadata(
-  storage: StorageService,
-  cipherId: string,
-  cipherData: any
-): Promise<void> {
-  const incoming = readIncomingAttachmentMetadata(cipherData);
-  if (!incoming.length) return;
-
-  const currentById = new Map((await storage.getAttachmentsByCipher(cipherId)).map((attachment) => [attachment.id, attachment]));
-  for (const item of incoming) {
+// Applies client-sent attachment metadata (re-encrypted keys, renamed files) to the stored rows and
+// returns only the rows it changed.
+function applyIncomingAttachmentMetadata(current: Attachment[], cipherData: any): Attachment[] {
+  const currentById = new Map(current.map((attachment) => [attachment.id, attachment]));
+  const changedAttachments: Attachment[] = [];
+  for (const item of readIncomingAttachmentMetadata(cipherData)) {
     const attachment = currentById.get(item.id);
     if (!attachment) continue;
 
@@ -701,9 +698,19 @@ async function syncIncomingAttachmentMetadata(
       }
     }
 
-    if (changed) {
-      await storage.saveAttachment(attachment);
-    }
+    if (changed) changedAttachments.push(attachment);
+  }
+  return changedAttachments;
+}
+
+async function syncIncomingAttachmentMetadata(
+  storage: StorageService,
+  cipherId: string,
+  cipherData: any
+): Promise<void> {
+  if (!hasIncomingAttachmentMetadata(cipherData)) return;
+  for (const attachment of applyIncomingAttachmentMetadata(await storage.getAttachmentsByCipher(cipherId), cipherData)) {
+    await storage.saveAttachment(attachment);
   }
 }
 
@@ -1039,22 +1046,11 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   );
 }
 
-// PUT /api/ciphers/:id
-export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const existingCipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
-  if (!existingCipher) return errorResponse('Cipher not found', 404);
+type CipherMerge = { ok: true; cipher: Cipher } | { ok: false; message: string };
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  // Handle nested cipher object
-  // Android client sends PascalCase "Cipher" for organization ciphers
-  const cipherData = body.Cipher || body.cipher || body;
+// Full-update semantics shared by PUT /ciphers/{id} and the share endpoints: the client body
+// replaces the stored cipher, while unknown fields survive and server-owned ones stay put.
+function mergeFullCipherUpdate(existingCipher: Cipher, cipherData: any, preserveRevisionDate: boolean): CipherMerge {
   const incomingFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
   const incomingKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
   const incomingLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
@@ -1068,16 +1064,13 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
   const incomingRevisionDate = readCipherRevisionDate(cipherData);
   const hasAttachmentMigrationMetadata = hasIncomingAttachmentMetadata(cipherData);
-  const preserveRevisionDate =
-    shouldPreserveRepairableCipherUris(request)
-    && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
 
   if (incomingKey.present && !shouldAcceptCipherKey(incomingKey.value)) {
-    return errorResponse('Cipher key encryption is not supported by this server. Resync the client and try again.', 400);
+    return { ok: false, message: 'Cipher key encryption is not supported by this server. Resync the client and try again.' };
   }
 
   if (!hasAttachmentMigrationMetadata && isStaleCipherUpdate(existingCipher.updatedAt, incomingRevisionDate)) {
-    return errorResponse('The client copy of this cipher is out of date. Resync the client and try again.', 400);
+    return { ok: false, message: 'The client copy of this cipher is out of date. Resync the client and try again.' };
   }
 
   const nextType = Number(cipherData.type) || existingCipher.type;
@@ -1091,6 +1084,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     // Server-controlled fields (never from client)
     id: existingCipher.id,
     userId: existingCipher.userId,
+    organizationId: existingCipher.organizationId,
     type: nextType,
     favorite: cipherData.favorite ?? existingCipher.favorite,
     reprompt: cipherData.reprompt ?? existingCipher.reprompt,
@@ -1126,7 +1120,37 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   cipher.fields = readNullableFullUpdateField<Cipher['fields']>(cipherData, ['fields', 'Fields']);
   normalizeCipherForStorage(cipher);
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
-  if (compatibilityError) return errorResponse(compatibilityError, 400);
+  return compatibilityError ? { ok: false, message: compatibilityError } : { ok: true, cipher };
+}
+
+// PUT /api/ciphers/:id
+export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const existingCipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  if (!existingCipher) return errorResponse('Cipher not found', 404);
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  // Handle nested cipher object
+  // Android client sends PascalCase "Cipher" for organization ciphers
+  const cipherData = body.Cipher || body.cipher || body;
+  // Upstream CiphersController.Put: an item changes owner only through share, so a different
+  // organizationId means a stale client copy. An omitted one (NodeWarden web repair) keeps the owner.
+  const incomingOrganizationId = readCipherProp<string | null>(cipherData, ['organizationId', 'OrganizationId']);
+  if (incomingOrganizationId.present && normalizeOptionalId(incomingOrganizationId.value) !== (existingCipher.organizationId ?? null)) {
+    return errorResponse('Organization mismatch. Re-sync if you recently moved this item, then try again.', 400);
+  }
+  const preserveRevisionDate =
+    shouldPreserveRepairableCipherUris(request)
+    && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
+  const merged = mergeFullCipherUpdate(existingCipher, cipherData, preserveRevisionDate);
+  if (!merged.ok) return errorResponse(merged.message, 400);
+  const cipher = merged.cipher;
 
   // Prevent referencing a folder owned by another user.
   if (cipher.folderId) {
@@ -1145,6 +1169,135 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   return jsonResponse(
     cipherToResponse(cipher, attachments, responseOptions)
   );
+}
+
+// Upstream CipherShareRequestModel / CipherBulkShareRequestModel validation message.
+const NO_SHARE_COLLECTION = 'You must select at least one collection.';
+
+type ShareResult = { ok: true; ciphers: Cipher[]; revisionDate: string } | { ok: false; status: number; message: string };
+
+// Upstream CipherService.ShareAsync / ShareManyAsync. The caller already owns each personal cipher
+// and may write the collections; the client re-encrypted the body under the org key, so it replaces
+// the stored fields as a full update would. Each row keeps its owner and gains the org, and every
+// member's revision moves so their next sync pulls the ciphers in.
+async function shareOwnedCiphers(
+  request: Request,
+  env: Env,
+  storage: StorageService,
+  userId: string,
+  organizationId: string,
+  shares: Array<{ existing: Cipher; cipherData: any }>,
+  collectionIds: string[]
+): Promise<ShareResult> {
+  const merges = shares.map(({ existing, cipherData }) => mergeFullCipherUpdate(existing, cipherData, false));
+  const failed = merges.find((merge) => !merge.ok);
+  if (failed && !failed.ok) return { ok: false, status: 400, message: failed.message };
+  const sharedCiphers = merges.flatMap((merge) => merge.ok ? [{ ...merge.cipher, organizationId }] : []);
+
+  const folderIds = new Set((await storage.getAllFolders(userId)).map((folder) => folder.id));
+  if (sharedCiphers.some((cipher) => cipher.folderId && !folderIds.has(cipher.folderId))) {
+    return { ok: false, status: 404, message: 'Folder not found' };
+  }
+
+  // Re-encrypted attachment keys arrive in attachments2 and move in the same batch as their cipher,
+  // so a failed write never leaves org-key attachments on a cipher that is still personal.
+  const withAttachmentMetadata = shares.filter(({ cipherData }) => hasIncomingAttachmentMetadata(cipherData));
+  const currentAttachments = await storage.getAttachmentsByCipherIds(withAttachmentMetadata.map(({ existing }) => existing.id));
+  const changedAttachments = withAttachmentMetadata.flatMap(({ existing, cipherData }) =>
+    applyIncomingAttachmentMetadata(currentAttachments.get(existing.id) || [], cipherData));
+  await orgRepo.shareCiphers(env.DB, sharedCiphers, collectionIds, changedAttachments);
+  const revisionDate = await storage.updateRevisionDate(userId);
+  await orgRepo.bumpOrgMemberRevisions(env.DB, organizationId);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  return { ok: true, ciphers: sharedCiphers.map((cipher) => ({ ...cipher, collectionIds })), revisionDate };
+}
+
+function readShareCollectionIds(body: any): string[] {
+  return parseCipherIdList({ ids: body.collectionIds ?? body.CollectionIds }) ?? [];
+}
+
+// PUT/POST /api/ciphers/:id/share
+export async function handleShareCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const cipherData = body.Cipher || body.cipher || {};
+  const organizationId = normalizeOptionalId(cipherData.organizationId ?? cipherData.OrganizationId);
+  const collectionIds = readShareCollectionIds(body);
+  if (!organizationId) return errorResponse('Cipher OrganizationId is required.', 400);
+  if (!collectionIds.length) return errorResponse(NO_SHARE_COLLECTION, 400);
+
+  // Only a personal cipher of the caller can move; an org cipher or someone else's is not found.
+  const existing = await storage.getCipherForUser(id, userId);
+  if (!existing) return errorResponse('Cipher not found', 404);
+  const assignment = await checkCollectionAssignment(env, userId, organizationId, collectionIds);
+  if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
+
+  const shared = await shareOwnedCiphers(request, env, storage, userId, organizationId, [{ existing, cipherData }], collectionIds);
+  if (!shared.ok) return errorResponse(shared.message, shared.status);
+  const [cipher] = shared.ciphers;
+  notifyCipherUpdateForRequest(request, env, cipher, shared.revisionDate);
+  const attachments = await storage.getAttachmentsByCipher(cipher.id);
+  return jsonResponse(cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request)));
+}
+
+// PUT/POST /api/ciphers/share
+export async function handleBulkShareCiphers(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const cipherList: unknown = body.ciphers ?? body.Ciphers;
+  if (!Array.isArray(cipherList) || !cipherList.length) return errorResponse('You must select at least one cipher.', 400);
+  // The whole share is one D1 batch, so its size is capped like an import.
+  if (cipherList.length > LIMITS.performance.importItemLimit) {
+    return errorResponse(`Share exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
+  }
+  const requested = cipherList.map((cipherData) => ({
+    cipherData,
+    id: normalizeOptionalId(cipherData?.id ?? cipherData?.Id),
+    organizationId: normalizeOptionalId(cipherData?.organizationId ?? cipherData?.OrganizationId),
+  }));
+  if (requested.some((item) => !item.id || !item.organizationId)) {
+    return errorResponse('All Ciphers must have an Id and OrganizationId.', 400);
+  }
+  const organizationIds = new Set(requested.map((item) => item.organizationId as string));
+  if (organizationIds.size !== 1) return errorResponse('All ciphers must be for the same organization.', 400);
+  const collectionIds = readShareCollectionIds(body);
+  if (!collectionIds.length) return errorResponse(NO_SHARE_COLLECTION, 400);
+
+  // Upstream PutShareMany checks membership before ownership.
+  const [organizationId] = organizationIds;
+  const assignment = await checkCollectionAssignment(env, userId, organizationId, collectionIds);
+  if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
+  const owned = new Map(
+    (await storage.getCiphersByIds(requested.map((item) => item.id as string), userId)).map((cipher) => [cipher.id, cipher])
+  );
+  if (requested.some((item) => !owned.has(item.id as string))) {
+    return errorResponse('Trying to share ciphers that you do not own.', 400);
+  }
+
+  const shares = requested.map((item) => ({ existing: owned.get(item.id as string) as Cipher, cipherData: item.cipherData }));
+  const shared = await shareOwnedCiphers(request, env, storage, userId, organizationId, shares, collectionIds);
+  if (!shared.ok) return errorResponse(shared.message, shared.status);
+  const attachmentsByCipher = await storage.getAttachmentsByCipherIds(shared.ciphers.map((cipher) => cipher.id));
+  const responseOptions = cipherResponseOptionsForRequest(request);
+  return jsonResponse({
+    data: shared.ciphers.map((cipher) => cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], responseOptions)),
+    object: 'list',
+    continuationToken: null,
+  });
 }
 
 // DELETE /api/ciphers/:id

@@ -30,6 +30,8 @@ Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D
 
 Personal vault lists and mutations filter `organization_id IS NULL`. Organization ciphers are loaded by id, then membership and collection ACL in `src/handlers/cipher-access.ts`.
 
+A cipher changes owner only through share (`PUT /api/ciphers/{id}/share`, bulk `PUT /api/ciphers/share`, plus POST aliases). `PUT /api/ciphers/{id}` keeps the stored `organizationId` and returns 400 "Organization mismatch" when the client sends a different one. Share moves only the caller's personal ciphers, at most `importItemLimit` per bulk call. Every collection must belong to the target org and be writable by the caller, otherwise 403. Upstream drops those ids silently instead. The ciphers, their collection links and their re-encrypted attachment keys are written in one D1 batch.
+
 Instance backups never include runtime auth state (`session`, `account`, `two_factor`, devices, auth requests, remembered 2FA tokens).
 
 ## Auth

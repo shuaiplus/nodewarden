@@ -20,8 +20,10 @@ import {
   ssoUsers,
   users,
 } from '../db/schema';
-import type { Cipher } from '../types';
+import type { Attachment, Cipher } from '../types';
 import { hasFullCollectionAccess } from './org-authz';
+import { attachmentUpsert } from './storage-attachment-repo';
+import { cipherUpsert } from './storage-cipher-repo';
 import {
   MembershipStatus,
   type CollectionAccess,
@@ -509,14 +511,39 @@ export async function saveAcceptedMembership(db: D1Database, member: MembershipR
   ]);
 }
 
+// Sets every listed cipher's collections to exactly collectionIds. Deletes and inserts span all
+// ciphers so a bulk change adds a handful of statements, each within the bound-parameter limit.
+function cipherCollectionReplacement(orm: Orm, cipherIds: string[], collectionIds: string[]): BatchItem<'sqlite'>[] {
+  const links = cipherIds.flatMap((cipherId) => collectionIds.map((collectionId) => ({ cipherId, collectionId })));
+  return [
+    ...chunkRows(cipherIds, 1).map((chunk) => orm.delete(cipherCollections).where(inArray(cipherCollections.cipherId, chunk))),
+    ...chunkRows(links, columnCount(cipherCollections)).map((chunk) => orm.insert(cipherCollections).values(chunk).onConflictDoNothing()),
+  ];
+}
+
 export async function replaceCipherCollections(db: D1Database, cipherId: string, collectionIds: string[]): Promise<void> {
   const orm = getOrm(db);
-  await orm.delete(cipherCollections).where(eq(cipherCollections.cipherId, cipherId));
-  if (collectionIds.length) {
-    await orm.insert(cipherCollections).values(
-      collectionIds.map((collectionId) => ({ cipherId, collectionId }))
-    ).onConflictDoNothing();
-  }
+  const statements = cipherCollectionReplacement(orm, [cipherId], collectionIds);
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+}
+
+// Moves personal ciphers into an org in one batch, so no cipher lands in the org without its
+// collections or re-encrypted attachment keys, and a whole-vault transfer costs one D1 round trip.
+// ponytail: one statement per cipher in a single batch, bounded by the importItemLimit share cap;
+// split into bulkMoveChunkSize batches (atomic per chunk only) if D1 rejects batches that large.
+export async function shareCiphers(
+  db: D1Database,
+  sharedCiphers: Cipher[],
+  collectionIds: string[],
+  changedAttachments: Attachment[]
+): Promise<void> {
+  const orm = getOrm(db);
+  const statements = [
+    ...changedAttachments.map((attachment) => attachmentUpsert(db, attachment)),
+    ...sharedCiphers.map((cipher) => cipherUpsert(db, cipher)),
+    ...cipherCollectionReplacement(orm, sharedCiphers.map((cipher) => cipher.id), collectionIds),
+  ];
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
 }
 
 export async function listCipherCollectionIds(db: D1Database, cipherId: string): Promise<string[]> {

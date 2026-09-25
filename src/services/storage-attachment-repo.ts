@@ -42,8 +42,9 @@ export async function getAttachmentForUser(db: D1Database, id: string, userId: s
   return row ? mapAttachment(row) : null;
 }
 
-export async function saveAttachment(db: D1Database, attachment: Attachment): Promise<void> {
-  await getOrm(db)
+// The upsert as an unexecuted statement, so callers can batch it with related writes.
+export function attachmentUpsert(db: D1Database, attachment: Attachment) {
+  return getOrm(db)
     .insert(attachments)
     .values({
       id: attachment.id,
@@ -69,6 +70,10 @@ export async function saveAttachment(db: D1Database, attachment: Attachment): Pr
           AND current_cipher.user_id = next_cipher.user_id
       )`,
     });
+}
+
+export async function saveAttachment(db: D1Database, attachment: Attachment): Promise<void> {
+  await attachmentUpsert(db, attachment);
 }
 
 export async function deleteAttachment(db: D1Database, id: string): Promise<void> {

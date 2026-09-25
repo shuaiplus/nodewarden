@@ -45,6 +45,8 @@ import {
   handleBulkRestoreCiphers,
   handleArchiveCipher,
   handleUnarchiveCipher,
+  handleShareCipher,
+  handleBulkShareCiphers,
 } from './handlers/ciphers';
 import {
   handleGetFolders,
@@ -350,6 +352,10 @@ export async function handleAuthenticatedRoute(
     return handleBulkMoveCiphers(request, env, userId);
   }
 
+  if (path === '/api/ciphers/share' && (method === 'PUT' || method === 'POST')) {
+    return handleBulkShareCiphers(request, env, userId);
+  }
+
   const cipherMatch = path.match(/^\/api\/ciphers\/([a-f0-9-]+)(\/.*)?$/i);
   if (cipherMatch) {
     const cipherId = cipherMatch[1];
@@ -367,7 +373,7 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
-    if (subPath === '/share' && method === 'POST') return handleGetCipher(request, env, userId, cipherId);
+    if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
     if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);

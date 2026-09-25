@@ -36,6 +36,27 @@ export async function loadAccessibleCipher(
   return candidate;
 }
 
+export type CollectionAssignment = { ok: true } | { ok: false; status: 403 | 404; message: string };
+
+// Upstream Cipher_UpdateCollections links only collections of the target org that the member can
+// write. Other ids are rejected here instead of dropped, so a share never lands a cipher in another
+// org's collection or one the caller cannot edit.
+export async function checkCollectionAssignment(
+  env: Env,
+  userId: string,
+  orgId: string,
+  collectionIds: string[]
+): Promise<CollectionAssignment> {
+  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
+  if (!isActiveMember(member)) return { ok: false, status: 404, message: 'Organization not found' };
+  const writable = new Set(hasFullCollectionAccess(member)
+    ? (await orgRepo.listCollectionsByOrg(env.DB, orgId)).map((collection) => collection.id)
+    : (await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).filter((access) => !access.readOnly).map((access) => access.collectionId));
+  return collectionIds.every((collectionId) => writable.has(collectionId))
+    ? { ok: true }
+    : { ok: false, status: 403, message: 'Access denied' };
+}
+
 export async function deleteAuthorizedCipher(
   storage: StorageService,
   cipher: Cipher,
