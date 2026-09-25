@@ -1,11 +1,15 @@
-import { createServer } from 'node:http';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../official-web/dist', import.meta.url)));
 const workerOrigin = (process.env.WORKER_ORIGIN || 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const port = Number(process.env.OFFICIAL_WEB_PORT || 8080);
+const tlsCert = process.env.OFFICIAL_WEB_CERT || '';
+const tlsKey = process.env.OFFICIAL_WEB_KEY || '';
+const protocol = tlsCert && tlsKey ? 'https' : 'http';
 
 const BACKEND_PREFIXES = [
   '/api', '/identity', '/icons', '/fill-assist', '/notifications', '/.well-known',
@@ -29,6 +33,7 @@ const TYPES = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
   '.map': 'application/json',
 };
 
@@ -37,7 +42,9 @@ if (!existsSync(join(root, 'index.html'))) {
   process.exit(1);
 }
 
-const server = createServer(async (req, res) => {
+const server = (protocol === 'https' ? createHttpsServer : createHttpServer)(
+  protocol === 'https' ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) } : undefined,
+  async (req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
   if (isBackend(url.pathname)) {
     const target = `${workerOrigin}${url.pathname}${url.search}`;
@@ -46,7 +53,7 @@ const server = createServer(async (req, res) => {
       if (value && name.toLowerCase() !== 'host') headers.set(name, Array.isArray(value) ? value.join(',') : value);
     }
     headers.set('X-Forwarded-Host', `127.0.0.1:${port}`);
-    headers.set('X-Forwarded-Proto', 'http');
+    headers.set('X-Forwarded-Proto', protocol);
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = chunks.length ? Buffer.concat(chunks) : undefined;
@@ -79,5 +86,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`Official Bitwarden web at http://127.0.0.1:${port} → ${workerOrigin}`);
+  console.log(`Official Bitwarden web at ${protocol}://127.0.0.1:${port} → ${workerOrigin}`);
 });

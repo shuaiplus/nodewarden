@@ -6,5 +6,6 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: process.env.E2E_ORIGIN || 'http://127.0.0.1:8787',
+    ignoreHTTPSErrors: true,
   },
 });

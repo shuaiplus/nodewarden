@@ -148,15 +148,19 @@ WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
 npm run deploy:official-web
 ```
 
-Set Worker `WEB_VAULT_ORIGINS` to the Pages / local official-web origin (`http://127.0.0.1:8080` locally). Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
+Set Worker `WEB_VAULT_ORIGINS` to the Pages origin, or to the local official-web origin (`https://127.0.0.1:8090` when using the certificate below). Current official web builds refuse `http://` API calls, so Playwright against that UI needs a local certificate:
+
+```bash
+OFFICIAL_WEB_PORT=8090 OFFICIAL_WEB_CERT=/tmp/nw-web.crt OFFICIAL_WEB_KEY=/tmp/nw-web.key \
+  WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
+E2E_ORIGIN=http://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8090 npm run test:e2e
+```
+
+Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
 
 Official self-host web asks for a **license file** to create an organization. Download `GET /api/licenses/nodewarden-enterprise.json` while logged in and upload it. That unlocks Enterprise features (including emergency access). NodeWarden does not check Bitwarden commercial signatures.
 
-Run official-client E2E against the Worker:
-
-```bash
-npm run test:e2e:official
-```
+`npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on port 8080.
 
 ---
 
