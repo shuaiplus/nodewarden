@@ -15,6 +15,7 @@ import {
   handleGetOrganization,
   handleGetOrganizationKeys,
   handleGetPlans,
+  handleGetPolicy,
   handleInviteMembers,
   handleLeaveOrganization,
   handleListGroups,
@@ -152,7 +153,7 @@ export async function handleOrganizationRoute(
   const policyMatch = sub.match(/^\/policies\/(\d+)(?:\/vnext)?$/i);
   if (policyMatch && (method === 'PUT' || method === 'GET')) {
     if (method === 'PUT') return handlePutPolicy(request, env, userId, orgId, Number(policyMatch[1]));
-    return handleListPolicies(env, userId, orgId);
+    return handleGetPolicy(env, userId, orgId, Number(policyMatch[1]));
   }
 
   if ((sub === '/api-key' || sub === '/rotate-api-key') && method === 'POST') {

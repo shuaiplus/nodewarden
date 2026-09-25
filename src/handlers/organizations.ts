@@ -774,19 +774,39 @@ export async function handleListPolicies(env: Env, userId: string, orgId: string
   return jsonResponse({ data: policies.map(policyResponse), object: 'list', continuationToken: null });
 }
 
+// Official web's policy drawer loads one policy here. Upstream PolicyQuery synthesizes a disabled
+// status with empty data when no row exists, so the drawer opens with the toggle off.
+export async function handleGetPolicy(env: Env, userId: string, orgId: string, policyType: number): Promise<Response> {
+  const member = await requireMember(env.DB, userId, orgId);
+  if (member instanceof Response) return member;
+  if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
+  const policy = await orgRepo.getPolicy(env.DB, orgId, policyType);
+  return jsonResponse(policy
+    ? policyResponse(policy)
+    : { organizationId: orgId, type: policyType, enabled: false, data: {}, object: 'policy' });
+}
+
 export async function handlePutPolicy(request: Request, env: Env, userId: string, orgId: string, policyType: number): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
+  // Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; NodeWarden's webapp
+  // still sends the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
+  // marks Policy [Required], so a malformed envelope is rejected instead of saving a disabled policy.
+  const envelope = readBody(body, ['policy', 'Policy']);
+  if (envelope !== undefined && (!envelope || typeof envelope !== 'object' || Array.isArray(envelope))) {
+    return errorResponse('The Policy field is required.', 400);
+  }
+  const source = asRecord(envelope ?? body);
   const existing = await orgRepo.getPolicy(env.DB, orgId, policyType);
   const policy = {
     id: existing?.id || generateUUID(),
     orgId,
     type: policyType,
-    enabled: asBoolean(readBody(body, ['enabled', 'Enabled'])),
-    data: (readBody(body, ['data', 'Data']) as Record<string, unknown>) || {},
+    enabled: asBoolean(readBody(source, ['enabled', 'Enabled'])),
+    data: (readBody(source, ['data', 'Data']) as Record<string, unknown>) || {},
     updatedAt: new Date().toISOString(),
   };
   await orgRepo.savePolicy(env.DB, policy);
