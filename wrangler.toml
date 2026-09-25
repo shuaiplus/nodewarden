@@ -1,6 +1,7 @@
 name = "nodewarden"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-23"
+compatibility_flags = [ "nodejs_compat" ]
 
 [build]
 command = "npm run build"
@@ -15,9 +16,22 @@ run_worker_first = true
 [triggers]
 crons = [ "*/5 * * * *" ]
 
+[vars]
+ALLOW_OPEN_REGISTRATION = "1"
+WEB_VAULT_ORIGINS = "https://nodewarden-official-web.pages.dev"
+EMAIL_FROM = "noreply@stevefan1999.tech"
+EMAIL_FROM_NAME = "NodeWarden"
+
+[[send_email]]
+name = "EMAIL"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "nodewarden-db"
+database_id = "7f33ae0e-0f62-4e5b-914f-dd22350f36cd"
+# drizzle-kit v1 writes one folder per migration; the pattern opts wrangler in.
+migrations_dir = "migrations"
+migrations_pattern = "migrations/*/migration.sql"
 
 [[durable_objects.bindings]]
 name = "NOTIFICATIONS_HUB"
@@ -26,6 +40,14 @@ class_name = "NotificationsHub"
 [[durable_objects.bindings]]
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
+
+[[durable_objects.bindings]]
+name = "ORGANIZATION_HUB"
+class_name = "OrganizationHub"
+
+[[durable_objects.bindings]]
+name = "DIRECTORY_SYNC"
+class_name = "DirectorySyncActor"
 
 [[r2_buckets]]
 binding = "ATTACHMENTS"
@@ -38,3 +60,7 @@ new_sqlite_classes = [ "NotificationsHub" ]
 [[migrations]]
 tag = "v2-backup-transfer-runner"
 new_sqlite_classes = [ "BackupTransferRunner" ]
+
+[[migrations]]
+tag = "v3-organization-directory"
+new_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]

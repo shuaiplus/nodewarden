@@ -1,10 +1,12 @@
-import { Env, Cipher, Folder, CipherType } from '../types';
+import { LIMITS } from '../config/limits';
+import { getOrm, type Orm } from '../db/client';
+import { ciphers as cipherTable, folders as folderTable } from '../db/schema';
 import { notifyUserVaultSync } from '../durable/notifications-hub';
 import { StorageService } from '../services/storage';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { Env, Cipher, Folder, CipherType } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
+import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import { LIMITS } from '../config/limits';
 import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
 
 // Bitwarden client import request format
@@ -101,10 +103,15 @@ function normalizeOptionalId(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
-async function runBatchInChunks(db: D1Database, statements: D1PreparedStatement[], chunkSize: number): Promise<void> {
-  for (let i = 0; i < statements.length; i += chunkSize) {
-    const chunk = statements.slice(i, i + chunkSize);
-    await db.batch(chunk);
+async function runOrmBatch(
+  orm: Orm,
+  statements: Array<{ execute: () => Promise<unknown> }>,
+  chunkSize: number
+): Promise<void> {
+  for (let offset = 0; offset < statements.length; offset += chunkSize) {
+    const chunk = statements.slice(offset, offset + chunkSize);
+    if (!chunk.length) continue;
+    await orm.batch(chunk as unknown as Parameters<Orm['batch']>[0]);
   }
 }
 
@@ -153,15 +160,17 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   if (folderRows.length > 0) {
-    const folderStatements = folderRows.map(folder =>
-      env.DB
-        .prepare(
-          'INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, name=excluded.name, updated_at=excluded.updated_at'
-        )
-        .bind(folder.id, folder.userId, folder.name, folder.createdAt, folder.updatedAt)
+    const orm = getOrm(env.DB);
+    await runOrmBatch(
+      orm,
+      folderRows.map((folder) =>
+        orm.insert(folderTable).values(folder).onConflictDoUpdate({
+          target: folderTable.id,
+          set: { userId: folder.userId, name: folder.name, updatedAt: folder.updatedAt },
+        })
+      ),
+      batchChunkSize
     );
-    await runBatchInChunks(env.DB, folderStatements, batchChunkSize);
   }
 
   // Build cipher index -> folder id mapping from relationships
@@ -282,33 +291,44 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   if (cipherRows.length > 0) {
-    const cipherStatements = cipherRows.map(cipher => {
-      const data = JSON.stringify(cipher);
-      return env.DB
-        .prepare(
-          'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
-          'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(id) DO UPDATE SET ' +
-          'user_id=excluded.user_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at'
-        )
-        .bind(
-          cipher.id,
-          cipher.userId,
-          Number(cipher.type) || 1,
-          bindNull(cipher.folderId),
-          bindNull(cipher.name),
-          bindNull(cipher.notes),
-          cipher.favorite ? 1 : 0,
-          data,
-          bindNull(cipher.reprompt ?? 0),
-          bindNull(cipher.key),
-          cipher.createdAt,
-          cipher.updatedAt,
-          bindNull(cipher.archivedAt),
-          bindNull(cipher.deletedAt)
-        );
+    const orm = getOrm(env.DB);
+    const cipherStatements = cipherRows.map((cipher) => {
+      const values = {
+        id: cipher.id,
+        userId: cipher.userId,
+        organizationId: null,
+        type: Number(cipher.type) || 1,
+        folderId: bindNull(cipher.folderId),
+        name: bindNull(cipher.name),
+        notes: bindNull(cipher.notes),
+        favorite: cipher.favorite ? 1 : 0,
+        data: JSON.stringify(cipher),
+        reprompt: bindNull(cipher.reprompt ?? 0),
+        key: bindNull(cipher.key),
+        createdAt: cipher.createdAt,
+        updatedAt: cipher.updatedAt,
+        archivedAt: bindNull(cipher.archivedAt),
+        deletedAt: bindNull(cipher.deletedAt),
+      };
+      return orm.insert(cipherTable).values(values).onConflictDoUpdate({
+        target: cipherTable.id,
+        set: {
+          userId: values.userId,
+          type: values.type,
+          folderId: values.folderId,
+          name: values.name,
+          notes: values.notes,
+          favorite: values.favorite,
+          data: values.data,
+          reprompt: values.reprompt,
+          key: values.key,
+          updatedAt: values.updatedAt,
+          archivedAt: values.archivedAt,
+          deletedAt: values.deletedAt,
+        },
+      });
     });
-    await runBatchInChunks(env.DB, cipherStatements, batchChunkSize);
+    await runOrmBatch(orm, cipherStatements, batchChunkSize);
   }
 
   // Update revision date

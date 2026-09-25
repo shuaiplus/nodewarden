@@ -9,6 +9,9 @@ import { importBackupArchiveBytes } from '../src/services/backup-import.ts';
 const forbiddenRuntimeTables = [
   'devices',
   'refresh_tokens',
+  'session',
+  'account',
+  'two_factor',
   'auth_requests',
   'trusted_two_factor_device_tokens',
   'account_passkey_challenges',

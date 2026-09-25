@@ -1,45 +1,56 @@
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { ciphers, folders } from '../db/schema';
 import type { Folder } from '../types';
 
-function mapFolderRow(row: any): Folder {
+function mapFolderRow(row: typeof folders.$inferSelect): Folder {
   return {
     id: row.id,
-    userId: row.user_id,
+    userId: row.userId,
     name: row.name,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
+function folderClearedData() {
+  return sql`json_remove(${ciphers.data}, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')`;
+}
+
 export async function getFolder(db: D1Database, id: string): Promise<Folder | null> {
-  const row = await db
-    .prepare('SELECT id, user_id, name, created_at, updated_at FROM folders WHERE id = ?')
-    .bind(id)
-    .first<any>();
-  if (!row) return null;
-  return mapFolderRow(row);
+  const [row] = await getOrm(db).select().from(folders).where(eq(folders.id, id)).limit(1);
+  return row ? mapFolderRow(row) : null;
 }
 
 export async function getFolderForUser(db: D1Database, id: string, userId: string): Promise<Folder | null> {
-  const row = await db
-    .prepare('SELECT id, user_id, name, created_at, updated_at FROM folders WHERE id = ? AND user_id = ?')
-    .bind(id, userId)
-    .first<any>();
-  if (!row) return null;
-  return mapFolderRow(row);
+  const [row] = await getOrm(db)
+    .select()
+    .from(folders)
+    .where(and(eq(folders.id, id), eq(folders.userId, userId)))
+    .limit(1);
+  return row ? mapFolderRow(row) : null;
 }
 
 export async function saveFolder(db: D1Database, folder: Folder): Promise<void> {
-  await db
-    .prepare(
-      'INSERT INTO folders(id, user_id, name, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
-      'ON CONFLICT(id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at WHERE user_id=excluded.user_id'
-    )
-    .bind(folder.id, folder.userId, folder.name, folder.createdAt, folder.updatedAt)
-    .run();
+  await getOrm(db)
+    .insert(folders)
+    .values({
+      id: folder.id,
+      userId: folder.userId,
+      name: folder.name,
+      createdAt: folder.createdAt,
+      updatedAt: folder.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: folders.id,
+      set: { name: folder.name, updatedAt: folder.updatedAt },
+      where: eq(folders.userId, folder.userId),
+    });
 }
 
 export async function deleteFolder(db: D1Database, id: string, userId: string): Promise<void> {
-  await db.prepare('DELETE FROM folders WHERE id = ? AND user_id = ?').bind(id, userId).run();
+  await getOrm(db).delete(folders).where(and(eq(folders.id, id), eq(folders.userId, userId)));
 }
 
 export async function clearFolderFromCiphers(
@@ -48,20 +59,18 @@ export async function clearFolderFromCiphers(
   folderId: string
 ): Promise<void> {
   const now = new Date().toISOString();
-  await db
-    .prepare(
-      `UPDATE ciphers
-       SET folder_id = NULL, updated_at = ?,
-           data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-       WHERE user_id = ?
-         AND (
-           folder_id = ?
-           OR json_extract(data, '$.folderId') = ?
-           OR json_extract(data, '$.folder_id') = ?
-         )`
-    )
-    .bind(now, userId, folderId, folderId, folderId)
-    .run();
+  await getOrm(db)
+    .update(ciphers)
+    .set({ folderId: null, updatedAt: now, data: folderClearedData() })
+    .where(and(
+      eq(ciphers.userId, userId),
+      isNull(ciphers.organizationId),
+      or(
+        eq(ciphers.folderId, folderId),
+        sql`json_extract(${ciphers.data}, '$.folderId') = ${folderId}`,
+        sql`json_extract(${ciphers.data}, '$.folder_id') = ${folderId}`,
+      ),
+    ));
 }
 
 export async function bulkDeleteFolders(
@@ -74,53 +83,51 @@ export async function bulkDeleteFolders(
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
 
+  const orm = getOrm(db);
   const now = new Date().toISOString();
-  // Each folder ID is bound in all three compatibility predicates below.
   const chunkSize = sqlChunkSize(2, 3);
-  const statements: D1PreparedStatement[] = [];
+  const statements = [];
 
-  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
-    const chunk = uniqueIds.slice(i, i + chunkSize);
-    const placeholders = chunk.map(() => '?').join(',');
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const inList = sql.join(chunk.map((id) => sql`${id}`), sql`, `);
     statements.push(
-      db.prepare(
-        `UPDATE ciphers
-         SET folder_id = NULL, updated_at = ?,
-             data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
-         WHERE user_id = ?
-           AND (
-             folder_id IN (${placeholders})
-             OR json_extract(data, '$.folderId') IN (${placeholders})
-             OR json_extract(data, '$.folder_id') IN (${placeholders})
-           )`
-      )
-      .bind(now, userId, ...chunk, ...chunk, ...chunk)
-    );
-    statements.push(
-      db.prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
-        .bind(userId, ...chunk)
+      orm
+        .update(ciphers)
+        .set({ folderId: null, updatedAt: now, data: folderClearedData() })
+        .where(and(
+          eq(ciphers.userId, userId),
+          isNull(ciphers.organizationId),
+          or(
+            inArray(ciphers.folderId, chunk),
+            sql`json_extract(${ciphers.data}, '$.folderId') in (${inList})`,
+            sql`json_extract(${ciphers.data}, '$.folder_id') in (${inList})`,
+          ),
+        )),
+      orm.delete(folders).where(and(eq(folders.userId, userId), inArray(folders.id, chunk))),
     );
   }
 
-  await db.batch(statements);
-
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
   return updateRevisionDate(userId);
 }
 
 export async function getAllFolders(db: D1Database, userId: string): Promise<Folder[]> {
-  const res = await db
-    .prepare('SELECT id, user_id, name, created_at, updated_at FROM folders WHERE user_id = ? ORDER BY updated_at DESC')
-    .bind(userId)
-    .all<any>();
-  return (res.results || []).map((row) => mapFolderRow(row));
+  const rows = await getOrm(db)
+    .select()
+    .from(folders)
+    .where(eq(folders.userId, userId))
+    .orderBy(desc(folders.updatedAt));
+  return rows.map(mapFolderRow);
 }
 
 export async function getFoldersPage(db: D1Database, userId: string, limit: number, offset: number): Promise<Folder[]> {
-  const res = await db
-    .prepare(
-      'SELECT id, user_id, name, created_at, updated_at FROM folders WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?'
-    )
-    .bind(userId, limit, offset)
-    .all<any>();
-  return (res.results || []).map((row) => mapFolderRow(row));
+  const rows = await getOrm(db)
+    .select()
+    .from(folders)
+    .where(eq(folders.userId, userId))
+    .orderBy(desc(folders.updatedAt))
+    .limit(limit)
+    .offset(offset);
+  return rows.map(mapFolderRow);
 }

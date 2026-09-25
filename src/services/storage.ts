@@ -1,7 +1,10 @@
+import { sql } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
-import { ensureStorageSchema } from './storage-schema';
+import { ensureStorageSchema } from '../db/migrate';
 import {
   getConfigValue as getStoredConfigValue,
   isRegistered as getRegisteredFlag,
@@ -59,6 +62,7 @@ import {
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
   deleteCipher as deleteStoredCipher,
+  deleteCipherById as deleteStoredCipherById,
 } from './storage-cipher-repo';
 import {
   addAttachmentToCipher as attachStoredAttachmentToCipher,
@@ -89,13 +93,14 @@ import {
 import {
   bindRefreshTokenDeviceStamp as bindStoredRefreshTokenDeviceStamp,
   bindRefreshTokenSecurityStamp as bindStoredRefreshTokenSecurityStamp,
+  deleteExpiredRefreshTokens as deleteExpiredStoredRefreshTokens,
   deleteRefreshToken as deleteStoredRefreshToken,
   deleteRefreshTokensByDevice as deleteStoredRefreshTokensByDevice,
   deleteRefreshTokensByUserId as deleteStoredRefreshTokensByUserId,
   extendRefreshTokenExpiry as extendStoredRefreshTokenExpiry,
   getRefreshTokenRecord as findStoredRefreshTokenRecord,
   saveRefreshToken as saveStoredRefreshToken,
-} from './storage-refresh-token-repo';
+} from './storage-session-repo';
 import {
   deleteDevice as deleteStoredDevice,
   deleteDevicesByUserId as deleteStoredDevicesByUserId,
@@ -131,7 +136,6 @@ import {
   updateAuthRequestResponse as updateStoredAuthRequestResponse,
 } from './storage-auth-request-repo';
 import {
-  ensureUsedAttachmentDownloadTokenTable as ensureStoredAttachmentTokenTable,
   consumeAttachmentDownloadToken as consumeStoredAttachmentDownloadToken,
 } from './storage-attachment-token-repo';
 import {
@@ -161,11 +165,20 @@ import {
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
-// Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
-// changes. Existing D1 installs only rerun ensureStorageSchema() when this value
-// differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-07-13-refresh-session-reuse';
-const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays'] as const;
+// Bump this whenever src/db/schema.ts changes. Existing D1 installs only
+// rerun ensureStorageSchema() when this value differs from config.schema.version.
+const STORAGE_SCHEMA_VERSION = '2026-08-14-drop-refresh-tokens';
+const REQUIRED_SCHEMA_TABLES = [
+  'webauthn_credentials',
+  'webauthn_challenges',
+  'auth_requests',
+  'totp_login_replays',
+  'organizations',
+  'organization_memberships',
+  'collections',
+  'sm_secrets',
+  'emergency_access',
+] as const;
 
 // D1-backed storage.
 // Contract:
@@ -174,7 +187,6 @@ const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', '
 // - Revision date is maintained per user for Bitwarden sync.
 
 export class StorageService {
-  private static attachmentTokenTableReady = false;
   private static schemaVerified = false;
   private static lastRefreshTokenCleanupAt = 0;
   private static lastAttachmentTokenCleanupAt = 0;
@@ -189,23 +201,12 @@ export class StorageService {
 
   constructor(private db: D1Database) {}
 
-  /**
-   * D1 .bind() throws on `undefined` values. This helper converts every
-   * `undefined` in the argument list to `null` so we never hit that runtime
-   * error - especially important after the opaque-passthrough change where
-   * client-supplied JSON may omit fields we later reference as columns.
-   */
-  private safeBind(stmt: D1PreparedStatement, ...values: any[]): D1PreparedStatement {
-    return stmt.bind(...values.map(v => v === undefined ? null : v));
-  }
-
   private async hasRequiredSchemaTables(): Promise<boolean> {
-    const placeholders = REQUIRED_SCHEMA_TABLES.map(() => '?').join(', ');
-    const result = await this.db
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
-      .bind(...REQUIRED_SCHEMA_TABLES)
-      .all<{ name: string }>();
-    const found = new Set((result.results || []).map((row) => row.name));
+    const rows = await getOrm(this.db).all(sql`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (${sql.join(REQUIRED_SCHEMA_TABLES.map((name) => sql`${name}`), sql`, `)})
+    `) as Array<{ name: string }>;
+    const found = new Set(rows.map((row) => row.name));
     return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
   }
 
@@ -243,7 +244,7 @@ export class StorageService {
       return;
     }
 
-    await this.db.prepare('DELETE FROM refresh_tokens WHERE expires_at < ?').bind(nowMs).run();
+    await deleteExpiredStoredRefreshTokens(this.db, nowMs);
     StorageService.lastRefreshTokenCleanupAt = nowMs;
   }
 
@@ -255,7 +256,7 @@ export class StorageService {
   async initializeDatabase(): Promise<void> {
     if (StorageService.schemaVerified) return;
 
-    await this.db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)').run();
+    await getOrm(this.db).run(sql`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     const schemaVersion = await getStoredConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY);
     const schemaMissingRequiredTables = schemaVersion === STORAGE_SCHEMA_VERSION
       ? !(await this.hasRequiredSchemaTables())
@@ -306,15 +307,15 @@ export class StorageService {
   }
 
   async saveUser(user: User): Promise<void> {
-    await saveStoredUser(this.db, this.safeBind.bind(this), user);
+    await saveStoredUser(this.db, user);
   }
 
   async createUser(user: User): Promise<void> {
-    await createStoredUser(this.db, this.safeBind.bind(this), user);
+    await createStoredUser(this.db, user);
   }
 
   async createFirstUser(user: User): Promise<boolean> {
-    return createFirstStoredUser(this.db, this.safeBind.bind(this), user);
+    return createFirstStoredUser(this.db, user);
   }
 
   async deleteUserById(id: string): Promise<boolean> {
@@ -403,7 +404,7 @@ export class StorageService {
   // --- Account passkeys / WebAuthn login credentials ---
 
   async saveAccountPasskeyCredential(credential: AccountPasskeyCredential): Promise<void> {
-    await saveStoredAccountPasskeyCredential(this.db, this.safeBind.bind(this), credential);
+    await saveStoredAccountPasskeyCredential(this.db, credential);
   }
 
   async getAccountPasskeyCredentialsByUserId(
@@ -488,11 +489,15 @@ export class StorageService {
   }
 
   async saveCipher(cipher: Cipher): Promise<void> {
-    await saveStoredCipher(this.db, this.safeBind.bind(this), cipher);
+    await saveStoredCipher(this.db, cipher);
   }
 
   async deleteCipher(id: string, userId: string): Promise<void> {
     await deleteStoredCipher(this.db, id, userId);
+  }
+
+  async deleteCipherById(id: string): Promise<void> {
+    await deleteStoredCipherById(this.db, id);
   }
 
   async bulkSoftDeleteCiphers(ids: string[], userId: string): Promise<string | null> {
@@ -584,7 +589,7 @@ export class StorageService {
   }
 
   async saveAttachment(attachment: Attachment): Promise<void> {
-    await saveStoredAttachment(this.db, this.safeBind.bind(this), attachment);
+    await saveStoredAttachment(this.db, attachment);
   }
 
   async deleteAttachment(id: string): Promise<void> {
@@ -691,7 +696,7 @@ export class StorageService {
   }
 
   async saveSend(send: Send): Promise<void> {
-    await saveStoredSend(this.db, this.safeBind.bind(this), send);
+    await saveStoredSend(this.db, send);
   }
 
   /**
@@ -941,19 +946,9 @@ export class StorageService {
     return updateStoredRevisionDate(this.db, userId);
   }
 
-  // --- One-time attachment download tokens ---
-
-  private async ensureUsedAttachmentDownloadTokenTable(): Promise<void> {
-    if (StorageService.attachmentTokenTableReady) return;
-    await ensureStoredAttachmentTokenTable(this.db);
-
-    StorageService.attachmentTokenTableReady = true;
-  }
-
   // Marks an attachment download token JTI as consumed.
   // Returns true only on first use. Reuse returns false.
   async consumeAttachmentDownloadToken(jti: string, expUnixSeconds: number): Promise<boolean> {
-    await this.ensureUsedAttachmentDownloadTokenTable();
     const result = await consumeStoredAttachmentDownloadToken(
       this.db,
       this.shouldRunPeriodicCleanup.bind(this),

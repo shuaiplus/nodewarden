@@ -96,6 +96,10 @@ import {
   handleListPendingAuthRequests,
   handleUpdateAuthRequest,
 } from './handlers/auth-requests';
+import { handleOrganizationRoute } from './router-org';
+import { handleEmergencyAccessRoute } from './handlers/emergency-access';
+import { handleAccountLicenseUpload } from './handlers/licenses';
+import { handleListAllCollections } from './handlers/organizations';
 
 export async function handleAuthenticatedRoute(
   request: Request,
@@ -282,6 +286,20 @@ export async function handleAuthenticatedRoute(
   if (path === '/api/sync' && method === 'GET') {
     return handleSync(request, env, userId);
   }
+
+  if (path === '/api/collections' && method === 'GET') {
+    return handleListAllCollections(env, userId);
+  }
+
+  const orgRoute = await handleOrganizationRoute(request, env, userId, currentUser, path, method);
+  if (orgRoute) return orgRoute;
+
+  if ((path === '/api/accounts/license' || path === '/accounts/license') && method === 'POST') {
+    return handleAccountLicenseUpload();
+  }
+
+  const emergency = await handleEmergencyAccessRoute(request, env, currentUser, path, method);
+  if (emergency) return emergency;
 
   if (path.startsWith('/notifications/')) {
     return errorResponse('Not found', 404);

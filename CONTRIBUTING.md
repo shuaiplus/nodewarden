@@ -39,12 +39,14 @@ these areas, check the related files before calling the work complete.
 
 ### Database Changes
 
-Runtime schema lives in `src/services/storage-schema.ts`. The initial D1 schema
-lives in `migrations/0001_init.sql`.
+Runtime schema lives in `src/db/schema.ts`. drizzle-kit emits
+`migrations/<id>/migration.sql`; `npm run db:generate` also embeds that SQL
+for the Worker bootstrap in `src/db/baseline.ts`.
 
 If you add or change a table, column, or index:
 
-- Update both schema files.
+- Edit `src/db/schema.ts` (and `relations.ts` when a foreign key changes).
+- Run `npm run db:generate` and `npm run test:db-schema`.
 - Bump `STORAGE_SCHEMA_VERSION` in `src/services/storage.ts`.
 - Decide whether the data should be included in instance backup.
 
@@ -75,6 +77,9 @@ Official Bitwarden clients may send or expect fields that are not used directly
 by the web vault. Cipher and sync changes should preserve unknown client fields
 unless they are known-invalid or server-owned.
 
+Official web signup must send Cloudflare Email and must not return a
+register-verify JWT from `send-verification-email`.
+
 Check these files when changing vault item shape or sync behavior:
 
 - `src/handlers/ciphers.ts`
@@ -92,7 +97,7 @@ compatibility plan.
 
 `users.master_password_hash` is for server-side login verification. It is not the
 vault decryption key. Password changes, key material, `securityStamp`, and
-refresh-token revocation must stay aligned.
+session revocation (`session` table) must stay aligned.
 
 Password hints are reminders, not recovery secrets. They must never contain the
 master password, recovery codes, API keys, or anything that directly unlocks the

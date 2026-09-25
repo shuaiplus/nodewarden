@@ -1,4 +1,6 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
+
+import { getOrm } from '../db/client';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
@@ -104,9 +106,9 @@ export interface BackupArchiveBuildProgressEvent {
 
 export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgressEvent) => Promise<void>;
 
-async function queryRows(db: D1Database, sql: string, ...values: unknown[]): Promise<SqlRow[]> {
-  const result = await db.prepare(sql).bind(...values).all<SqlRow>();
-  return (result.results || []).map((row) => ({ ...row }));
+async function queryRows(db: D1Database, query: string): Promise<SqlRow[]> {
+  const rows = await getOrm(db).all(query) as SqlRow[];
+  return rows.map((row) => ({ ...row }));
 }
 
 function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {

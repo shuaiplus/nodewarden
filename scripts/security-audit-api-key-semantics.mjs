@@ -66,7 +66,7 @@ function createDb(apiKey) {
             state.user.api_key = bindings[24];
             state.user.updated_at = bindings[26];
           }
-          if (/DELETE FROM refresh_tokens/i.test(sql)) state.refreshDeletes += 1;
+          if (/DELETE FROM (?:refresh_tokens|session)|delete from ["`]?session/i.test(sql)) state.refreshDeletes += 1;
           if (/INSERT INTO audit_logs/i.test(sql)) state.auditActions.push(bindings[2]);
           return { meta: { changes: 1 } };
         },

@@ -5,7 +5,8 @@ import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse, identityErrorResponse } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
-import { createRefreshToken } from '../utils/jwt';
+import { createJWT, createRefreshToken } from '../utils/jwt';
+import { getSafeJwtSecret } from '../utils/direct-upload';
 import { readAuthRequestDeviceInfo } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { generateUUID } from '../utils/uuid';
@@ -27,6 +28,9 @@ import { createPasskeyUserVerificationToken } from '../utils/user-verification-t
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
+import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
+import { authenticateServiceAccount } from './secrets-manager';
+import * as orgRepo from '../services/storage-org-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -346,7 +350,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
   }
 
-  const grantType = body.grant_type;
+  let grantType = body.grant_type;
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier && grantType !== 'refresh_token') {
     await safeWriteAuditEvent(env, {
@@ -362,6 +366,37 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       503,
       { 'Retry-After': '5' }
     );
+  }
+
+  if (grantType === 'authorization_code' && isSsoEnabled(env)) {
+    const code = String(body.code || '').trim();
+    if (!code) return identityErrorResponse('code is required', 'invalid_request', 400);
+    const claims = await exchangeOidcCode(env, code, new URL(request.url).origin);
+    if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
+    const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
+    let user = linked ? await storage.getUserById(linked.userId) : null;
+    // Adopting an existing local account by email address is only safe when the
+    // provider vouches for the address; otherwise anyone who can claim that email
+    // at the IdP inherits the local vault.
+    if (!user && !claims.emailVerified) {
+      return identityErrorResponse(
+        'SSO linking requires an email address verified by your identity provider',
+        'invalid_grant',
+        400
+      );
+    }
+    if (!user) user = await storage.getUser(claims.email);
+    if (!user) {
+      if (String(env.SSO_SIGNUPS || '1') === '0') {
+        return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
+      }
+      return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
+    }
+    await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
+    body.username = user.email;
+    body.password = user.masterPasswordHash;
+    body.sso = '1';
+    grantType = 'password';
   }
 
   if (grantType === 'password') {
@@ -411,6 +446,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         },
       });
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
+    }
+    if (await userRequiresSso(env, user.id)) {
+      if (String(body.sso || '') !== '1' && isSsoEnabled(env)) {
+        return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
+      }
     }
 
     let validatedAuthRequestId: string | null = null;
@@ -760,6 +800,26 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const scope = body.scope;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
+    if (scope === 'api.secrets' || clientId.startsWith('organization.')) {
+      const machine = await authenticateServiceAccount(env, clientId, clientSecret);
+      if (!machine) return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
+      const secret = getSafeJwtSecret(env);
+      if (!secret) return identityErrorResponse('Server misconfigured', 'server_error', 500);
+      const accessToken = await createJWT({
+        sub: machine.serviceAccountId,
+        name: 'service-account',
+        email: `sa-${machine.serviceAccountId}@nodewarden.local`,
+        sstamp: machine.tokenId,
+      }, secret);
+      return identityJsonResponse({
+        access_token: accessToken,
+        expires_in: LIMITS.auth.accessTokenTtlSeconds,
+        token_type: 'Bearer',
+        scope: 'api.secrets',
+        organizationId: machine.orgId,
+        wrappedOrgKey: machine.wrappedOrgKey,
+      });
+    }
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);
     if (!parmValid) {
       return identityErrorResponse('Parameter error', 'invalid_request', 400);

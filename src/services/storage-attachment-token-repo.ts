@@ -1,15 +1,9 @@
-type ShouldRunPeriodicCleanup = (lastRunAt: number, intervalMs: number) => boolean;
+import { lt } from 'drizzle-orm';
 
-export async function ensureUsedAttachmentDownloadTokenTable(db: D1Database): Promise<void> {
-  await db
-    .prepare(
-      'CREATE TABLE IF NOT EXISTS used_attachment_download_tokens (' +
-        'jti TEXT PRIMARY KEY, ' +
-        'expires_at INTEGER NOT NULL' +
-        ')'
-    )
-    .run();
-}
+import { getOrm } from '../db/client';
+import { usedAttachmentDownloadTokens } from '../db/schema';
+
+type ShouldRunPeriodicCleanup = (lastRunAt: number, intervalMs: number) => boolean;
 
 export async function consumeAttachmentDownloadToken(
   db: D1Database,
@@ -19,24 +13,19 @@ export async function consumeAttachmentDownloadToken(
   jti: string,
   expUnixSeconds: number
 ): Promise<{ consumed: boolean; cleanedUpAt: number | null }> {
+  const orm = getOrm(db);
   const nowMs = Date.now();
   let cleanedUpAt: number | null = null;
 
   if (shouldRunPeriodicCleanup(lastCleanupAt, cleanupIntervalMs)) {
-    await db
-      .prepare('DELETE FROM used_attachment_download_tokens WHERE expires_at < ?')
-      .bind(nowMs)
-      .run();
+    await orm.delete(usedAttachmentDownloadTokens).where(lt(usedAttachmentDownloadTokens.expiresAt, nowMs));
     cleanedUpAt = nowMs;
   }
 
-  const expiresAtMs = expUnixSeconds * 1000;
-  const result = await db
-    .prepare(
-      'INSERT INTO used_attachment_download_tokens(jti, expires_at) VALUES(?, ?) ' +
-        'ON CONFLICT(jti) DO NOTHING'
-    )
-    .bind(jti, expiresAtMs)
+  const result = await orm
+    .insert(usedAttachmentDownloadTokens)
+    .values({ jti, expiresAt: expUnixSeconds * 1000 })
+    .onConflictDoNothing({ target: usedAttachmentDownloadTokens.jti })
     .run();
 
   return {

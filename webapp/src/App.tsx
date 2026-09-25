@@ -2030,6 +2030,8 @@ export default function App() {
     importRoute: IMPORT_ROUTE,
     settingsHomeRoute: SETTINGS_HOME_ROUTE,
     settingsAccountRoute: SETTINGS_ACCOUNT_ROUTE,
+    authedFetch,
+    onRefreshProfile: async () => { await profileQuery.refetch(); },
     decryptedCiphers,
     decryptedFolders,
     decryptedSends,

@@ -15,6 +15,15 @@ export const OFFICIAL_BITWARDEN_DESKTOP_ORIGINS = [
   'bw-desktop-file://bundle',
 ] as const;
 
+export function requestPublicOrigin(request: Request): string {
+  const forwardedHost = String(request.headers.get('X-Forwarded-Host') || '').split(',')[0].trim();
+  if (forwardedHost) {
+    const forwardedProto = String(request.headers.get('X-Forwarded-Proto') || 'https').split(',')[0].trim() || 'https';
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+  return new URL(request.url).origin;
+}
+
 export function normalizeOrigin(value: unknown): string | null {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -44,12 +53,32 @@ export function isOfficialBitwardenDesktopOrigin(origin: unknown): boolean {
   );
 }
 
+export function getConfiguredWebVaultOrigins(
+  env: Pick<Env, 'WEB_VAULT_ORIGINS'>
+): string[] {
+  const seen = new Set<string>();
+  for (const item of String(env.WEB_VAULT_ORIGINS || '').split(',')) {
+    const origin = normalizeOrigin(item);
+    if (origin) seen.add(origin);
+  }
+  return Array.from(seen);
+}
+
+export function isConfiguredWebVaultOrigin(
+  env: Pick<Env, 'WEB_VAULT_ORIGINS'>,
+  origin: unknown
+): boolean {
+  const normalized = normalizeOrigin(origin);
+  return !!normalized && getConfiguredWebVaultOrigins(env).includes(normalized);
+}
+
 export function getConfiguredWebAuthnAllowedOrigins(
-  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS'>
+  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>
 ): string[] {
   const seen = new Set<string>([
     ...OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS,
     ...OFFICIAL_BITWARDEN_DESKTOP_ORIGINS,
+    ...getConfiguredWebVaultOrigins(env),
   ]);
   for (const item of String(env.WEBAUTHN_ALLOWED_ORIGINS || '').split(',')) {
     const origin = normalizeOrigin(item);
@@ -59,7 +88,7 @@ export function getConfiguredWebAuthnAllowedOrigins(
 }
 
 export function isConfiguredWebAuthnAllowedOrigin(
-  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS'>,
+  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>,
   origin: unknown
 ): boolean {
   const normalized = normalizeOrigin(origin);

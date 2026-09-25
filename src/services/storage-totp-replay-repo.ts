@@ -1,3 +1,8 @@
+import { lt } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { totpLoginReplays } from '../db/schema';
+
 type ShouldRunPeriodicCleanup = (lastRunAt: number, intervalMs: number) => boolean;
 
 export async function consumeTotpLoginCounter(
@@ -10,22 +15,18 @@ export async function consumeTotpLoginCounter(
   consumedAtMs: number,
   markerTtlMs: number
 ): Promise<{ consumed: boolean; cleanedUpAt: number | null }> {
+  const orm = getOrm(db);
   let cleanedUpAt: number | null = null;
 
   if (shouldRunPeriodicCleanup(lastCleanupAt, cleanupIntervalMs)) {
-    await db
-      .prepare('DELETE FROM totp_login_replays WHERE consumed_at < ?')
-      .bind(consumedAtMs - markerTtlMs)
-      .run();
+    await orm.delete(totpLoginReplays).where(lt(totpLoginReplays.consumedAt, consumedAtMs - markerTtlMs));
     cleanedUpAt = consumedAtMs;
   }
 
-  const result = await db
-    .prepare(
-      'INSERT INTO totp_login_replays(user_id, time_counter, consumed_at) VALUES(?, ?, ?) ' +
-        'ON CONFLICT(user_id, time_counter) DO NOTHING'
-    )
-    .bind(userId, timeCounter, consumedAtMs)
+  const result = await orm
+    .insert(totpLoginReplays)
+    .values({ userId, timeCounter, consumedAt: consumedAtMs })
+    .onConflictDoNothing({ target: [totpLoginReplays.userId, totpLoginReplays.timeCounter] })
     .run();
 
   return {

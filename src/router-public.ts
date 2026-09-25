@@ -13,9 +13,14 @@ import {
   handleFillAssistManifest,
 } from './handlers/fill-assist';
 import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
+import { handleOidcSignin, handleSsoAuthorize, handleSsoPrevalidate } from './handlers/sso';
+import { handleScimRoute } from './handlers/scim';
+import { handlePublicSecretsSync } from './handlers/secrets-manager';
 import { handleGetAccountPasskeyAssertionOptions } from './handlers/account-passkeys';
 import {
   handleRegister,
+  handleRegisterFinish,
+  handleRegisterSendVerificationEmail,
   handleGetPasswordHint,
   handleRecoverTwoFactor,
 } from './handlers/accounts';
@@ -33,9 +38,10 @@ import {
 import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
+import { createAuth } from './auth';
 import { StorageService } from './services/storage';
 import type { Env } from './types';
-import { getConfiguredWebAuthnAllowedOrigins } from './utils/origins';
+import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
 
 type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
@@ -54,23 +60,27 @@ function isWebsiteIconProxyEnabled(env: Env): boolean {
   return true;
 }
 
-function isSameOriginWriteRequest(request: Request): boolean {
+function isSameOriginWriteRequest(request: Request, env?: Env): boolean {
   const targetOrigin = new URL(request.url).origin;
-  const origin = request.headers.get('Origin');
-  if (origin) {
-    return origin === targetOrigin;
+  const originHeader = request.headers.get('Origin');
+  if (originHeader) {
+    if (originHeader === targetOrigin) return true;
+    return !!env && isConfiguredWebVaultOrigin(env, originHeader);
   }
 
   const referer = request.headers.get('Referer');
   if (referer) {
     try {
-      return new URL(referer).origin === targetOrigin;
+      const refererOrigin = new URL(referer).origin;
+      if (refererOrigin === targetOrigin) return true;
+      return !!env && isConfiguredWebVaultOrigin(env, refererOrigin);
     } catch {
       return false;
     }
   }
 
-  return false;
+  // Non-browser API clients (CLI, Playwright request, curl) omit Origin.
+  return true;
 }
 
 function getDefaultWebsiteIconSvg(): string {
@@ -292,6 +302,10 @@ export async function handlePublicRoute(
   method: string,
   enforcePublicRateLimit: PublicRateLimiter
 ): Promise<Response | null> {
+  if (path === '/api/auth' || path.startsWith('/api/auth/')) {
+    return createAuth(env, request).handler(request);
+  }
+
   if (path === '/.well-known/appspecific/com.chrome.devtools.json' && method === 'GET') {
     return new Response('{}', {
       status: 200,
@@ -399,6 +413,24 @@ export async function handlePublicRoute(
     return handleToken(request, env);
   }
 
+  if ((path === '/identity/sso/prevalidate' || path === '/sso/prevalidate') && method === 'GET') {
+    return handleSsoPrevalidate(env);
+  }
+  if ((path === '/identity/connect/authorize' || path === '/connect/authorize') && method === 'GET') {
+    return handleSsoAuthorize(request, env);
+  }
+  if ((path === '/identity/oidc-signin' || path === '/oidc-signin') && method === 'GET') {
+    return handleOidcSignin(request, env);
+  }
+
+  const scim = await handleScimRoute(request, env, path);
+  if (scim) return scim;
+
+  const secretSync = path.match(/^\/(?:api\/)?organizations\/([a-f0-9-]+)\/secrets\/sync$/i);
+  if (secretSync && method === 'GET') {
+    return handlePublicSecretsSync(request, env, secretSync[1]);
+  }
+
   if (path === '/api/devices/knowndevice' && method === 'GET') {
     const blocked = await enforcePublicRateLimit();
     if (blocked) return jsonResponse(false);
@@ -443,15 +475,9 @@ export async function handlePublicRoute(
   const publicMailBackedPaths = new Set([
     '/api/accounts/resend-new-device-otp',
     '/accounts/resend-new-device-otp',
-    '/api/accounts/register/send-verification-email',
-    '/accounts/register/send-verification-email',
-    '/identity/accounts/register/send-verification-email',
     '/api/accounts/register/verification-email-clicked',
     '/accounts/register/verification-email-clicked',
     '/identity/accounts/register/verification-email-clicked',
-    '/api/accounts/register/finish',
-    '/accounts/register/finish',
-    '/identity/accounts/register/finish',
     '/api/accounts/verify-email-token',
     '/accounts/verify-email-token',
     '/api/two-factor/send-email-login',
@@ -466,7 +492,7 @@ export async function handlePublicRoute(
   if (path === '/api/accounts/password-hint' && method === 'POST') {
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
     if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request)) {
+    if (!isSameOriginWriteRequest(request, env)) {
       return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json' },
@@ -475,10 +501,17 @@ export async function handlePublicRoute(
     return handleGetPasswordHint(request, env);
   }
 
+  if ((path === '/alive' || path === '/api/alive') && method === 'GET') {
+    return new Response('OK', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+
   if ((path === '/config' || path === '/api/config') && method === 'GET') {
     const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
     if (blocked) return blocked;
-    const origin = new URL(request.url).origin;
+    const origin = requestPublicOrigin(request);
     return jsonResponse(buildConfigResponse(origin), 200, { 'Cache-Control': 'no-store' });
   }
 
@@ -488,10 +521,44 @@ export async function handlePublicRoute(
     return jsonResponse(LIMITS.compatibility.bitwardenServerVersion);
   }
 
-  if (path === '/api/accounts/register' && method === 'POST') {
+  const registerSendVerificationPaths = new Set([
+    '/api/accounts/register/send-verification-email',
+    '/accounts/register/send-verification-email',
+    '/identity/accounts/register/send-verification-email',
+  ]);
+  if (registerSendVerificationPaths.has(path) && method === 'POST') {
     const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
     if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request)) {
+    if (!isSameOriginWriteRequest(request, env)) {
+      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return handleRegisterSendVerificationEmail(request, env);
+  }
+
+  const registerFinishPaths = new Set([
+    '/api/accounts/register/finish',
+    '/accounts/register/finish',
+    '/identity/accounts/register/finish',
+  ]);
+  if (registerFinishPaths.has(path) && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
+    if (blocked) return blocked;
+    if (!isSameOriginWriteRequest(request, env)) {
+      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return handleRegisterFinish(request, env);
+  }
+
+  if ((path === '/api/accounts/register' || path === '/identity/accounts/register') && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
+    if (blocked) return blocked;
+    if (!isSameOriginWriteRequest(request, env)) {
       return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json' },

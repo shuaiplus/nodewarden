@@ -1,10 +1,14 @@
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
+import { DirectorySyncActor, OrganizationHub } from './durable/organization-hub';
+import type { PlatformEvent } from './services/queue-publisher';
+import * as orgRepo from './services/storage-org-repo';
 import { handleRequest } from './router';
 import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
+import { approveExpiredEmergencyAccess } from './handlers/emergency-access';
 import {
   isBackendRequestPath,
   isWebVaultHidden,
@@ -119,11 +123,34 @@ export default {
       console.error('Skipping scheduled backup because DB init failed:', dbInitError);
       return;
     }
-    ctx.waitUntil(runScheduledBackupIfDue(env).catch((error) => {
-      console.error('Scheduled backup failed:', error);
-    }));
+    ctx.waitUntil(Promise.all([
+      runScheduledBackupIfDue(env).catch((error) => {
+        console.error('Scheduled backup failed:', error);
+      }),
+      approveExpiredEmergencyAccess(env).catch((error) => {
+        console.error('Emergency access timeout job failed:', error);
+      }),
+    ]));
+  },
+
+  async queue(batch: MessageBatch<PlatformEvent>, env: Env): Promise<void> {
+    await ensureDatabaseInitialized(env);
+    for (const message of batch.messages) {
+      try {
+        const event = message.body;
+        if (event.type === 'org.revision') {
+          await orgRepo.bumpOrgMemberRevisions(env.DB, event.orgId);
+        }
+        message.ack();
+      } catch (error) {
+        console.error('Queue event failed:', error);
+        message.retry({ delaySeconds: 30 });
+      }
+    }
   },
 };
 
 export { NotificationsHub };
 export { BackupTransferRunner };
+export { OrganizationHub };
+export { DirectorySyncActor };
