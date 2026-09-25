@@ -47,6 +47,7 @@ import {
   handleUnarchiveCipher,
   handleShareCipher,
   handleBulkShareCiphers,
+  handleUpdateCipherCollections,
 } from './handlers/ciphers';
 import {
   handleGetFolders,
@@ -374,6 +375,8 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
     if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
+    if (subPath === '/collections_v2' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'member');
+    if (subPath === '/collections-admin' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'admin');
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
     if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);

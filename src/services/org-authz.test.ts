@@ -8,6 +8,7 @@ import {
   confirmMemberCheck,
   hasFullCollectionAccess,
   memberRoleChangeCheck,
+  planCollectionAssignment,
   resolveCollectionPermission,
 } from './org-authz';
 import {
@@ -145,4 +146,16 @@ test('only Owners touch Owner roles, and Custom managers stay within Users, Cust
     ok: false,
     message: "Only an Owner can configure another Owner's account.",
   });
+});
+
+// Upstream CollectionCipher_UpdateCollections and 1aed7ce03: collections outside `available` survive.
+test('planCollectionAssignment adds and drops only the collections the caller may change', () => {
+  assert.deepEqual(
+    planCollectionAssignment({ current: ['A', 'B'], requested: ['C'], available: ['B', 'C'] }),
+    { insert: ['C'], remove: ['B'] }
+  );
+  assert.deepEqual(
+    planCollectionAssignment({ current: ['A'], requested: ['A', 'D'], available: ['B'] }),
+    { insert: [], remove: [] }
+  );
 });

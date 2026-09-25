@@ -212,6 +212,27 @@ export function canEditCipher(
   });
 }
 
+export interface CollectionAssignmentPlan {
+  insert: string[];
+  remove: string[];
+}
+
+// Upstream CollectionCipher_UpdateCollections[Admin] (and 1aed7ce03 for EF): a caller adds and drops
+// only collections it may write, so assignments it cannot see or edit survive its request.
+export function planCollectionAssignment({ current, requested, available }: {
+  current: string[];
+  requested: string[];
+  available: string[];
+}): CollectionAssignmentPlan {
+  const availableIds = new Set(available);
+  const currentIds = new Set(current);
+  const requestedIds = new Set(requested);
+  return {
+    insert: [...requestedIds].filter((collectionId) => availableIds.has(collectionId) && !currentIds.has(collectionId)),
+    remove: current.filter((collectionId) => availableIds.has(collectionId) && !requestedIds.has(collectionId)),
+  };
+}
+
 // A membership transition guard: the row that may move on, or the upstream 400 message.
 export type MemberCheck = { ok: true; member: MembershipRecord } | { ok: false; message: string };
 

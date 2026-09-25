@@ -21,7 +21,7 @@ import {
   users,
 } from '../db/schema';
 import type { Attachment, Cipher } from '../types';
-import { hasFullCollectionAccess } from './org-authz';
+import { hasFullCollectionAccess, type CollectionAssignmentPlan } from './org-authz';
 import { attachmentUpsert } from './storage-attachment-repo';
 import { cipherUpsert } from './storage-cipher-repo';
 import {
@@ -111,9 +111,10 @@ function columnCount(table: Table): number {
   return Object.keys(getColumns(table)).length;
 }
 
-// Splits multi-row INSERT values so each statement stays within D1's bound-parameter limit.
-function chunkRows<T>(rows: T[], columnsPerRow: number): T[][] {
-  const size = Math.floor(D1_MAX_BOUND_PARAMETERS / columnsPerRow);
+// Splits multi-row INSERT values so each statement stays within D1's bound-parameter limit, less
+// any parameters every chunk's statement binds besides the rows.
+function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters = 0): T[][] {
+  const size = Math.floor((D1_MAX_BOUND_PARAMETERS - fixedParameters) / columnsPerRow);
   return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
 }
 
@@ -524,6 +525,20 @@ function cipherCollectionReplacement(orm: Orm, cipherIds: string[], collectionId
 export async function replaceCipherCollections(db: D1Database, cipherId: string, collectionIds: string[]): Promise<void> {
   const orm = getOrm(db);
   const statements = cipherCollectionReplacement(orm, [cipherId], collectionIds);
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+}
+
+// Applies a collection plan to one cipher in one batch. Each delete binds the cipher id next to its
+// chunk of collection ids, so leave room for that parameter.
+export async function updateCipherCollections(db: D1Database, cipherId: string, plan: CollectionAssignmentPlan): Promise<void> {
+  const orm = getOrm(db);
+  const statements = [
+    ...chunkRows(plan.remove, 1, 1).map((chunk) => orm.delete(cipherCollections)
+      .where(and(eq(cipherCollections.cipherId, cipherId), inArray(cipherCollections.collectionId, chunk)))),
+    ...chunkRows(plan.insert.map((collectionId) => ({ cipherId, collectionId })), columnCount(cipherCollections))
+      .map((chunk) => orm.insert(cipherCollections).values(chunk).onConflictDoNothing()),
+  ];
+  if (!statements.length) return;
   await orm.batch(statements as [typeof statements[0], ...typeof statements]);
 }
 

@@ -30,7 +30,13 @@ import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import * as orgRepo from '../services/storage-org-repo';
 import { canEditCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
-import { checkCollectionAssignment, deleteAuthorizedCipher, loadAccessibleCipher } from './cipher-access';
+import {
+  checkCollectionAssignment,
+  deleteAuthorizedCipher,
+  loadAccessibleCipher,
+  planCipherCollectionChange,
+  type CollectionChangeMode,
+} from './cipher-access';
 import { readNullableFullUpdateField } from './cipher-full-update';
 
 // CONTRACT:
@@ -1297,6 +1303,48 @@ export async function handleBulkShareCiphers(request: Request, env: Env, userId:
     data: shared.ciphers.map((cipher) => cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], responseOptions)),
     object: 'list',
     continuationToken: null,
+  });
+}
+
+// PUT/POST /api/ciphers/:id/collections_v2 and /api/ciphers/:id/collections-admin
+export async function handleUpdateCipherCollections(
+  request: Request,
+  env: Env,
+  userId: string,
+  id: string,
+  mode: CollectionChangeMode
+): Promise<Response> {
+  const storage = new StorageService(env.DB);
+
+  let body: { collectionIds?: unknown; CollectionIds?: unknown } | null;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const requested = parseCipherIdList({ ids: body?.collectionIds ?? body?.CollectionIds });
+  if (!requested) return errorResponse('The CollectionIds field is required.', 400);
+
+  const change = await planCipherCollectionChange(env, storage, userId, id, requested, mode);
+  if (!change.ok) return errorResponse(change.message, change.status);
+  await orgRepo.updateCipherCollections(env.DB, change.cipher.id, change.plan);
+  const revisionDate = await storage.updateRevisionDate(userId);
+  await orgRepo.bumpOrgMemberRevisions(env.DB, change.organizationId);
+  const cipher = { ...change.cipher, collectionIds: await orgRepo.listCipherCollectionIds(env.DB, change.cipher.id) };
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
+
+  const attachments = await storage.getAttachmentsByCipher(cipher.id);
+  const responseOptions = cipherResponseOptionsForRequest(request);
+  // The admin client fills in edit, viewPassword and favorite itself, so the details shape serves.
+  if (mode === 'admin') return jsonResponse({ ...cipherToResponse(cipher, attachments, responseOptions), object: 'cipherMiniDetails' });
+  // A member who dropped its last collection holding the item can no longer read it; upstream
+  // answers unavailable and the client deletes its local copy.
+  const readable = await loadAccessibleCipher(env, storage, userId, cipher.id, 'read');
+  return jsonResponse({
+    object: 'optionalCipherDetails',
+    unavailable: !readable,
+    cipher: readable ? cipherToResponse(readable, attachments, responseOptions) : null,
   });
 }
 

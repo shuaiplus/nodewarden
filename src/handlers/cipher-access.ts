@@ -1,4 +1,12 @@
-import { canEditCipher, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
+import {
+  canEditCipher,
+  canViewCipher,
+  hasFullCollectionAccess,
+  isActiveMember,
+  planCollectionAssignment,
+  resolvePermissions,
+  type CollectionAssignmentPlan,
+} from '../services/org-authz';
 import * as orgRepo from '../services/storage-org-repo';
 import { StorageService } from '../services/storage';
 import type { Cipher, Env } from '../types';
@@ -55,6 +63,58 @@ export async function checkCollectionAssignment(
   return collectionIds.every((collectionId) => writable.has(collectionId))
     ? { ok: true }
     : { ok: false, status: 403, message: 'Access denied' };
+}
+
+async function listOrgCollectionIds(env: Env, orgId: string): Promise<string[]> {
+  return (await orgRepo.listCollectionsByOrg(env.DB, orgId)).map((collection) => collection.id);
+}
+
+// 'member' is PUT /ciphers/{id}/collections_v2, 'admin' is the admin console's /collections-admin.
+export type CollectionChangeMode = 'member' | 'admin';
+
+export type CollectionChange =
+  | { ok: true; cipher: Cipher; organizationId: string; plan: CollectionAssignmentPlan }
+  | { ok: false; status: 400 | 404; message: string };
+
+const CIPHER_NOT_FOUND = { ok: false, status: 404, message: 'Cipher not found' } as const;
+
+// Upstream CiphersController.PutCollections_vNext / PutCollectionsAdmin with CipherService
+// .SaveCollectionsAsync. A member needs to see the item's passwords (else 404) and edit it (else
+// 400), and changes only its writable collections. An admin (Owner, Admin or editAnyCollection)
+// may use any collection of the org, but naming another org's collection is a 404.
+export async function planCipherCollectionChange(
+  env: Env,
+  storage: StorageService,
+  userId: string,
+  id: string,
+  requested: string[],
+  mode: CollectionChangeMode
+): Promise<CollectionChange> {
+  const cipher = await storage.getCipher(id);
+  const organizationId = cipher?.organizationId;
+  if (!cipher || !organizationId) return CIPHER_NOT_FOUND;
+  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, organizationId);
+  if (!isActiveMember(member)) return CIPHER_NOT_FOUND;
+  const current = await orgRepo.listCipherCollectionIds(env.DB, cipher.id);
+  const planned = (available: string[]): CollectionChange =>
+    ({ ok: true, cipher, organizationId, plan: planCollectionAssignment({ current, requested, available }) });
+
+  if (mode === 'admin') {
+    if (!resolvePermissions(member).editAnyCollection) return CIPHER_NOT_FOUND;
+    const orgCollectionIds = await listOrgCollectionIds(env, organizationId);
+    const orgCollectionIdSet = new Set(orgCollectionIds);
+    if (!requested.every((collectionId) => orgCollectionIdSet.has(collectionId))) return CIPHER_NOT_FOUND;
+    return planned(orgCollectionIds);
+  }
+  if (hasFullCollectionAccess(member)) return planned(await listOrgCollectionIds(env, organizationId));
+
+  const accesses = await orgRepo.listUserCollectionAccess(env.DB, userId, organizationId);
+  const assigned = new Map(accesses.map((access) => [access.collectionId, access]));
+  // Upstream CipherDetails.ViewPassword: some assigned collection holding the item shows passwords.
+  if (!current.some((collectionId) => assigned.get(collectionId)?.hidePasswords === false)) return CIPHER_NOT_FOUND;
+  if (!canEditCipher(member, current, assigned)) return { ok: false, status: 400, message: 'You do not have permissions to edit this.' };
+  // The member's own collections, assigned directly or through a group, minus the readOnly ones.
+  return planned(accesses.filter((access) => !access.readOnly).map((access) => access.collectionId));
 }
 
 export async function deleteAuthorizedCipher(

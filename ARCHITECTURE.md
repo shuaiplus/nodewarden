@@ -32,6 +32,8 @@ Personal vault lists and mutations filter `organization_id IS NULL`. Organizatio
 
 A cipher changes owner only through share (`PUT /api/ciphers/{id}/share`, bulk `PUT /api/ciphers/share`, plus POST aliases). `PUT /api/ciphers/{id}` keeps the stored `organizationId` and returns 400 "Organization mismatch" when the client sends a different one. Share moves only the caller's personal ciphers, at most `importItemLimit` per bulk call. Every collection must belong to the target org and be writable by the caller, otherwise 403. Upstream drops those ids silently instead. The ciphers, their collection links and their re-encrypted attachment keys are written in one D1 batch.
 
+An org cipher's collections change through `PUT /api/ciphers/{id}/collections_v2` (member) or `/collections-admin` (Owner, Admin or `editAnyCollection`), plus POST aliases. Both add and drop only collections the caller may write: a member's non-readOnly assignments, or every org collection with full access or on the admin route. Links to other collections survive, as in upstream `CollectionCipher_UpdateCollections` and 1aed7ce03. The member route answers `optionalCipherDetails` with `unavailable: true` once the caller can no longer read the item.
+
 Instance backups never include runtime auth state (`session`, `account`, `two_factor`, devices, auth requests, remembered 2FA tokens).
 
 ## Auth
