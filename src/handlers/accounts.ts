@@ -339,6 +339,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     // Bitwarden creates a readable personal API key with the account. It is
     // returned only after fresh user verification and is excluded from backups.
     apiKey: randomStringAlphanum(LIMITS.auth.clientSecretLength),
+    userKeyId: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -1567,6 +1568,38 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
   // Return as milliseconds timestamp (Bitwarden format)
   const timestamp = new Date(revisionDate).getTime();
   return jsonResponse(timestamp);
+}
+
+// Upstream KeyId: exactly 16 bytes as lowercase hex. The SDK rejects a whole sync whose
+// UserKeyId is malformed, so uppercase is refused rather than normalized.
+const USER_KEY_ID_PATTERN = /^[0-9a-f]{32}$/;
+
+// POST /api/accounts/key-management/user-key-id
+// 2026.9 clients report their user key id once, then clear it and re-post on every unlock
+// unless /api/sync echoes it. The revision bump is what evicts the cached pre-backfill sync.
+export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
+  let body: { userKeyId?: unknown; UserKeyId?: unknown } | null;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  // ASP.NET binds request properties case-insensitively; the SDK sends camelCase.
+  const userKeyId = body?.userKeyId ?? body?.UserKeyId;
+  if (userKeyId == null || userKeyId === '') {
+    return errorResponse('The UserKeyId field is required.', 400);
+  }
+  if (typeof userKeyId !== 'string' || !USER_KEY_ID_PATTERN.test(userKeyId)) {
+    return errorResponse('UserKeyId is not a valid key id.', 400);
+  }
+
+  const storage = new StorageService(env.DB);
+  if (!await storage.setUserKeyIdIfUnset(userId, userKeyId)) {
+    return errorResponse('User key id is already set.', 400);
+  }
+  await storage.updateRevisionDate(userId);
+  return new Response(null, { status: 200 });
 }
 
 // POST /api/accounts/verify-password

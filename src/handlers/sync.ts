@@ -57,11 +57,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const excludeSends = excludeSendsParam !== null && /^(1|true|yes)$/i.test(excludeSendsParam);
   const preserveRepairableUris = shouldPreserveRepairableCipherUris(request);
 
-  const user = await storage.getUserById(userId);
-  if (!user) {
-    return errorResponse('User not found', 404);
-  }
-
+  // Read the revision before the user row: writers change the row first and bump the
+  // revision second, so a body cached under a revision can never predate that revision.
   const [revisionDate, accountPasskeys] = await Promise.all([
     storage.getRevisionDate(userId),
     storage.getAccountPasskeyCredentialsByUserId(userId),
@@ -78,6 +75,11 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const cachedResponse = await readSyncCache(cacheRequest);
   if (cachedResponse) {
     return cachedResponse;
+  }
+
+  const user = await storage.getUserById(userId);
+  if (!user) {
+    return errorResponse('User not found', 404);
   }
 
   const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([
@@ -184,6 +186,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
       WebAuthnPrfOption: webAuthnPrfOptions[0] || null,
       WebAuthnPrfOptions: webAuthnPrfOptions,
       V2UpgradeToken: null,
+      UserKeyId: user.userKeyId,
       Object: 'userDecryption',
     },
     UserDecryptionOptions: userDecryptionOptions,

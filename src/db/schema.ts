@@ -47,6 +47,7 @@ export const users = sqliteTable('users', {
   yubikeyKey5: text('yubikey_key5'),
   yubikeyNfc: integer('yubikey_nfc').notNull().default(0),
   apiKey: text('api_key'),
+  userKeyId: text('user_key_id'),
   emailVerified: integer('email_verified').notNull().default(1),
   image: text('image'),
   createdAt: text('created_at').notNull(),

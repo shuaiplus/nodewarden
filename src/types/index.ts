@@ -94,6 +94,9 @@ export interface User {
   yubikeyKey5: string | null;
   yubikeyNfc: boolean;
   apiKey: string | null;
+  // Hex key id of the current user key, reported once by 2026.9+ clients. Written only by
+  // setUserKeyIdIfUnset, never by saveUser, so a stale read-modify-write cannot erase it.
+  userKeyId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -693,6 +696,7 @@ export interface SyncResponse {
       WrappedUserKey1: string;
       WrappedUserKey2: string;
     } | null;
+    UserKeyId?: string | null;
     Object?: string;
   } | null;
   // PascalCase for desktop/browser clients

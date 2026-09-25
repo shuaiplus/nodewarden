@@ -95,6 +95,7 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
     yubikeyKey5: null,
     yubikeyNfc: false,
     apiKey: null,
+    userKeyId: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,

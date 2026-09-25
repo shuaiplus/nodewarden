@@ -59,7 +59,7 @@ export function buildUserDecryptionOptions(
 }
 
 export function buildUserDecryptionCompat(
-  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>
+  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism' | 'userKeyId'>
 ): Record<string, unknown> {
   return {
     masterPasswordUnlock: {
@@ -73,5 +73,6 @@ export function buildUserDecryptionCompat(
       masterKeyEncryptedUserKey: user.key,
       salt: user.email.toLowerCase(),
     },
+    userKeyId: user.userKeyId,
   };
 }

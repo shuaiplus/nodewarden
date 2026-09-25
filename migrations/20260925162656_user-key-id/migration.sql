@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `user_key_id` text;

@@ -20,6 +20,7 @@ import {
   getUserById as findStoredUserById,
   getUserCount as countStoredUsers,
   saveUser as saveStoredUser,
+  setUserKeyIdIfUnset as setStoredUserKeyIdIfUnset,
 } from './storage-user-repo';
 import {
   type AuditLogListOptions,
@@ -167,7 +168,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
 // Bump this whenever src/db/schema.ts changes. Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-08-14-drop-refresh-tokens';
+const STORAGE_SCHEMA_VERSION = '2026-09-25-user-key-id';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',
@@ -316,6 +317,10 @@ export class StorageService {
 
   async createFirstUser(user: User): Promise<boolean> {
     return createFirstStoredUser(this.db, user);
+  }
+
+  async setUserKeyIdIfUnset(userId: string, userKeyId: string): Promise<boolean> {
+    return setStoredUserKeyIdIfUnset(this.db, userId, userKeyId);
   }
 
   async deleteUserById(id: string): Promise<boolean> {

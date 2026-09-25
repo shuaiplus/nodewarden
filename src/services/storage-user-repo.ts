@@ -1,4 +1,4 @@
-import { asc, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
@@ -31,6 +31,7 @@ function mapUserRow(row: typeof users.$inferSelect): User {
     yubikeyKey5: row.yubikeyKey5,
     yubikeyNfc: !!row.yubikeyNfc,
     apiKey: row.apiKey,
+    userKeyId: row.userKeyId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -147,6 +148,17 @@ export async function createFirstUser(db: D1Database, user: User): Promise<boole
       ${values.yubikeyNfc}, ${values.apiKey}, ${values.createdAt}, ${values.updatedAt}
     WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)
   `);
+  return (result.meta.changes ?? 0) > 0;
+}
+
+// One conditional UPDATE, so two devices backfilling at once cannot overwrite each other: the
+// first write wins and the caller reports the rest as already set.
+export async function setUserKeyIdIfUnset(db: D1Database, userId: string, userKeyId: string): Promise<boolean> {
+  const result = await getOrm(db)
+    .update(users)
+    .set({ userKeyId, updatedAt: new Date().toISOString() })
+    .where(and(eq(users.id, userId), isNull(users.userKeyId)))
+    .run();
   return (result.meta.changes ?? 0) > 0;
 }
 
