@@ -1,5 +1,7 @@
 import type { Env, ProfileResponse, User } from '../types';
 import { buildAccountKeys } from './user-decryption';
+import { StorageService } from '../services/storage';
+import { twoFactorProviders } from '../services/two-factor-providers';
 import { isYubiKeyEnabled } from './yubico-otp';
 import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus } from '../services/org-types';
@@ -20,6 +22,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
     }
   }
   const accountKeys = buildAccountKeys(user);
+  const hasTwoFactorPasskey = env?.DB ? await new StorageService(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0 : false;
 
   return {
     id: user.id,
@@ -31,7 +34,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
     usesKeyConnector: false,
     masterPasswordHint: user.masterPasswordHint,
     culture: 'en-US',
-    twoFactorEnabled: !!user.totpSecret || isYubiKeyEnabled(user),
+    twoFactorEnabled: twoFactorProviders(user, hasTwoFactorPasskey).length > 0,
     yubikeyEnabled: isYubiKeyEnabled(user),
     key: user.key,
     privateKey: user.privateKey,

@@ -3,6 +3,7 @@ import { notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse, identityErrorResponse } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
@@ -28,7 +29,7 @@ import {
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
-import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
+import { userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
 import { getAccessTokenWithAccount } from '../services/storage-secret-repo';
@@ -262,14 +263,11 @@ async function twoFactorRequiredResponse(
   // Match Bitwarden Identity: TwoFactorProviders2 lists enabled 2FA providers only.
   // Clients expose recovery-code entry points themselves; Android 2026.4 fails to
   // parse the challenge if an unknown recovery provider key such as "8" is included.
-  const providers: string[] = [];
-  let webAuthnOptions: Record<string, unknown> | null = null;
-  if (!user || resolveTotpSecret(user.totpSecret)) providers.push(String(TWO_FACTOR_PROVIDER_AUTHENTICATOR));
-  if (user && isYubiKeyEnabled(user)) providers.push(String(TWO_FACTOR_PROVIDER_YUBIKEY));
-  if (user) {
-    webAuthnOptions = await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null;
-    if (webAuthnOptions) providers.push(String(TWO_FACTOR_PROVIDER_WEBAUTHN));
-  }
+  const hasTwoFactorPasskey = user ? await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0 : false;
+  const providers = user ? twoFactorProviders(user, hasTwoFactorPasskey).map(String) : [String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)];
+  const webAuthnOptions = user && hasTwoFactorPasskey
+    ? await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null
+    : null;
   const providers2: Record<string, Record<string, unknown> | null> = {};
   for (const provider of providers) {
     providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
@@ -516,8 +514,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let trustedTwoFactorTokenToReturn: string | undefined;
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
-    const effectiveWebAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-    if (effectiveTotpSecret || effectiveYubiKeyPublicIds.length > 0 || effectiveWebAuthnCredentials.length > 0) {
+    const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+    if (twoFactorProviders(user, hasTwoFactorPasskey).length > 0) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
       const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
       let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
@@ -575,7 +573,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {
-        if (!effectiveWebAuthnCredentials.length) {
+        if (!hasTwoFactorPasskey) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         let deviceResponse: unknown;
@@ -597,21 +595,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!recoveryCodeEquals(normalizedTwoFactorToken, user.totpRecoveryCode)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
-        user.totpSecret = null;
-        user.yubikeyKey1 = null;
-        user.yubikeyKey2 = null;
-        user.yubikeyKey3 = null;
-        user.yubikeyKey4 = null;
-        user.yubikeyKey5 = null;
-        user.yubikeyNfc = false;
-        for (const credential of effectiveWebAuthnCredentials) {
-          await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
-        }
-        user.totpRecoveryCode = createRecoveryCode();
         user.securityStamp = generateUUID();
-        user.updatedAt = new Date().toISOString();
-        await storage.saveUser(user);
-        await storage.deleteRefreshTokensByUserId(user.id);
+        await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
+          recoveryCode: createRecoveryCode(),
+          securityStamp: user.securityStamp,
+        }));
         AuthService.invalidateUserCache(user.id);
         notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
         rememberRequested = false;

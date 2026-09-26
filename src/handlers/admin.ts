@@ -1,5 +1,7 @@
 import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
+import { twoFactorProviders } from '../services/two-factor-providers';
+import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { deleteUserAccount } from '../services/account-deletion';
@@ -95,22 +97,20 @@ export async function handleAdminListUsers(
     return errorResponse('Forbidden', 403);
   }
 
-  const storage = new StorageService(env.DB);
-  const users = await storage.getAllUsers();
-  const data = await Promise.all(users.map(async user => {
-    const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+  const users = await getAllUsersWithTwoFactor(env.DB);
+  const data = users.map(user => {
     return {
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
       status: user.status,
-      twoFactorEnabled: !!user.totpSecret || Boolean(user.yubikeyKey1 || user.yubikeyKey2 || user.yubikeyKey3 || user.yubikeyKey4 || user.yubikeyKey5) || hasTwoFactorPasskey,
+      twoFactorEnabled: twoFactorProviders(user, user.hasTwoFactorPasskey).length > 0,
       creationDate: user.createdAt,
       revisionDate: user.updatedAt,
       object: 'user',
     };
-  }));
+  });
   return jsonResponse({
     data,
     object: 'list',

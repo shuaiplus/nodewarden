@@ -1,3 +1,4 @@
+import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
 import { StorageService } from '../services/storage';
@@ -606,11 +607,11 @@ function memberMiniDetails(item: MembershipRecord, account: Pick<User, 'name' | 
 export async function handleListMembers(env: Env, userId: string, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
-  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account }) => ({
+  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account, hasTwoFactorPasskey }) => ({
     ...memberMiniDetails(item, account),
     externalId: item.externalId,
     accessAll: item.accessAll,
-    twoFactorEnabled: !!(account?.totpSecret),
+    twoFactorEnabled: account ? twoFactorProviders(account, hasTwoFactorPasskey).length > 0 : false,
     resetPasswordEnrolled: !!item.resetPasswordKey,
     permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
     accessSecretsManager: canAccessSecretsManager(item),

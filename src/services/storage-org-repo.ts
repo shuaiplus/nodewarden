@@ -251,17 +251,22 @@ export async function listMembershipsByOrg(db: D1Database, orgId: string): Promi
 export async function listMembershipsWithAccountsByOrg(
   db: D1Database,
   orgId: string
-): Promise<Array<{ item: MembershipRecord; account: Pick<User, 'name' | 'email' | 'totpSecret'> | null }>> {
+) {
   const rows = await getOrm(db)
     .select({
       membership: organizationMemberships,
-      account: { name: users.name, email: users.email, totpSecret: users.totpSecret },
+      account: {
+        name: users.name, email: users.email, totpSecret: users.totpSecret,
+        yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2, yubikeyKey3: users.yubikeyKey3,
+        yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
+      },
+      hasTwoFactorPasskey: sql<number>`EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id = users.id AND w.purpose = 'twoFactor')`.mapWith(Boolean),
     })
     .from(organizationMemberships)
     .leftJoin(users, eq(users.id, organizationMemberships.userId))
     .where(eq(organizationMemberships.orgId, orgId))
     .orderBy(asc(organizationMemberships.createdAt));
-  return rows.map(({ membership, account }) => ({ item: mapMembership(membership), account }));
+  return rows.map(({ membership, account, hasTwoFactorPasskey }) => ({ item: mapMembership(membership), account, hasTwoFactorPasskey }));
 }
 
 // Invite mail sends existing accounts to login instead of signup. One query per chunk of emails

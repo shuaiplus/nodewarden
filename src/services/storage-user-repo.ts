@@ -89,6 +89,14 @@ export async function getAllUsers(db: D1Database): Promise<User[]> {
   return rows.map(mapUserRow);
 }
 
+export async function getAllUsersWithTwoFactor(db: D1Database): Promise<Array<User & { hasTwoFactorPasskey: boolean }>> {
+  const rows = await getOrm(db).select({
+    user: users,
+    hasTwoFactorPasskey: sql<number>`EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id = users.id AND w.purpose = 'twoFactor')`.mapWith(Boolean),
+  }).from(users).orderBy(asc(users.createdAt));
+  return rows.map(({ user, hasTwoFactorPasskey }) => ({ ...mapUserRow(user), hasTwoFactorPasskey }));
+}
+
 export async function saveUser(db: D1Database, user: User): Promise<void> {
   const values = userValues(user);
   await getOrm(db)

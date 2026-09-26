@@ -2,6 +2,7 @@ import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { deleteTwoFactorSecret, upsertCredentialAccount, upsertTwoFactorSecret } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../services/audit-events';
@@ -972,11 +973,8 @@ export async function handleGetTwoFactorProviders(request: Request, env: Env, us
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const data = [];
-  if (isTotpEnabled(user.totpSecret)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_AUTHENTICATOR, true));
-  if (isYubiKeyEnabled(user)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_YUBIKEY, true));
-  const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-  if (webAuthnCredentials.length > 0) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_WEBAUTHN, true));
+  const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+  const data = twoFactorProviders(user, hasTwoFactorPasskey).map(type => twoFactorProviderResponse(type, true));
 
   return jsonResponse({
     Data: data,
@@ -1331,6 +1329,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
     user.totpSecret = null;
+    await deleteTwoFactorSecret(env.DB, user.id);
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
     user.yubikeyKey1 = null;
     user.yubikeyKey2 = null;
@@ -1558,22 +1557,11 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
     return errorResponse('Invalid credentials or recovery code', 400);
   }
 
-  user.totpSecret = null;
-  user.yubikeyKey1 = null;
-  user.yubikeyKey2 = null;
-  user.yubikeyKey3 = null;
-  user.yubikeyKey4 = null;
-  user.yubikeyKey5 = null;
-  user.yubikeyNfc = false;
-  const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-  for (const credential of webAuthnCredentials) {
-    await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
-  }
   user.totpRecoveryCode = createRecoveryCode();
-  user.securityStamp = generateUUID();
-  user.updatedAt = new Date().toISOString();
-  await storage.saveUser(user);
-  await storage.deleteRefreshTokensByUserId(user.id);
+  await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
+    recoveryCode: user.totpRecoveryCode,
+    securityStamp: generateUUID(),
+  }));
   AuthService.invalidateUserCache(user.id);
   notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
   await rateLimit.clearLoginAttempts(recoverLimitKey);
