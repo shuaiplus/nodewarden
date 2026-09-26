@@ -4,7 +4,7 @@ import test from 'node:test';
 import { ensureStorageSchema } from '../src/db/migrate';
 import type { Env } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
-import { ENCRYPTED_FIELD, postJson, seedSmOrg } from './support/sm';
+import { ENCRYPTED_FIELD, postJson, seedSmOrg, TOKEN_FIELDS } from './support/sm';
 
 // The webapp's token button posted the raw 64-byte org key (encryption + MAC halves), base64-encoded.
 const ORG_KEY_BYTES = 64;
@@ -12,7 +12,6 @@ const PLAINTEXT_ORG_KEY = Buffer.alloc(ORG_KEY_BYTES, 1).toString('base64');
 
 interface IssuedToken {
   id: string;
-  clientId: string;
   clientSecret: string;
 }
 
@@ -22,7 +21,7 @@ async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token:
   const { orgId, owner } = await seedSmOrg(env);
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
   const token = await postJson<IssuedToken>(env, owner, `/api/service-accounts/${account.id}/access-tokens`, {
-    name: ENCRYPTED_FIELD,
+    ...TOKEN_FIELDS,
     wrappedOrgKey: PLAINTEXT_ORG_KEY,
   });
   return { env, orgId, token };
@@ -45,7 +44,7 @@ test('a token created with wrappedOrgKey stores NULL and no response carries the
     body: new URLSearchParams({
       grant_type: 'client_credentials',
       scope: 'api.secrets',
-      client_id: token.clientId,
+      client_id: token.id,
       client_secret: token.clientSecret,
     }),
   });
@@ -54,9 +53,9 @@ test('a token created with wrappedOrgKey stores NULL and no response carries the
 
   const synced = await authedFetch(env, {
     path: `/api/organizations/${orgId}/secrets/sync`,
-    headers: { Authorization: `Bearer ${token.clientId}:${token.clientSecret}` },
+    headers: { Authorization: `Bearer ${token.id}:${token.clientSecret}` },
   });
-  assert.equal(synced.status, 200);
+  assert.equal(synced.status, 401);
   assert.equal('wrappedOrgKey' in (await synced.json() as object), false);
 });
 

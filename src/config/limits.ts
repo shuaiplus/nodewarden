@@ -3,6 +3,7 @@
     // Access token lifetime in seconds.
     // 访问令牌有效期（秒）。
     accessTokenTtlSeconds: 7200,
+    smAccessTokenTtlSeconds: 3600,
     // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
     // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
     refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,

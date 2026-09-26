@@ -131,7 +131,7 @@ test('the schema step removes cross-org and unreadable machine-account project g
   await assertOnlyReadableSameOrgGrants();
 });
 
-test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets and a machine account granted their project syncs them all`, async () => {
+test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets without exceeding D1 parameters`, async () => {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
   const projectId = await createProject(env, owner, orgId);
@@ -143,13 +143,4 @@ test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets and a machine account gra
   const { secrets } = await getJson<{ secrets: unknown[] }>(env, owner, `/api/organizations/${orgId}/secrets`);
   assert.equal(secrets.length, LARGE_ORG_SECRET_COUNT);
 
-  const { id: serviceAccountId } = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD, projectIds: [projectId] });
-  await smRepo.replaceServiceAccountProjects(env.DB, serviceAccountId, [projectId]);
-  const token = await postJson<{ clientId: string; clientSecret: string }>(env, owner, `/api/service-accounts/${serviceAccountId}/access-tokens`, { name: ENCRYPTED_FIELD });
-  const synced = await authedFetch(env, {
-    path: `/api/organizations/${orgId}/secrets/sync`,
-    headers: { Authorization: `Bearer ${token.clientId}:${token.clientSecret}` },
-  });
-  assert.equal(synced.status, 200);
-  assert.equal((await synced.json() as { secrets: unknown[] }).secrets.length, LARGE_ORG_SECRET_COUNT);
 });

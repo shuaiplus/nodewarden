@@ -15,7 +15,6 @@ import {
 import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
 import { handleOidcSignin, handleSsoAuthorize, handleSsoPrevalidate } from './handlers/sso';
 import { handleScimRoute } from './handlers/scim';
-import { handlePublicSecretsSync } from './handlers/secrets-manager';
 import { handleGetAccountPasskeyAssertionOptions } from './handlers/account-passkeys';
 import {
   handleRegister,
@@ -426,10 +425,7 @@ export async function handlePublicRoute(
   const scim = await handleScimRoute(request, env, path);
   if (scim) return scim;
 
-  const secretSync = path.match(/^\/(?:api\/)?organizations\/([a-f0-9-]+)\/secrets\/sync$/i);
-  if (secretSync && method === 'GET') {
-    return handlePublicSecretsSync(request, env, secretSync[1]);
-  }
+
 
   if (path === '/api/devices/knowndevice' && method === 'GET') {
     const blocked = await enforcePublicRateLimit();

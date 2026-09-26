@@ -1,3 +1,4 @@
+import { LIMITS } from '../config/limits';
 import { policyConflict, prepareSecretPolicies } from './sm-access-policies';
 import { isSerializedEncString } from '../utils/account-passkeys';
 import { projectAccess, serviceAccountAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
@@ -5,7 +6,7 @@ import type { Env } from '../types';
 import * as smRepo from '../services/storage-secret-repo';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
-import { hashApiKey, verifyApiKey } from '../utils/api-key';
+import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
 import { publishSecretChanged } from '../services/queue-publisher';
 
 // Upstream ProjectsAreInOrganization: a missing or foreign project is 404 before any write, so a
@@ -278,105 +279,24 @@ export async function handleSmCounts(env: Env, userId: string, orgId: string): P
 
 export async function handleCreateAccessToken(request: Request, env: Env, userId: string, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
-  if (!account) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, account.orgId);
-  if (!context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
-  const body = await request.json() as { name?: string; expireAt?: string | null };
-  const clientSecret = `nws_${generateUUID().replace(/-/g, '')}`;
-  const token = {
-    id: generateUUID(),
-    serviceAccountId,
-    name: String(body.name || 'Access token'),
-    clientSecretHash: await hashApiKey(clientSecret),
-    expireAt: body.expireAt || null,
-    revokedAt: null,
-    createdAt: new Date().toISOString(),
-  };
+  const context = account && await smContext(env, userId, account.orgId);
+  if (!account || !context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !encryptedField(body.name, 200) || !encryptedField(body.encryptedPayload, 4000) || !encryptedField(body.key)) return errorResponse('Name, encryptedPayload and key must be encrypted strings within their size limits.', 400);
+  const expires = body.expireAt == null ? null : typeof body.expireAt === 'string' ? Date.parse(body.expireAt) : NaN;
+  if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now())) return errorResponse('ExpireAt must be in the future.', 400);
+  const clientSecret = randomStringAlphanum(LIMITS.auth.clientSecretLength);
+  const token = { id: generateUUID(), serviceAccountId, name: body.name, encryptedPayload: body.encryptedPayload, key: body.key, clientSecretHash: await hashApiKey(clientSecret), expireAt: expires === null ? null : new Date(expires).toISOString(), revokedAt: null, createdAt: new Date().toISOString() };
   await smRepo.saveAccessToken(env.DB, token);
-  return jsonResponse({
-    id: token.id,
-    name: token.name,
-    clientSecret,
-    clientId: `organization.${account.orgId}.sa.${account.id}.${token.id}`,
-    expireAt: token.expireAt,
-    creationDate: token.createdAt,
-    object: 'accessTokenCreation',
-  });
+  return jsonResponse({ id: token.id, name: token.name, clientSecret, expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessTokenCreation' });
 }
 
 export async function handleListAccessTokens(env: Env, userId: string, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
-  if (!account) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, account.orgId);
-  if (!context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
+  const context = account && await smContext(env, userId, account.orgId);
+  if (!context || serviceAccountAccess(context.actor, context.grants, serviceAccountId) !== 'write') return errorResponse('Not found', 404);
   const tokens = await smRepo.listAccessTokens(env.DB, serviceAccountId);
-  return jsonResponse({
-    data: tokens.map((token) => ({
-      id: token.id,
-      name: token.name,
-      expireAt: token.expireAt,
-      revokedDate: token.revokedAt,
-      creationDate: token.createdAt,
-      object: 'accessToken',
-    })),
-    object: 'list',
-    continuationToken: null,
-  });
-}
-
-export async function authenticateServiceAccount(
-  env: Env,
-  clientId: string,
-  clientSecret: string
-): Promise<{ orgId: string; serviceAccountId: string; tokenId: string } | null> {
-  const match = clientId.match(/^organization\.([a-f0-9-]+)\.sa\.([a-f0-9-]+)\.([a-f0-9-]+)$/i);
-  if (!match) return null;
-  const token = await smRepo.getAccessToken(env.DB, match[3]);
-  if (!token || token.revokedAt) return null;
-  if (token.expireAt && Date.parse(token.expireAt) < Date.now()) return null;
-  if (!(await verifyApiKey(clientSecret, token.clientSecretHash))) return null;
-  const account = await smRepo.getServiceAccount(env.DB, token.serviceAccountId);
-  if (!account || account.orgId !== match[1]) return null;
-  return { orgId: account.orgId, serviceAccountId: account.id, tokenId: token.id };
-}
-
-export async function handlePublicSecretsSync(request: Request, env: Env, orgId: string): Promise<Response> {
-  const authorization = String(request.headers.get('Authorization') || '');
-  const bearer = authorization.replace(/^Bearer\s+/i, '').trim();
-  const [clientId, clientSecret] = bearer.includes('\n') ? bearer.split('\n') : bearer.split(':');
-  const machine = await authenticateServiceAccount(env, String(clientId || '').trim(), String(clientSecret || '').trim());
-  if (!machine || machine.orgId !== orgId) return errorResponse('Unauthorized', 401);
-  return handleSecretsSync(request, env, orgId, machine.serviceAccountId);
-}
-
-export async function handleSecretsSync(
-  request: Request,
-  env: Env,
-  orgId: string,
-  serviceAccountId: string
-): Promise<Response> {
-  const url = new URL(request.url);
-  const lastSynced = url.searchParams.get('lastSyncedDate');
-  const lastMs = lastSynced ? Date.parse(lastSynced) : 0;
-  // A machine account reads a secret only through a read grant on one of its projects, so an
-  // account with no readable project syncs nothing instead of the whole org.
-  const readableProjectIds = new Set(await smRepo.listReadableServiceAccountProjectIds(env.DB, serviceAccountId));
-  const secrets = (await smRepo.listSecrets(env.DB, orgId))
-    .filter((secret) => secret.projectIds.some((projectId) => readableProjectIds.has(projectId)));
-  const changed = !lastMs || secrets.some((secret) => Date.parse(secret.updatedAt) > lastMs);
-  return jsonResponse({
-    hasChanges: changed,
-    secrets: changed ? secrets.map((secret) => ({
-      id: secret.id,
-      organizationId: secret.orgId,
-      key: secret.key,
-      value: secret.value,
-      note: secret.note,
-      projectIds: secret.projectIds,
-      revisionDate: secret.updatedAt,
-    })) : [],
-    object: 'secretsSync',
-  });
+  return jsonResponse(listResponse(tokens.map(token => ({ id: token.id, name: token.name, scopes: ['api.secrets'], expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessToken' }))));
 }
 
 export async function handleSmEvents(env: Env, userId: string, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {

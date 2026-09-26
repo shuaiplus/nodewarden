@@ -10,6 +10,11 @@ export const TEST_ORG_KEY = '4.dGVzdA==';
 
 // Stored as sent; official web encrypts SM names, keys and values with the org key.
 export const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
+export const TOKEN_FIELDS = { name: ENCRYPTED_FIELD, encryptedPayload: ENCRYPTED_FIELD, key: ENCRYPTED_FIELD };
+
+export function smLogin(env: Env, tokenId: string, secret: string): Promise<Response> {
+  return authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'api.secrets', client_id: tokenId, client_secret: secret }) });
+}
 
 // Official web creates an org through POST /organizations, or self-hosted through the license
 // upload, which NodeWarden accepts with any JSON.

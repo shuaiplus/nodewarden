@@ -40,3 +40,22 @@ export async function verifyApiKey(apiKey: string, storedApiKey: string | null |
   const hashed = await hashApiKey(apiKey);
   return constantTimeEquals(hashed, stored);
 }
+
+// Generate a random alphanumeric string of the given length using crypto.getRandomValues.
+export function randomStringAlphanum(length: number): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  const maxUnbiased = Math.floor(256 / chars.length) * chars.length;
+  const bytes = new Uint8Array(Math.max(16, length));
+
+  while (result.length < length) {
+    crypto.getRandomValues(bytes);
+    for (const value of bytes) {
+      if (value >= maxUnbiased) continue;
+      result += chars[value % chars.length];
+      if (result.length >= length) break;
+    }
+  }
+
+  return result;
+}

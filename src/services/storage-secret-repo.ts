@@ -46,6 +46,8 @@ export interface SmAccessToken {
   serviceAccountId: string;
   name: string;
   clientSecretHash: string;
+  encryptedPayload?: string | null;
+  key?: string | null;
   expireAt: string | null;
   revokedAt: string | null;
   createdAt: string;
@@ -91,6 +93,8 @@ function mapAccessToken(row: typeof smAccessTokens.$inferSelect): SmAccessToken 
     serviceAccountId: row.serviceAccountId,
     name: row.name,
     clientSecretHash: row.clientSecretHash,
+    encryptedPayload: row.encryptedPayload,
+    key: row.key,
     expireAt: row.expireAt,
     revokedAt: row.revokedAt,
     createdAt: row.createdAt,
@@ -501,4 +505,10 @@ export async function readGrantedProjects(db: D1Database, orgId: string, id: str
 export async function readSecretMachinePolicies(db: D1Database, orgId: string, id: string) {
   const rows = await db.prepare('SELECT sa.id, sa.name, sp.write_access FROM sm_secret_service_accounts sp JOIN sm_service_accounts sa ON sa.id = sp.service_account_id AND sa.org_id = ? WHERE sp.secret_id = ?').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
   return rows.results;
+}
+
+export async function getAccessTokenWithAccount(db: D1Database, id: string): Promise<(SmAccessToken & { orgId: string }) | null> {
+  const [row] = await getOrm(db).select({ token: smAccessTokens, orgId: smServiceAccounts.orgId }).from(smAccessTokens)
+    .innerJoin(smServiceAccounts, eq(smServiceAccounts.id, smAccessTokens.serviceAccountId)).where(eq(smAccessTokens.id, id)).limit(1);
+  return row ? { ...mapAccessToken(row.token), orgId: row.orgId } : null;
 }

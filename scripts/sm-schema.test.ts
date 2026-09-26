@@ -72,7 +72,7 @@ async function seedPolicies(): Promise<{ env: Env; ids: SeededIds }> {
     orm.insert(smProjects).values({ id: projectId, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
     orm.insert(smSecrets).values({ id: secretId, orgId, key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
     orm.insert(smServiceAccounts).values({ id: serviceAccountId, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
-    orm.insert(smAccessTokens).values({ id: crypto.randomUUID(), serviceAccountId, name: ENCRYPTED_FIELD, clientSecretHash: 'hash', createdAt: now }),
+    orm.insert(smAccessTokens).values({ id: crypto.randomUUID(), serviceAccountId, name: ENCRYPTED_FIELD, encryptedPayload: ENCRYPTED_FIELD, key: ENCRYPTED_FIELD, clientSecretHash: 'hash', createdAt: now }),
     orm.insert(smSecretProjects).values({ secretId, projectId }),
     orm.insert(smServiceAccountProjects).values({ serviceAccountId, projectId }),
     orm.insert(smProjectMembers).values({ projectId, membershipId: membership.id }),

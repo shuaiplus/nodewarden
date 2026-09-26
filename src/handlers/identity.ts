@@ -5,11 +5,11 @@ import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse, identityErrorResponse } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
-import { createJWT, createRefreshToken } from '../utils/jwt';
+import { signHs256Jwt, createRefreshToken } from '../utils/jwt';
 import { getSafeJwtSecret } from '../utils/direct-upload';
 import { readAuthRequestDeviceInfo } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, isUUID } from '../utils/uuid';
 import { issueSendAccessToken } from './sends';
 import { registerMobilePushDevice } from '../services/push-relay';
 import {
@@ -29,7 +29,7 @@ import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
-import { authenticateServiceAccount } from './secrets-manager';
+import { getAccessTokenWithAccount } from '../services/storage-secret-repo';
 import * as orgRepo from '../services/storage-org-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -350,6 +350,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
   }
 
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
   let grantType = body.grant_type;
   let viaSsoShim = false;
   const clientIdentifier = getClientIdentifier(request);
@@ -801,24 +802,22 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const scope = body.scope;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
-    if (scope === 'api.secrets' || clientId.startsWith('organization.')) {
-      const machine = await authenticateServiceAccount(env, clientId, clientSecret);
-      if (!machine) return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
+    if (typeof clientId !== 'string' || !clientId || typeof clientSecret !== 'string' || !clientSecret) return identityErrorResponse('Parameter error', 'invalid_request', 400);
+    if (scope === 'api.secrets' || isUUID(String(clientId))) {
+      const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, clientId.toLowerCase());
+      const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
+      if (!loginCheck.allowed) return identityErrorResponse('Too many failed login attempts.', 'TooManyRequests', 429);
+      const token = await getAccessTokenWithAccount(env.DB, clientId.toLowerCase());
+      if (!token || !token.key || !token.encryptedPayload || (token.expireAt && !(Date.parse(token.expireAt) > Date.now())) || !(await verifyApiKey(clientSecret, token.clientSecretHash))) {
+        await rateLimit.recordFailedLogin(loginIdentifier);
+        return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_client', 400);
+      }
       const secret = getSafeJwtSecret(env);
       if (!secret) return identityErrorResponse('Server misconfigured', 'server_error', 500);
-      const accessToken = await createJWT({
-        sub: machine.serviceAccountId,
-        name: 'service-account',
-        email: `sa-${machine.serviceAccountId}@nodewarden.local`,
-        sstamp: machine.tokenId,
-      }, secret);
-      return identityJsonResponse({
-        access_token: accessToken,
-        expires_in: LIMITS.auth.accessTokenTtlSeconds,
-        token_type: 'Bearer',
-        scope: 'api.secrets',
-        organizationId: machine.orgId,
-      });
+      await rateLimit.clearLoginAttempts(loginIdentifier);
+      const now = Math.floor(Date.now() / 1000);
+      const accessToken = await signHs256Jwt({ iss: 'nodewarden', iat: now, nbf: now, exp: now + LIMITS.auth.smAccessTokenTtlSeconds, sub: token.serviceAccountId, type: 'ServiceAccount', organization: token.orgId, client_id: token.id, scope: ['api.secrets'] }, secret);
+      return identityJsonResponse({ access_token: accessToken, expires_in: LIMITS.auth.smAccessTokenTtlSeconds, token_type: 'Bearer', scope: 'api.secrets', encrypted_payload: token.encryptedPayload });
     }
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);
     if (!parmValid) {

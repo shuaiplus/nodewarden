@@ -6,7 +6,7 @@ import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import * as smRepo from '../src/services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
-import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
+import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 
 async function setup() {
   const env = await createTestEnv();
@@ -42,11 +42,10 @@ test('machine-account creator and group policies gate management, and revocation
   assert.equal((await request(b.id, detailPath)).status, 200);
   assert.equal((await request(b.id, detailPath, 'PUT', { name: ENCRYPTED_FIELD })).status, 200);
   assert.equal((await request(a.id, detailPath, 'PUT', { name: 'plaintext' })).status, 400);
-  const token = await postJson<{ id: string; clientId: string; clientSecret: string }>(env, b, `${detailPath}/access-tokens`, { name: ENCRYPTED_FIELD });
+  const token = await postJson<{ id: string; clientSecret: string }>(env, b, `${detailPath}/access-tokens`, TOKEN_FIELDS);
   const other = await account();
-  const otherToken = await postJson<{ id: string }>(env, a, `/api/service-accounts/${other.id}/access-tokens`, { name: ENCRYPTED_FIELD });
-  const sync = () => authedFetch(env, { path: `/api/organizations/${orgId}/secrets/sync`, headers: { Authorization: `Bearer ${token.clientId}:${token.clientSecret}` } });
-  assert.equal((await sync()).status, 200);
+  const otherToken = await postJson<{ id: string }>(env, a, `/api/service-accounts/${other.id}/access-tokens`, TOKEN_FIELDS);
+  assert.equal((await smLogin(env, token.id, token.clientSecret)).status, 200);
   assert.deepEqual(await (await request(a.id, `${detailPath}/sm-counts`)).json(), { projects: 0, people: 2, accessTokens: 1, object: 'serviceAccountCounts' });
   const revoked = await request(b.id, `${detailPath}/access-tokens/revoke`, 'POST', { ids: [token.id, otherToken.id] });
   assert.equal(revoked.status, 200);
@@ -54,7 +53,9 @@ test('machine-account creator and group policies gate management, and revocation
   assert.equal(await smRepo.getAccessToken(env.DB, token.id), null);
   assert.ok(await smRepo.getAccessToken(env.DB, otherToken.id));
   assert.deepEqual((await (await request(a.id, `${detailPath}/access-tokens`)).json() as any).data, []);
-  assert.equal((await sync()).status, 401);
+  const rejectedLogin = await smLogin(env, token.id, token.clientSecret);
+  assert.equal(rejectedLogin.status, 400);
+  assert.equal((await rejectedLogin.json() as any).error, 'invalid_client');
 });
 
 test('machine accessToSecrets is distinct across direct and project policies, and org counts equal visible lists', async () => {
@@ -100,7 +101,7 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
   await env.DB.exec('DROP TRIGGER fail_machine_grant;');
   const own = await account(a, [ownProject.id, deniedProject.id, crypto.randomUUID()]);
   const denied = await account(owner);
-  const token = await postJson<{ id: string }>(env, a, `/api/service-accounts/${own.id}/access-tokens`, { name: ENCRYPTED_FIELD });
+  const token = await postJson<{ id: string }>(env, a, `/api/service-accounts/${own.id}/access-tokens`, TOKEN_FIELDS);
   assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, own.id), []);
   const foreign = await seedSmOrg(env);
   const foreignAccount = await postJson<{ id: string }>(env, foreign.owner, `/api/organizations/${foreign.orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
