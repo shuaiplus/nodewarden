@@ -31,8 +31,8 @@ export async function wrapOrgKeyForMember(session: SessionState, wrappedOrgKey: 
 }
 
 // Secrets Manager names, keys, values and notes are EncStrings under the org key: upstream requires
-// [EncryptedString] on each, and official web and bws decrypt them with that key. Callers unwrap the
-// org key once, as upstream project.service, so a key failure is not mistaken for a bad field.
+// [EncryptedString] on each, and official web and bws decrypt them with that key. Taking an unwrapped
+// key keeps key-unwrapping failures separate from individual field-decryption failures.
 export function encryptWithOrgKey(orgKey: Pick<OrgKeyPair, 'encKey' | 'macKey'>, value: string): Promise<string> {
   return encryptBw(new TextEncoder().encode(value), orgKey.encKey, orgKey.macKey);
 }

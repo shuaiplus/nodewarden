@@ -4,7 +4,7 @@ import test from 'node:test';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
-import { ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support/sm';
+import { ENCRYPTED_FIELD, ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support/sm';
 
 // Secrets Manager is on for every organization and never reads a license: no license upload may
 // switch it off or cap its seats, projects or machine accounts. Confirmed Owners and Admins get it
@@ -12,8 +12,6 @@ import { ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support
 const SM_OFF_LICENSE = { useSecretsManager: false, smSeats: 0, smServiceAccounts: 0 };
 // More projects and machine accounts than SM_OFF_LICENSE's zero seats and machine accounts allow.
 const ITEMS_PAST_LICENSE = 3;
-// Stored as sent; official web encrypts SM names with the org key.
-const ENCRYPTED_NAME = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
 interface ProfileOrganization {
   id: string;
@@ -49,7 +47,7 @@ async function assertSecretsManagerOn(env: Env, orgId: string, members: User[]):
 async function assertNoSecretsManagerLimits(env: Env, orgId: string, owner: User): Promise<void> {
   for (const collection of ['projects', 'service-accounts']) {
     for (let created = 0; created < ITEMS_PAST_LICENSE; created += 1) {
-      const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/${collection}`, body: { name: ENCRYPTED_NAME }, userId: owner.id });
+      const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/${collection}`, body: { name: ENCRYPTED_FIELD }, userId: owner.id });
       assert.equal(response.status, 200, `${collection} #${created + 1}`);
     }
   }
@@ -89,7 +87,7 @@ for (const createPath of ORG_CREATE_PATHS) {
 
 test('creating an org from a license switching Secrets Manager off with zero seats changes nothing', async () => {
   const env = await createTestEnv();
-  const createBody = smOffLicenseForm({ key: TEST_ORG_KEY, collectionName: ENCRYPTED_NAME });
+  const createBody = smOffLicenseForm({ key: TEST_ORG_KEY, collectionName: ENCRYPTED_FIELD });
   const { orgId, owner, admin } = await seedSmOrg(env, ORG_CREATE_PATHS[1], createBody);
   await assertSecretsManagerOn(env, orgId, [owner, admin]);
   await assertNoSecretsManagerLimits(env, orgId, owner);
