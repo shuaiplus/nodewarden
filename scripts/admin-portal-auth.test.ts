@@ -84,3 +84,23 @@ test('admin sessions expire and directory/stamp changes revoke both links and se
   await env.DB.prepare('UPDATE verification SET expires_at=0 WHERE id=?').bind('admin-login:' + await sha256Base64Url(token(capture.sent))).run();
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login/confirm', form: { token: token(capture.sent) }, cookie: cookie(expiring, '__Host-nw_admin_login') })).status, 400);
 });
+
+test('throttled or failed resends preserve earlier links from the same browser', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  for (const fail of [false, true]) {
+    const capture = captureEmail();
+    const env = await createTestEnv({ ...capture.overrides, ADMIN_EMAILS: email });
+    const first = await portalFetch(env, { path: '/admin/login', method: 'POST', form: { email } });
+    const browser = cookie(first, '__Host-nw_admin_login');
+    await drainWaitUntil();
+    const delivered = token(capture.sent);
+    if (fail) env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
+    for (let i = 0; i < (fail ? 1 : 3); i++) {
+      const resend = await portalFetch(env, { path: '/admin/login', method: 'POST', form: { email }, cookie: browser });
+      assert.equal(cookie(resend, '__Host-nw_admin_login'), browser);
+      await drainWaitUntil();
+    }
+    assert.equal(capture.sent.length, fail ? 1 : 3);
+    assert.equal((await portalFetch(env, { path: '/admin/login/confirm', method: 'POST', form: { token: delivered }, cookie: browser })).status, 303);
+  }
+});

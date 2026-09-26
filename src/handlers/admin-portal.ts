@@ -59,7 +59,8 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (!clientId) return forbidden();
       const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-login-ip:${clientId}`, LIMITS.admin.loginRequestsPerIpPerHour, 3600);
       if (!budget.allowed) return portalPage('Too many requests', html`<p>Try signing in later.</p>`, 429, { 'Retry-After': String(budget.retryAfterSeconds) });
-      const nonce = randomAdminToken();
+      const existingNonce = readAdminCookie(request, ADMIN_LOGIN_COOKIE);
+      const nonce = ADMIN_TOKEN_PATTERN.test(existingNonce) ? existingNonce : randomAdminToken();
       runInBackground('admin-login', async () => {
         const stamp = directory.admins.get(email);
         if (stamp && mailEnabled) await issueAdminLogin(env, request, email, stamp, nonce, returnPath);
