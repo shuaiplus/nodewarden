@@ -25,3 +25,5 @@ Routes match official clients: `/emergency-access/trusted|granted|invite` and `/
 With mail and a configured vault origin, every invitation starts Invited and sends a dedicated five-day token. Acceptance requires the invited account and that token. Without mail or a vault origin, inviting an existing user still marks the contact Accepted immediately. New-account invitees need open registration; an emergency-access token does not bypass it. Pending invitations created before enabling mail need a reinvite.
 
 After Confirm, the grantee can Initiate; wait-time 0 approves immediately. The Worker cron also auto-approves recoveries whose wait has elapsed.
+
+Successful accept, confirm, recovery initiation, approval and rejection send background notices to the affected party. Initiation and timeout notices go to the grantor; acceptance also tells the grantor to confirm. Confirmation, approval and rejection notify the grantee. Immediate approval sends both initiation and approval notices; elapsed recoveries send timeout and approval notices. A delivery failure does not undo the transition.

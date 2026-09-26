@@ -65,6 +65,48 @@ export const MAIL_TEMPLATES = {
       action: { label: 'Accept invitation', url: toSafeUrl(new URL(`${model.vaultOrigin}/#/accept-emergency?${new URLSearchParams({ id: model.id, name: model.grantorName, email: model.grantorEmail, token: model.token })}`)) },
     }),
   },
+  emergencyAccessAccepted: {
+    throttle: 'user',
+    render: (model: { name: string }): MailContent => ({
+      subject: 'Emergency contact accepted your invitation',
+      paragraphs: [`${sanitizeForEmail(model.name)} accepted your emergency-access invitation. Confirm this contact in your vault to enable access.`],
+    }),
+  },
+  emergencyAccessConfirmed: {
+    throttle: 'user',
+    render: (model: { name: string }): MailContent => ({
+      subject: 'Emergency access confirmed',
+      paragraphs: [`${sanitizeForEmail(model.name)} confirmed you as an emergency contact. You can now request emergency access from your vault.`],
+    }),
+  },
+  emergencyAccessRecoveryInitiated: {
+    throttle: 'exempt',
+    render: (model: { name: string; accessType: string; daysLeft: number }): MailContent => ({
+      subject: 'Emergency access requested',
+      paragraphs: [`${sanitizeForEmail(model.name)} requested permission to ${sanitizeForEmail(model.accessType)}.`, `Access will be approved after ${model.daysLeft} days. Open your vault to approve or reject the request.`],
+    }),
+  },
+  emergencyAccessApproved: {
+    throttle: 'user',
+    render: (model: { name: string }): MailContent => ({
+      subject: 'Emergency access approved',
+      paragraphs: [`Your emergency access to ${sanitizeForEmail(model.name)} has been approved. Open your vault to continue.`],
+    }),
+  },
+  emergencyAccessRejected: {
+    throttle: 'user',
+    render: (model: { name: string }): MailContent => ({
+      subject: 'Emergency access request rejected',
+      paragraphs: [`${sanitizeForEmail(model.name)} rejected your emergency-access request. Your emergency contact relationship remains confirmed.`],
+    }),
+  },
+  emergencyAccessTimedOut: {
+    throttle: 'exempt',
+    render: (model: { name: string }): MailContent => ({
+      subject: 'Emergency access waiting period ended',
+      paragraphs: [`The waiting period for ${sanitizeForEmail(model.name)} has ended. Their emergency access to your account is now approved.`],
+    }),
+  },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
