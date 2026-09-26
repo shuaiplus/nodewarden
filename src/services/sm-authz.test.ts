@@ -9,3 +9,16 @@ test('project grants merge direct and group access and admins bypass policy chec
   assert.equal(projectAccess({ kind: 'admin', membershipId: 'a' }, grants, 'other'), 'write');
   assert.equal(projectAccess({ kind: 'serviceAccount', serviceAccountId: 's' }, grants, 'p'), 'write');
 });
+
+test('secret writes require destination write but preserve directly granted projectless edits', async () => {
+  const { secretAccess, canCreateSecret, canUpdateSecret } = await import('./sm-authz');
+  const user = { kind: 'user', membershipId: 'u' } as const;
+  const grants = grantsFromRows({ projects: [{ id: 'read', write_access: 0 }, { id: 'write', write_access: 1 }], secrets: [{ id: 's', write_access: 1 }], serviceAccounts: [] });
+  assert.equal(secretAccess(user, grants, { id: 'other', projectIds: ['read'] }), 'read');
+  assert.equal(canCreateSecret(user, grants, undefined), false);
+  assert.equal(canCreateSecret(user, grants, 'write'), true);
+  assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: [] }, []), true);
+  assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: ['write'] }, []), false);
+  assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: ['write'] }, ['read']), false);
+  assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: ['read'] }, ['write']), true);
+});

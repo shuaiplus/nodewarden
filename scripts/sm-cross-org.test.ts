@@ -76,8 +76,9 @@ for (const [write, send] of PROJECT_WRITES) {
       const before = await yOrgState(fixture);
 
       const response = await send(fixture, projectIds(fixture));
-      assert.equal(response.status, 404);
-      assert.equal((await response.json() as { message: string }).message, RESOURCE_NOT_FOUND);
+      const tooMany = target === "Y's project twice" && write !== 'creating a machine account';
+      assert.equal(response.status, tooMany ? 400 : 404);
+      assert.equal((await response.json() as { message: string }).message, tooMany ? 'Only one project assignment is supported.' : RESOURCE_NOT_FOUND);
       assert.deepEqual(await yOrgState(fixture), before);
     });
   }

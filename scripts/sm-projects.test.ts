@@ -35,7 +35,7 @@ test('project routes enforce creator and group grants, bulk isolation, encrypted
   assert.equal((await request(foreign.owner.id, `/api/projects/${p.id}`)).status, 404);
   const result = await (await request(b.id, '/api/projects/delete', 'POST', [p.id, q.id])).json() as any;
   assert.deepEqual(result.data.map((item: any) => item.error), ['access denied', null]);
-  for (const sub of ['secrets', 'service-accounts']) assert.equal((await request(a.id, `/api/organizations/${orgId}/${sub}`)).status, 404);
+  for (const sub of ['service-accounts']) assert.equal((await request(a.id, `/api/organizations/${orgId}/${sub}`)).status, 404);
 });
 
 test('project updates cannot resurrect a concurrently deleted row and reject null JSON', async () => {

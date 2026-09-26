@@ -1,5 +1,5 @@
 import { isSerializedEncString } from '../utils/account-passkeys';
-import { projectAccess, resolveSmActor, type SmAccess } from '../services/sm-authz';
+import { projectAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
 import type { Env } from '../types';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -23,110 +23,122 @@ async function allProjectsInOrg(env: Env, orgId: string, projectIds: string[]): 
   return new Set(projectIds).size === projectIds.length && projectIds.every((id) => orgProjectIds.has(id));
 }
 
-function secretResponse(secret: smRepo.SmSecret) {
+export function secretResponse(secret: smRepo.SmSecret, projects: Map<string, string>, access: SmAccess = 'write', base = false) {
   return {
-    id: secret.id,
-    organizationId: secret.orgId,
-    key: secret.key,
-    value: secret.value,
-    note: secret.note,
-    creationDate: secret.createdAt,
-    revisionDate: secret.updatedAt,
-    projects: secret.projectIds.map((id) => ({ id, object: 'project' })),
-    read: true,
-    write: true,
-    object: 'secret',
+    id: secret.id, organizationId: secret.orgId, key: secret.key, value: secret.value, note: secret.note,
+    creationDate: secret.createdAt, revisionDate: secret.updatedAt,
+    projects: secret.projectIds.map(id => ({ id, name: projects.get(id) })),
+    ...(base ? {} : { read: access !== 'none', write: access === 'write' }), object: base ? 'baseSecret' : 'secret',
   };
 }
 
-export async function handleListSecrets(env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const secrets = await smRepo.listSecrets(env.DB, orgId);
-  return jsonResponse({
-    secrets: secrets.map((secret) => ({
-      id: secret.id,
-      organizationId: secret.orgId,
-      key: secret.key,
-      creationDate: secret.createdAt,
-      revisionDate: secret.updatedAt,
-      projects: secret.projectIds.map((id) => ({ id })),
-    })),
-    projects: [],
-    object: 'secretWithProjectsList',
-  });
+export async function projectNames(env: Env, orgId: string): Promise<Map<string, string>> {
+  return new Map((await smRepo.listProjects(env.DB, orgId)).map(project => [project.id, project.name]));
+}
+
+export async function secretsListResponse(env: Env, orgId: string, secrets: smRepo.SmSecret[], context: NonNullable<Awaited<ReturnType<typeof smContext>>>) {
+  const names = await projectNames(env, orgId);
+  const visible = secrets.filter(secret => secretAccess(context.actor, context.grants, secret) !== 'none');
+  return {
+    secrets: visible.map(secret => {
+      const { value, note, object, ...response } = secretResponse(secret, names, secretAccess(context.actor, context.grants, secret));
+      return response;
+    }),
+    projects: [...new Set(visible.flatMap(secret => secret.projectIds))].map(id => ({ id, name: names.get(id) })),
+    object: 'SecretsWithProjectsList',
+  };
+}
+
+export async function handleListSecrets(env: Env, userId: string, orgId: string, projectId?: string): Promise<Response> {
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(secret => !projectId || secret.projectIds.includes(projectId));
+  return jsonResponse(await secretsListResponse(env, orgId, secrets, context));
+}
+
+export async function handleProjectSecrets(env: Env, userId: string, id: string): Promise<Response> {
+  const project = await smRepo.getProject(env.DB, id);
+  return project ? handleListSecrets(env, userId, project.orgId, id) : errorResponse('Not found', 404);
+}
+
+async function secretInput(request: Request) {
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !encryptedField(body.key, 1000) || !encryptedField(body.value, 35000) || !encryptedField(body.note, 10000)) return errorResponse('Key, value and note must be encrypted strings within their size limits.', 400);
+  if (body.projectIds != null && (!Array.isArray(body.projectIds) || !body.projectIds.every(isUUID))) return errorResponse('ProjectIds must be an array of GUIDs.', 400);
+  const projectIds = (body.projectIds as string[] | null | undefined)?.map(id => id.toLowerCase()) ?? [];
+  if (projectIds.length > 1) return errorResponse('Only one project assignment is supported.', 400, {}, { ProjectIds: ['Only one project assignment is supported.'] });
+  if (body.accessPoliciesRequests != null) {
+    const policy = body.accessPoliciesRequests;
+    if (typeof policy !== 'object' || Array.isArray(policy) || Object.values(policy).some(items => !Array.isArray(items) || items.length)) return errorResponse('Secret access policies are not supported yet', 400);
+  }
+  return { key: body.key, value: body.value, note: body.note, projectIds };
 }
 
 export async function handleCreateSecret(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const body = await request.json() as Record<string, unknown>;
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  const input = await secretInput(request);
+  if (input instanceof Response) return input;
+  if (!(await allProjectsInOrg(env, orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
+  if (!canCreateSecret(context.actor, context.grants, input.projectIds[0])) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
-  const secret: smRepo.SmSecret = {
-    id: generateUUID(),
-    orgId,
-    key: String(body.key || ''),
-    value: String(body.value || ''),
-    note: body.note == null ? null : String(body.note),
-    projectIds: Array.isArray(body.projectIds) ? body.projectIds.map(String) : [],
-    createdAt: now,
-    updatedAt: now,
-    deletedAt: null,
-  };
-  if (!secret.key || !secret.value) return errorResponse('key and value are required', 400);
-  if (!(await allProjectsInOrg(env, orgId, secret.projectIds))) return errorResponse('Resource not found.', 404);
-  await smRepo.saveSecret(env.DB, secret);
+  const secret = { ...input, id: generateUUID(), orgId, createdAt: now, updatedAt: now, deletedAt: null };
+  await smRepo.createSecret(env.DB, secret);
   await publishSecretChanged(env, orgId, secret.id);
-  return jsonResponse(secretResponse(secret));
+  return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
 }
 
 export async function handleGetSecret(env: Env, userId: string, secretId: string): Promise<Response> {
   const secret = await smRepo.getSecret(env.DB, secretId);
-  if (!secret) return errorResponse('Not found', 404);
-  if (!(await requireSmMember(env, userId, secret.orgId))) return errorResponse('Not found', 404);
-  return jsonResponse(secretResponse(secret));
+  const context = secret && !secret.deletedAt && await smContext(env, userId, secret.orgId);
+  if (!secret || !context) return errorResponse('Not found', 404);
+  const access = secretAccess(context.actor, context.grants, secret);
+  if (access === 'none') return errorResponse('Not found', 404);
+  return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId), access));
 }
 
 export async function handleUpdateSecret(request: Request, env: Env, userId: string, secretId: string): Promise<Response> {
-  const secret = await smRepo.getSecret(env.DB, secretId);
-  if (!secret) return errorResponse('Not found', 404);
-  if (!(await requireSmMember(env, userId, secret.orgId))) return errorResponse('Not found', 404);
-  const body = await request.json() as Record<string, unknown>;
-  if (body.key) secret.key = String(body.key);
-  if (body.value) secret.value = String(body.value);
-  if (body.note !== undefined) secret.note = body.note == null ? null : String(body.note);
-  if (Array.isArray(body.projectIds)) secret.projectIds = body.projectIds.map(String);
-  if (!(await allProjectsInOrg(env, secret.orgId, secret.projectIds))) return errorResponse('Resource not found.', 404);
-  secret.updatedAt = new Date().toISOString();
-  await smRepo.saveSecret(env.DB, secret);
+  const existing = await smRepo.getSecret(env.DB, secretId);
+  const context = existing && !existing.deletedAt && await smContext(env, userId, existing.orgId);
+  if (!existing || !context) return errorResponse('Not found', 404);
+  const input = await secretInput(request);
+  if (input instanceof Response) return input;
+  if (!(await allProjectsInOrg(env, existing.orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
+  if (!canUpdateSecret(context.actor, context.grants, existing, input.projectIds)) return errorResponse('Not found', 404);
+  const secret = { ...existing, ...input, updatedAt: new Date().toISOString() };
+  if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds)) return errorResponse('Not found', 404);
   await publishSecretChanged(env, secret.orgId, secret.id);
-  return jsonResponse(secretResponse(secret));
+  return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }
 
-// Official web and the SDK send a bare array of ids. Upstream binds `[FromBody] List<Guid> ids`, so any
-// other body, or an id that is not a GUID, is a 400 there.
 export async function handleDeleteSecrets(request: Request, env: Env, userId: string): Promise<Response> {
-  let ids: unknown;
-  try {
-    ids = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-  if (!Array.isArray(ids) || !ids.every(isUUID)) {
-    return errorResponse('Request body must be an array of secret GUIDs', 400);
-  }
-  const data = [];
-  for (const id of ids) {
-    const secret = await smRepo.getSecret(env.DB, id);
-    if (!secret || !(await requireSmMember(env, userId, secret.orgId))) {
-      data.push({ id, error: 'not found', object: 'BulkDeleteResponseModel' });
-      continue;
-    }
-    secret.deletedAt = new Date().toISOString();
-    secret.updatedAt = secret.deletedAt;
-    await smRepo.saveSecret(env.DB, secret);
-    await publishSecretChanged(env, secret.orgId, secret.id);
-    data.push({ id, error: null, object: 'BulkDeleteResponseModel' });
-  }
-  return jsonResponse({ data, object: 'list', continuationToken: null });
+  const ids = await readIds(request);
+  if (!ids) return errorResponse('Request body must be an array of secret GUIDs', 400);
+  if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
+  const secrets = await smRepo.getSecretsByIds(env.DB, ids);
+  const orgId = secrets[0]?.orgId;
+  if (!orgId || secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || secret.deletedAt)) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  const data = secrets.map(secret => ({ id: secret.id, error: secretAccess(context.actor, context.grants, secret) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
+  const allowed = data.filter(item => !item.error).map(item => item.id);
+  await smRepo.deleteSecrets(env.DB, orgId, allowed);
+  await Promise.all(allowed.map(id => publishSecretChanged(env, orgId, id)));
+  return jsonResponse(listResponse(data));
+}
+
+export async function handleSecretsByIds(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await request.json().catch(() => null) as { ids?: unknown } | null;
+  if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
+  const ids = body.ids.map(id => id.toLowerCase());
+  if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
+  const secrets = await smRepo.getSecretsByIds(env.DB, ids);
+  const orgId = secrets[0]?.orgId;
+  if (!orgId || secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || secret.deletedAt)) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, orgId);
+  if (!context || secrets.some(secret => secretAccess(context.actor, context.grants, secret) === 'none')) return errorResponse('Not found', 404);
+  const names = await projectNames(env, orgId);
+  return jsonResponse(listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))));
 }
 
 export async function smContext(env: Env, userId: string, orgId: string) {

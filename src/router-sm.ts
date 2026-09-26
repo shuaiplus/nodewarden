@@ -9,6 +9,8 @@ import {
   handleCreateServiceAccount,
   handleDeleteSecrets,
   handleGetSecret,
+  handleProjectSecrets,
+  handleSecretsByIds,
   handleListAccessTokens,
   handleListProjects,
   handleListSecrets,
@@ -18,6 +20,9 @@ import {
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
   if (path === '/api/projects/delete' && method === 'POST') return handleDeleteProjects(request, env, userId);
+  if (path === '/api/secrets/get-by-ids' && method === 'POST') return handleSecretsByIds(request, env, userId);
+  const projectSecrets = path.match(/^\/api\/projects\/([a-f0-9-]+)\/secrets$/i);
+  if (projectSecrets && method === 'GET') return handleProjectSecrets(env, userId, projectSecrets[1]);
   const project = path.match(/^\/api\/projects\/([a-f0-9-]+)(\/sm-counts)?$/i);
   if (project && (method === 'GET' || (!project[2] && method === 'PUT'))) return handleProject(request, env, userId, project[1], !!project[2]);
   if (path === '/api/secrets/delete' && method === 'POST') return handleDeleteSecrets(request, env, userId);

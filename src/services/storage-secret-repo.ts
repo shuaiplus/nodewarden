@@ -333,3 +333,43 @@ export async function updateProject(db: D1Database, project: SmProject): Promise
   const [rows] = await orm.batch([orm.update(smProjects).set({ name: project.name, updatedAt: project.updatedAt }).where(eq(smProjects.id, project.id)).returning({ id: smProjects.id })]);
   return rows.length > 0;
 }
+
+export function revisionStatement(db: D1Database, orgId: string, now = new Date().toISOString()): D1PreparedStatement {
+  // ponytail: org-wide revision bump trades a smaller write path for extra machine resyncs.
+  return db.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE org_id = ?').bind(now, orgId);
+}
+
+export async function createSecret(db: D1Database, secret: SmSecret, policies: D1PreparedStatement[] = []): Promise<void> {
+  await db.batch([
+    db.prepare('INSERT INTO sm_secrets (id, org_id, key, value, note, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)').bind(secret.id, secret.orgId, secret.key, secret.value, secret.note, secret.createdAt, secret.updatedAt),
+    ...secret.projectIds.map(projectId => db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(secret.id, projectId)),
+    ...policies,
+    revisionStatement(db, secret.orgId, secret.updatedAt),
+  ]);
+}
+
+export async function updateSecret(db: D1Database, secret: SmSecret, previousProjectIds: string[], policies: D1PreparedStatement[] = []): Promise<boolean> {
+  const statements = [db.prepare('UPDATE sm_secrets SET key = ?, value = ?, note = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').bind(secret.key, secret.value, secret.note, secret.updatedAt, secret.id)];
+  if (previousProjectIds[0] !== secret.projectIds[0]) {
+    statements.push(db.prepare('DELETE FROM sm_secret_projects WHERE secret_id = ? AND EXISTS (SELECT 1 FROM sm_secrets WHERE id = ? AND deleted_at IS NULL)').bind(secret.id, secret.id));
+    for (const projectId of secret.projectIds) statements.push(db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) SELECT id, ? FROM sm_secrets WHERE id = ? AND deleted_at IS NULL').bind(projectId, secret.id));
+  }
+  const [result] = await db.batch([...statements, ...policies, revisionStatement(db, secret.orgId, secret.updatedAt)]);
+  return result.meta.changes > 0;
+}
+
+export async function getSecretsByIds(db: D1Database, ids: string[]): Promise<SmSecret[]> {
+  const orm = getOrm(db);
+  const results = await Promise.all(chunkRows(ids, 1).map(async chunk => {
+    const rows = await orm.select().from(smSecrets).where(inArray(smSecrets.id, chunk));
+    const projects = await projectIdsBySecret(db, inArray(smSecrets.id, chunk));
+    return rows.map(row => mapSecret(row, projects.get(row.id) ?? []));
+  }));
+  return results.flat();
+}
+
+export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]): Promise<void> {
+  const orm = getOrm(db);
+  const now = new Date().toISOString();
+  await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))))]);
+}

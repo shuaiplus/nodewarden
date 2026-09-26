@@ -34,3 +34,13 @@ export async function resolveSmActor(env: Env, userId: string, orgId: string): P
   if (!isActiveMember(member)) return null;
   return { kind: member.type <= MembershipType.Admin ? 'admin' : 'user', membershipId: member.id };
 }
+
+export function secretAccess(actor: SmActor, grants: SmGrants, secret: { id: string; projectIds: readonly string[] }): SmAccess {
+  return actor.kind === 'admin' ? 'write' : maxAccess(grants.secrets.get(secret.id) ?? 'none', ...secret.projectIds.map(id => projectAccess(actor, grants, id)));
+}
+export function canCreateSecret(actor: SmActor, grants: SmGrants, projectId: string | undefined): boolean {
+  return actor.kind === 'admin' || (!!projectId && projectAccess(actor, grants, projectId) === 'write');
+}
+export function canUpdateSecret(actor: SmActor, grants: SmGrants, secret: { id: string; projectIds: readonly string[] }, requested: readonly string[]): boolean {
+  return secretAccess(actor, grants, secret) === 'write' && (actor.kind === 'admin' || secret.projectIds[0] === requested[0] || (!!requested[0] && projectAccess(actor, grants, requested[0]) === 'write'));
+}
