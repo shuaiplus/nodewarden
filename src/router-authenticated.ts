@@ -11,6 +11,8 @@ import {
   handleVerifyPassword,
   handleChangePassword,
   handleDeleteAccount,
+  handleEmailToken,
+  handleChangeEmail,
   handleSetVerifyDevices,
   handleGetTotpStatus,
   handleSetTotpStatus,
@@ -138,9 +140,14 @@ export async function handleAuthenticatedRoute(
     return unsupportedResponse('KDF changes are not supported by this server.');
   }
 
+  if ((path === '/api/accounts/email-token' || path === '/accounts/email-token') && method === 'POST') {
+    return handleEmailToken(request, env, userId);
+  }
+  if ((path === '/api/accounts/email' || path === '/accounts/email') && method === 'POST') {
+    return handleChangeEmail(request, env, userId);
+  }
+
   const mailBackedAccountPaths = new Set([
-    '/api/accounts/email-token',
-    '/accounts/email-token',
     '/api/accounts/verify-email',
     '/accounts/verify-email',
     '/api/accounts/verify-email-token',

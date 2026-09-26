@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
@@ -8,11 +9,11 @@ import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
 import { syncVaultAdminRoles } from '../services/vault-admin-role';
 import { deleteUserAccount } from '../services/account-deletion';
 import { notifyUserLogout } from '../durable/notifications-hub';
-import { issueEmailOtp, redeemEmailOtp } from '../services/email-otp';
+import { issueEmailOtp, redeemEmailOtp, spendEmailOtpIssueBudget } from '../services/email-otp';
 import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
-import { deleteTwoFactorSecret, upsertCredentialAccount, upsertTwoFactorSecret } from '../services/auth-accounts';
+import { deleteTwoFactorSecret, upsertCredentialAccount, credentialAccountStatement, upsertTwoFactorSecret } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../services/audit-events';
+import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent, auditEventStatement } from '../services/audit-events';
 import { jsonResponse, errorResponse, unsupportedResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
@@ -25,6 +26,7 @@ import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUs
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
   mailStatusCheck,
+  type MailOutcome,
   readMailConfig,
   EMAIL_PATTERN,
   isReservedDocumentationEmail,
@@ -389,7 +391,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     if (!created) {
       return errorResponse('Registration is temporarily unavailable, retry once', 409);
     }
-    await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
+    AuthService.invalidateUserCache(user.id);
+    if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
     await storage.setRegistered();
     await writeAuditEvent(storage, {
       actorUserId: user.id,
@@ -418,7 +421,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
   try {
     await storage.createUser(user);
-    await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
+    AuthService.invalidateUserCache(user.id);
+    if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
   } catch (error) {
     if (inviteCode) await storage.revertInviteUsed(inviteCode, user.id);
     let cause = error;
@@ -619,6 +623,78 @@ export async function handleDeleteAccount(request: Request, env: Env, userId: st
   if (result.kind === 'blocked-by-orgs') return errorResponse('You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.', 400);
   if (result.kind === 'last-vault-admin') return errorResponse('You cannot delete the last instance administrator.', 400);
   notifyUserLogout(env, userId, null);
+  return new Response(null, { status: 200 });
+}
+
+export async function handleEmailToken(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
+  if (!await verifyUserSecret(new AuthService(env), user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']))) {
+    return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
+  }
+  const email = readBodyString(body, ['newEmail', 'NewEmail']).trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  const target = { purpose: 'email-change' as const, subject: user.id, binding: `${user.securityStamp}:${email}` };
+  let outcome: MailOutcome;
+  if (await storage.getUser(email)) {
+    outcome = await spendEmailOtpIssueBudget(env, target)
+      ? await sendMail(env, user.email, 'emailChangeAlreadyExists', {})
+      : { kind: 'throttled', retryAfterSeconds: 3600 - Math.floor(Date.now() / 1000) % 3600 };
+  } else {
+    outcome = await issueEmailOtp(env, target, code => sendMail(env, email, 'verificationCode', { code, reason: 'email-change' }));
+  }
+  const check = mailStatusCheck(outcome);
+  return check.ok ? new Response(null, { status: 200 }) : errorResponse(check.message, check.status, check.headers);
+}
+
+export async function handleChangeEmail(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
+  const auth = new AuthService(env);
+  if (!await verifyUserSecret(auth, user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']))) return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
+  const email = readBodyString(body, ['newEmail', 'NewEmail']).trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const kdfFields = { kdf: user.kdfType, kdfType: user.kdfType, kdfIterations: user.kdfIterations, kdfMemory: user.kdfMemory ?? null, kdfParallelism: user.kdfParallelism ?? null };
+  for (const [name, expected] of Object.entries(kdfFields)) {
+    if (body[name] !== undefined && body[name] !== expected) return errorResponse('KDF settings cannot be changed with the email endpoint', 400);
+  }
+  const update = parseMasterPasswordUpdate(body, { ...user, email });
+  if (!update.ok) return update.response;
+  if (!await redeemEmailOtp(env, { purpose: 'email-change', subject: user.id, binding: `${user.securityStamp}:${email}` }, readBodyString(body, ['token', 'Token']))) return errorResponse('Invalid token.', 400);
+  const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash, email);
+  const stamp = generateUUID();
+  const now = new Date().toISOString();
+  const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${user.id} AND security_stamp = ${stamp})`;
+  const event = auditEventStatement(env.DB, {
+    actorUserId: user.id, action: 'user.email.change', category: 'security', level: 'security',
+    targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
+  }, guard).toSQL();
+  let result: D1Result[];
+  try {
+    result = await env.DB.batch([
+      env.DB.prepare("UPDATE users SET email = ?, email_verified = 1, master_password_hash = ?, key = ?, security_stamp = ?, updated_at = ? WHERE id = ? AND security_stamp = ? AND status = 'active'")
+        .bind(email, passwordHash, update.key, stamp, now, user.id, user.securityStamp),
+      credentialAccountStatement(env.DB, user.id, passwordHash, stamp),
+      env.DB.prepare('DELETE FROM session WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)').bind(user.id, user.id, stamp),
+      env.DB.prepare('INSERT INTO user_revisions (user_id, revision_date) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?) ON CONFLICT(user_id) DO UPDATE SET revision_date = excluded.revision_date').bind(user.id, now, user.id, stamp),
+      env.DB.prepare(event.sql).bind(...event.params),
+    ]);
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE constraint failed: users\.email/i.test(error.message)) return errorResponse('Email already in use.', 400);
+    throw error;
+  }
+  if (!result[0].meta.changes) return errorResponse('User verification failed.', 400);
+  AuthService.invalidateUserCache(user.id);
+  notifyUserLogout(env, user.id, null);
+  notifyMail(env, user.email, 'emailChanged', { utc: now, ip: getClientIdentifier(request) ?? 'Unknown' });
+  await syncVaultAdminRoles(env);
   return new Response(null, { status: 200 });
 }
 
@@ -916,9 +992,9 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
     ...(nextPublicKey ? ['publicKey' as const] : []),
     ...(shouldUpdateHint ? ['masterPasswordHint' as const] : []),
   ], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
-  await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
-  await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
+  await storage.deleteRefreshTokensByUserId(user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'user.password.change',

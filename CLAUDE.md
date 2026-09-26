@@ -29,3 +29,5 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - With `ADMIN_EMAILS` configured, `users.role` is derived by `syncVaultAdminRoles` from verified addresses, with a no-lockout guard. Do not write roles outside the guarded bootstrap, sync, or backup-import paths. Account creation uses `createUser` (INSERT); `saveUser` only UPDATEs its explicit field list, defaulting to profile fields. Never write a whole stale account snapshot. Saves compare the original security stamp and return false on a lost update; credential writers must reject that result. Role, status, email verification, recovery codes and Email 2FA use targeted writers.
 
 - Email codes go only through `src/services/email-otp.ts`: purpose/binding-scoped, hashed at rest, single-use, budgeted and five-minute expiry.
+
+- Email changes must atomically update the normalized email, verified flag, server hash, client-rewrapped key and credential mirror, rotate the stamp and revoke sessions. Better Auth `user.changeEmail` and `user.deleteUser` stay disabled; they bypass vault key and deletion invariants.

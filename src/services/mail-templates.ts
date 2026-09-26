@@ -4,6 +4,20 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  emailChangeAlreadyExists: {
+    throttle: 'user',
+    render: (_model: Record<string, never>): MailContent => ({
+      subject: 'Your NodeWarden email change request',
+      paragraphs: ['The requested email address is already used by another account.', 'Your account email has not changed. Request a different address to continue.'],
+    }),
+  },
+  emailChanged: {
+    throttle: 'exempt',
+    render: (model: { utc: string; ip: string }): MailContent => ({
+      subject: 'Your NodeWarden email address changed',
+      paragraphs: ['Your account email address was changed.', `Time (UTC): ${sanitizeForEmail(model.utc)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If you did not make this change, contact your instance administrator.'],
+    }),
+  },
   verifyDelete: {
     throttle: 'user',
     render: (model: { url: SafeUrl }): MailContent => ({
@@ -26,9 +40,9 @@ export const MAIL_TEMPLATES = {
   },
   verificationCode: {
     throttle: 'user',
-    render: (model: { code: string; reason: 'two-factor-setup' }): MailContent => ({
+    render: (model: { code: string; reason: 'two-factor-setup' | 'email-change' }): MailContent => ({
       subject: 'Your NodeWarden verification code',
-      paragraphs: [`Use this code to set up email two-step login: ${model.code}`, 'The code expires in five minutes. If you did not request it, ignore this message.'],
+      paragraphs: [model.reason === 'email-change' ? `Use this code to confirm your new email address: ${model.code}` : `Use this code to set up email two-step login: ${model.code}`, 'The code expires in five minutes. If you did not request it, ignore this message.'],
     }),
   },
   passwordHint: {

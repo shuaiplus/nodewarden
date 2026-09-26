@@ -325,9 +325,9 @@ export async function handleEmergencyAccessRoute(
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
     if (!await storage.saveUser(grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
-    await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash);
-    await storage.deleteRefreshTokensByUserId(grantor.id);
     AuthService.invalidateUserCache(grantor.id);
+    if (!await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash, grantor.securityStamp)) return errorResponse('User verification failed.', 400);
+    await storage.deleteRefreshTokensByUserId(grantor.id);
     return new Response(null, { status: 200 });
   }
   if (action === 'policies' && method === 'GET') {
