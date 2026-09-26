@@ -1,3 +1,4 @@
+import { runInBackground } from '../services/mail-notify';
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
@@ -16,7 +17,7 @@ import { createRegisterVerifyToken, verifyRegisterVerifyToken } from '../utils/j
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
   readMailConfig,
-  mailStatusCheck,
+  EMAIL_PATTERN,
   isReservedDocumentationEmail,
   registerVerifyVaultOrigin,
   sendMail,
@@ -521,7 +522,7 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
 
   const email = String(body.email || '').trim().toLowerCase();
   const name = String(body.name || '').trim() || null;
-  if (!email || !email.includes('@')) return errorResponse('Invalid email address', 400);
+  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
 
   const storage = new StorageService(env.DB);
   const userCount = await storage.getUserCount();
@@ -529,19 +530,12 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
     return errorResponse('Registration is invite-only', 403);
   }
 
-  const existing = await storage.getUser(email);
-  if (existing || isReservedDocumentationEmail(email)) {
-    // Same empty body as a real send so clients cannot enumerate accounts.
-    return jsonResponse('');
-  }
-
-  if (readMailConfig(env).kind !== 'enabled') {
-    return errorResponse('Email sending is not configured', 503);
-  }
-
-  const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
-  const check = mailStatusCheck(await sendMail(env, email, 'registerVerification', { vaultOrigin: registerVerifyVaultOrigin(request, env), email, token }));
-  if (!check.ok) return errorResponse(check.message, check.status, check.headers);
+  if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  runInBackground('register-verification', async () => {
+    if (isReservedDocumentationEmail(email) || await storage.getUser(email)) return;
+    const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
+    await sendMail(env, email, 'registerVerification', { vaultOrigin: registerVerifyVaultOrigin(request, env), email, token });
+  });
 
   // Official clients treat a non-empty string as an inline token (no SMTP).
   // An empty JSON string means "check your email".

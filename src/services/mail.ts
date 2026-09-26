@@ -4,7 +4,6 @@ import {
   getConfiguredWebVaultOrigins,
   isConfiguredWebVaultOrigin,
   normalizeOrigin,
-  requestPublicOrigin,
 } from '../utils/origins';
 
 // RFC 2606 / 6761 names. Sending to these bounces and hurts sender reputation.
@@ -77,9 +76,7 @@ export function isReservedDocumentationEmail(email: string): boolean {
 export function registerVerifyVaultOrigin(request: Request, env: Pick<Env, 'WEB_VAULT_ORIGINS'>): string {
   const originHeader = request.headers.get('Origin');
   if (isConfiguredWebVaultOrigin(env, originHeader)) return String(originHeader).replace(/\/+$/, '');
-  const forwarded = requestPublicOrigin(request);
-  if (isConfiguredWebVaultOrigin(env, forwarded)) return forwarded;
-  return getConfiguredWebVaultOrigins(env)[0] || forwarded;
+  return getConfiguredWebVaultOrigins(env)[0] || new URL(request.url).origin;
 }
 
 // Any org admin picks the invite recipients and the mail comes from EMAIL_FROM, so its link only

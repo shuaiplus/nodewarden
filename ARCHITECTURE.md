@@ -88,3 +88,4 @@ Transactional email uses one typed sender with data-only templates and escaped t
 
 The Worker `/admin` portal authenticates configured `ADMIN_EMAILS` independently of vault JWTs and `users.role`. Hashed, browser-bound single-use email links create fixed two-day D1 sessions. All form POSTs enforce origin and CSRF; top-level navigation checks and CSP isolate the portal from webapp scripts. `/admin` is never forwarded by the official-web Pages proxy.
 The system administrator portal reads Secrets Manager tables for counts only; it never renders encrypted names or values.
+Registration verification returns an empty JSON string before background mail delivery, uniformly for registered and new addresses; disabled or misconfigured mail gives 503 for both.
