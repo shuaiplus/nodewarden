@@ -3,10 +3,7 @@ import test from 'node:test';
 
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
-import { seedSmOrg } from './support/sm';
-
-// Stored as sent; official web encrypts SM names, keys and values with the org key.
-const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
+import { ENCRYPTED_FIELD, postJson, seedSmOrg } from './support/sm';
 
 interface SyncFixture {
   env: Env;
@@ -20,12 +17,6 @@ interface SyncFixture {
 interface MachineToken {
   serviceAccountId: string;
   authorization: string;
-}
-
-async function postJson<T>(env: Env, owner: User, path: string, body: unknown): Promise<T> {
-  const response = await authedFetch(env, { method: 'POST', path, body, userId: owner.id });
-  assert.equal(response.status, 200, `${path} answered ${response.status}`);
-  return await response.json() as T;
 }
 
 async function seedSyncFixture(): Promise<SyncFixture> {

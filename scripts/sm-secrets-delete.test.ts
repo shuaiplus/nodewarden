@@ -4,10 +4,7 @@ import test from 'node:test';
 import * as smRepo from '../src/services/storage-secret-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
-import { seedSmOrg } from './support/sm';
-
-// Stored as sent; official web encrypts SM keys and values with the org key.
-const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
+import { ENCRYPTED_FIELD, seedSmOrg } from './support/sm';
 
 async function createSecret(env: Env, orgId: string, owner: User): Promise<string> {
   const created = await authedFetch(env, {

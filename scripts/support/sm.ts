@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+
 import { MembershipStatus, MembershipType } from '../../src/services/org-types';
 import * as orgRepo from '../../src/services/storage-org-repo';
 import type { Env, User } from '../../src/types';
@@ -5,6 +7,9 @@ import { authedFetch, seedUser } from './env';
 
 // The server stores org and membership keys as sent, so any EncString-shaped value will do.
 export const TEST_ORG_KEY = '4.dGVzdA==';
+
+// Stored as sent; official web encrypts SM names, keys and values with the org key.
+export const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
 // Official web creates an org through POST /organizations, or self-hosted through the license
 // upload, which NodeWarden accepts with any JSON.
@@ -14,6 +19,13 @@ export interface SmOrg {
   orgId: string;
   owner: User;
   admin: User;
+}
+
+// Fails on anything but 200 so a broken setup call cannot pass for the behavior under test.
+export async function postJson<T>(env: Env, owner: User, path: string, body: unknown): Promise<T> {
+  const response = await authedFetch(env, { method: 'POST', path, body, userId: owner.id });
+  assert.equal(response.status, 200, `${path} answered ${response.status}`);
+  return await response.json() as T;
 }
 
 // A new account holding a membership of `orgId` in the given role and status. Only confirming a
