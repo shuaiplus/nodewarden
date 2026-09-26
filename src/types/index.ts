@@ -96,6 +96,8 @@ export interface Invite {
   code: string;
   createdBy: string;
   usedBy: string | null;
+  /** When set, the invite code only registers this email (org-minted codes). */
+  email: string | null;
   expiresAt: string;
   status: 'active' | 'used' | 'revoked' | 'expired';
   createdAt: string;
@@ -245,7 +247,8 @@ export interface PasswordHistory {
 
 export interface Cipher {
   id: string;
-  userId: string;
+  userId: string | null;
+  organizationId?: string | null;
   type: CipherType;
   folderId: string | null;
   name: string | null;
@@ -269,6 +272,77 @@ export interface Cipher {
   deletedAt: string | null;
   /** Allow unknown fields from Bitwarden clients to be stored and passed through transparently. */
   [key: string]: any;
+}
+
+// Organization model (Bitwarden-compatible sharing)
+export type OrganizationUserStatus = -1 | 0 | 1 | 2; // Bitwarden OrganizationUserStatusType: -1=Revoked 0=Invited 1=Accepted 2=Confirmed
+export type OrganizationUserType = 0 | 1 | 2 | 3 | 4; // Bitwarden OrganizationUserType: 0=Owner 1=Admin 2=User 3=Manager 4=Custom
+
+export interface Organization {
+  id: string;
+  /** Encrypted with the organization key (EncString). */
+  name: string;
+  /** Organization private key encrypted with the organization key (EncString). */
+  privateKey: string;
+  billingEmail: string | null;
+  /** Organization public key (base64, plaintext — mirrors users.public_key). */
+  publicKey?: string | null;
+  creationDate: string;
+  revisionDate: string;
+}
+
+export interface OrganizationUser {
+  id: string;
+  organizationId: string;
+  userId: string | null;
+  email: string;
+  /** Organization key encrypted with the member's public key; set on confirm. */
+  key: string | null;
+  status: OrganizationUserStatus;
+  type: OrganizationUserType;
+  accessAll: boolean;
+  creationDate: string;
+  revisionDate: string;
+}
+
+export interface Collection {
+  id: string;
+  organizationId: string;
+  /** Encrypted with the organization key (EncString). */
+  name: string;
+  externalId: string | null;
+  creationDate: string;
+  revisionDate: string;
+}
+
+export interface Collection {
+  id: string;
+  organizationId: string;
+  /** Encrypted with the organization key (EncString). */
+  name: string;
+  externalId: string | null;
+  creationDate: string;
+  revisionDate: string;
+}
+
+// Organization-owned folder. Like collections, names are encrypted with the
+// organization key so every confirmed member can decrypt them; management is
+// restricted to organization owners/admins. Surfaced to clients through the
+// standard sync folders list so official clients render org items filed.
+export interface OrganizationFolder {
+  id: string;
+  organizationId: string;
+  /** Encrypted with the organization key (EncString). */
+  name: string;
+  creationDate: string;
+  revisionDate: string;
+}
+
+export interface CollectionUserAccess {
+  collectionId: string;
+  organizationUserId: string;
+  readOnly: boolean;
+  hidePasswords: boolean;
 }
 
 // Folder model
@@ -575,6 +649,7 @@ export interface ProfileResponse {
   yubikeyEnabled?: boolean;
   key: string;
   privateKey: string | null;
+  publicKey?: string | null;
   accountKeys: any | null;
   securityStamp: string;
   organizations: any[];

@@ -142,6 +142,12 @@ const CipherListItem = memo(function CipherListItem(props: CipherListItemProps) 
         <div className="list-text">
           <span className="list-title" title={props.cipher.decName || t('txt_no_name')}>
             <span className="list-title-text">{props.cipher.decName || t('txt_no_name')}</span>
+            {props.cipher.organizationId ? (
+              <span className="org-item-badge" title={t('txt_organizations_shared_item_badge')}>{t('txt_organizations_shared_item_badge')}</span>
+            ) : null}
+            {props.cipher.organizationId && props.cipher.edit === false ? (
+              <span className="org-item-badge org-item-badge-readonly" title={t('txt_organizations_readonly_badge')}>{t('txt_organizations_readonly_badge')}</span>
+            ) : null}
           </span>
           <span className="list-sub" title={props.subtitle}>{props.subtitle}</span>
         </div>

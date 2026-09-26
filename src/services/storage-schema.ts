@@ -28,6 +28,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'ALTER TABLE users ADD COLUMN yubikey_key5 TEXT',
   'ALTER TABLE users ADD COLUMN yubikey_nfc INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE users ADD COLUMN api_key TEXT',
+  'ALTER TABLE users ADD COLUMN user_key_id TEXT',
 
   'CREATE TABLE IF NOT EXISTS domain_settings (' +
   'user_id TEXT PRIMARY KEY, equivalent_domains TEXT NOT NULL DEFAULT \'[]\', custom_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', excluded_global_equivalent_domains TEXT NOT NULL DEFAULT \'[]\', updated_at TEXT NOT NULL, ' +
@@ -38,17 +39,67 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'user_id TEXT PRIMARY KEY, revision_date TEXT NOT NULL, ' +
   'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
 
+  'CREATE TABLE IF NOT EXISTS organizations (' +
+  'id TEXT PRIMARY KEY, name TEXT NOT NULL, private_key TEXT NOT NULL, public_key TEXT, billing_email TEXT, creation_date TEXT NOT NULL, revision_date TEXT NOT NULL)',
+
   'CREATE TABLE IF NOT EXISTS ciphers (' +
-  'id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type INTEGER NOT NULL, folder_id TEXT, name TEXT, notes TEXT, ' +
+  'id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT, type INTEGER NOT NULL, folder_id TEXT, name TEXT, notes TEXT, ' +
   'favorite INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, reprompt INTEGER, key TEXT, ' +
   'created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT, ' +
-  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
   'ALTER TABLE ciphers ADD COLUMN archived_at TEXT',
+  'ALTER TABLE ciphers ADD COLUMN organization_id TEXT',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_archived ON ciphers(user_id, archived_at)',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_deleted ON ciphers(user_id, deleted_at)',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_deleted_updated ON ciphers(user_id, deleted_at, updated_at)',
   'CREATE INDEX IF NOT EXISTS idx_ciphers_user_folder ON ciphers(user_id, folder_id)',
+  'CREATE INDEX IF NOT EXISTS idx_ciphers_organization ON ciphers(organization_id, updated_at)',
+
+  'CREATE TABLE IF NOT EXISTS organization_users (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT, email TEXT NOT NULL, key TEXT, ' +
+  'status INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 2, access_all INTEGER NOT NULL DEFAULT 0, ' +
+  'creation_date TEXT NOT NULL, revision_date TEXT NOT NULL, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_users_org_email ON organization_users(organization_id, email)',
+  'CREATE INDEX IF NOT EXISTS idx_organization_users_user ON organization_users(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_organization_users_org_status ON organization_users(organization_id, status)',
+
+  'CREATE TABLE IF NOT EXISTS collections (' +
+  'id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, external_id TEXT, ' +
+  'creation_date TEXT NOT NULL, revision_date TEXT NOT NULL, ' +
+  'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collections_org ON collections(organization_id)',
+
+  'CREATE TABLE IF NOT EXISTS collection_users (' +
+  'collection_id TEXT NOT NULL, organization_user_id TEXT NOT NULL, ' +
+  'read_only INTEGER NOT NULL DEFAULT 0, hide_passwords INTEGER NOT NULL DEFAULT 0, ' +
+  'PRIMARY KEY (collection_id, organization_user_id), ' +
+  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (organization_user_id) REFERENCES organization_users(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_collection_users_org_user ON collection_users(organization_user_id)',
+
+  'CREATE TABLE IF NOT EXISTS cipher_collections (' +
+  'cipher_id TEXT NOT NULL, collection_id TEXT NOT NULL, ' +
+  'PRIMARY KEY (cipher_id, collection_id), ' +
+  'FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_cipher_collections_collection ON cipher_collections(collection_id)',
+
+  // Per-user filing of organization ciphers: each member files shared items
+  // into their own personal folders (folder names are user-key encrypted, so
+  // a shared filing cannot cross members). Cascades unfile when the cipher,
+  // folder, or user is deleted.
+  'CREATE TABLE IF NOT EXISTS cipher_user_folders (' +
+  'cipher_id TEXT NOT NULL, user_id TEXT NOT NULL, folder_id TEXT NOT NULL, ' +
+  'created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'PRIMARY KEY (cipher_id, user_id), ' +
+  'FOREIGN KEY (cipher_id) REFERENCES ciphers(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, ' +
+  'FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE)',
+  'CREATE INDEX IF NOT EXISTS idx_cipher_user_folders_user ON cipher_user_folders(user_id)',
 
   'CREATE TABLE IF NOT EXISTS folders (' +
   'id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
@@ -90,10 +141,11 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   'UPDATE refresh_tokens SET absolute_expires_at = expires_at WHERE absolute_expires_at IS NULL',
 
   'CREATE TABLE IF NOT EXISTS invites (' +
-  'code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, expires_at TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
+  'code TEXT PRIMARY KEY, created_by TEXT NOT NULL, used_by TEXT, email TEXT, expires_at TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ' +
   'FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE, ' +
   'FOREIGN KEY (used_by) REFERENCES users(id) ON DELETE SET NULL)',
   'ALTER TABLE invites ADD COLUMN used_by TEXT',
+  'ALTER TABLE invites ADD COLUMN email TEXT',
   'CREATE INDEX IF NOT EXISTS idx_invites_status_expires ON invites(status, expires_at)',
   'CREATE INDEX IF NOT EXISTS idx_invites_created_by ON invites(created_by, created_at)',
 
@@ -199,11 +251,103 @@ async function ensureAdminUserExists(db: D1Database): Promise<void> {
     .run();
 }
 
+// Legacy installs created ciphers.user_id as NOT NULL. SQLite cannot relax a
+// column constraint via ALTER TABLE, so existing installs need a one-time
+// guarded table rebuild. The NOT NULL state is detected from the stored CREATE
+// TABLE text because D1 does not expose the pragma_table_info table-valued
+// function. Foreign keys are disabled for the rebuild because dropping the
+// parent table would otherwise cascade-delete attachments.
+async function migrateCiphersToOrganizationShape(db: D1Database): Promise<void> {
+  const ddlRow = await db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ciphers'")
+    .first<{ sql: string | null }>();
+  const cipherDdl = String(ddlRow?.sql || '');
+  if (!/\buser_id\s+TEXT\s+NOT\s+NULL\b/i.test(cipherDdl)) return;
+
+  await db.prepare('PRAGMA foreign_keys = OFF').run();
+  try {
+    // The rebuild runs as ONE atomic D1 batch: an eviction mid-sequence can
+    // never orphan vault data between the DROP and the RENAME. A concurrent
+    // isolate losing the race fails its batch whole; its batch would instead
+    // re-copy the already-rebuilt table (harmless), but the re-check below
+    // short-circuits that case anyway.
+    await db.batch([
+      db.prepare(
+        'CREATE TABLE ciphers_organization_migration (' +
+        'id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT, type INTEGER NOT NULL, folder_id TEXT, ' +
+        'name TEXT, notes TEXT, favorite INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, reprompt INTEGER, ' +
+        'key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, archived_at TEXT, deleted_at TEXT, ' +
+        'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, ' +
+        'FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)'
+      ),
+      db.prepare(
+        'INSERT INTO ciphers_organization_migration ' +
+        '(id, user_id, organization_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
+        'SELECT id, user_id, organization_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers'
+      ),
+      db.prepare('DROP TABLE ciphers'),
+      db.prepare('ALTER TABLE ciphers_organization_migration RENAME TO ciphers'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_user_updated ON ciphers(user_id, updated_at)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_user_archived ON ciphers(user_id, archived_at)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_user_deleted ON ciphers(user_id, deleted_at)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_user_deleted_updated ON ciphers(user_id, deleted_at, updated_at)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_user_folder ON ciphers(user_id, folder_id)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_ciphers_organization ON ciphers(organization_id, updated_at)'),
+    ]);
+  } catch (error) {
+    // A concurrent isolate may have completed its own rebuild between this
+    // isolate's DDL check and its batch; confirm the table now has the
+    // organization shape before surfacing anything.
+    const ddlRow = await db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ciphers'")
+      .first<{ sql: string | null }>();
+    if (!/\buser_id\s+TEXT\s+NOT\s+NULL\b/i.test(String(ddlRow?.sql || ''))) return;
+    throw error;
+  } finally {
+    await db.prepare('PRAGMA foreign_keys = ON').run();
+  }
+}
+
+// One-time data migration: organization_users.status originally stored
+// 0=Revoked, 1=Invited, 2=Accepted, 3=Confirmed, and handlers translated to
+// Bitwarden's wire enum at the response edge. The stored values are now the
+// wire enum itself (-1=Revoked, 0=Invited, 1=Accepted, 2=Confirmed), removing
+// the translation layer. The sentinel for unmigrated data is status = 3 —
+// only the pre-migration scale contains it.
+//
+// Race safety: the shift is a single statement whose WHERE re-evaluates at
+// execution time; D1 serializes writes, so the second of two concurrent
+// isolates finds no status = 3 rows and no-ops — a check-then-SELECT-then-
+// UPDATE pattern would double-shift instead. The config marker makes the
+// migration one-shot across rollback windows: an old build can re-introduce
+// status = 3 rows while rolled back, and without the marker a redeploy would
+// shift every row again, demoting already-migrated members.
+async function migrateOrganizationUserStatusToWire(db: D1Database): Promise<void> {
+  const done = await db
+    .prepare("SELECT 1 FROM config WHERE key = 'migration.org_status_wire'")
+    .first();
+  if (done) return;
+  await db
+    .prepare(
+      'UPDATE organization_users SET status = status - 1 ' +
+      'WHERE EXISTS (SELECT 1 FROM organization_users WHERE status = 3)'
+    )
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO config(key, value) VALUES('migration.org_status_wire', 'done') " +
+      'ON CONFLICT(key) DO NOTHING'
+    )
+    .run();
+}
+
 export async function ensureStorageSchema(db: D1Database): Promise<void> {
   await db.prepare('PRAGMA foreign_keys = ON').run();
   await db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)').run();
   for (const stmt of SCHEMA_STATEMENTS) {
     await executeSchemaStatement(db, stmt);
   }
+  await migrateCiphersToOrganizationShape(db);
+  await migrateOrganizationUserStatusToWire(db);
   await ensureAdminUserExists(db);
 }

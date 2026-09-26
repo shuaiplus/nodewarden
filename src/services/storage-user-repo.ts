@@ -158,3 +158,12 @@ export async function deleteUserById(db: D1Database, id: string): Promise<boolea
   const result = await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run();
   return (result.meta.changes ?? 0) > 0;
 }
+
+// Record the key id of the user's current user key (Bitwarden key-management
+// backfill endpoint). The id is client-computed hex; the server only stores it.
+export async function updateUserKeyId(db: D1Database, userId: string, userKeyId: string): Promise<void> {
+  await db
+    .prepare('UPDATE users SET user_key_id = ?, updated_at = ? WHERE id = ?')
+    .bind(userKeyId, new Date().toISOString(), userId)
+    .run();
+}

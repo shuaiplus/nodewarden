@@ -132,6 +132,7 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
     <>
       {renderSideLink('/vault', props.location === '/vault', <KeyRound size={16} />, t('nav_vault_items'))}
       {renderSideLink('/sends', props.location === '/sends', <SendIcon size={16} />, t('nav_sends'))}
+      {renderSideLink('/organizations', props.location === '/organizations', <Users size={16} />, t('nav_organizations'))}
       {renderNavGroup(
         'tools',
         t('nav_group_tools'),

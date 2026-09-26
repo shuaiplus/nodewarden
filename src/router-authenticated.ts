@@ -6,6 +6,7 @@ import {
   handleGetKeys,
   handleSetKeys,
   handleGetRevisionDate,
+  handleSetUserKeyId,
   handleVerifyPassword,
   handleChangePassword,
   handleSetVerifyDevices,
@@ -43,6 +44,9 @@ import {
   handleBulkRestoreCiphers,
   handleArchiveCipher,
   handleUnarchiveCipher,
+  handleShareCipher,
+  handleSetCipherCollections,
+  handleBulkSetCipherCollections,
 } from './handlers/ciphers';
 import {
   handleGetFolders,
@@ -96,6 +100,29 @@ import {
   handleListPendingAuthRequests,
   handleUpdateAuthRequest,
 } from './handlers/auth-requests';
+import {
+  handleAcceptOrganizationInvitation,
+  handleConfirmOrganizationUser,
+  handleCreateOrganization,
+  handleDeleteOrganization,
+  handleGetOrganization,
+  handleGetOrganizationUser,
+  handleInviteOrganizationUsers,
+  handleLeaveOrganization,
+  handleListMyOrganizations,
+  handleListOrganizationUsers,
+  handleRemoveOrganizationUser,
+  handleUpdateOrganization,
+  handleUpdateOrganizationUser,
+} from './handlers/organizations';
+import {
+  handleCreateOrganizationCollection,
+  handleDeleteOrganizationCollection,
+  handleGetOrganizationCollectionDetails,
+  handleListMyCollections,
+  handleListOrganizationCollections,
+  handleUpdateOrganizationCollection,
+} from './handlers/collections';
 
 export async function handleAuthenticatedRoute(
   request: Request,
@@ -241,6 +268,10 @@ export async function handleAuthenticatedRoute(
     return handleGetRevisionDate(request, env, userId);
   }
 
+  if (path === '/api/accounts/key-management/user-key-id' && method === 'POST') {
+    return handleSetUserKeyId(request, env, userId);
+  }
+
   if (path === '/api/accounts/verify-password' && method === 'POST') {
     return handleVerifyPassword(request, env, userId);
   }
@@ -321,6 +352,10 @@ export async function handleAuthenticatedRoute(
     return handleBulkMoveCiphers(request, env, userId);
   }
 
+  if (path === '/api/ciphers/bulk/collections' && (method === 'POST' || method === 'PUT')) {
+    return handleBulkSetCipherCollections(request, env, userId);
+  }
+
   const cipherMatch = path.match(/^\/api\/ciphers\/([a-f0-9-]+)(\/.*)?$/i);
   if (cipherMatch) {
     const cipherId = cipherMatch[1];
@@ -338,7 +373,8 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
     if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
-    if (subPath === '/share' && method === 'POST') return handleGetCipher(request, env, userId, cipherId);
+    if (subPath === '/share' && (method === 'POST' || method === 'PUT')) return handleShareCipher(request, env, userId, cipherId);
+    if (subPath === '/collections' && (method === 'PUT' || method === 'POST')) return handleSetCipherCollections(request, env, userId, cipherId);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
     if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
@@ -402,17 +438,92 @@ export async function handleAuthenticatedRoute(
     return errorResponse('Method not allowed', 405);
   }
 
-  if (path === '/api/collections' || path.startsWith('/api/collections/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
+  if (path === '/api/collections' || path === '/api/collections/') {
+    if (method === 'GET') return handleListMyCollections(request, env, userId);
+    return errorResponse('Method not allowed', 405);
   }
 
-  if (path === '/api/organizations' || path.startsWith('/api/organizations/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
+  if (path === '/api/organizations' || path === '/api/organizations/') {
+    if (method === 'GET') return handleListMyOrganizations(request, env, userId);
+    if (method === 'POST') return handleCreateOrganization(request, env, userId);
+    return errorResponse('Method not allowed', 405);
+  }
+
+  const organizationMatch = path.match(/^\/api\/organizations\/([a-f0-9-]+)(\/.*)?$/i);
+  if (organizationMatch) {
+    const organizationId = organizationMatch[1];
+    const orgSubPath = organizationMatch[2] || '';
+
+    if (orgSubPath === '' || orgSubPath === '/') {
+      if (method === 'GET') return handleGetOrganization(request, env, userId, organizationId);
+      if (method === 'PUT') return handleUpdateOrganization(request, env, userId, organizationId);
+      if (method === 'DELETE') return handleDeleteOrganization(request, env, userId, organizationId);
+      return errorResponse('Method not allowed', 405);
     }
+
+    if (orgSubPath === '/leave' && (method === 'POST' || method === 'PUT')) {
+      return handleLeaveOrganization(request, env, userId, organizationId);
+    }
+
+    if (orgSubPath === '/invites' && (method === 'POST' || method === 'PUT')) {
+      return handleInviteOrganizationUsers(request, env, userId, organizationId);
+    }
+
+    if (orgSubPath === '/users' || orgSubPath === '/users/') {
+      if (method === 'GET') return handleListOrganizationUsers(request, env, userId, organizationId);
+      return errorResponse('Method not allowed', 405);
+    }
+
+    const orgUserMatch = orgSubPath.match(/^\/users\/([a-f0-9-]+)(\/.*)?$/i);
+    if (orgUserMatch) {
+      const organizationUserId = orgUserMatch[1];
+      const userSubPath = orgUserMatch[2] || '';
+
+      if (userSubPath === '' || userSubPath === '/') {
+        if (method === 'GET') return handleGetOrganizationUser(request, env, userId, organizationId, organizationUserId);
+        if (method === 'PUT') return handleUpdateOrganizationUser(request, env, userId, organizationId, organizationUserId);
+        if (method === 'DELETE') return handleRemoveOrganizationUser(request, env, userId, organizationId, organizationUserId);
+        return errorResponse('Method not allowed', 405);
+      }
+
+      if (userSubPath === '/accept' && (method === 'POST' || method === 'PUT')) {
+        return handleAcceptOrganizationInvitation(request, env, userId, organizationId, organizationUserId);
+      }
+      if (userSubPath === '/confirm' && (method === 'POST' || method === 'PUT')) {
+        return handleConfirmOrganizationUser(request, env, userId, organizationId, organizationUserId);
+      }
+      if (userSubPath === '/delete' && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
+        return handleRemoveOrganizationUser(request, env, userId, organizationId, organizationUserId);
+      }
+      return null;
+    }
+
+    if (orgSubPath === '/collections' || orgSubPath === '/collections/') {
+      if (method === 'GET') return handleListOrganizationCollections(request, env, userId, organizationId);
+      if (method === 'POST') return handleCreateOrganizationCollection(request, env, userId, organizationId);
+      return errorResponse('Method not allowed', 405);
+    }
+
+    const orgCollectionMatch = orgSubPath.match(/^\/collections\/([a-f0-9-]+)(\/.*)?$/i);
+    if (orgCollectionMatch) {
+      const collectionId = orgCollectionMatch[1];
+      const collectionSubPath = orgCollectionMatch[2] || '';
+
+      if (collectionSubPath === '' || collectionSubPath === '/') {
+        if (method === 'PUT') return handleUpdateOrganizationCollection(request, env, userId, organizationId, collectionId);
+        if (method === 'DELETE') return handleDeleteOrganizationCollection(request, env, userId, organizationId, collectionId);
+        return errorResponse('Method not allowed', 405);
+      }
+
+      if (collectionSubPath === '/details' && method === 'GET') {
+        return handleGetOrganizationCollectionDetails(request, env, userId, organizationId, collectionId);
+      }
+      if (collectionSubPath === '/delete' && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
+        return handleDeleteOrganizationCollection(request, env, userId, organizationId, collectionId);
+      }
+      return null;
+    }
+
     return null;
   }
 

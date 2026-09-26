@@ -66,6 +66,7 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
   if (parsed.encrypted === true) throw new Error('Encrypted export requires encrypted import flow.');
 
   const foldersRaw = Array.isArray(parsed.folders) ? parsed.folders : [];
+  const collectionsRaw = Array.isArray(parsed.collections) ? parsed.collections : [];
   const itemsRaw = Array.isArray(parsed.items) ? parsed.items : [];
   const folders: Array<{ name: string }> = [];
   const folderIndexById = new Map<string, number>();
@@ -76,6 +77,21 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
     folders.push({ name });
     const id = txt(folder?.id);
     if (id) folderIndexById.set(id, idx);
+  }
+
+  // Bitwarden organization exports carry no folders array (folderId is always
+  // null; structure lives in collections + per-item collectionIds). Mirror the
+  // file's collections as the folder source so "Original path from import
+  // file" has something to map for organization imports.
+  if (!folders.length) {
+    for (const collection of collectionsRaw) {
+      const name = txt(collection?.name);
+      if (!name) continue;
+      const idx = folders.length;
+      folders.push({ name });
+      const id = txt(collection?.id);
+      if (id) folderIndexById.set(id, idx);
+    }
   }
 
   const ciphers: Array<Record<string, unknown>> = [];
@@ -123,9 +139,20 @@ export function normalizeBitwardenImport(raw: unknown): CiphersImportPayload {
       driversLicense: item?.driversLicense ?? null,
       passport: item?.passport ?? null,
     });
+    let folderIndex: number | undefined;
     const folderId = txt(item?.folderId);
-    if (!folderId) continue;
-    const folderIndex = folderIndexById.get(folderId);
+    if (folderId) folderIndex = folderIndexById.get(folderId);
+    if (folderIndex === undefined) {
+      const collectionIds = Array.isArray(item?.collectionIds) ? (item.collectionIds as unknown[]) : [];
+      for (const collectionId of collectionIds) {
+        const collectionFolderIndex = folderIndexById.get(txt(collectionId));
+        if (collectionFolderIndex !== undefined) {
+          // A folder holds one filing per item; the first source collection wins.
+          folderIndex = collectionFolderIndex;
+          break;
+        }
+      }
+    }
     if (folderIndex !== undefined) {
       hasAnyExplicitFolderLink = true;
       folderRelationships.push({ key: ciphers.length - 1, value: folderIndex });

@@ -108,6 +108,11 @@ export interface AdminBackupImportCounts {
   ciphers: number;
   attachments: number;
   attachmentFiles: number;
+  organizations?: number;
+  organizationUsers?: number;
+  collections?: number;
+  collectionUsers?: number;
+  cipherCollections?: number;
 }
 
 export interface AdminBackupImportSkippedItem {

@@ -1,9 +1,10 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { ChevronLeft, ChevronRight, Clipboard, Plus, RefreshCw, Trash2, UserCheck, UserX } from 'lucide-preact';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import LoadingState from '@/components/LoadingState';
 import type { AdminInvite, AdminUser } from '@/lib/types';
 import { t } from '@/lib/i18n';
+import type { AuthedFetch } from '@/lib/api/shared';
 
 interface AdminPageProps {
   currentUserId: string;
@@ -11,6 +12,7 @@ interface AdminPageProps {
   invites: AdminInvite[];
   loading: boolean;
   error: string;
+  authedFetch: AuthedFetch;
   onRefresh: () => void;
   onCreateInvite: (hours: number) => Promise<void>;
   onDeleteInvalidInvites: () => Promise<void>;
@@ -18,6 +20,21 @@ interface AdminPageProps {
   onToggleUserStatus: (userId: string, currentStatus: 'active' | 'banned') => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
   onDeleteInvite: (code: string) => Promise<void>;
+}
+
+// Self-service registration: whether organization owners may mint registration
+// invite codes for the unregistered emails they invite. Default OFF.
+async function fetchOrgSelfServiceRegistration(
+  authedFetch: AuthedFetch
+): Promise<boolean | null> {
+  try {
+    const resp = await authedFetch('/api/admin/settings/org-self-service-registration');
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    return body?.enabled === true;
+  } catch {
+    return null;
+  }
 }
 
 export default function AdminPage(props: AdminPageProps) {
@@ -28,6 +45,39 @@ export default function AdminPage(props: AdminPageProps) {
   const totalPages = Math.max(1, Math.ceil(props.invites.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pagedInvites = props.invites.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const [orgSelfService, setOrgSelfService] = useState<boolean | null>(null);
+  const [orgSelfServiceBusy, setOrgSelfServiceBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const enabled = await fetchOrgSelfServiceRegistration(props.authedFetch);
+      if (active) setOrgSelfService(enabled);
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.authedFetch]);
+
+  async function toggleOrgSelfService(next: boolean, masterPasswordHash: string): Promise<void> {
+    setOrgSelfServiceBusy(true);
+    try {
+      const resp = await props.authedFetch('/api/admin/settings/org-self-service-registration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next, masterPasswordHash }),
+      });
+      if (resp.ok) {
+        setOrgSelfService(next);
+      } else {
+        const body = await resp.json().catch(() => null);
+        alert(body?.error || 'Failed to update setting');
+      }
+    } catch {
+      alert('Failed to update setting');
+    } finally {
+      setOrgSelfServiceBusy(false);
+    }
+  }
 
   const roleText = (role: string) => {
     const normalized = String(role || '').toLowerCase();
@@ -223,6 +273,87 @@ export default function AdminPage(props: AdminPageProps) {
           </button>
         </div>
       </section>
+
+      <section className="card">
+        <div className="section-head">
+          <h3>{t('txt_admin_org_self_service_title')}</h3>
+        </div>
+        <div className="org-self-service-card">
+          <div className="org-self-service-status">
+            <span className={`org-self-service-badge ${orgSelfService ? 'enabled' : ''}`}>
+              {orgSelfService === null ? t('txt_admin_org_self_service_unknown') : orgSelfService ? t('txt_admin_org_self_service_on') : t('txt_admin_org_self_service_off')}
+            </span>
+          </div>
+          <p className="org-self-service-description">{t('txt_admin_org_self_service_description')}</p>
+          {orgSelfService === true && (
+            <p className="org-self-service-warning">{t('txt_admin_org_self_service_warning')}</p>
+          )}
+          <OrgSelfServiceToggle
+            enabled={orgSelfService === true}
+            busy={orgSelfServiceBusy}
+            disabled={orgSelfService === null}
+            onToggle={(next, password) => void toggleOrgSelfService(next, password)}
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+interface OrgSelfServiceToggleProps {
+  enabled: boolean;
+  busy: boolean;
+  disabled: boolean;
+  onToggle: (next: boolean, masterPasswordHash: string) => void;
+}
+
+function OrgSelfServiceToggle(props: OrgSelfServiceToggleProps) {
+  const [showPassword, setShowPassword] = useState(false);
+  const [password, setPassword] = useState('');
+  const next = !props.enabled;
+  return (
+    <div className="org-self-service-toggle">
+      {!showPassword ? (
+        <button
+          type="button"
+          className={next ? 'btn btn-primary' : 'btn btn-danger'}
+          disabled={props.busy || props.disabled}
+          onClick={() => setShowPassword(true)}
+        >
+          {next ? t('txt_admin_org_self_service_enable') : t('txt_admin_org_self_service_disable')}
+        </button>
+      ) : (
+        <>
+          <input
+            type="password"
+            className="input org-self-service-password"
+            placeholder={t('txt_admin_org_self_service_password_placeholder')}
+            value={password}
+            disabled={props.busy}
+            onInput={(e) => setPassword((e.currentTarget as HTMLInputElement).value)}
+          />
+          <button
+            type="button"
+            className={next ? 'btn btn-primary' : 'btn btn-danger'}
+            disabled={props.busy || !password.trim()}
+            onClick={() => {
+              props.onToggle(next, password.trim());
+              setShowPassword(false);
+              setPassword('');
+            }}
+          >
+            {props.busy ? t('txt_saving') : t('txt_confirm')}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={props.busy}
+            onClick={() => { setShowPassword(false); setPassword(''); }}
+          >
+            {t('txt_cancel')}
+          </button>
+        </>
+      )}
     </div>
   );
 }

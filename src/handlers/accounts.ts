@@ -11,6 +11,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
+import { profileOrganizationResponse } from './organizations';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -23,6 +24,16 @@ const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const TOTP_USER_VERIFICATION_TOKEN_TTL_MS = 10 * 60 * 1000;
 const TOTP_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+// Confirmed organization memberships shaped for profile.organizations. The
+// embedded `key` is the org key encrypted with this user's public key — the
+// only path official clients have to decrypt organization data.
+async function loadProfileOrganizations(storage: StorageService, userId: string): Promise<unknown[]> {
+  const memberships = await storage.listConfirmedOrganizationsForUser(userId);
+  return memberships.map((membership) =>
+    profileOrganizationResponse(membership.organization, membership.organizationUser)
+  );
+}
 
 // CONTRACT:
 // users.master_password_hash is server-side login verification only. It does
@@ -367,6 +378,10 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
       level: 'security',
       metadata: { email: user.email, ...auditRequestMetadata(request) },
     });
+    // Link any pending organization invitations issued for this email.
+    await storage.linkOrganizationUsersByEmail(user.id, user.email).catch((error) => {
+      console.error('Organization invite linking failed after registration:', error);
+    });
     return jsonResponse({ success: true, role: user.role }, 200);
   }
 
@@ -374,7 +389,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     return errorResponse('Invite code is required', 403);
   }
 
-  const inviteMarked = await storage.markInviteUsed(inviteCode, user.id);
+  const inviteMarked = await storage.markInviteUsed(inviteCode, user.id, email);
   if (!inviteMarked) {
     return errorResponse('Invite code is invalid or expired', 403);
   }
@@ -409,6 +424,10 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     category: 'security',
     level: 'info',
     metadata: { email: user.email, inviteCode, ...auditRequestMetadata(request) },
+  });
+  // Link any pending organization invitations issued for this email.
+  await storage.linkOrganizationUsersByEmail(user.id, user.email).catch((error) => {
+    console.error('Organization invite linking failed after registration:', error);
   });
 
   return jsonResponse({ success: true, role: user.role }, 200);
@@ -494,7 +513,8 @@ export async function handleGetProfile(request: Request, env: Env, userId: strin
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(buildProfileResponse(user, env));
+  const organizations = await loadProfileOrganizations(storage, userId);
+  return jsonResponse(buildProfileResponse(user, env, organizations));
 }
 
 // PUT /api/accounts/profile
@@ -533,7 +553,7 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
     },
   });
 
-  return jsonResponse(buildProfileResponse(user, env));
+  return jsonResponse(buildProfileResponse(user, env, await loadProfileOrganizations(storage, user.id)));
 }
 
 // PUT/POST /api/accounts/verify-devices
@@ -1502,6 +1522,26 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
   // Return as milliseconds timestamp (Bitwarden format)
   const timestamp = new Date(revisionDate).getTime();
   return jsonResponse(timestamp);
+}
+
+// POST /api/accounts/key-management/user-key-id
+// Bitwarden client key-management backfill: the client reports the id of its
+// current user key. The id is client-computed hex; the server only records it.
+// Newer official clients treat a missing endpoint as a login failure.
+export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  let body: { userKeyId?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const userKeyId = String(body?.userKeyId ?? '').trim();
+  if (!userKeyId || !/^[0-9a-f]+$/i.test(userKeyId)) {
+    return errorResponse('userKeyId must be a non-empty hex string', 400);
+  }
+  await storage.updateUserKeyId(userId, userKeyId.toLowerCase());
+  return new Response(null, { status: 200 });
 }
 
 // POST /api/accounts/verify-password

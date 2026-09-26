@@ -26,22 +26,35 @@ type SqlRow = Record<string, string | number | null>;
 type BackupTableName =
   | 'config'
   | 'users'
+  | 'organizations'
   | 'domain_settings'
   | 'user_revisions'
   | 'webauthn_credentials'
+  | 'organization_users'
+  | 'cipher_user_folders'
   | 'folders'
+  | 'collections'
   | 'ciphers'
-  | 'attachments';
+  | 'attachments'
+  | 'collection_users'
+  | 'cipher_collections';
 
+// Insert order: parents before children so foreign keys stay satisfied.
 const BACKUP_TABLES: BackupTableName[] = [
   'config',
   'users',
+  'organizations',
   'domain_settings',
   'user_revisions',
   'webauthn_credentials',
+  'organization_users',
+  'cipher_user_folders',
   'folders',
+  'collections',
   'ciphers',
   'attachments',
+  'collection_users',
+  'cipher_collections',
 ];
 
 function shadowTableName(table: BackupTableName): string {
@@ -60,6 +73,12 @@ export interface BackupImportResultBody {
     ciphers: number;
     attachments: number;
     attachmentFiles: number;
+    organizations: number;
+    cipher_user_folders: number;
+    organizationUsers: number;
+    collections: number;
+    collectionUsers: number;
+    cipherCollections: number;
   };
   skipped: {
     reason: string | null;
@@ -171,13 +190,20 @@ async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
 }
 
 function buildResetImportTargetStatements(db: D1Database): D1PreparedStatement[] {
+  // Children before parents so cascade rules cannot fight the reset.
   return [
+    'DELETE FROM cipher_collections',
+    'DELETE FROM collection_users',
     'DELETE FROM attachments',
     'DELETE FROM ciphers',
+    'DELETE FROM collections',
     'DELETE FROM folders',
+    'DELETE FROM cipher_user_folders',
+    'DELETE FROM organization_users',
     'DELETE FROM webauthn_credentials',
-    'DELETE FROM domain_settings',
     'DELETE FROM user_revisions',
+    'DELETE FROM domain_settings',
+    'DELETE FROM organizations',
     'DELETE FROM users',
     'DELETE FROM config',
   ].map((sql) => db.prepare(sql));
@@ -315,8 +341,15 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     ciphers: cloneRows(payload.ciphers || []).map((row) => ({
       ...row,
       archived_at: row.archived_at ?? null,
+      organization_id: row.organization_id ?? null,
     })),
     attachments: cloneRows(payload.attachments || []),
+    organizations: cloneRows(payload.organizations || []),
+    organization_users: cloneRows(payload.organization_users || []),
+    cipher_user_folders: cloneRows(payload.cipher_user_folders || []),
+    collections: cloneRows(payload.collections || []),
+    collection_users: cloneRows(payload.collection_users || []),
+    cipher_collections: cloneRows(payload.cipher_collections || []),
   };
   await importBackupRows(db, preparedDb, true);
   return preparedDb;
@@ -680,14 +713,44 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('ciphers'),
-      ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
+      ['id', 'user_id', 'organization_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
       payload.ciphers || []
     )
   );
   await runInsertBatch(
     db,
+    tableName('cipher_user_folders'),
+    buildInsertStatements(db, tableName('cipher_user_folders'), ['cipher_id', 'user_id', 'folder_id', 'created_at', 'updated_at'], payload.cipher_user_folders || [])
+  );
+  await runInsertBatch(
+    db,
     tableName('attachments'),
     buildInsertStatements(db, tableName('attachments'), ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], payload.attachments || [])
+  );
+  await runInsertBatch(
+    db,
+    tableName('organizations'),
+    buildInsertStatements(db, tableName('organizations'), ['id', 'name', 'private_key', 'public_key', 'billing_email', 'creation_date', 'revision_date'], payload.organizations || [])
+  );
+  await runInsertBatch(
+    db,
+    tableName('organization_users'),
+    buildInsertStatements(db, tableName('organization_users'), ['id', 'organization_id', 'user_id', 'email', 'key', 'status', 'type', 'access_all', 'creation_date', 'revision_date'], payload.organization_users || [])
+  );
+  await runInsertBatch(
+    db,
+    tableName('collections'),
+    buildInsertStatements(db, tableName('collections'), ['id', 'organization_id', 'name', 'external_id', 'creation_date', 'revision_date'], payload.collections || [])
+  );
+  await runInsertBatch(
+    db,
+    tableName('collection_users'),
+    buildInsertStatements(db, tableName('collection_users'), ['collection_id', 'organization_user_id', 'read_only', 'hide_passwords'], payload.collection_users || [])
+  );
+  await runInsertBatch(
+    db,
+    tableName('cipher_collections'),
+    buildInsertStatements(db, tableName('cipher_collections'), ['cipher_id', 'collection_id'], payload.cipher_collections || [])
   );
 }
 
@@ -764,6 +827,12 @@ export async function importBackupArchiveBytes(
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
+      organizations: (db.organizations || []).length,
+      cipher_user_folders: (db.cipher_user_folders || []).length,
+      organization_users: (db.organization_users || []).length,
+      collections: (db.collections || []).length,
+      collection_users: (db.collection_users || []).length,
+      cipher_collections: (db.cipher_collections || []).length,
     });
     await progress?.({
       source: 'local',
@@ -806,6 +875,12 @@ export async function importBackupArchiveBytes(
           ciphers: (db.ciphers || []).length,
           attachments: restored.restoredAttachments.length,
           attachmentFiles: restored.imported,
+          organizations: (db.organizations || []).length,
+      cipher_user_folders: (db.cipher_user_folders || []).length,
+          organizationUsers: (db.organization_users || []).length,
+          collections: (db.collections || []).length,
+          collectionUsers: (db.collection_users || []).length,
+          cipherCollections: (db.cipher_collections || []).length,
         },
         skipped: {
           reason: restored.skipped.reason || prepared.skipped.reason,
@@ -882,6 +957,12 @@ export async function importRemoteBackupArchiveBytes(
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: (db.attachments || []).length,
+      organizations: (db.organizations || []).length,
+      cipher_user_folders: (db.cipher_user_folders || []).length,
+      organization_users: (db.organization_users || []).length,
+      collections: (db.collections || []).length,
+      collection_users: (db.collection_users || []).length,
+      cipher_collections: (db.cipher_collections || []).length,
     });
 
     await progress?.({
@@ -905,6 +986,12 @@ export async function importRemoteBackupArchiveBytes(
       folders: (db.folders || []).length,
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
+      organizations: (db.organizations || []).length,
+      cipher_user_folders: (db.cipher_user_folders || []).length,
+      organization_users: (db.organization_users || []).length,
+      collections: (db.collections || []).length,
+      collection_users: (db.collection_users || []).length,
+      cipher_collections: (db.cipher_collections || []).length,
     });
     await progress?.({
       source: 'remote',
@@ -953,6 +1040,12 @@ export async function importRemoteBackupArchiveBytes(
           ciphers: (db.ciphers || []).length,
           attachments: restored.restoredAttachments.length,
           attachmentFiles: restored.imported,
+          organizations: (db.organizations || []).length,
+      cipher_user_folders: (db.cipher_user_folders || []).length,
+          organizationUsers: (db.organization_users || []).length,
+          collections: (db.collections || []).length,
+          collectionUsers: (db.collection_users || []).length,
+          cipherCollections: (db.cipher_collections || []).length,
         },
         skipped: {
           reason: finalSkippedReason,

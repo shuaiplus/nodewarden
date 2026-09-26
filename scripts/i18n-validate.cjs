@@ -1,17 +1,22 @@
-const { localeFiles, readLocale } = require('./i18n-utils.cjs');
+const { localeFiles, readMergedLocale } = require('./i18n-utils.cjs');
 
 // CONTRACT:
 // This is the authoritative locale consistency gate. It checks key parity,
-// placeholder parity, and accidental mostly-English locale files. Run after any
-// user-facing text or locale-file change.
+// placeholder parity, and accidental mostly-English locale files across the
+// MERGED locale set (base bundle + organizations bundle, matching what the
+// webapp serves at runtime). Run after any user-facing text or locale-file
+// change.
 const locales = Object.fromEntries(
-  localeFiles.map(([locale, fileName, variableName]) => [locale, readLocale(fileName, variableName)])
+  localeFiles.map((_, index) => [localeFiles[index][0], readMergedLocale(index)])
 );
 const base = locales.en;
 const baseKeys = Object.keys(base).sort();
 const placeholderRe = /\{\w+\}/g;
 const errors = [];
 const intentionallyEnglishKeys = new Set([
+  // "Admin" and "Manager" are legitimate German words.
+  'txt_organizations_role_admin',
+  'txt_organizations_role_manager',
   'txt_backup_destination_detail_note',
   'txt_backup_protocol_webdav',
   'txt_backup_protocol_s3',

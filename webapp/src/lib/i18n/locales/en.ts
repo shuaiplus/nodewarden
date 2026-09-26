@@ -1506,10 +1506,7 @@ const en: Record<string, string> = {
   "txt_auth_request_approved": "Device login approved",
   "txt_auth_request_denied": "Device login denied",
   "txt_auth_request_missing_public_key": "Device login request is missing a public key",
-  "txt_ip_address": "IP address"
-};
-
-Object.assign(en, {
+  "txt_ip_address": "IP address",
   "nav_password_security": "Password Security",
   "txt_password_security": "Password Security Check",
   "txt_password_security_privacy": "Passwords are checked locally in your browser. Only an anonymous hash prefix is sent to the breach database.",
@@ -1541,7 +1538,9 @@ Object.assign(en, {
   "txt_open_vault": "Open vault",
   "txt_check_password_breach": "Check breach",
   "txt_password_not_found_in_breaches": "Not found in the breach database",
-  "txt_password_security_check_failed": "The breach check could not be completed."
-});
+  "txt_password_security_check_failed": "The breach check could not be completed.",
+  "txt_creating": "Creating…",
+  "txt_sending": "Sending…"
+};
 
 export default en;

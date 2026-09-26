@@ -51,21 +51,6 @@ function isCacheableResponse(response) {
   return response && response.ok && (response.type === 'basic' || response.type === 'default');
 }
 
-async function refreshNavigationCache(request) {
-  const cache = await caches.open(APP_SHELL_CACHE);
-  try {
-    const response = await fetch(request);
-    if (isCacheableResponse(response)) {
-      await cache.put('/', response.clone());
-      await cache.put('/index.html', response.clone());
-      await warmStaticDependencies(response.clone());
-    }
-    return response;
-  } catch {
-    return null;
-  }
-}
-
 async function warmStaticDependencies(response) {
   try {
     const html = await response.text();
@@ -90,6 +75,23 @@ async function warmStaticDependencies(response) {
 async function appShellNavigation(request) {
   const cache = await caches.open(APP_SHELL_CACHE);
   const url = new URL(request.url);
+  // Network-first while online: every deploy ships new asset hashes, and a
+  // stale cached shell referencing removed chunks renders a blank vault with
+  // "Failed to fetch dynamically imported module" errors. The cached shell is
+  // only an offline fallback.
+  if (navigator.onLine !== false) {
+    try {
+      const response = await fetch(request);
+      if (isCacheableResponse(response)) {
+        await cache.put('/', response.clone());
+        await cache.put('/index.html', response.clone());
+        await warmStaticDependencies(response.clone());
+      }
+      return response;
+    } catch {
+      // Network failed; fall through to the cached shell below.
+    }
+  }
   return (
     (await cache.match(request, { ignoreSearch: true }))
     || (await cache.match(url.pathname, { ignoreSearch: true }))
@@ -176,9 +178,6 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(appShellNavigation(request));
-    if (navigator.onLine !== false) {
-      event.waitUntil(refreshNavigationCache(request));
-    }
     return;
   }
 

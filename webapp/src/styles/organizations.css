@@ -1,0 +1,284 @@
+/* Organizations console + shared-item presentation. */
+
+.org-create-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.org-create-row .input {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.org-list {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.org-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.org-list-item:hover {
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--line));
+  background: var(--panel);
+}
+
+.org-list-item.active {
+  background: color-mix(in srgb, var(--primary) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--line));
+  color: var(--primary-strong);
+}
+
+.org-list-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.org-section h4 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: var(--font-md);
+}
+
+.section-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.org-collections {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.org-collection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.org-collection-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--muted-strong);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.small-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--font-sm);
+}
+
+/* Vault sidebar: organization / collection tree */
+.org-sidebar-group {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.tree-btn.tree-head {
+  cursor: default;
+  font-weight: 700;
+  color: var(--muted-strong);
+}
+
+.tree-btn.tree-sub {
+  margin-left: 18px;
+}
+
+/* Vault list: shared / read-only badges */
+.org-item-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--line));
+  background: color-mix(in srgb, var(--primary) 10%, var(--panel));
+  color: var(--primary-strong);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.org-item-badge-readonly {
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--danger);
+}
+
+/* Import page: organization mapping selects */
+.org-import-selects {
+  display: grid;
+  gap: 10px;
+}
+
+/* Member permission editor rows */
+.org-permissions-rows {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.org-permission-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.org-permission-enable {
+  margin-top: 0;
+}
+
+.org-permission-name {
+  font-weight: 700;
+}
+
+.org-permission-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-left: 24px;
+}
+
+.org-permission-flags .checkbox-row {
+  margin-top: 0;
+}
+
+/* Vault editor: collection checkboxes for organization items */
+.org-editor-collections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0 2px;
+}
+
+.org-editor-collections .checkbox-row {
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  .org-create-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .org-create-row .btn {
+    width: 100%;
+  }
+
+  .section-head-actions {
+    justify-content: stretch;
+  }
+
+  .section-head-actions .btn {
+    flex: 1 1 auto;
+  }
+}
+
+/* Admin panel: self-service registration settings card */
+.org-self-service-card {
+  display: grid;
+  gap: 10px;
+}
+
+.org-self-service-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.org-self-service-badge {
+  display: inline-flex;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--danger) 26%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.org-self-service-badge.enabled {
+  border-color: color-mix(in srgb, var(--success) 26%, var(--line));
+  background: color-mix(in srgb, var(--success) 8%, var(--panel));
+  color: var(--success);
+}
+
+.org-self-service-description {
+  color: var(--muted);
+  font-size: var(--font-sm);
+  line-height: var(--leading-snug);
+  margin: 0;
+}
+
+.org-self-service-warning {
+  color: var(--danger);
+  font-size: var(--font-sm);
+  line-height: var(--leading-snug);
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 5%, var(--panel));
+}
+
+.org-self-service-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.org-self-service-password {
+  max-width: 240px;
+}

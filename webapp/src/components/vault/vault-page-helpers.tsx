@@ -27,7 +27,8 @@ export type SidebarFilter =
   | { kind: 'trash' }
   | { kind: 'duplicates' }
   | { kind: 'type'; value: TypeFilter }
-  | { kind: 'folder'; folderId: string | null };
+  | { kind: 'folder'; folderId: string | null }
+  | { kind: 'collection'; collectionId: string; organizationId: string };
 
 interface TypeOption {
   type: number;
@@ -552,12 +553,16 @@ export function createEmptyDraft(type: number): VaultDraft {
     passportIssueDate: '',
     passportExpirationDate: '',
     customFields: [],
+    organizationId: null,
+    collectionIds: [],
   };
 }
 
 export function draftFromCipher(cipher: Cipher): VaultDraft {
   const draft = createEmptyDraft(Number(cipher.type || 1));
   draft.id = cipher.id;
+  draft.organizationId = cipher.organizationId || null;
+  draft.collectionIds = Array.isArray(cipher.collectionIds) ? [...cipher.collectionIds] : [];
   draft.favorite = !!cipher.favorite;
   draft.name = cipher.decName || '';
   draft.folderId = cipher.folderId || '';
@@ -569,9 +574,12 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
     draft.loginPassword = cipher.login.decPassword || '';
     draft.loginTotp = cipher.login.decTotp || '';
     draft.loginUris = (cipher.login.uris || []).map((x) => ({
-      uri: x.decUri || x.uri || '',
+      // Never fall back to the raw encrypted string: an undecryptable URI must
+      // stay empty, otherwise saving re-encrypts the EncString itself
+      // (double-encrypted garbage).
+      uri: x.decUri || '',
       match: x.match ?? null,
-      originalUri: x.decUri || x.uri || '',
+      originalUri: x.decUri || '',
       extra: Object.fromEntries(
         Object.entries(x as Record<string, unknown>).filter(([key]) => !['uri', 'match', 'decUri'].includes(key))
       ),

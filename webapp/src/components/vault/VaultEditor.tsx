@@ -5,7 +5,7 @@ import jsQR from 'jsqr';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
 import { normalizeTotpInput } from '@/lib/crypto';
-import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
+import type { Cipher, Folder, VaultCollection, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';
 import {
@@ -27,6 +27,10 @@ interface VaultEditorProps {
   busy: boolean;
   folders: Folder[];
   selectedCipher: Cipher | null;
+  /** Confirmed organizations available for create/transfer. */
+  organizations?: Array<{ id: string; name: string; keyAvailable: boolean }>;
+  /** All collections the user can see (decrypted names). */
+  collections?: VaultCollection[];
   editExistingAttachments: Array<any>;
   removedAttachmentIds: Record<string, boolean>;
   removedAttachmentCount: number;
@@ -385,6 +389,62 @@ export default function VaultEditor(props: VaultEditorProps) {
               ))}
             </select>
           </label>
+          {(props.organizations || []).filter((organization) => organization.keyAvailable).length > 0 && (
+            <label className="field">
+              <span>{t('txt_org_field_label')}</span>
+              <select
+                className="input"
+                value={props.draft.organizationId || ''}
+                disabled={!!props.selectedCipher?.organizationId}
+                onInput={(e) => {
+                  const value = (e.currentTarget as HTMLSelectElement).value;
+                  props.onUpdateDraft({ organizationId: value || null, collectionIds: [] });
+                  // The selected folder carries over: personal folders are valid
+                  // filing targets for organization items too (per-user mapping).
+                }}
+              >
+                <option value="">{t('txt_org_personal')}</option>
+                {(props.organizations || [])
+                  .filter((organization) => organization.keyAvailable)
+                  .map((organization) => (
+                    <option key={organization.id} value={organization.id}>
+                      {organization.name || organization.id.slice(0, 8)}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
+          {props.draft.organizationId && (
+            <div className="field field-span-2">
+              <span>{t('txt_organizations_collections')}</span>
+              <div className="org-editor-collections">
+                {(props.collections || [])
+                  .filter((collection) => collection.organizationId === props.draft.organizationId)
+                  .map((collection) => {
+                    const selected = (props.draft.collectionIds || []).includes(collection.id);
+                    return (
+                      <label key={collection.id} className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(event) => {
+                            const checked = (event.target as HTMLInputElement).checked;
+                            const next = new Set(props.draft.collectionIds || []);
+                            if (checked) next.add(collection.id);
+                            else next.delete(collection.id);
+                            props.onUpdateDraft({ collectionIds: [...next] });
+                          }}
+                        />
+                        {collection.decName || collection.name || collection.id.slice(0, 8)}
+                      </label>
+                    );
+                  })}
+                {(props.collections || []).filter((collection) => collection.organizationId === props.draft.organizationId).length === 0 && (
+                  <span className="muted">{t('txt_organizations_no_collections')}</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         <label className="field">
           <span>{t('txt_name')}</span>

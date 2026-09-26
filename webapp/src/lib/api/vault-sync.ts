@@ -1,4 +1,4 @@
-import type { Cipher, Folder, Send } from '../types';
+import type { Cipher, Folder, Send, VaultCollection } from '../types';
 import { getVaultRevisionDate } from './auth';
 import { clearCachedVaultCoreSnapshot, loadCachedVaultCoreSnapshot, saveCachedVaultCoreSnapshot, type VaultCoreSnapshot } from '../vault-cache';
 import { parseJson, type AuthedFetch } from './shared';
@@ -7,6 +7,7 @@ interface VaultSyncResponse {
   ciphers?: Cipher[];
   folders?: Folder[];
   sends?: Send[];
+  collections?: VaultCollection[];
 }
 
 const pendingVaultCoreRequests = new Map<string, Promise<VaultCoreSnapshot>>();
@@ -17,6 +18,7 @@ function normalizeSnapshot(body: VaultSyncResponse | null | undefined): VaultCor
     ciphers: Array.isArray(body?.ciphers) ? body!.ciphers! : [],
     folders: Array.isArray(body?.folders) ? body!.folders! : [],
     sends: Array.isArray(body?.sends) ? body!.sends! : [],
+    collections: Array.isArray(body?.collections) ? body!.collections! : [],
   };
 }
 
@@ -25,6 +27,7 @@ function normalizeCachedSnapshot(snapshot: Partial<VaultCoreSnapshot> | null | u
     ciphers: Array.isArray(snapshot?.ciphers) ? snapshot.ciphers : [],
     folders: Array.isArray(snapshot?.folders) ? snapshot.folders : [],
     sends: Array.isArray(snapshot?.sends) ? snapshot.sends : [],
+    collections: Array.isArray(snapshot?.collections) ? snapshot.collections : [],
   };
 }
 
@@ -76,7 +79,7 @@ export async function saveVaultCoreSyncSnapshot(
 
 export async function loadVaultCoreSyncSnapshot(authedFetch: AuthedFetch, cacheKey: string): Promise<VaultCoreSnapshot> {
   const normalizedKey = String(cacheKey || '').trim();
-  if (!normalizedKey) return { ciphers: [], folders: [], sends: [] };
+  if (!normalizedKey) return { ciphers: [], folders: [], sends: [], collections: [] };
 
   const existing = pendingVaultCoreRequests.get(normalizedKey);
   if (existing) return existing;

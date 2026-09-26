@@ -1,4 +1,4 @@
-import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
+import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord, Organization, OrganizationUser, Collection, CollectionUserAccess } from '../types';
 import { LIMITS } from '../config/limits';
 import { ensurePushInstallationCredentials } from './push-relay';
 import { ensureStorageSchema } from './storage-schema';
@@ -12,6 +12,7 @@ import {
   createFirstUser as createFirstStoredUser,
   createUser as createStoredUser,
   deleteUserById as deleteStoredUserById,
+  updateUserKeyId as updateStoredUserKeyId,
   getAllUsers as listStoredUsers,
   getUser as findStoredUserByEmail,
   getUserById as findStoredUserById,
@@ -53,13 +54,66 @@ import {
   bulkSoftDeleteCiphers as softDeleteStoredCiphers,
   bulkUnarchiveCiphers as unarchiveStoredCiphers,
   getAllCiphers as listStoredCiphers,
+  getAllCiphersIncludingOrgs as listStoredCiphersIncludingOrgs,
   getCipher as findStoredCipher,
   getCipherForUser as findStoredCipherForUser,
+  getAccessibleCipher as findStoredAccessibleCipher,
+  listAccessibleCiphersByIds as listStoredAccessibleCiphersByIds,
   getCiphersByIds as listStoredCiphersByIds,
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
   deleteCipher as deleteStoredCipher,
+  archiveCiphersByIds as archiveStoredCiphersByIds,
+  deleteCiphersByIds as deleteStoredCiphersByIds,
+  listCipherIdsByOrganization as listStoredCipherIdsByOrganization,
+  restoreCiphersByIds as restoreStoredCiphersByIds,
+  transferCipherToOrganization as transferStoredCipherToOrganization,
+  softDeleteCiphersByIds as softDeleteStoredCiphersByIds,
+  unarchiveCiphersByIds as unarchiveStoredCiphersByIds,
 } from './storage-cipher-repo';
+import {
+  countConfirmedOrganizationOwners as countStoredConfirmedOrgOwners,
+  createOrganizationWithOwner as createStoredOrganizationWithOwner,
+  deleteOrganizationForOwner as deleteStoredOrganizationForOwner,
+  deleteOrganizationUser as deleteStoredOrganizationUser,
+  deleteOrganizationUserGuardingLastOwner as deleteStoredOrganizationUserGuardingLastOwner,
+  getOrganization as findStoredOrganization,
+  getOrganizationUser as findStoredOrganizationUser,
+  getOrganizationUserByEmail as findStoredOrganizationUserByEmail,
+  getOrganizationUserForUser as findStoredOrganizationUserForUser,
+  listConfirmedOrganizationUserIds as listStoredConfirmedOrgUserIds,
+  listConfirmedOrganizationsForUser as listStoredConfirmedOrgsForUser,
+  listOrganizationsForUser as listStoredOrganizationsForUser,
+  listOrganizationUsers as listStoredOrganizationUsers,
+  linkOrganizationUsersByEmail as linkStoredOrganizationUsersByEmail,
+  saveOrganization as saveStoredOrganization,
+  saveOrganizationUser as saveStoredOrganizationUser,
+  transitionOrganizationUserStatus as transitionStoredOrganizationUserStatus,
+  type UserOrganizationMembership,
+} from './storage-org-repo';
+import {
+  bulkSetCipherUserFolders as bulkSetStoredCipherUserFolders,
+  getCipherUserFolder as getStoredCipherUserFolder,
+  listCipherUserFolders as listStoredCipherUserFolders,
+  setCipherUserFolder as setStoredCipherUserFolder,
+} from './storage-cipher-folder-repo';
+import {
+  type CipherAccessInfo,
+  type UserCollectionAccess,
+  deleteCollectionForOwner as deleteStoredCollectionForOwner,
+  getCollectionsByIds as listStoredCollectionsByIds,
+  getCollection as findStoredCollection,
+  listCollectionIdsForCipher as listStoredCollectionIdsForCipher,
+  listCollectionUsers as listStoredCollectionUsers,
+  listCollectionUsersByOrganizationUser as listStoredCollectionUsersByOrganizationUser,
+  listCollectionsForOrganization as listStoredCollectionsForOrganization,
+  listCollectionsForUser as listStoredCollectionsForUser,
+  replaceCollectionUsers as replaceStoredCollectionUsers,
+  replaceOrganizationUserCollections as replaceStoredOrganizationUserCollections,
+  resolveCipherAccessForUser as resolveStoredCipherAccessForUser,
+  saveCollection as saveStoredCollection,
+  setCipherCollections as setStoredCipherCollections,
+} from './storage-collection-repo';
 import {
   addAttachmentToCipher as attachStoredAttachmentToCipher,
   addAttachmentToCipherForUser as attachStoredAttachmentToCipherForUser,
@@ -164,8 +218,21 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-07-13-refresh-session-reuse';
-const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays'] as const;
+const STORAGE_SCHEMA_VERSION = '2026-09-20-org-status-marker';
+const REQUIRED_SCHEMA_TABLES = [
+  'webauthn_credentials',
+  'webauthn_challenges',
+  'auth_requests',
+  'totp_login_replays',
+  // Org tables: a partially-failed earlier ensure gets repaired on the next
+  // boot even when the schema version matches.
+  'organizations',
+  'organization_users',
+  'collections',
+  'collection_users',
+  'cipher_collections',
+  'cipher_user_folders',
+] as const;
 
 // D1-backed storage.
 // Contract:
@@ -321,6 +388,10 @@ export class StorageService {
     return deleteStoredUserById(this.db, id);
   }
 
+  async updateUserKeyId(userId: string, userKeyId: string): Promise<void> {
+    await updateStoredUserKeyId(this.db, userId, userKeyId);
+  }
+
   async createInvite(invite: Invite): Promise<void> {
     await createStoredInvite(this.db, invite);
   }
@@ -333,8 +404,8 @@ export class StorageService {
     return listStoredInvites(this.db, includeInactive);
   }
 
-  async markInviteUsed(code: string, userId: string): Promise<boolean> {
-    return markStoredInviteUsed(this.db, code, userId);
+  async markInviteUsed(code: string, userId: string, email?: string): Promise<boolean> {
+    return markStoredInviteUsed(this.db, code, userId, email);
   }
 
   async assignInviteUsedBy(code: string, userId: string): Promise<boolean> {
@@ -531,6 +602,230 @@ export class StorageService {
     return moveStoredCiphers(this.db, this.sqlChunkSize.bind(this), this.updateRevisionDate.bind(this), ids, folderId, userId);
   }
 
+  // --- Organizations ---
+
+  async getOrganization(id: string): Promise<Organization | null> {
+    return findStoredOrganization(this.db, id);
+  }
+
+  async saveOrganization(organization: Organization): Promise<void> {
+    await saveStoredOrganization(this.db, organization);
+  }
+
+  // Atomic org + owner (+ default collection) creation; see storage-org-repo.
+  async createOrganizationWithOwner(
+    organization: Organization,
+    organizationUser: OrganizationUser,
+    defaultCollection?: Collection | null
+  ): Promise<void> {
+    await createStoredOrganizationWithOwner(this.db, organization, organizationUser, defaultCollection);
+  }
+
+  // Single-statement owner-preconditioned delete; returns false when the
+  // caller is not a confirmed owner of the organization.
+  async deleteOrganizationForOwner(organizationId: string, ownerUserId: string): Promise<boolean> {
+    return deleteStoredOrganizationForOwner(this.db, organizationId, ownerUserId);
+  }
+
+  async getOrganizationUser(id: string): Promise<OrganizationUser | null> {
+    return findStoredOrganizationUser(this.db, id);
+  }
+
+  async getOrganizationUserByEmail(organizationId: string, email: string): Promise<OrganizationUser | null> {
+    return findStoredOrganizationUserByEmail(this.db, organizationId, email);
+  }
+
+  async getOrganizationUserForUser(organizationId: string, userId: string): Promise<OrganizationUser | null> {
+    return findStoredOrganizationUserForUser(this.db, organizationId, userId);
+  }
+
+  async listOrganizationUsers(organizationId: string): Promise<OrganizationUser[]> {
+    return listStoredOrganizationUsers(this.db, organizationId);
+  }
+
+  async saveOrganizationUser(organizationUser: OrganizationUser): Promise<void> {
+    await saveStoredOrganizationUser(this.db, organizationUser);
+  }
+
+  // Status-preconditioned membership transition (see storage-org-repo). Use
+  // for accept/confirm; returns false on concurrent state change.
+  async transitionOrganizationUserStatus(
+    organizationUserId: string,
+    expectedStatus: number,
+    fields: { status?: number; key?: string | null; userId?: string | null; type?: number; accessAll?: boolean },
+    options?: { guardLastOwner?: boolean }
+  ): Promise<boolean> {
+    return transitionStoredOrganizationUserStatus(this.db, organizationUserId, expectedStatus, fields, options);
+  }
+
+  async deleteOrganizationUser(id: string): Promise<void> {
+    await deleteStoredOrganizationUser(this.db, id);
+  }
+
+  // Race-free last-owner-guarded membership delete; returns false when the
+  // row is missing or is the last confirmed Owner of its organization.
+  async deleteOrganizationUserGuardingLastOwner(organizationUserId: string): Promise<boolean> {
+    return deleteStoredOrganizationUserGuardingLastOwner(this.db, organizationUserId);
+  }
+
+  async countConfirmedOrganizationOwners(organizationId: string): Promise<number> {
+    return countStoredConfirmedOrgOwners(this.db, organizationId);
+  }
+
+  async listConfirmedOrganizationUserIds(organizationId: string): Promise<Array<{ id: string; userId: string }>> {
+    return listStoredConfirmedOrgUserIds(this.db, organizationId);
+  }
+
+  async listConfirmedOrganizationsForUser(userId: string): Promise<UserOrganizationMembership[]> {
+    return listStoredConfirmedOrgsForUser(this.db, userId);
+  }
+
+  async listOrganizationsForUser(userId: string): Promise<UserOrganizationMembership[]> {
+    return listStoredOrganizationsForUser(this.db, userId);
+  }
+
+  async linkOrganizationUsersByEmail(userId: string, email: string): Promise<void> {
+    await linkStoredOrganizationUsersByEmail(this.db, userId, email);
+  }
+
+  // --- Collections ---
+
+  async getCollection(id: string): Promise<Collection | null> {
+    return findStoredCollection(this.db, id);
+  }
+
+  async getCollectionsByIds(ids: string[]): Promise<Collection[]> {
+    return listStoredCollectionsByIds(this.db, ids, this.sqlChunkSize.bind(this));
+  }
+
+  async saveCollection(collection: Collection): Promise<void> {
+    await saveStoredCollection(this.db, collection);
+  }
+
+  // Single-statement owner-preconditioned collection delete; returns false
+  // when the collection does not belong to the org or the caller is not a
+  // confirmed owner of it.
+  async deleteCollectionForOwner(
+    collectionId: string,
+    organizationId: string,
+    ownerUserId: string
+  ): Promise<boolean> {
+    return deleteStoredCollectionForOwner(this.db, collectionId, organizationId, ownerUserId);
+  }
+
+  async listCollectionsForOrganization(organizationId: string): Promise<Collection[]> {
+    return listStoredCollectionsForOrganization(this.db, organizationId);
+  }
+
+  async listCollectionsForUser(userId: string): Promise<UserCollectionAccess[]> {
+    return listStoredCollectionsForUser(this.db, userId);
+  }
+
+  async listCollectionUsers(collectionId: string): Promise<CollectionUserAccess[]> {
+    return listStoredCollectionUsers(this.db, collectionId);
+  }
+
+  async listCollectionUsersByOrganizationUser(
+    organizationUserId: string
+  ): Promise<Array<{ collectionId: string; readOnly: boolean; hidePasswords: boolean }>> {
+    return listStoredCollectionUsersByOrganizationUser(this.db, organizationUserId);
+  }
+
+  // --- Per-user filing of organization ciphers ---
+
+  async listCipherUserFolders(userId: string): Promise<Array<{ cipherId: string; folderId: string }>> {
+    return listStoredCipherUserFolders(this.db, userId);
+  }
+
+  async getCipherUserFolder(userId: string, cipherId: string): Promise<string | null> {
+    return getStoredCipherUserFolder(this.db, userId, cipherId);
+  }
+
+  async setCipherUserFolder(userId: string, cipherId: string, folderId: string | null): Promise<void> {
+    await setStoredCipherUserFolder(this.db, userId, cipherId, folderId);
+  }
+
+  async bulkSetCipherUserFolders(
+    userId: string,
+    cipherIds: string[],
+    folderId: string | null
+  ): Promise<void> {
+    await bulkSetStoredCipherUserFolders(this.db, this.sqlChunkSize(2), userId, cipherIds, folderId);
+  }
+
+  async replaceCollectionUsers(
+    collectionId: string,
+    rows: Array<{ organizationUserId: string; readOnly: boolean; hidePasswords: boolean }>
+  ): Promise<void> {
+    await replaceStoredCollectionUsers(this.db, collectionId, rows);
+  }
+
+  async replaceOrganizationUserCollections(
+    organizationUserId: string,
+    rows: Array<{ collectionId: string; readOnly: boolean; hidePasswords: boolean }>
+  ): Promise<void> {
+    await replaceStoredOrganizationUserCollections(this.db, organizationUserId, rows);
+  }
+
+  async setCipherCollections(cipherId: string, collectionIds: string[]): Promise<void> {
+    await setStoredCipherCollections(this.db, cipherId, collectionIds);
+  }
+
+  async listCollectionIdsForCipher(cipherId: string): Promise<string[]> {
+    return listStoredCollectionIdsForCipher(this.db, cipherId);
+  }
+
+  // --- Organization-aware cipher access ---
+
+  async getAccessibleCipher(id: string, userId: string): Promise<{ cipher: Cipher; access: CipherAccessInfo | null } | null> {
+    return findStoredAccessibleCipher(this.db, id, userId);
+  }
+
+  async listAccessibleCiphersByIds(userId: string, ids: string[]): Promise<Array<{ cipher: Cipher; access: CipherAccessInfo | null }>> {
+    return listStoredAccessibleCiphersByIds(this.db, this.sqlChunkSize.bind(this), userId, ids);
+  }
+
+  async getAllCiphersIncludingOrgs(userId: string): Promise<Cipher[]> {
+    return listStoredCiphersIncludingOrgs(this.db, userId);
+  }
+
+  async resolveCipherAccessForUser(cipherId: string, userId: string): Promise<CipherAccessInfo | null> {
+    return resolveStoredCipherAccessForUser(this.db, cipherId, userId);
+  }
+
+  // --- By-id cipher mutations (organization ciphers) ---
+  // Access must be verified by the caller before invoking these.
+
+  async softDeleteCiphersByIds(ids: string[]): Promise<void> {
+    await softDeleteStoredCiphersByIds(this.db, ids);
+  }
+
+  async restoreCiphersByIds(ids: string[]): Promise<void> {
+    await restoreStoredCiphersByIds(this.db, ids);
+  }
+
+  async archiveCiphersByIds(ids: string[]): Promise<void> {
+    await archiveStoredCiphersByIds(this.db, ids);
+  }
+
+  async unarchiveCiphersByIds(ids: string[]): Promise<void> {
+    await unarchiveStoredCiphersByIds(this.db, ids);
+  }
+
+  async deleteCiphersByIds(ids: string[]): Promise<void> {
+    await deleteStoredCiphersByIds(this.db, ids);
+  }
+
+  async listCipherIdsByOrganization(organizationId: string): Promise<string[]> {
+    return listStoredCipherIdsByOrganization(this.db, organizationId);
+  }
+
+  // Move a personal cipher into an organization. Returns false when the caller
+  // no longer owns the row.
+  async transferCipherToOrganization(cipher: Cipher, expectedUserId: string): Promise<boolean> {
+    return transferStoredCipherToOrganization(this.db, this.safeBind.bind(this), cipher, expectedUserId);
+  }
+
   // --- Folders ---
 
   async getFolder(id: string): Promise<Folder | null> {
@@ -623,7 +918,7 @@ export class StorageService {
     await deleteStoredAttachmentsByCipher(this.db, cipherId);
   }
 
-  async updateCipherRevisionDate(cipherId: string): Promise<{ userId: string; revisionDate: string } | null> {
+  async updateCipherRevisionDate(cipherId: string): Promise<{ userId: string | null; revisionDate: string } | null> {
     return updateStoredCipherRevisionDate(
       this.getCipher.bind(this),
       this.saveCipher.bind(this),

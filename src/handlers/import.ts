@@ -5,6 +5,8 @@ import { errorResponse, jsonResponse } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
+import { bumpOrganizationMembers } from '../utils/org-notify';
+import { ORG_SELF_SERVICE_REGISTRATION_CONFIG_KEY, ORG_USER_STATUS, ORG_USER_TYPE } from '../config/org';
 import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
 
 // Bitwarden client import request format
@@ -132,19 +134,45 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const now = new Date().toISOString();
   const batchChunkSize = LIMITS.performance.bulkMoveChunkSize;
 
+  // Resolve existing folders up front so imported folders whose (encrypted)
+  // name exactly matches an existing vault folder reuse that row instead of
+  // creating a duplicate. Folder names are opaque ciphertext, so only exact
+  // string matches dedupe here; the first-party webapp additionally matches
+  // decrypted names client-side before sending the payload.
+  const existingFolders = await storage.getAllFolders(userId);
+  const existingFolderIds = new Set(existingFolders.map((folder) => folder.id));
+  const existingFolderIdByName = new Map<string, string>();
+  for (const folder of existingFolders) {
+    if (folder.name && !existingFolderIdByName.has(folder.name)) {
+      existingFolderIdByName.set(folder.name, folder.id);
+    }
+  }
+
   // Create folders and build index -> id mapping
   const folderIdMap = new Map<number, string>();
+  const createdFolderIdByName = new Map<string, string>();
   const folderRows: Folder[] = [];
   
   for (let i = 0; i < folders.length; i++) {
     const importedFolder = folders[i] && typeof folders[i] === 'object' ? folders[i] : null;
+    const name = typeof importedFolder?.name === 'string' && importedFolder.name ? importedFolder.name : 'Folder';
+
+    // Reuse an existing vault folder — or an earlier folder in this payload
+    // with the same name — rather than inserting a duplicate row.
+    const reusedFolderId = existingFolderIdByName.get(name) ?? createdFolderIdByName.get(name);
+    if (reusedFolderId) {
+      folderIdMap.set(i, reusedFolderId);
+      continue;
+    }
+
     const folderId = generateUUID();
+    createdFolderIdByName.set(name, folderId);
     folderIdMap.set(i, folderId);
 
     const folder: Folder = {
       id: folderId,
       userId: userId,
-      name: typeof importedFolder?.name === 'string' && importedFolder.name ? importedFolder.name : 'Folder',
+      name: name,
       createdAt: now,
       updatedAt: now,
     };
@@ -173,11 +201,42 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       cipherFolderMap.set(rel.key, folderId);
     }
   }
-  const existingFolderIds = new Set((await storage.getAllFolders(userId)).map((folder) => folder.id));
+
+  // Organization support: ciphers may carry organizationId + collectionIds
+  // (the webapp import flow re-encrypts org items with the org key before
+  // sending them here). Resolve membership and writable collections up front.
+  const requestedOrganizationIds = Array.from(new Set(
+    ciphers
+      .map((c) => normalizeOptionalId((c as Record<string, unknown> as any)?.organizationId))
+      .filter((id): id is string => !!id)
+  ));
+  const organizationMemberships = new Map<string, { accessAll: boolean; editableCollectionIds: Set<string>; validCollectionIds: Set<string> }>();
+  for (const organizationId of requestedOrganizationIds) {
+    const membership = await storage.getOrganizationUserForUser(organizationId, userId);
+    if (!membership || membership.status !== ORG_USER_STATUS.CONFIRMED) {
+      return errorResponse(`Organization ${organizationId} not found`, 404);
+    }
+    const orgCollections = await storage.listCollectionsForOrganization(organizationId);
+    const validCollectionIds = new Set(orgCollections.map((collection) => collection.id));
+    const editableCollectionIds = membership.accessAll
+      ? new Set(orgCollections.map((collection) => collection.id))
+      : new Set(
+          (await storage.listCollectionUsersByOrganizationUser(membership.id))
+            .filter((row) => !row.readOnly)
+            .map((row) => row.collectionId)
+        );
+    organizationMemberships.set(organizationId, { accessAll: membership.accessAll, editableCollectionIds, validCollectionIds });
+  }
 
   // Create ciphers
   const cipherRows: Cipher[] = [];
+  const cipherCollectionRows: Array<{ cipherId: string; collectionId: string }> = [];
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
+  // Per-user filing of organization ciphers (mirrors the org create flow in
+  // handlers/ciphers.ts): org rows never persist a personal folder id, so the
+  // folder computed above is filed into cipher_user_folders for the acting
+  // user and overlaid by sync/list responses.
+  const orgFolderFilingRows: Array<{ cipherId: string; folderId: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
     const c = ciphers[i] && typeof ciphers[i] === 'object' ? ciphers[i] : {} as CiphersImportRequest['ciphers'][number];
     const importedFolderId = normalizeOptionalId(readAliasedImportProp<string | null>(c, ['folderId', 'FolderId']));
@@ -277,23 +336,61 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       return errorResponse(`Cipher ${i + 1}: ${compatibilityError}`, 400);
     }
 
+    // Organization ciphers: validate access, detach from the personal vault.
+    const importOrganizationId = normalizeOptionalId((c as Record<string, unknown> as any)?.organizationId);
+    const importCollectionIds = Array.isArray((c as Record<string, unknown> as any)?.collectionIds)
+      ? Array.from(new Set(((c as Record<string, unknown> as any).collectionIds as unknown[])
+          .map((collectionId) => String(collectionId || '').trim())
+          .filter(Boolean)))
+      : [];
+    if (importOrganizationId) {
+      const membership = organizationMemberships.get(importOrganizationId);
+      if (!membership) {
+        return errorResponse(`Cipher ${i + 1}: organization not found`, 404);
+      }
+      if (!importCollectionIds.length) {
+        return errorResponse(`Cipher ${i + 1}: at least one collection is required for organization items`, 400);
+      }
+      for (const collectionId of importCollectionIds) {
+        if (!membership.validCollectionIds.has(collectionId)) {
+          return errorResponse(`Cipher ${i + 1}: collection ${collectionId} does not belong to this organization`, 400);
+        }
+        if (!membership.editableCollectionIds.has(collectionId)) {
+          return errorResponse(`Cipher ${i + 1}: you do not have permission to add ciphers to collection ${collectionId}`, 403);
+        }
+      }
+      cipher.userId = null;
+      cipher.organizationId = importOrganizationId;
+      // Keep the computed personal folder as a per-user filing; the shared row
+      // itself never carries a personal folder id.
+      if (folderId) orgFolderFilingRows.push({ cipherId: cipher.id, folderId });
+      cipher.folderId = null;
+      for (const collectionId of importCollectionIds) {
+        cipherCollectionRows.push({ cipherId: cipher.id, collectionId });
+      }
+    }
+
     cipherRows.push(cipher);
     cipherMapRows.push({ index: i, sourceId, id: cipher.id });
   }
 
   if (cipherRows.length > 0) {
     const cipherStatements = cipherRows.map(cipher => {
-      const data = JSON.stringify(cipher);
+      // Strip server-managed org fields so the data blob cannot leak stale
+      // collection/organization associations into future passthroughs.
+      const { organizationId: _orgId, collectionIds: _collIds, ...dataOnly } = cipher as Record<string, unknown>;
+      const data = JSON.stringify(dataOnly);
       return env.DB
         .prepare(
-          'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
-          'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+          'INSERT INTO ciphers(id, user_id, organization_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
+          'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
           'ON CONFLICT(id) DO UPDATE SET ' +
-          'user_id=excluded.user_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at'
+          'user_id=excluded.user_id, organization_id=excluded.organization_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at'
         )
         .bind(
           cipher.id,
-          cipher.userId,
+          bindNull(cipher.userId),
+          bindNull(cipher.organizationId ?? null),
           Number(cipher.type) || 1,
           bindNull(cipher.folderId),
           bindNull(cipher.name),
@@ -311,9 +408,36 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
     await runBatchInChunks(env.DB, cipherStatements, batchChunkSize);
   }
 
+  if (orgFolderFilingRows.length > 0) {
+    const now = new Date().toISOString();
+    const filingStatements = orgFolderFilingRows.map((row) =>
+      env.DB
+        .prepare(
+          'INSERT INTO cipher_user_folders(cipher_id, user_id, folder_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(cipher_id, user_id) DO UPDATE SET folder_id=excluded.folder_id, updated_at=excluded.updated_at'
+        )
+        .bind(row.cipherId, userId, row.folderId, now, now)
+    );
+    await runBatchInChunks(env.DB, filingStatements, batchChunkSize);
+  }
+
+  if (cipherCollectionRows.length > 0) {
+    const collectionStatements = cipherCollectionRows.map((row) =>
+      env.DB
+        .prepare('INSERT OR IGNORE INTO cipher_collections(cipher_id, collection_id) VALUES(?, ?)')
+        .bind(row.cipherId, row.collectionId)
+    );
+    await runBatchInChunks(env.DB, collectionStatements, batchChunkSize);
+  }
+
   // Update revision date
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  if (requestedOrganizationIds.length > 0) {
+    for (const organizationId of requestedOrganizationIds) {
+      await bumpOrganizationMembers(request, env, storage, organizationId);
+    }
+  }
 
   if (returnCipherMap) {
     return jsonResponse({
