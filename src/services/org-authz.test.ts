@@ -7,6 +7,7 @@ import {
   canManageMembers,
   confirmMemberCheck,
   hasFullCollectionAccess,
+  memberCollectionsCheck,
   memberRoleChangeCheck,
   planCollectionAssignment,
   resolveCollectionPermission,
@@ -16,6 +17,7 @@ import {
   MembershipStatus,
   MembershipType,
   revokeStatus,
+  type CollectionAccess,
   type MembershipRecord,
   type OrgPermissions,
 } from './org-types';
@@ -158,4 +160,30 @@ test('planCollectionAssignment adds and drops only the collections the caller ma
     planCollectionAssignment({ current: ['A'], requested: ['A', 'D'], available: ['B'] }),
     { insert: [], remove: [] }
   );
+});
+
+// Upstream GetAuthorizedCollectionsToSaveAsync with allowAdminAccessToAllCollectionItems off: the actor
+// manages M, has only "Can edit" on E, and the target already holds E and H.
+test('memberCollectionsCheck grants only managed collections, accepts unchanged entries and keeps the rest', () => {
+  const access = (collectionId: string, manage = false): CollectionAccess => ({ collectionId, readOnly: false, hidePasswords: false, manage });
+  const manager = member({ type: MembershipType.Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true } });
+  const editor = member({ type: MembershipType.Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, editAnyCollection: true } });
+  const check = (overrides: Partial<Parameters<typeof memberCollectionsCheck>[0]>) => memberCollectionsCheck({
+    actor: manager,
+    actorAccess: [access('M', true), access('E')],
+    requested: [],
+    current: [access('E'), access('H')],
+    restrictSelf: false,
+    ...overrides,
+  });
+  const notFound = { ok: false, status: 404, message: 'Resource not found.' };
+
+  assert.deepEqual(check({ requested: [access('M', true), access('E')] }), { ok: true, collections: [access('M', true), access('E'), access('H')] });
+  assert.deepEqual(check({ requested: [] }), { ok: true, collections: [access('E'), access('H')] });
+  assert.deepEqual(check({ requested: [access('E', true)] }), notFound);
+  assert.deepEqual(check({ requested: [access('X')] }), notFound);
+  assert.deepEqual(check({ requested: [access('E'), access('E', true)] }), notFound);
+  assert.deepEqual(check({ restrictSelf: true, requested: [access('M', true)] }), { ok: false, status: 400, message: 'You cannot add yourself to a collection.' });
+  assert.deepEqual(check({ restrictSelf: true, requested: [access('E')] }), { ok: true, collections: [access('E'), access('H')] });
+  assert.deepEqual(check({ actor: editor, requested: [access('X', true)] }), { ok: true, collections: [access('X', true)] });
 });

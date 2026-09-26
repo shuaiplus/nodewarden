@@ -108,6 +108,48 @@ export function memberRoleChangeCheck(
     : { ok: true };
 }
 
+// Upstream restricts self-edits unless admins may access all collection items. NodeWarden applies
+// that per actor: Owners and Admins always have the access, so only the other members are restricted.
+export function restrictsEditingSelf(actor: MembershipRecord, target: MembershipRecord): boolean {
+  return target.userId === actor.userId && !hasFullCollectionAccess(actor);
+}
+
+export type MemberCollectionsCheck =
+  | { ok: true; collections: CollectionAccess[] }
+  | { ok: false; status: number; message: string };
+
+function sameAccess(left: CollectionAccess, right: CollectionAccess | undefined): boolean {
+  return !!right && left.readOnly === right.readOnly && left.hidePasswords === right.hidePasswords && left.manage === right.manage;
+}
+
+// Upstream OrganizationUsersController.Invite and GetAuthorizedCollectionsToSaveAsync: granting
+// access needs ModifyUserAccess on the collection. Owners, Admins and editAnyCollection members hold
+// it everywhere, anyone else only where its stored Manage flag is set, own or via a group (upstream
+// CanManageCollectionsAsync; legacy "Can edit" does not count): upstream's rule with
+// allowAdminAccessToAllCollectionItems off, so manageUsers alone cannot grant direct access to a
+// collection it does not manage. Group membership stays unchecked, as upstream. Official web still
+// treats that setting as on and offers every collection it shows, so an unchanged entry the actor
+// cannot modify is accepted, and the member keeps that access whether re-posted or omitted.
+export function memberCollectionsCheck({ actor, actorAccess, requested, current, restrictSelf }: {
+  actor: MembershipRecord;
+  actorAccess: CollectionAccess[];
+  requested: CollectionAccess[];
+  current: CollectionAccess[];
+  restrictSelf: boolean;
+}): MemberCollectionsCheck {
+  const currentById = new Map(current.map((access) => [access.collectionId, access]));
+  if (restrictSelf && requested.some(({ collectionId }) => !currentById.has(collectionId))) {
+    return { ok: false, status: 400, message: 'You cannot add yourself to a collection.' };
+  }
+  const modifiesAll = hasFullCollectionAccess(actor) || resolvePermissions(actor).editAnyCollection;
+  const managed = new Set(actorAccess.filter((access) => access.manage).map(({ collectionId }) => collectionId));
+  const canModify = ({ collectionId }: CollectionAccess) => modifiesAll || managed.has(collectionId);
+  if (requested.some((access) => !canModify(access) && !sameAccess(access, currentById.get(access.collectionId)))) {
+    return { ok: false, status: 404, message: 'Resource not found.' };
+  }
+  return { ok: true, collections: [...requested.filter(canModify), ...current.filter((access) => !canModify(access))] };
+}
+
 export function canManageGroups(member: MembershipRecord): boolean {
   return isActiveMember(member) && (
     member.type === MembershipType.Owner

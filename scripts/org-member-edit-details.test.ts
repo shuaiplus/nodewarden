@@ -21,6 +21,8 @@ const CUSTOM_NOT_ADMINS = 'Custom users can not manage Admins or Owners.';
 const CUSTOM_OWN_PERMISSIONS = 'Custom users can only grant the same custom permissions that they have.';
 const LAST_OWNER = 'Organization must have at least one confirmed owner.';
 const MANAGE_EXCLUSIVE = 'The Manage property is mutually exclusive and cannot be true while the ReadOnly or HidePasswords properties are also true.';
+const RESOURCE_NOT_FOUND = 'Resource not found.';
+const SELF_COLLECTION = 'You cannot add yourself to a collection.';
 // A collection access row binds 5 parameters and D1 allows 100 per statement, so this needs two INSERTs.
 const MANY_COLLECTIONS = 30;
 // Likewise more members than one multi-row INSERT of collection access holds.
@@ -101,6 +103,20 @@ async function createGroup(env: Env, owner: User, orgId: string): Promise<string
   assert.equal(response.status, 200);
   return ((await response.json()) as { id: string }).id;
 }
+
+function manageAccess(id: string) {
+  return { id, readOnly: false, hidePasswords: false, manage: true };
+}
+
+function viewAccess(id: string) {
+  return { id, readOnly: true, hidePasswords: false, manage: false };
+}
+
+function editAccess(id: string) {
+  return { id, readOnly: false, hidePasswords: false, manage: false };
+}
+
+const byId = (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id);
 
 test('an Admin can neither grant Owner nor edit or demote an Owner, on PUT or invite', async () => {
   const env = await createTestEnv();
@@ -195,6 +211,78 @@ test('accessAll in an invite or PUT body grants no full collection access', asyn
   assert.equal(stored.find((row) => row.email === email)!.accessAll, false);
 });
 
+// Upstream Invite and GetAuthorizedCollectionsToSaveAsync need ModifyUserAccess on every posted
+// collection. With allowAdminAccessToAllCollectionItems off, which NodeWarden applies to Custom
+// members, a manageUsers member without editAnyCollection holds it only where it manages.
+test('a Custom manageUsers member grants only collections it manages, and never widens its own access', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const [managed, unmanaged] = [await createCollection(env, owner, orgId), await createCollection(env, owner, orgId)];
+  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
+  const member = await addMember(env, orgId, MembershipType.User);
+  const customBody = { type: MembershipType.Custom, permissions: { manageUsers: true } };
+  assert.equal((await putMember(env, owner, orgId, custom.memberId, { ...customBody, collections: [manageAccess(managed)] })).status, 200);
+
+  const grant = [manageAccess(managed), manageAccess(unmanaged)];
+  const email = 'accomplice@example.test';
+  await expectRejected(putMember(env, custom.user, orgId, custom.memberId, { ...customBody, collections: grant }), 400, SELF_COLLECTION);
+  await expectRejected(putMember(env, custom.user, orgId, member.memberId, { type: MembershipType.User, collections: grant }), 404, RESOURCE_NOT_FOUND);
+  await expectRejected(invite(env, custom.user, orgId, { emails: [email], type: MembershipType.User, collections: grant }), 404, RESOURCE_NOT_FOUND);
+  assert.deepEqual((await details(env, owner, orgId, custom.memberId)).collections, [manageAccess(managed)]);
+  assert.deepEqual((await details(env, owner, orgId, member.memberId)).collections, []);
+  assert.equal((await orgRepo.listMembershipsByOrg(env.DB, orgId)).some((row) => row.email === email), false);
+
+  // A group grant is collection access too, so upstream's restricted self-edit leaves groups as they are.
+  const groupId = await createGroup(env, owner, orgId);
+  const collectionPath = `/api/organizations/${orgId}/collections/${unmanaged}`;
+  const groupGrant = await authedFetch(env, { method: 'PUT', path: collectionPath, body: { name: '2.c|c|c', groups: [manageAccess(groupId)] }, userId: owner.id });
+  assert.equal(groupGrant.status, 200);
+  const selfEdit = { ...customBody, collections: [manageAccess(managed)], groups: [groupId] };
+  assert.equal((await putMember(env, custom.user, orgId, custom.memberId, selfEdit)).status, 200);
+  assert.deepEqual((await details(env, owner, orgId, custom.memberId)).groups, []);
+
+  // Managed collections stay grantable, as does any collection for editAnyCollection members and Owners.
+  assert.equal((await putMember(env, custom.user, orgId, member.memberId, { type: MembershipType.User, collections: [manageAccess(managed)] })).status, 200);
+  const editor = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true, editAnyCollection: true });
+  assert.equal((await invite(env, editor.user, orgId, { emails: [email], type: MembershipType.User, collections: grant })).status, 200);
+  assert.equal((await putMember(env, owner, orgId, ownerMemberId, { type: MembershipType.Owner, collections: grant })).status, 200);
+});
+
+// Official web posts only the collections the actor can see, each as editable, so PUT keeps the
+// member's access to the rest and accepts an unchanged entry it re-posts, but refuses to change it.
+// Upstream CanManageCollectionsAsync reads only the stored Manage flag, so "Can edit" is not Manage.
+test('PUT keeps member access to collections the actor cannot manage', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const [managed, editable, hidden] = [
+    await createCollection(env, owner, orgId),
+    await createCollection(env, owner, orgId),
+    await createCollection(env, owner, orgId),
+  ];
+  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
+  const member = await addMember(env, orgId, MembershipType.User);
+  const customBody = { type: MembershipType.Custom, permissions: { manageUsers: true }, collections: [manageAccess(managed), editAccess(editable)] };
+  assert.equal((await putMember(env, owner, orgId, custom.memberId, customBody)).status, 200);
+  assert.equal((await putMember(env, owner, orgId, member.memberId, { type: MembershipType.User, collections: [viewAccess(editable), viewAccess(hidden)] })).status, 200);
+
+  const changed = { type: MembershipType.User, collections: [editAccess(editable)] };
+  await expectRejected(putMember(env, custom.user, orgId, member.memberId, changed), 404, RESOURCE_NOT_FOUND);
+  const selfManage = { ...customBody, collections: [manageAccess(managed), manageAccess(editable)] };
+  await expectRejected(putMember(env, custom.user, orgId, custom.memberId, selfManage), 404, RESOURCE_NOT_FOUND);
+  const resaved = { type: MembershipType.User, collections: [viewAccess(editable), viewAccess(managed)] };
+  assert.equal((await putMember(env, custom.user, orgId, member.memberId, resaved)).status, 200);
+  assert.deepEqual(
+    (await details(env, owner, orgId, member.memberId)).collections.sort(byId),
+    [viewAccess(managed), viewAccess(editable), viewAccess(hidden)].sort(byId)
+  );
+
+  assert.equal((await putMember(env, custom.user, orgId, member.memberId, { type: MembershipType.User, collections: [] })).status, 200);
+  assert.deepEqual((await details(env, owner, orgId, member.memberId)).collections.sort(byId), [viewAccess(editable), viewAccess(hidden)].sort(byId));
+});
+
 test('member details round-trip the permissions, collections and groups that invite and PUT send', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
@@ -278,7 +366,6 @@ test('collection access larger than one D1 statement is saved in chunks for invi
     await orgRepo.saveCollection(env.DB, { id, orgId, name: '2.c|c|c', externalId: null, createdAt: now, updatedAt: now });
   }
   const collections = collectionIds.map((id) => ({ id, readOnly: false, hidePasswords: false, manage: true }));
-  const byId = (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id);
 
   assert.equal((await putMember(env, owner, orgId, member.memberId, { type: MembershipType.User, collections })).status, 200);
   assert.deepEqual((await details(env, owner, orgId, member.memberId)).collections.sort(byId), [...collections].sort(byId));

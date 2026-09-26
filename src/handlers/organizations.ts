@@ -12,9 +12,11 @@ import {
   confirmMemberCheck,
   hasFullCollectionAccess,
   isActiveMember,
+  memberCollectionsCheck,
   memberRoleChangeCheck,
   resolveCollectionPermission,
   resolvePermissions,
+  restrictsEditingSelf,
 } from '../services/org-authz';
 import {
   clientMembershipType,
@@ -452,6 +454,26 @@ async function readMemberChange(db: D1Database, orgId: string, body: Record<stri
   return { ok: true, type, permissions, collections, groupIds };
 }
 
+// Loads what memberCollectionsCheck compares. An invite has no target yet, so it has no access to
+// keep and no self-edit to restrict. An omitted list stays omitted.
+async function authorizeMemberCollections(
+  db: D1Database,
+  actorUserId: string,
+  actor: MembershipRecord,
+  target: MembershipRecord | null,
+  requested: CollectionAccess[] | undefined
+): Promise<CollectionAccess[] | undefined | Response> {
+  if (!requested) return undefined;
+  const check = memberCollectionsCheck({
+    actor,
+    actorAccess: await orgRepo.listUserCollectionAccess(db, actorUserId, actor.orgId),
+    requested,
+    current: target ? await orgRepo.listMemberCollectionAccess(db, target) : [],
+    restrictSelf: !!target && restrictsEditingSelf(actor, target),
+  });
+  return check.ok ? check.collections : errorResponse(check.message, check.status);
+}
+
 // Upstream stores custom permissions only for the Custom role, so a demoted member keeps no stale grants.
 function storedPermissions(change: { type: number; permissions: OrgPermissions }): OrgPermissions | null {
   return change.type === MembershipType.Custom ? change.permissions : null;
@@ -544,6 +566,8 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   if (!emailsCheck.ok) return errorResponse(emailsCheck.message, 400);
   const change = await readMemberChange(env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
+  const collections = await authorizeMemberCollections(env.DB, user.id, member, null, change.collections);
+  if (collections instanceof Response) return collections;
   // Upstream InviteUsersAsync runs the same role guard; an invite has no current role, so the
   // requested one stands on both sides.
   const roleCheck = memberRoleChangeCheck(member, change.type, change.type, change.permissions, 'invite');
@@ -568,7 +592,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     externalId: null,
     createdAt: now,
     updatedAt: now,
-  })), change);
+  })), { ...change, collections });
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   if (!env.EMAIL || !getEmailSender(env)) return jsonResponse({});
   const vaultOrigin = organizationInviteVaultOrigin(request, env);
@@ -681,6 +705,8 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (body instanceof Response) return body;
   const change = await readMemberChange(env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
+  const collections = await authorizeMemberCollections(env.DB, userId, actor, membership, change.collections);
+  if (collections instanceof Response) return collections;
   const roleCheck = memberRoleChangeCheck(actor, clientMembershipType(membership.type), change.type, change.permissions, 'update');
   if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
   // Upstream HasConfirmedOwnersExceptAsync: leaving Owner must leave another confirmed owner behind.
@@ -696,7 +722,9 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   // memberRoleChangeCheck. Clearing it also stops a demoted org creator keeping full access.
   membership.accessAll = false;
   membership.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembershipWithAccess(env.DB, membership, change);
+  // Upstream skips groups on a restricted self-edit rather than failing it, as groups carry collection access.
+  const groupIds = restrictsEditingSelf(actor, membership) ? undefined : change.groupIds;
+  await orgRepo.saveMembershipWithAccess(env.DB, membership, { collections, groupIds });
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
