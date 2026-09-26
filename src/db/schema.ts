@@ -584,6 +584,7 @@ export const smSecretProjects = sqliteTable('sm_secret_projects', {
   primaryKey({ columns: [table.secretId, table.projectId] }),
   foreignKey({ columns: [table.secretId], foreignColumns: [smSecrets.id] }).onDelete('cascade'),
   foreignKey({ columns: [table.projectId], foreignColumns: [smProjects.id] }).onDelete('cascade'),
+  index('idx_sm_secret_projects_project').on(table.projectId),
 ]);
 
 export const smServiceAccounts = sqliteTable('sm_service_accounts', {
@@ -594,6 +595,7 @@ export const smServiceAccounts = sqliteTable('sm_service_accounts', {
   updatedAt: text('updated_at').notNull(),
 }, (table) => [
   foreignKey({ columns: [table.orgId], foreignColumns: [organizations.id] }).onDelete('cascade'),
+  index('idx_sm_service_accounts_org').on(table.orgId),
 ]);
 
 export const smServiceAccountProjects = sqliteTable('sm_service_account_projects', {
@@ -605,6 +607,7 @@ export const smServiceAccountProjects = sqliteTable('sm_service_account_projects
   primaryKey({ columns: [table.serviceAccountId, table.projectId] }),
   foreignKey({ columns: [table.serviceAccountId], foreignColumns: [smServiceAccounts.id] }).onDelete('cascade'),
   foreignKey({ columns: [table.projectId], foreignColumns: [smProjects.id] }).onDelete('cascade'),
+  index('idx_sm_sa_projects_project').on(table.projectId),
 ]);
 
 export const smAccessTokens = sqliteTable('sm_access_tokens', {
@@ -620,6 +623,87 @@ export const smAccessTokens = sqliteTable('sm_access_tokens', {
   createdAt: text('created_at').notNull(),
 }, (table) => [
   foreignKey({ columns: [table.serviceAccountId], foreignColumns: [smServiceAccounts.id] }).onDelete('cascade'),
+]);
+
+// Secrets Manager access policies: one table per (target, grantee) pair, where upstream keeps one
+// AccessPolicy table with a discriminator. A row grants read, because upstream rejects read=false,
+// so write_access is the only bit. Every FK cascades, so deleting either side drops the policy
+// without cleanup code. The PK leads with the target; grantee indexes serve the grants lookup and
+// grantee-side cascades.
+export const smProjectMembers = sqliteTable('sm_project_members', {
+  projectId: text('project_id').notNull(),
+  membershipId: text('membership_id').notNull(),
+  writeAccess: integer('write_access').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.membershipId] }),
+  foreignKey({ columns: [table.projectId], foreignColumns: [smProjects.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.membershipId], foreignColumns: [organizationMemberships.id] }).onDelete('cascade'),
+  index('idx_sm_project_members_membership').on(table.membershipId),
+]);
+
+export const smProjectGroups = sqliteTable('sm_project_groups', {
+  projectId: text('project_id').notNull(),
+  groupId: text('group_id').notNull(),
+  writeAccess: integer('write_access').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.projectId, table.groupId] }),
+  foreignKey({ columns: [table.projectId], foreignColumns: [smProjects.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.groupId], foreignColumns: [orgGroups.id] }).onDelete('cascade'),
+  index('idx_sm_project_groups_group').on(table.groupId),
+]);
+
+export const smSecretMembers = sqliteTable('sm_secret_members', {
+  secretId: text('secret_id').notNull(),
+  membershipId: text('membership_id').notNull(),
+  writeAccess: integer('write_access').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.secretId, table.membershipId] }),
+  foreignKey({ columns: [table.secretId], foreignColumns: [smSecrets.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.membershipId], foreignColumns: [organizationMemberships.id] }).onDelete('cascade'),
+  index('idx_sm_secret_members_membership').on(table.membershipId),
+]);
+
+export const smSecretGroups = sqliteTable('sm_secret_groups', {
+  secretId: text('secret_id').notNull(),
+  groupId: text('group_id').notNull(),
+  writeAccess: integer('write_access').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.secretId, table.groupId] }),
+  foreignKey({ columns: [table.secretId], foreignColumns: [smSecrets.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.groupId], foreignColumns: [orgGroups.id] }).onDelete('cascade'),
+  index('idx_sm_secret_groups_group').on(table.groupId),
+]);
+
+export const smSecretServiceAccounts = sqliteTable('sm_secret_service_accounts', {
+  secretId: text('secret_id').notNull(),
+  serviceAccountId: text('service_account_id').notNull(),
+  writeAccess: integer('write_access').notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.secretId, table.serviceAccountId] }),
+  foreignKey({ columns: [table.secretId], foreignColumns: [smSecrets.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.serviceAccountId], foreignColumns: [smServiceAccounts.id] }).onDelete('cascade'),
+  index('idx_sm_secret_service_accounts_service_account').on(table.serviceAccountId),
+]);
+
+// People policies on a machine account have no permission column: upstream requires read and write.
+export const smServiceAccountMembers = sqliteTable('sm_service_account_members', {
+  serviceAccountId: text('service_account_id').notNull(),
+  membershipId: text('membership_id').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.serviceAccountId, table.membershipId] }),
+  foreignKey({ columns: [table.serviceAccountId], foreignColumns: [smServiceAccounts.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.membershipId], foreignColumns: [organizationMemberships.id] }).onDelete('cascade'),
+  index('idx_sm_service_account_members_membership').on(table.membershipId),
+]);
+
+export const smServiceAccountGroups = sqliteTable('sm_service_account_groups', {
+  serviceAccountId: text('service_account_id').notNull(),
+  groupId: text('group_id').notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.serviceAccountId, table.groupId] }),
+  foreignKey({ columns: [table.serviceAccountId], foreignColumns: [smServiceAccounts.id] }).onDelete('cascade'),
+  foreignKey({ columns: [table.groupId], foreignColumns: [orgGroups.id] }).onDelete('cascade'),
+  index('idx_sm_service_account_groups_group').on(table.groupId),
 ]);
 
 export const emergencyAccess = sqliteTable('emergency_access', {
