@@ -1,7 +1,7 @@
-import { and, asc, count, desc, eq, getColumns, inArray, isNotNull, sql, type Table } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
 
-import { D1_MAX_BOUND_PARAMETERS, getOrm, type Orm } from '../db/client';
+import { chunkRows, columnCount, getOrm, type Orm } from '../db/client';
 import {
   cipherCollections,
   ciphers,
@@ -105,17 +105,6 @@ function mapPolicy(row: typeof orgPolicies.$inferSelect): PolicyRecord {
     data,
     updatedAt: row.updatedAt,
   };
-}
-
-function columnCount(table: Table): number {
-  return Object.keys(getColumns(table)).length;
-}
-
-// Splits multi-row INSERT values so each statement stays within D1's bound-parameter limit, less
-// any parameters every chunk's statement binds besides the rows.
-export function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters = 0): T[][] {
-  const size = Math.floor((D1_MAX_BOUND_PARAMETERS - fixedParameters) / columnsPerRow);
-  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
 }
 
 function mapAccess(row: { collectionId: string; readOnly: number; hidePasswords: number; manage: number }): CollectionAccess {

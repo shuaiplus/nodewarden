@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, columnCount, getOrm } from '../db/client';
 import {
   smAccessTokens,
   smProjects,
@@ -9,7 +9,6 @@ import {
   smServiceAccountProjects,
   smServiceAccounts,
 } from '../db/schema';
-import { chunkRows } from './storage-org-repo';
 
 export interface SmProject {
   id: string;
@@ -150,9 +149,11 @@ export async function deleteProject(db: D1Database, id: string): Promise<void> {
   await getOrm(db).delete(smProjects).where(eq(smProjects.id, id));
 }
 
+// Saves the secret and replaces its links in one batch with chunked inserts, so a link that fails
+// cannot leave the secret saved with its previous links gone.
 export async function saveSecret(db: D1Database, secret: SmSecret): Promise<void> {
   const orm = getOrm(db);
-  await orm
+  const upsert = orm
     .insert(smSecrets)
     .values({
       id: secret.id,
@@ -174,12 +175,12 @@ export async function saveSecret(db: D1Database, secret: SmSecret): Promise<void
         deletedAt: secret.deletedAt,
       },
     });
-  await orm.delete(smSecretProjects).where(eq(smSecretProjects.secretId, secret.id));
-  if (secret.projectIds.length) {
-    await orm.insert(smSecretProjects).values(
-      secret.projectIds.map((projectId) => ({ secretId: secret.id, projectId }))
-    ).onConflictDoNothing();
-  }
+  const links = secret.projectIds.map((projectId) => ({ secretId: secret.id, projectId }));
+  await orm.batch([
+    upsert,
+    orm.delete(smSecretProjects).where(eq(smSecretProjects.secretId, secret.id)),
+    ...chunkRows(links, columnCount(smSecretProjects)).map((chunk) => orm.insert(smSecretProjects).values(chunk).onConflictDoNothing()),
+  ]);
 }
 
 export async function getSecret(db: D1Database, id: string): Promise<SmSecret | null> {
@@ -223,23 +224,18 @@ export async function getServiceAccount(db: D1Database, id: string): Promise<SmS
   return row ? mapServiceAccount(row) : null;
 }
 
+// One batch with chunked inserts, so a grant that fails leaves the previous grants in place.
 export async function replaceServiceAccountProjects(
   db: D1Database,
   serviceAccountId: string,
   projectIds: string[]
 ): Promise<void> {
   const orm = getOrm(db);
-  await orm.delete(smServiceAccountProjects).where(eq(smServiceAccountProjects.serviceAccountId, serviceAccountId));
-  if (projectIds.length) {
-    await orm.insert(smServiceAccountProjects).values(
-      projectIds.map((projectId) => ({
-        serviceAccountId,
-        projectId,
-        readAccess: 1,
-        writeAccess: 0,
-      }))
-    );
-  }
+  const grants = projectIds.map((projectId) => ({ serviceAccountId, projectId, readAccess: 1, writeAccess: 0 }));
+  await orm.batch([
+    orm.delete(smServiceAccountProjects).where(eq(smServiceAccountProjects.serviceAccountId, serviceAccountId)),
+    ...chunkRows(grants, columnCount(smServiceAccountProjects)).map((chunk) => orm.insert(smServiceAccountProjects).values(chunk)),
+  ]);
 }
 
 // Upstream ignores a machine-account project policy without Read, so only read grants count.
