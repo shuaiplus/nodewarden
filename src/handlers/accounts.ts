@@ -14,7 +14,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
-import { createRegisterVerifyToken, verifyRegisterVerifyToken } from '../utils/jwt';
+import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
   readMailConfig,
@@ -34,7 +34,6 @@ import {
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
-const TOTP_USER_VERIFICATION_TOKEN_TTL_MS = 10 * 60 * 1000;
 const TOTP_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 // CONTRACT:
@@ -102,67 +101,6 @@ function randomBase32Secret(length: number = 32): string {
     out += TOTP_BASE32_ALPHABET[byte % TOTP_BASE32_ALPHABET.length];
   }
   return out;
-}
-
-function base64UrlEncodeBytes(data: Uint8Array): string {
-  const base64 = btoa(String.fromCharCode(...data));
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function base64UrlDecodeBytes(input: string): Uint8Array {
-  let base64 = input.replace(/-/g, '+').replace(/_/g, '/');
-  while (base64.length % 4) base64 += '=';
-  const binary = atob(base64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
-}
-
-async function hmacSha256(secret: string, data: string): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  return new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)));
-}
-
-async function createTotpUserVerificationToken(env: Env, user: User, key: string): Promise<string> {
-  const payload = {
-    sub: user.id,
-    key,
-    stamp: user.securityStamp,
-    exp: Date.now() + TOTP_USER_VERIFICATION_TOKEN_TTL_MS,
-  };
-  const payloadB64 = base64UrlEncodeBytes(new TextEncoder().encode(JSON.stringify(payload)));
-  const signatureB64 = base64UrlEncodeBytes(await hmacSha256(env.JWT_SECRET, payloadB64));
-  return `${payloadB64}.${signatureB64}`;
-}
-
-async function verifyTotpUserVerificationToken(env: Env, user: User, key: string, token: string): Promise<boolean> {
-  try {
-    const [payloadB64, signatureB64] = String(token || '').split('.');
-    if (!payloadB64 || !signatureB64) return false;
-    const expected = base64UrlEncodeBytes(await hmacSha256(env.JWT_SECRET, payloadB64));
-    if (expected !== signatureB64) return false;
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecodeBytes(payloadB64))) as {
-      sub?: string;
-      key?: string;
-      stamp?: string;
-      exp?: number;
-    };
-    return (
-      payload.sub === user.id &&
-      payload.key === key &&
-      payload.stamp === user.securityStamp &&
-      typeof payload.exp === 'number' &&
-      payload.exp >= Date.now()
-    );
-  } catch {
-    return false;
-  }
 }
 
 function normalizeRecoveryCodeInput(input: string): string {
@@ -917,12 +855,13 @@ function twoFactorAuthenticatorResponse(
     Enabled: enabled,
     Key: key,
     UserVerificationToken: userVerificationToken ?? null,
-    Object: 'twoFactorAuthenticator',
+    Authenticator: { Enabled: enabled, Key: key },
+    Object: userVerificationToken ? 'twoFactorAuthenticator' : 'twoFactorAuthenticatorUpdate',
   };
 }
 
 function yubiKeyResponse(user: User): Record<string, unknown> {
-  return {
+  const provider = {
     Enabled: isYubiKeyEnabled(user),
     Key1: user.yubikeyKey1,
     Key2: user.yubikeyKey2,
@@ -930,8 +869,8 @@ function yubiKeyResponse(user: User): Record<string, unknown> {
     Key4: user.yubikeyKey4,
     Key5: user.yubikeyKey5,
     Nfc: !!user.yubikeyNfc,
-    Object: 'twoFactorYubiKey',
   };
+  return { ...provider, YubiKey: provider, Object: 'twoFactorYubiKey' };
 }
 
 // New-device verification requires an email delivery channel to send OTP
@@ -1002,7 +941,7 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
   if (!verified) return errorResponse('User verification failed.', 400);
 
   const key = normalizeTotpSecret(user.totpSecret || '') || randomBase32Secret();
-  const userVerificationToken = await createTotpUserVerificationToken(env, user, key);
+  const userVerificationToken = await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_AUTHENTICATOR, key);
   return jsonResponse(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
 }
 
@@ -1024,7 +963,10 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   const verified = await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+  return jsonResponse({
+    ...await yubiKeySettingsResponse(storage, env, user),
+    UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY),
+  });
 }
 
 // POST /api/two-factor/get-device-verification-settings
@@ -1096,7 +1038,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!key || !token || !userVerificationToken) {
     return errorResponse('Key, token and userVerificationToken are required', 400);
   }
-  if (!await verifyTotpUserVerificationToken(env, user, key, userVerificationToken)) {
+  if (!await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_AUTHENTICATOR, userVerificationToken, key)) {
     return errorResponse('User verification failed.', 400);
   }
   if (!isTotpEnabled(key)) return errorResponse('Invalid TOTP secret', 400);
@@ -1142,7 +1084,9 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   }
 
   const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const userVerificationToken = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
+  const verified = await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY, userVerificationToken)
+    || await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
   const keys = [
@@ -1203,7 +1147,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+  return jsonResponse({ ...await yubiKeySettingsResponse(storage, env, user), Object: 'twoFactorYubiKeyUpdate' });
 }
 
 // PUT/POST /api/two-factor/yubikey/config
@@ -1304,7 +1248,7 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
 }
 
 // DELETE /api/two-factor/authenticator and PUT/POST /api/two-factor/disable
-export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string, routeType?: number): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const user = await storage.getUserById(userId);
@@ -1317,14 +1261,17 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     return errorResponse('Invalid JSON', 400);
   }
 
-  const typeRaw = body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
+  const typeRaw = routeType ?? body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
   const type = typeof typeRaw === 'number' ? typeRaw : Number.parseInt(String(typeRaw), 10);
   if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
   const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const userVerificationToken = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
+  const key = normalizeTotpSecret(readBodyString(body, ['key', 'Key']));
+  const verified = (routeType !== undefined && await verifyTwoFactorUserVerificationToken(env, user, type, userVerificationToken, key))
+    || await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
@@ -1338,10 +1285,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     user.yubikeyKey5 = null;
     user.yubikeyNfc = false;
   } else {
-    const credentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
-    for (const credential of credentials) {
-      await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
-    }
+    await env.DB.prepare("DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor'").bind(user.id).run();
   }
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
@@ -1361,7 +1305,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(twoFactorProviderResponse(type, false));
+  return routeType === undefined ? jsonResponse(twoFactorProviderResponse(type, false)) : new Response(null, { status: 204 });
 }
 
 // PUT /api/accounts/totp
@@ -1398,7 +1342,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     }
     let verifiedUser = false;
     if (userVerificationToken) {
-      verifiedUser = await verifyTotpUserVerificationToken(env, user, normalizedSecret, userVerificationToken);
+      verifiedUser = await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_AUTHENTICATOR, userVerificationToken, normalizedSecret);
     }
     if (!verifiedUser && masterPasswordHash) {
       verifiedUser = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);

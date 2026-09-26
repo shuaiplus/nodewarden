@@ -30,6 +30,7 @@ import {
 } from '../utils/account-passkeys';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
 import { createRecoveryCode } from '../utils/recovery-code';
+import { createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
 
 const MAX_ACCOUNT_PASSKEYS = 5;
 const MAX_TWO_FACTOR_PASSKEYS = 5;
@@ -59,6 +60,11 @@ async function verifyUserSecret(
   return auth.verifyPassword(secret, storedHash, user.email);
 }
 
+async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: Record<string, any>): Promise<boolean> {
+  const token = String(body.userVerificationToken || body.UserVerificationToken || '');
+  return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
+}
+
 function logAccountPasskeyHandlerError(stage: string, error: unknown, details: Record<string, unknown> = {}): void {
   const err = error instanceof Error ? error : null;
   console.error('Account passkey handler failed', {
@@ -83,28 +89,23 @@ function hasCompletePrfKeySet(body: Record<string, any>): boolean {
   return !!(body.encryptedUserKey && body.encryptedPublicKey && body.encryptedPrivateKey);
 }
 
-function twoFactorWebAuthnResponse(credentials: AccountPasskeyCredential[]): Record<string, unknown> {
+function twoFactorWebAuthnResponse(credentials: AccountPasskeyCredential[], object = 'twoFactorWebAuthn'): Record<string, unknown> {
+  const keys = credentials.map((credential, index) => ({
+    Id: index + 1,
+    id: index + 1,
+    Name: credential.name,
+    name: credential.name,
+    Migrated: false,
+    migrated: false,
+  }));
   return {
     Enabled: credentials.length > 0,
     enabled: credentials.length > 0,
-    Keys: credentials.map((credential, index) => ({
-      Id: index + 1,
-      id: index + 1,
-      Name: credential.name,
-      name: credential.name,
-      Migrated: false,
-      migrated: false,
-    })),
-    keys: credentials.map((credential, index) => ({
-      Id: index + 1,
-      id: index + 1,
-      Name: credential.name,
-      name: credential.name,
-      Migrated: false,
-      migrated: false,
-    })),
-    Object: 'twoFactorWebAuthn',
-    object: 'twoFactorWebAuthn',
+    Keys: keys,
+    keys,
+    WebAuthn: { Enabled: credentials.length > 0, Keys: keys },
+    Object: object,
+    object,
   };
 }
 
@@ -353,13 +354,16 @@ export async function handleGetTwoFactorWebAuthn(request: Request, env: Env, use
 
   const storage = new StorageService(env.DB);
   const credentials = await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
-  return jsonResponse(twoFactorWebAuthnResponse(credentials));
+  return jsonResponse({
+    ...twoFactorWebAuthnResponse(credentials),
+    UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, 7),
+  });
 }
 
 export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
-  if (!(await verifyUserSecret(env, user, body))) {
+  if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
 
@@ -389,13 +393,13 @@ export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env:
     },
   });
   await saveChallenge(storage, 'TwoFactorCreate', options.challenge, userId);
-  return jsonResponse(options);
+  return jsonResponse({ ...options, Options: options, Object: 'twoFactorWebAuthnChallenge' });
 }
 
 export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
-  if (!(await verifyUserSecret(env, user, body))) {
+  if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
 
@@ -486,13 +490,13 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   });
 
   const credentials = await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor');
-  return jsonResponse(twoFactorWebAuthnResponse(credentials));
+  return jsonResponse(twoFactorWebAuthnResponse(credentials, 'twoFactorWebAuthnUpdate'));
 }
 
 export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
-  if (!(await verifyUserSecret(env, user, body))) {
+  if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
 
@@ -526,7 +530,7 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(twoFactorWebAuthnResponse(await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor')));
+  return jsonResponse(twoFactorWebAuthnResponse(await storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor'), 'twoFactorWebAuthnDelete'));
 }
 
 export async function handleGetAccountPasskeyAttestationOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {

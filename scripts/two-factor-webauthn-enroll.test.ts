@@ -24,6 +24,7 @@ const CREDENTIAL_ID_LENGTH_BYTES = 2;
 interface Enrollment {
   env: Env;
   user: User;
+  userVerificationToken: string;
   deviceResponse: {
     id: string;
     rawId: string;
@@ -37,15 +38,31 @@ type CborValue = Parameters<typeof isoCBOR.encode>[0];
 const base64Url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 
 // A software authenticator's 'none' attestation for the challenge the Worker just issued.
-async function officialEnrollment(): Promise<Enrollment> {
-  const env = await createTestEnv();
-  const user = await seedUser(env, { masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH) });
+async function officialEnrollment(context?: Pick<Enrollment, 'env' | 'user' | 'userVerificationToken'>): Promise<Enrollment> {
+  const env = context?.env ?? await createTestEnv();
+  const user = context?.user ?? await seedUser(env, { masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH) });
+  const userVerificationToken = context?.userVerificationToken ?? await authedFetch(env, {
+    method: 'POST', path: '/api/two-factor/get-webauthn', userId: user.id,
+    body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH },
+  }).then(async response => {
+    assert.equal(response.status, 200);
+    const body = await response.json() as { WebAuthn: { Enabled: boolean; Keys: unknown[] }; UserVerificationToken: string };
+    assert.equal(body.WebAuthn.Enabled, false);
+    assert.deepEqual(body.WebAuthn.Keys, []);
+    assert.ok(body.UserVerificationToken);
+    return body.UserVerificationToken;
+  });
   const options = await authedFetch(env, {
     method: 'POST',
     path: '/api/two-factor/get-webauthn-challenge',
-    body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH },
+    body: { userVerificationToken },
     userId: user.id,
-  }).then((response) => response.json() as Promise<{ challenge: string; rp: { id: string } }>);
+  }).then(async response => {
+    assert.equal(response.status, 200);
+    const body = await response.json() as { Options: { challenge: string; rp: { id: string }; excludeCredentials: unknown[] } };
+    assert.ok(Array.isArray(body.Options.excludeCredentials));
+    return body.Options;
+  });
 
   const { publicKey } = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const { x, y } = await crypto.subtle.exportKey('jwk', publicKey);
@@ -79,6 +96,7 @@ async function officialEnrollment(): Promise<Enrollment> {
   return {
     env,
     user,
+    userVerificationToken,
     deviceResponse: {
       id: base64Url(credentialId),
       rawId: base64Url(credentialId),
@@ -93,11 +111,11 @@ async function officialEnrollment(): Promise<Enrollment> {
   };
 }
 
-function putWebAuthn({ env, user }: Enrollment, deviceResponse: unknown): Promise<Response> {
+function putWebAuthn({ env, user, userVerificationToken }: Enrollment, deviceResponse: unknown): Promise<Response> {
   return authedFetch(env, {
     method: 'PUT',
     path: '/api/two-factor/webauthn',
-    body: { id: 1, name: 'Security key', masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH, deviceResponse },
+    body: { id: 1, name: 'Security key', userVerificationToken, deviceResponse },
     userId: user.id,
   });
 }
@@ -106,9 +124,37 @@ test('official web enrolls a WebAuthn two-step-login key with a PascalCase Attes
   const enrollment = await officialEnrollment();
   const response = await putWebAuthn(enrollment, enrollment.deviceResponse);
   assert.equal(response.status, 200);
-  const body = await response.json() as { Enabled: boolean; Keys: { Name: string }[] };
-  assert.equal(body.Enabled, true);
-  assert.deepEqual(body.Keys.map(({ Name }) => Name), ['Security key']);
+  const body = await response.json() as { WebAuthn: { Enabled: boolean; Keys: { Name: string }[] } };
+  assert.equal(body.WebAuthn.Enabled, true);
+  assert.deepEqual(body.WebAuthn.Keys.map(({ Name }) => Name), ['Security key']);
+
+  // The dialog keeps the original token through enrollment and deletion.
+  const second = await officialEnrollment(enrollment);
+  assert.equal((await putWebAuthn(second, second.deviceResponse)).status, 200);
+  const removed = await authedFetch(enrollment.env, {
+    method: 'DELETE', path: '/api/two-factor/webauthn', userId: enrollment.user.id,
+    body: { id: 1, userVerificationToken: enrollment.userVerificationToken },
+  });
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json() as { WebAuthn: { Keys: unknown[] } }).WebAuthn.Keys.length, 1);
+  const lastKey = await authedFetch(enrollment.env, {
+    method: 'DELETE', path: '/api/two-factor/webauthn', userId: enrollment.user.id,
+    body: { id: 1, userVerificationToken: enrollment.userVerificationToken },
+  });
+  assert.equal(lastKey.status, 400);
+
+  const { env, user, userVerificationToken } = enrollment;
+  await env.DB.prepare(`INSERT INTO webauthn_credentials
+    (id, user_id, purpose, name, public_key, credential_id, created_at, updated_at)
+    VALUES (?, ?, 'login', 'Login key', 'cHVibGlj', ?, ?, ?)`)
+    .bind('login-key', user.id, 'login-credential', user.createdAt, user.updatedAt).run();
+  const disabled = await authedFetch(env, {
+    method: 'DELETE', path: '/api/two-factor/webauthn/all', userId: user.id, body: { userVerificationToken },
+  });
+  assert.equal(disabled.status, 204);
+  assert.equal(await disabled.text(), '');
+  const remaining = await env.DB.prepare('SELECT id, purpose FROM webauthn_credentials WHERE user_id = ?').bind(user.id).all();
+  assert.deepEqual(remaining.results, [{ id: 'login-key', purpose: 'login' }]);
 });
 
 test('a WebAuthn enrollment without an attestation object in either casing is rejected', async () => {

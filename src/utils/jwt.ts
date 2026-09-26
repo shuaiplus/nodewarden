@@ -1,4 +1,6 @@
-import { JWTPayload } from '../types';
+import type { Env, JWTPayload, User } from '../types';
+import type { TwoFactorProviderType } from '../services/two-factor-providers';
+import { sha256Base64Url } from './account-passkeys';
 import { LIMITS } from '../config/limits';
 
 const hmacKeyCache = new Map<string, Promise<CryptoKey>>();
@@ -61,6 +63,42 @@ function isExpired(payload: Record<string, unknown>): boolean {
 export async function verifyHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
   const payload = await decodeSignedHs256Jwt(token, secret);
   return payload && !isExpired(payload) ? payload : null;
+}
+
+const TWO_FACTOR_USER_VERIFICATION_ISSUER = 'nodewarden|two_factor_uv';
+
+export async function createTwoFactorUserVerificationToken(
+  env: Env,
+  user: User,
+  providerType: TwoFactorProviderType,
+  totpKey?: string,
+): Promise<string> {
+  return signHs256Jwt({
+    iss: TWO_FACTOR_USER_VERIFICATION_ISSUER,
+    sub: user.id,
+    ptype: providerType,
+    ...(providerType === 0 ? { key: totpKey } : {}),
+    sst: await sha256Base64Url(user.securityStamp),
+    exp: Math.floor(Date.now() / 1000) + LIMITS.auth.twoFactorUserVerificationTtlSeconds,
+  }, env.JWT_SECRET);
+}
+
+export async function verifyTwoFactorUserVerificationToken(
+  env: Env,
+  user: User,
+  providerType: number,
+  token: string,
+  totpKey?: string,
+): Promise<boolean> {
+  const payload = await verifyHs256Jwt(token, env.JWT_SECRET);
+  return !!payload
+    && payload.iss === TWO_FACTOR_USER_VERIFICATION_ISSUER
+    && payload.sub === user.id
+    && payload.ptype === providerType
+    && typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+    && payload.exp > Math.floor(Date.now() / 1000)
+    && (providerType !== 0 || (!!totpKey && payload.key === totpKey))
+    && payload.sst === await sha256Base64Url(user.securityStamp);
 }
 
 export const REGISTER_VERIFY_ISSUER = 'nodewarden|register_verify';

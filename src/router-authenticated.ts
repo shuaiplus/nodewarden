@@ -223,14 +223,18 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/two-factor/authenticator') {
     if (method === 'PUT' || method === 'POST') return handlePutTwoFactorAuthenticator(request, env, userId);
-    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 0);
     return errorResponse('Method not allowed', 405);
   }
 
   if ((path === '/api/two-factor/yubikey' || path === '/api/two-factor/yubi-key')) {
     if (method === 'PUT' || method === 'POST') return handlePutTwoFactorYubiKey(request, env, userId);
-    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 3);
     return errorResponse('Method not allowed', 405);
+  }
+
+  if (path === '/api/two-factor/webauthn/all' && method === 'DELETE') {
+    return handleDisableTwoFactorProvider(request, env, userId, 7);
   }
 
   if (path === '/api/two-factor/webauthn') {
