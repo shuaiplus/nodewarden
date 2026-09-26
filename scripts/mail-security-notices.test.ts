@@ -23,7 +23,7 @@ test('new device mail is delivered once, respects age/flag and never blocks a lo
     env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
     assert.equal((await login('second')).status, 200);
     await drainWaitUntil();
-    if (flag === 'yes') assert.equal(readMailConfig(env).kind, 'enabled', 'malformed notice flag must not break other mail');
+    if (flag === 'yes') assert.equal(readMailConfig(env).kind, 'misconfigured', 'invalid delivery configuration must be reported');
   }
   const capture = captureEmail();
   const env = await createTestEnv(capture.overrides);

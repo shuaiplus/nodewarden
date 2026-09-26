@@ -34,8 +34,8 @@ export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FR
   if (field) { console.error('mail', { field }); return { kind: 'misconfigured' }; }
   const disableNewDevice = env.DISABLE_EMAIL_NEW_DEVICE?.toLowerCase() ?? 'false';
   const validNewDevice = ['0', '1', 'true', 'false'].includes(disableNewDevice);
-  if (!validNewDevice) console.error('mail', { field: 'DISABLE_EMAIL_NEW_DEVICE' });
-  return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour, newDeviceNotices: validNewDevice && ['0', 'false'].includes(disableNewDevice) };
+  if (!validNewDevice) { console.error('mail', { field: 'DISABLE_EMAIL_NEW_DEVICE' }); return { kind: 'misconfigured' }; }
+  return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour, newDeviceNotices: ['0', 'false'].includes(disableNewDevice) };
 }
 
 export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): Promise<MailOutcome> {
