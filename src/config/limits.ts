@@ -70,6 +70,13 @@
     // Passwordless/auth-request creation budget per IP/email/device per minute.
     // 免密/设备审批请求创建接口每 IP/邮箱/设备每分钟配额。
     authRequestRequestsPerMinute: 5,
+    // Organization invite emails one inviter may send per window, across all of their orgs:
+    // five full invite batches.
+    // 每个邀请人在每个窗口内（跨所有组织）可发送的组织邀请邮件数：五个满批次邀请。
+    orgInviteEmailsPerHour: 100,
+    // Fixed window size for the organization invite email budget in seconds.
+    // 组织邀请邮件配额的固定窗口大小（秒）。
+    orgInviteEmailWindowSeconds: 60 * 60,
     // Fixed window size for API rate limiting in seconds.
     // API 限流固定窗口大小（秒）。
     apiWindowSeconds: 60,

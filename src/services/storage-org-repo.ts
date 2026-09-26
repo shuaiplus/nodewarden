@@ -259,6 +259,15 @@ export async function listMembershipsWithAccountsByOrg(
   return rows.map(({ membership, account }) => ({ item: mapMembership(membership), account }));
 }
 
+// Invite mail sends existing accounts to login instead of signup. One query per chunk of emails
+// rather than a user lookup per invitee, which ran alongside every send in the same invocation.
+export async function listRegisteredEmails(db: D1Database, emails: string[]): Promise<Set<string>> {
+  const orm = getOrm(db);
+  const chunks = await Promise.all(chunkRows(emails, 1)
+    .map((chunk) => orm.select({ email: users.email }).from(users).where(inArray(users.email, chunk))));
+  return new Set(chunks.flat().map(({ email }) => email));
+}
+
 export async function deleteMembership(db: D1Database, id: string): Promise<void> {
   await getOrm(db).delete(organizationMemberships).where(eq(organizationMemberships.id, id));
 }

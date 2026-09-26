@@ -180,10 +180,13 @@ export class RateLimitService {
     return this.consumeStrictBudgetWithWindow(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS);
   }
 
+  // A cost above one spends several units in one step, all or nothing, so a batch either fits the
+  // remaining budget whole or is refused whole.
   async consumeStrictBudgetWithWindow(
     identifier: string,
     maxRequests: number,
-    windowSeconds: number
+    windowSeconds: number,
+    cost = 1
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
     const key = String(identifier || '').trim() || 'unknown';
     const max = Math.max(1, Math.floor(maxRequests));
@@ -205,11 +208,11 @@ export class RateLimitService {
     const update = await orm
       .update(rateLimitBuckets)
       .set({
-        count: sql`${rateLimitBuckets.count} + 1`,
+        count: sql`${rateLimitBuckets.count} + ${cost}`,
         expiresAt: windowEndMs,
         updatedAt: nowMs,
       })
-      .where(and(eq(rateLimitBuckets.bucketKey, bucketKey), sql`${rateLimitBuckets.count} < ${max}`))
+      .where(and(eq(rateLimitBuckets.bucketKey, bucketKey), sql`${rateLimitBuckets.count} + ${cost} <= ${max}`))
       .run();
 
     const allowed = Number(update.meta?.changes ?? 0) > 0;

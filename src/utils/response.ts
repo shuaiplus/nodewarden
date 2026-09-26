@@ -142,7 +142,7 @@ export function jsonResponse(data: any, status: number = 200, headers: Record<st
 }
 
 // Error response helper
-export function errorResponse(message: string, status: number = 400): Response {
+export function errorResponse(message: string, status: number = 400, headers: Record<string, string> = {}): Response {
   return jsonResponse(
     {
       error: message,
@@ -152,7 +152,8 @@ export function errorResponse(message: string, status: number = 400): Response {
         Object: 'error',
       },
     },
-    status
+    status,
+    headers
   );
 }
 

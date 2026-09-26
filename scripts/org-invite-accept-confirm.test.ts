@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 
+import { LIMITS } from '../src/config/limits';
 import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus } from '../src/services/org-types';
 import type { Env, User } from '../src/types';
@@ -398,4 +399,89 @@ test('invite mail defuses links and addresses hidden in the organization name', 
     assert.ok(!text.includes(FORWARDED_HOST), text);
     assert.ok(!text.includes('@'), text);
   });
+});
+
+// The invite mail budget is a fixed window, so start on a boundary to keep every request inside one
+// window. Returns the window length for tests that move past it.
+function pinClockToInviteMailWindow(context: TestContext): number {
+  const windowMs = LIMITS.rateLimit.orgInviteEmailWindowSeconds * MS_PER_SECOND;
+  context.mock.timers.enable({ apis: ['Date'], now: Math.floor(Date.now() / windowMs) * windowMs });
+  return windowMs;
+}
+
+// Any user can create an org and invite any address, so invite mail from EMAIL_FROM is budgeted per
+// inviter across all of their orgs. A batch that would overrun the budget mails nothing and, like a
+// failed send, saves no row.
+test('invite mail is budgeted per inviter per hour, and a batch that overruns it gets 429 with nothing mailed or saved', async (context) => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const otherOrgId = await createOrg(env, owner);
+  const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;
+  const windowSeconds = LIMITS.rateLimit.orgInviteEmailWindowSeconds;
+  const addresses = (count: number) => Array.from({ length: count }, () => `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`);
+  const windowMs = pinClockToInviteMailWindow(context);
+
+  for (let spent = 0; spent < budget - 1; spent += MAX_INVITE_EMAILS) {
+    await invite(env, owner, orgId, addresses(Math.min(MAX_INVITE_EMAILS, budget - 1 - spent)));
+  }
+  assert.equal(capture.sent.length, budget - 1);
+
+  const overrun = addresses(2);
+  const blocked = await postInvite(env, owner, otherOrgId, overrun);
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.headers.get('Retry-After'), String(windowSeconds));
+  assert.equal(await errorMessage(blocked), `Rate limit exceeded. Try again in ${windowSeconds} seconds.`);
+  assert.equal(capture.sent.length, budget - 1);
+  assert.deepEqual((await listMembers(env, owner, otherOrgId)).map((member) => member.email), [owner.email]);
+
+  context.mock.timers.tick(windowMs);
+  await invite(env, owner, otherOrgId, overrun);
+  assert.deepEqual(capture.sent.slice(budget - 1).map((message) => message.to).sort(), [...overrun].sort());
+});
+
+// A SCIM token belongs to the org, so its directory spends the org's own budget rather than the
+// owner's. Identity providers pace their retries by Retry-After, so the SCIM 429 carries it.
+test('SCIM invite mail over its org budget gets a 429 SCIM error with Retry-After and saves no row', async (context) => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;
+  const windowSeconds = LIMITS.rateLimit.orgInviteEmailWindowSeconds;
+  pinClockToInviteMailWindow(context);
+
+  for (let provisioned = 0; provisioned < budget; provisioned += 1) {
+    await provisionViaScim(env, owner, orgId, (await seedMailableUser(env)).email);
+  }
+  const overrun = await seedMailableUser(env);
+  const blocked = await postScimUser(env, owner, orgId, overrun.email);
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.headers.get('Retry-After'), String(windowSeconds));
+  assert.deepEqual(await blocked.json(), {
+    schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+    status: 429,
+    detail: `Rate limit exceeded. Try again in ${windowSeconds} seconds.`,
+  });
+  assert.equal(capture.sent.length, budget);
+  assert.ok(!(await listMembers(env, owner, orgId)).some((member) => member.email === overrun.email));
+
+  // The directory spent none of the owner's own budget.
+  await invite(env, owner, orgId, [overrun.email]);
+  assert.equal(capture.sent.at(-1)?.to, overrun.email);
+});
+
+// Official web's accept page sends existing accounts to login and everyone else to signup.
+test('one invite batch flags only the invitees that already have an account as existing users', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const registered = await seedMailableUser(env);
+  const unregistered = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
+  const orgId = await createOrg(env, owner);
+
+  await invite(env, owner, orgId, [registered.email, unregistered]);
+  const existingFlags = Object.fromEntries(capture.sent.map((message) => [message.to, inviteParams(message).get('orgUserHasExistingUser')]));
+  assert.deepEqual(existingFlags, { [registered.email]: 'true', [unregistered]: 'false' });
 });

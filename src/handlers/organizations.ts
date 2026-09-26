@@ -1,4 +1,5 @@
 import type { Env, User } from '../types';
+import { LIMITS } from '../config/limits';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import {
@@ -37,6 +38,7 @@ import { generateUUID } from '../utils/uuid';
 import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
 import { publishPlatformEvent } from '../services/queue-publisher';
+import { RateLimitService } from '../services/ratelimit';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { createOrgInviteToken, verifyOrgInviteToken } from '../utils/jwt';
 import {
@@ -60,6 +62,8 @@ const MAX_INVITE_EMAIL_LENGTH = 256;
 const INVITE_EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@]+\.\p{L}+$/u;
 
 type MessageCheck = { ok: true } | { ok: false; message: string };
+// Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
+type StatusCheck = { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
 
 function inviteEmailsCheck(emails: string[]): MessageCheck {
   if (!emails.length) return { ok: false, message: 'An email is required.' };
@@ -576,8 +580,8 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
   const invites = emails.map((email) => ({ id: generateUUID(), email }));
-  const mailed = await mailOrganizationInvites(request, env, orgId, invites);
-  if (!mailed.ok) return errorResponse(mailed.message, 502);
+  const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
+  if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
   await orgRepo.insertInvitedMemberships(env.DB, invites.map(({ id, email }) => ({
     id,
     userId: null,
@@ -601,14 +605,17 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
 
 // Upstream SendOrganizationInvitesCommand, shared by member invite and SCIM provisioning: accept
 // needs the emailed token, so every Invited row is mailed. Callers mail before saving, so a failed
-// send leaves no row behind (upstream deletes the rows it saved) and a retried request cannot pile
-// up duplicates. Without mail configured the rows stay Invited and cannot be accepted yet.
+// or refused send leaves no row behind (upstream deletes the rows it saved) and a retried request
+// cannot pile up duplicates. Without mail configured the rows stay Invited and cannot be accepted yet.
+// Any user can create an org and invite any address, so the mail spends a strict budget keyed by
+// the inviter across all of their orgs (upstream throttles the invite endpoint per IP instead).
 export async function mailOrganizationInvites(
   request: Request,
   env: Env,
   orgId: string,
+  inviter: string,
   invites: Array<{ id: string; email: string }>,
-): Promise<MessageCheck> {
+): Promise<StatusCheck> {
   if (!env.EMAIL || !getEmailSender(env)) return { ok: true };
   const vaultOrigin = organizationInviteVaultOrigin(request, env);
   if (!vaultOrigin) {
@@ -616,10 +623,24 @@ export async function mailOrganizationInvites(
     return { ok: true };
   }
 
-  const organization = await orgRepo.getOrganization(env.DB, orgId);
-  const storage = new StorageService(env.DB);
   // Documentation domains bounce and hurt sender reputation, as in register verification.
   const deliverable = invites.filter(({ email }) => !isReservedDocumentationEmail(email));
+  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+    `org-invite-mail:${inviter}`,
+    LIMITS.rateLimit.orgInviteEmailsPerHour,
+    LIMITS.rateLimit.orgInviteEmailWindowSeconds,
+    deliverable.length,
+  );
+  if (!budget.allowed) {
+    return {
+      ok: false,
+      status: 429,
+      message: `Rate limit exceeded. Try again in ${budget.retryAfterSeconds} seconds.`,
+      headers: { 'Retry-After': String(budget.retryAfterSeconds) },
+    };
+  }
+  const organization = await orgRepo.getOrganization(env.DB, orgId);
+  const registered = await orgRepo.listRegisteredEmails(env.DB, deliverable.map(({ email }) => email));
   try {
     await Promise.all(deliverable.map(async ({ id, email }) => sendOrganizationInviteEmail(env, {
       vaultOrigin,
@@ -628,11 +649,11 @@ export async function mailOrganizationInvites(
       organizationName: organization?.name ?? '',
       email,
       token: await createOrgInviteToken(env.JWT_SECRET, id, email),
-      hasExistingUser: !!(await storage.getUser(email)),
+      hasExistingUser: registered.has(email),
     })));
   } catch (error) {
     console.error('Organization invite email failed:', error instanceof Error ? error.message : String(error));
-    return { ok: false, message: 'Unable to send invitation email' };
+    return { ok: false, status: 502, message: 'Unable to send invitation email', headers: {} };
   }
   return { ok: true };
 }

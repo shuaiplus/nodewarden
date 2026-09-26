@@ -6,19 +6,19 @@ import { generateUUID } from '../utils/uuid';
 import { mailOrganizationInvites, verifyScimBearer } from './organizations';
 import { publishPlatformEvent } from '../services/queue-publisher';
 
-function scimJson(data: unknown, status = 200): Response {
+function scimJson(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/scim+json' },
+    headers: { 'Content-Type': 'application/scim+json', ...headers },
   });
 }
 
-function scimError(status: number, detail: string): Response {
+function scimError(status: number, detail: string, headers: Record<string, string> = {}): Response {
   return scimJson({
     schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
     status,
     detail,
-  }, status);
+  }, status, headers);
 }
 
 export async function handleScimRoute(request: Request, env: Env, path: string): Promise<Response | null> {
@@ -96,10 +96,11 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
       updatedAt: now,
     };
     // Upstream PostUserCommand invites through the normal invite path, so the invitee gets the token
-    // that accept requires. Staged rows have no account to accept with yet.
+    // that accept requires. Staged rows have no account to accept with yet. The SCIM token belongs
+    // to the org rather than a user, so the org's directory is the inviter that spends the budget.
     if (existingUser) {
-      const mailed = await mailOrganizationInvites(request, env, orgId, [member]);
-      if (!mailed.ok) return scimError(502, mailed.message);
+      const mailed = await mailOrganizationInvites(request, env, orgId, `scim:${orgId}`, [member]);
+      if (!mailed.ok) return scimError(mailed.status, mailed.message, mailed.headers);
     }
     await orgRepo.saveMembership(env.DB, member);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
