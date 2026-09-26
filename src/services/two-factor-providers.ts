@@ -25,15 +25,19 @@ export function twoFactorClearStatements(
   db: D1Database,
   userId: string,
   { recoveryCode, securityStamp }: { recoveryCode: string | null; securityStamp: string },
+  expected?: Pick<User, 'securityStamp' | 'totpRecoveryCode'>,
 ): D1PreparedStatement[] {
+  const verifiedSnapshot = expected ? " AND status = 'active' AND security_stamp = ? AND totp_recovery_code = ?" : '';
+  // Each dependent delete runs only if this batch installed its fresh stamp.
+  const cleared = 'EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)';
   return [
     db.prepare(`UPDATE users SET totp_secret = NULL, two_factor_email = NULL, totp_recovery_code = ?,
       yubikey_key1 = NULL, yubikey_key2 = NULL, yubikey_key3 = NULL, yubikey_key4 = NULL,
-      yubikey_key5 = NULL, yubikey_nfc = 0, security_stamp = ?, updated_at = ? WHERE id = ?`)
-      .bind(recoveryCode, securityStamp, new Date().toISOString(), userId),
-    db.prepare("DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor'").bind(userId),
-    db.prepare('DELETE FROM two_factor WHERE user_id = ?').bind(userId),
-    db.prepare('DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ?').bind(userId),
-    db.prepare('DELETE FROM session WHERE user_id = ?').bind(userId),
+      yubikey_key5 = NULL, yubikey_nfc = 0, security_stamp = ?, updated_at = ? WHERE id = ?${verifiedSnapshot}`)
+      .bind(recoveryCode, securityStamp, new Date().toISOString(), userId, ...(expected ? [expected.securityStamp, expected.totpRecoveryCode] : [])),
+    db.prepare(`DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND ${cleared}`).bind(userId, userId, securityStamp),
+    db.prepare(`DELETE FROM two_factor WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
+    db.prepare(`DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
+    db.prepare(`DELETE FROM session WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
   ];
 }

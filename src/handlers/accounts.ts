@@ -1619,11 +1619,16 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
     return errorResponse('Invalid credentials or recovery code', 400);
   }
 
-  user.totpRecoveryCode = createRecoveryCode();
-  await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
-    recoveryCode: user.totpRecoveryCode,
+  const nextRecoveryCode = createRecoveryCode();
+  const [cleared] = await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
+    recoveryCode: nextRecoveryCode,
     securityStamp: generateUUID(),
-  }));
+  }, user));
+  if (!cleared.meta.changes) {
+    notifyFailedTwoFactor(env, request, user, 8);
+    await rateLimit.recordFailedLogin(recoverLimitKey);
+    return errorResponse('Invalid credentials or recovery code', 400);
+  }
   AuthService.invalidateUserCache(user.id);
   notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
   await rateLimit.clearLoginAttempts(recoverLimitKey);
@@ -1640,7 +1645,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   return jsonResponse({
     success: true,
     twoFactorEnabled: false,
-    newRecoveryCode: user.totpRecoveryCode,
+    newRecoveryCode: nextRecoveryCode,
     object: 'twoFactorRecovery',
   });
 }
