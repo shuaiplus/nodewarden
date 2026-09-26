@@ -441,6 +441,7 @@ export async function serviceAccountCounts(db: D1Database, account: SmServiceAcc
 }
 
 export const peoplePolicyTables = {
+  secret: { member: 'sm_secret_members', group: 'sm_secret_groups', target: 'secret_id' },
   project: { member: 'sm_project_members', group: 'sm_project_groups', target: 'project_id' },
   serviceAccount: { member: 'sm_service_account_members', group: 'sm_service_account_groups', target: 'service_account_id' },
 } as const;
@@ -469,6 +470,9 @@ export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget
 }
 
 export const machinePolicyTables = {
+  secretMembers: { table: 'sm_secret_members', target: 'secret_id', grantee: 'membership_id', read: false },
+  secretGroups: { table: 'sm_secret_groups', target: 'secret_id', grantee: 'group_id', read: false },
+  secretServiceAccounts: { table: 'sm_secret_service_accounts', target: 'secret_id', grantee: 'service_account_id', read: false },
   projectServiceAccounts: { table: 'sm_service_account_projects', target: 'project_id', grantee: 'service_account_id', read: true },
   serviceAccountProjects: { table: 'sm_service_account_projects', target: 'service_account_id', grantee: 'project_id', read: true },
 } as const;
@@ -491,5 +495,10 @@ export async function readProjectMachinePolicies(db: D1Database, orgId: string, 
 
 export async function readGrantedProjects(db: D1Database, orgId: string, id: string) {
   const rows = await db.prepare('SELECT p.id, p.name, sp.write_access FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
+  return rows.results;
+}
+
+export async function readSecretMachinePolicies(db: D1Database, orgId: string, id: string) {
+  const rows = await db.prepare('SELECT sa.id, sa.name, sp.write_access FROM sm_secret_service_accounts sp JOIN sm_service_accounts sa ON sa.id = sp.service_account_id AND sa.org_id = ? WHERE sp.secret_id = ?').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
   return rows.results;
 }

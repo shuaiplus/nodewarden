@@ -1,3 +1,4 @@
+import { policyConflict, prepareSecretPolicies } from './sm-access-policies';
 import { isSerializedEncString } from '../utils/account-passkeys';
 import { projectAccess, serviceAccountAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
 import type { Env } from '../types';
@@ -59,11 +60,7 @@ async function secretInput(request: Request) {
   if (body.projectIds != null && (!Array.isArray(body.projectIds) || !body.projectIds.every(isUUID))) return errorResponse('ProjectIds must be an array of GUIDs.', 400);
   const projectIds = (body.projectIds as string[] | null | undefined)?.map(id => id.toLowerCase()) ?? [];
   if (projectIds.length > 1) return errorResponse('Only one project assignment is supported.', 400, {}, { ProjectIds: ['Only one project assignment is supported.'] });
-  if (body.accessPoliciesRequests != null) {
-    const policy = body.accessPoliciesRequests;
-    if (typeof policy !== 'object' || Array.isArray(policy) || Object.values(policy).some(items => !Array.isArray(items) || items.length)) return errorResponse('Secret access policies are not supported yet', 400);
-  }
-  return { key: body.key, value: body.value, note: body.note, projectIds };
+  return { key: body.key, value: body.value, note: body.note, projectIds, accessPoliciesRequests: body.accessPoliciesRequests };
 }
 
 export async function handleCreateSecret(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
@@ -75,7 +72,10 @@ export async function handleCreateSecret(request: Request, env: Env, userId: str
   if (!canCreateSecret(context.actor, context.grants, input.projectIds[0])) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
   const secret = { ...input, id: generateUUID(), orgId, createdAt: now, updatedAt: now, deletedAt: null };
-  await smRepo.createSecret(env.DB, secret);
+  const policies = await prepareSecretPolicies(env, context, orgId, secret.id, input.accessPoliciesRequests, true);
+  if (policies instanceof Response) return policies;
+  try { await smRepo.createSecret(env.DB, secret, policies); }
+  catch (error) { const conflict = policyConflict(error); if (conflict) return conflict; throw error; }
   await publishSecretChanged(env, orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
 }
@@ -98,7 +98,11 @@ export async function handleUpdateSecret(request: Request, env: Env, userId: str
   if (!(await allProjectsInOrg(env, existing.orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
   if (!canUpdateSecret(context.actor, context.grants, existing, input.projectIds)) return errorResponse('Not found', 404);
   const secret = { ...existing, ...input, updatedAt: new Date().toISOString() };
-  if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds, existing.updatedAt)) return errorResponse('Not found', 404);
+  const policies = await prepareSecretPolicies(env, context, secret.orgId, secret.id, input.accessPoliciesRequests, false);
+  if (policies instanceof Response) return policies;
+  try {
+    if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds, existing.updatedAt, policies)) return errorResponse('Not found', 404);
+  } catch (error) { const conflict = policyConflict(error); if (conflict) return conflict; throw error; }
   await publishSecretChanged(env, secret.orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }

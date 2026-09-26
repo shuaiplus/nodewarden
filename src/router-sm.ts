@@ -1,4 +1,4 @@
-import { handleMachinePolicies, handlePotentialMachines, handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
+import { handleMachinePolicies, handlePotentialMachines, handleSecretPolicies, handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
 import type { Env } from './types';
 import { errorResponse } from './utils/response';
 import {
@@ -25,6 +25,8 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  const secretPolicies = path.match(/^\/api\/secrets\/([a-f0-9-]+)\/access-policies$/i);
+  if (secretPolicies && method === 'GET') return handleSecretPolicies(env, userId, secretPolicies[1]);
   const machinePolicies = path.match(/^\/api\/projects\/([a-f0-9-]+)\/access-policies\/service-accounts$/i);
   if (machinePolicies && (method === 'GET' || method === 'PUT')) return handleMachinePolicies(request, env, userId, 'project', machinePolicies[1]);
   const granted = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/granted-policies$/i);
