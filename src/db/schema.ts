@@ -6,6 +6,7 @@
 // migration.
 import { sql } from 'drizzle-orm';
 import {
+  customType,
   foreignKey,
   index,
   integer,
@@ -15,6 +16,17 @@ import {
   unique,
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
+
+// Better Auth supplies Date objects; Bitwarden repositories use milliseconds or ISO strings.
+// Preserve their stored SQL types and read values. The auth adapter converts reads back to Date.
+const authTimestamp = customType<{ data: number; driverData: number }>({
+  dataType: () => 'integer',
+  toDriver: (value: number | Date) => value instanceof Date ? value.getTime() : value,
+});
+const authIsoTimestamp = customType<{ data: string; driverData: string }>({
+  dataType: () => 'text',
+  toDriver: (value: string | Date) => value instanceof Date ? value.toISOString() : value,
+});
 
 export const config = sqliteTable('config', {
   key: text('key').primaryKey(),
@@ -50,16 +62,16 @@ export const users = sqliteTable('users', {
   userKeyId: text('user_key_id'),
   emailVerified: integer('email_verified').notNull().default(1),
   image: text('image'),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull(),
+  createdAt: authIsoTimestamp('created_at').notNull(),
+  updatedAt: authIsoTimestamp('updated_at').notNull(),
 });
 
 export const session = sqliteTable('session', {
   id: text('id').primaryKey(),
-  expiresAt: integer('expires_at').notNull(),
+  expiresAt: authTimestamp('expires_at').notNull(),
   token: text('token').notNull().unique(),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
+  createdAt: authTimestamp('created_at').notNull(),
+  updatedAt: authTimestamp('updated_at').notNull(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
   userId: text('user_id').notNull(),
@@ -83,12 +95,12 @@ export const account = sqliteTable('account', {
   accessToken: text('access_token'),
   refreshToken: text('refresh_token'),
   idToken: text('id_token'),
-  accessTokenExpiresAt: integer('access_token_expires_at'),
-  refreshTokenExpiresAt: integer('refresh_token_expires_at'),
+  accessTokenExpiresAt: authTimestamp('access_token_expires_at'),
+  refreshTokenExpiresAt: authTimestamp('refresh_token_expires_at'),
   scope: text('scope'),
   password: text('password'),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
+  createdAt: authTimestamp('created_at').notNull(),
+  updatedAt: authTimestamp('updated_at').notNull(),
 }, (table) => [
   foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
   uniqueIndex('idx_account_provider_account').on(table.providerId, table.accountId),
@@ -99,9 +111,9 @@ export const verification = sqliteTable('verification', {
   id: text('id').primaryKey(),
   identifier: text('identifier').notNull(),
   value: text('value').notNull(),
-  expiresAt: integer('expires_at').notNull(),
-  createdAt: integer('created_at'),
-  updatedAt: integer('updated_at'),
+  expiresAt: authTimestamp('expires_at').notNull(),
+  createdAt: authTimestamp('created_at'),
+  updatedAt: authTimestamp('updated_at'),
 }, (table) => [
   index('idx_verification_identifier').on(table.identifier),
 ]);
