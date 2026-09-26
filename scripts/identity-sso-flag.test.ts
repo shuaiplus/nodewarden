@@ -7,7 +7,7 @@ import { PolicyType } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { verifyJWT } from '../src/utils/jwt';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, seedUser, captureEmail, drainWaitUntil, MAILABLE_DOMAIN } from './support/env';
 
 const SSO_CONFIG = {
   SSO_ENABLED: '1',
@@ -49,8 +49,9 @@ test('a client-sent sso flag does not replace password verification', async () =
 });
 
 test('verified SSO signs in an SSO-only account with a server-hashed password and still requires 2FA', async (t) => {
-  const env = await createTestEnv({ ...SSO_CONFIG, SSO_ONLY: '1' });
-  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
+  const capture = captureEmail();
+  const env = await createTestEnv({ ...capture.overrides, ...SSO_CONFIG, SSO_ONLY: '1' });
+  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), email: `sso@${MAILABLE_DOMAIN}`, createdAt: '2020-01-01T00:00:00.000Z' });
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'test-idp' })).toString('base64url');
   const claims = Buffer.from(JSON.stringify({
@@ -81,7 +82,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
 
   const exchange = (code: string) => authedFetch(env, {
     method: 'POST', path: TOKEN_PATH,
-    body: new URLSearchParams({ grant_type: 'authorization_code', code }),
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, deviceIdentifier: 'sso-device' }),
   });
   const rejected = await exchange('invalid-code');
   assert.equal(rejected.status, 400);
@@ -89,6 +90,9 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
 
   const accepted = await exchange('valid-code');
   assert.equal(accepted.status, 200);
+  await drainWaitUntil();
+  assert.equal(capture.sent.length, 1);
+  assert.match(capture.sent[0].subject, /New device/);
   const result = await accepted.json() as { access_token: string };
   assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
 

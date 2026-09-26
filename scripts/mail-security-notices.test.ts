@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
+import { hashPassword } from '../src/services/auth-password';
+import { readMailConfig } from '../src/services/mail';
+const password = 'client-password-hash';
+const old = '2020-01-01T00:00:00.000Z';
+
+test('new device mail is delivered once, respects age/flag and never blocks a login', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(console, 'warn', () => {});
+  for (const flag of [undefined, 'true', '1', 'yes']) {
+    const capture = captureEmail();
+    const env = await createTestEnv({ ...capture.overrides, DISABLE_EMAIL_NEW_DEVICE: flag });
+    const user = await seedUser(env, { email: `security@${MAILABLE_DOMAIN}`, createdAt: old, masterPasswordHash: await hashPassword(password) });
+    const login = (device: string) => authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password, deviceIdentifier: device, deviceType: '9' } });
+    assert.equal((await login('first')).status, 200);
+    await drainWaitUntil();
+    assert.equal(capture.sent.length, flag === undefined ? 1 : 0);
+    assert.equal((await login('first')).status, 200);
+    await drainWaitUntil();
+    assert.equal(capture.sent.length, flag === undefined ? 1 : 0);
+    env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
+    assert.equal((await login('second')).status, 200);
+    await drainWaitUntil();
+    if (flag === 'yes') assert.equal(readMailConfig(env).kind, 'enabled', 'malformed notice flag must not break other mail');
+  }
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
+  for (const overrides of [{ email: `young@${MAILABLE_DOMAIN}` }, { email: 'reserved@example.test', createdAt: old }]) {
+    const user = await seedUser(env, { ...overrides, masterPasswordHash: await hashPassword(password) });
+    assert.equal((await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password, deviceIdentifier: crypto.randomUUID() } })).status, 200);
+  }
+  await drainWaitUntil();
+  assert.equal(capture.sent.length, 0);
+});
+
+test('API-key grants notify a new device', async () => {
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
+  const apiKey = 'a'.repeat(30);
+  const user = await seedUser(env, { email: `api@${MAILABLE_DOMAIN}`, createdAt: old, apiKey });
+  const response = await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'client_credentials', client_id: `user.${user.id}`, client_secret: apiKey, scope: 'api', deviceIdentifier: 'api-device' } });
+  assert.equal(response.status, 200);
+  await drainWaitUntil();
+  assert.equal(capture.sent.length, 1);
+  assert.match(capture.sent[0].subject, /New device/);
+});

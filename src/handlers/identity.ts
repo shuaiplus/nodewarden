@@ -1,3 +1,5 @@
+import { readMailConfig } from '../services/mail';
+import { notifyMail } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
@@ -7,7 +9,7 @@ import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken } from '../utils/jwt';
 import { getSafeJwtSecret } from '../utils/direct-upload';
-import { readAuthRequestDeviceInfo } from '../utils/device';
+import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { issueSendAccessToken } from './sends';
@@ -60,11 +62,11 @@ async function resolveDeviceSession(
   storage: StorageService,
   userId: string,
   deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
-): Promise<{ identifier: string; sessionStamp: string } | null> {
+): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
   if (!deviceInfo.deviceIdentifier) return null;
   const existingDevice = await storage.getDevice(userId, deviceInfo.deviceIdentifier);
   const sessionStamp = String(existingDevice?.sessionStamp || '').trim() || generateUUID();
-  return { identifier: deviceInfo.deviceIdentifier, sessionStamp };
+  return { identifier: deviceInfo.deviceIdentifier, sessionStamp, isNewDevice: !existingDevice };
 }
 
 function resolveRefreshClientType(request: Request, body: Record<string, string>): string {
@@ -79,7 +81,7 @@ async function persistAndResolveDeviceSession(
   storage: StorageService,
   userId: string,
   deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
-): Promise<{ identifier: string; sessionStamp: string } | null> {
+): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
   const candidate = await resolveDeviceSession(storage, userId, deviceInfo);
   if (!candidate) return null;
   await storage.upsertDevice(
@@ -91,7 +93,13 @@ async function persistAndResolveDeviceSession(
   );
   const persisted = await storage.getDevice(userId, candidate.identifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
-  return { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp };
+  return { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: candidate.isNewDevice };
+}
+
+function notifyNewDevice(env: Env, request: Request, user: User, type: number): void {
+  const config = readMailConfig(env);
+  if (config.kind !== 'enabled' || !config.newDeviceNotices || Date.now() - Date.parse(user.createdAt) < LIMITS.mail.newDeviceMinAccountAgeSeconds * 1000) return;
+  notifyMail(env, user.email, 'newDeviceLogin', { device: deviceTypeName(type), time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
 }
 
 function readDevicePushToken(body: Record<string, string>): string {
@@ -621,6 +629,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     // Persist device only after successful password + (optional) 2FA verification.
     const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
       await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
     }
@@ -737,6 +746,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
     const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
       await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
     }
@@ -879,6 +889,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     // Persist device only after successful client credential verification.
     const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
       await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
     }

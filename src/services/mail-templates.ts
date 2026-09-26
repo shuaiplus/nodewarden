@@ -4,6 +4,13 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  newDeviceLogin: {
+    throttle: 'exempt',
+    render: (model: { device: string; time: string; ip: string }): MailContent => ({
+      subject: 'New device signed in to NodeWarden',
+      paragraphs: [`A new ${sanitizeForEmail(model.device)} device signed in to your account.`, `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password and revoke your sessions.'],
+    }),
+  },
   adminSignIn: {
     throttle: 'exempt',
     render: (model: { url: SafeUrl }): MailContent => ({

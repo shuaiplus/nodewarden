@@ -19,12 +19,12 @@ export interface SendEmailBinding {
 }
 export const EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@,;<>"()\[\]\\]+\.\p{L}+$/u;
 export type MailConfig = { kind: 'disabled' } | { kind: 'misconfigured' }
-  | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string }; sendsPerHour: number };
+  | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string }; sendsPerHour: number; newDeviceNotices: boolean };
 export type MailOutcome = { kind: 'sent' } | { kind: 'disabled' } | { kind: 'misconfigured' }
   | { kind: 'throttled'; retryAfterSeconds: number } | { kind: 'failed'; code: string };
 export type StatusCheck = { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
 
-export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME' | 'EMAIL_SENDS_PER_HOUR'>): MailConfig {
+export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME' | 'EMAIL_SENDS_PER_HOUR' | 'DISABLE_EMAIL_NEW_DEVICE'>): MailConfig {
   if (!env.EMAIL) return { kind: 'disabled' };
   const email = (env.EMAIL_FROM ?? '').trim();
   const name = env.EMAIL_FROM_NAME?.trim() || 'NodeWarden';
@@ -32,7 +32,10 @@ export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FR
   const field = !EMAIL_PATTERN.test(email) || email.length > 256 ? 'EMAIL_FROM'
     : /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(env.EMAIL_FROM_NAME ?? '') ? 'EMAIL_FROM_NAME' : env.EMAIL_SENDS_PER_HOUR !== undefined && (!/^[1-9][0-9]*$/.test(env.EMAIL_SENDS_PER_HOUR) || !Number.isSafeInteger(sendsPerHour)) ? 'EMAIL_SENDS_PER_HOUR' : null;
   if (field) { console.error('mail', { field }); return { kind: 'misconfigured' }; }
-  return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour };
+  const disableNewDevice = env.DISABLE_EMAIL_NEW_DEVICE?.toLowerCase() ?? 'false';
+  const validNewDevice = ['0', '1', 'true', 'false'].includes(disableNewDevice);
+  if (!validNewDevice) console.error('mail', { field: 'DISABLE_EMAIL_NEW_DEVICE' });
+  return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour, newDeviceNotices: validNewDevice && ['0', 'false'].includes(disableNewDevice) };
 }
 
 export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): Promise<MailOutcome> {
