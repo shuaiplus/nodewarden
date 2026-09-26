@@ -8,6 +8,7 @@ function mapUserRow(row: typeof users.$inferSelect): User {
   return {
     id: row.id,
     email: row.email,
+    emailVerified: !!row.emailVerified,
     name: row.name,
     masterPasswordHint: row.masterPasswordHint,
     masterPasswordHash: row.masterPasswordHash,
@@ -41,6 +42,7 @@ function userValues(user: User) {
   return {
     id: user.id,
     email: user.email.toLowerCase(),
+    emailVerified: user.emailVerified ? 1 : 0,
     name: user.name,
     masterPasswordHint: user.masterPasswordHint,
     masterPasswordHash: user.masterPasswordHash,
@@ -117,7 +119,6 @@ export async function saveUser(db: D1Database, user: User, rotateSecurityStamp =
         kdfMemory: values.kdfMemory,
         kdfParallelism: values.kdfParallelism,
         ...(rotateSecurityStamp ? { securityStamp: values.securityStamp } : {}),
-        role: values.role,
         verifyDevices: values.verifyDevices,
         totpSecret: values.totpSecret,
         totpRecoveryCode: values.totpRecoveryCode,
@@ -141,13 +142,13 @@ export async function createFirstUser(db: D1Database, user: User): Promise<boole
   const values = userValues(user);
   const result = await getOrm(db).run(sql`
     INSERT INTO users (
-      id, email, name, master_password_hint, master_password_hash, key, private_key, public_key,
+      id, email, email_verified, name, master_password_hint, master_password_hash, key, private_key, public_key,
       kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices,
       totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5,
       yubikey_nfc, api_key, created_at, updated_at
     )
     SELECT
-      ${values.id}, ${values.email}, ${values.name}, ${values.masterPasswordHint}, ${values.masterPasswordHash},
+      ${values.id}, ${values.email}, ${values.emailVerified}, ${values.name}, ${values.masterPasswordHint}, ${values.masterPasswordHash},
       ${values.key}, ${values.privateKey}, ${values.publicKey}, ${values.kdfType}, ${values.kdfIterations},
       ${values.kdfMemory}, ${values.kdfParallelism}, ${values.securityStamp}, ${values.role}, ${values.status},
       ${values.verifyDevices}, ${values.totpSecret}, ${values.totpRecoveryCode}, ${values.yubikeyKey1},

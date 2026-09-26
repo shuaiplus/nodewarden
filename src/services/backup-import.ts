@@ -1,3 +1,4 @@
+import { syncVaultAdminRoles } from './vault-admin-role';
 import { count, eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
@@ -99,13 +100,13 @@ async function getTableCreateSql(db: D1Database, table: BackupTableName): Promis
 }
 
 function buildShadowTableCreateSql(createSql: string, table: BackupTableName): string {
-  const tablePattern = new RegExp(`^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|${table})(?=\\s*\\()`, 'i');
+  const tablePattern = new RegExp(`^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`, 'i');
   let next = createSql.replace(tablePattern, `CREATE TABLE "${shadowTableName(table)}"`);
   if (next === createSql) {
     throw new Error(`Restore shadow schema could not rewrite CREATE TABLE statement for ${table}`);
   }
   for (const currentTable of BACKUP_TABLES) {
-    const referencePattern = new RegExp(`\\bREFERENCES\\s+(?:\"${currentTable}\"|${currentTable})(?=\\s*\\()`, 'gi');
+    const referencePattern = new RegExp(`\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`, 'gi');
     next = next.replace(
       referencePattern,
       `REFERENCES "${shadowTableName(currentTable)}"`
@@ -305,6 +306,7 @@ async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['
     config: await prepareImportedConfigRows(env, payload.config || [], payload.users || []),
     users: cloneRows(payload.users || []).map((row) => ({
       ...row,
+      email_verified: row.email_verified ?? 1,
       verify_devices: row.verify_devices ?? 0,
       yubikey_nfc: row.yubikey_nfc ?? 0,
     })),
@@ -642,7 +644,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
     buildInsertStatements(
       db,
       tableName('users'),
-      ['id', 'email', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
+      ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
       payload.users || []
     )
   );
@@ -777,6 +779,7 @@ export async function importBackupArchiveBytes(
       replaceExisting,
     });
     await swapShadowTablesIntoPlace(env.DB);
+    await syncVaultAdminRoles(env);
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
     if (replaceExisting && previousBlobKeys.size) {
       const nextBlobKeys = await collectCurrentBlobKeys(env.DB).catch(() => null);
@@ -918,6 +921,7 @@ export async function importRemoteBackupArchiveBytes(
       replaceExisting,
     });
     await swapShadowTablesIntoPlace(env.DB);
+    await syncVaultAdminRoles(env);
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
 
     if (replaceExisting && previousBlobKeys.size) {

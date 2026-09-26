@@ -140,7 +140,7 @@ test('sole Owners and item creators without a confirmed successor are refused wi
 
 test('deleting the last active vault admin is refused even if an inactive admin exists', async () => {
   const f = await setup();
-  await f.storage.saveUser({ ...f.target, role: 'admin' });
+  await f.env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(f.target.id).run();
   await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.admin.id).run();
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'last-vault-admin' });
   await assertIntact(f);
@@ -150,7 +150,7 @@ test('deleting the last active vault admin is refused even if an inactive admin 
 test('a concurrent successor revocation or admin deactivation makes every batch write a no-op', async () => {
   for (const change of ['successor', 'admin']) {
     const f = await setup();
-    if (change === 'admin') await f.storage.saveUser({ ...f.target, role: 'admin' });
+    if (change === 'admin') await f.env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(f.target.id).run();
     const batch = f.env.DB.batch.bind(f.env.DB);
     f.env.DB.batch = async (statements) => {
       if (change === 'successor') {

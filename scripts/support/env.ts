@@ -85,6 +85,7 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
   const user: User = {
     id,
     email: `${id}@example.test`,
+    emailVerified: true,
     name: 'Test User',
     masterPasswordHint: null,
     masterPasswordHash: 'test-master-password-hash',

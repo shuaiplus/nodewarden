@@ -2,6 +2,7 @@ import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { syncVaultAdminRoles } from '../services/vault-admin-role';
 import { deleteUserAccount } from '../services/account-deletion';
 import { notifyUserLogout } from '../durable/notifications-hub';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
@@ -343,6 +344,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   const user: User = {
     id: generateUUID(),
     email,
+    emailVerified: !!parsed.emailVerificationToken,
     name: name || email,
     masterPasswordHint,
     masterPasswordHash: serverHash,
@@ -392,7 +394,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
       metadata: { email: user.email, ...auditRequestMetadata(request) },
     });
     notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
-    return registerSuccessResponse(user.role);
+    await syncVaultAdminRoles(env);
+    return registerSuccessResponse((await storage.getUserById(user.id))!.role);
   }
 
   if (!inviteCode && !isOpenRegistrationEnabled(env)) {
@@ -443,7 +446,8 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   });
 
   notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
-  return registerSuccessResponse(user.role);
+  await syncVaultAdminRoles(env);
+  return registerSuccessResponse((await storage.getUserById(user.id))!.role);
 }
 
 function registerSuccessResponse(role: User['role']): Response {

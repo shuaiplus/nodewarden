@@ -48,6 +48,7 @@ const ALLOWED_METADATA_KEYS = new Set([
   'deviceType',
   'reason',
   'status',
+  'role',
   'verifyDevices',
   'changed',
   'removed',

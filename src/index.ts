@@ -1,4 +1,5 @@
 import { purgeSecretsTrash } from './services/storage-secret-repo';
+import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
@@ -65,6 +66,11 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
     dbInitPromise = (async () => {
       const storage = new StorageService(env.DB);
       await storage.initializeDatabase();
+      try {
+        await syncVaultAdminRoles(env);
+      } catch {
+        console.error('Vault administrator role sync failed during initialization');
+      }
       dbInitialized = true;
       dbInitError = null;
     })()

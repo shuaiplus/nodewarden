@@ -65,6 +65,7 @@ export interface Attachment {
 export interface User {
   id: string;
   email: string;
+  emailVerified: boolean;
   name: string | null;
   masterPasswordHint: string | null;
   masterPasswordHash: string;

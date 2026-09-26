@@ -25,3 +25,5 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 
 - All transactional mail goes through `sendMail` and data-only templates. Links use configured vault origins or the Worker request origin, never `X-Forwarded-Host`.
 - Portal admins come from `ADMIN_EMAILS`, independently of `users.role`; portal handlers render HTML and never call `errorResponse`. Keep `/admin` off the official-web Pages proxy.
+
+- With `ADMIN_EMAILS` configured, `users.role` is derived by `syncVaultAdminRoles` from verified addresses, with a no-lockout guard. Do not write roles outside the guarded bootstrap, sync, or backup-import paths. Generic `saveUser` preserves role, status and email verification; intentional security-stamp rotations must explicitly opt in.
