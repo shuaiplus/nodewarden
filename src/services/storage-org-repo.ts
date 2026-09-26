@@ -256,7 +256,7 @@ export async function listMembershipsWithAccountsByOrg(
     .select({
       membership: organizationMemberships,
       account: {
-        name: users.name, email: users.email, totpSecret: users.totpSecret,
+        name: users.name, email: users.email, totpSecret: users.totpSecret, twoFactorEmail: users.twoFactorEmail,
         yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2, yubikeyKey3: users.yubikeyKey3,
         yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
       },

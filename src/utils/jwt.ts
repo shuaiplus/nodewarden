@@ -23,6 +23,11 @@ function base64UrlDecode(str: string): Uint8Array {
   return bytes;
 }
 
+export async function hmacSha256Base64Url(secret: string, data: string): Promise<string> {
+  const signature = await crypto.subtle.sign('HMAC', await getHmacKey(secret), new TextEncoder().encode(data));
+  return base64UrlEncode(new Uint8Array(signature));
+}
+
 export async function signHs256Jwt(payload: Record<string, unknown>, secret: string): Promise<string> {
   const header = { alg: 'HS256', typ: 'JWT' };
   const encoder = new TextEncoder();

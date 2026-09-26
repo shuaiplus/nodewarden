@@ -16,6 +16,9 @@ import {
   handleSetTotpStatus,
   handleGetTotpRecoveryCode,
   handleGetTwoFactorProviders,
+  handleGetTwoFactorEmail,
+  handleSendTwoFactorEmail,
+  handlePutTwoFactorEmail,
   handleGetTwoFactorAuthenticator,
   handlePutTwoFactorAuthenticator,
   handleGetTwoFactorYubiKey,
@@ -152,17 +155,23 @@ export async function handleAuthenticatedRoute(
   }
 
   const emailTwoFactorPaths = new Set([
-    '/api/two-factor/get-email',
-    '/two-factor/get-email',
-    '/api/two-factor/send-email',
-    '/two-factor/send-email',
     '/api/two-factor/send-email-login',
     '/two-factor/send-email-login',
-    '/api/two-factor/email',
-    '/two-factor/email',
   ]);
   if (emailTwoFactorPaths.has(path) && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
     return unsupportedResponse('Email two-step login is not supported by this server.');
+  }
+
+  if ((path === '/api/two-factor/get-email' || path === '/two-factor/get-email') && method === 'POST') {
+    return handleGetTwoFactorEmail(request, env, userId);
+  }
+  if ((path === '/api/two-factor/send-email' || path === '/two-factor/send-email') && method === 'POST') {
+    return handleSendTwoFactorEmail(request, env, userId);
+  }
+  if (path === '/api/two-factor/email' || path === '/two-factor/email') {
+    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorEmail(request, env, userId);
+    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 1);
+    return errorResponse('Method not allowed', 405);
   }
 
   if (path === '/api/accounts/profile') {

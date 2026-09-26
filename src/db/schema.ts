@@ -52,6 +52,7 @@ export const users = sqliteTable('users', {
   verifyDevices: integer('verify_devices').notNull().default(0),
   totpSecret: text('totp_secret'),
   totpRecoveryCode: text('totp_recovery_code'),
+  twoFactorEmail: text('two_factor_email'),
   yubikeyKey1: text('yubikey_key1'),
   yubikeyKey2: text('yubikey_key2'),
   yubikeyKey3: text('yubikey_key3'),

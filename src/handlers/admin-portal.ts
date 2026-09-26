@@ -181,7 +181,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       ]);
       const providers = twoFactorProviders(user, passkeys > 0);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
-        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', providers.map(provider => ({ 0: 'Authenticator', 3: 'YubiKey', 7: 'WebAuthn' })[provider]).join(', ') || 'None'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
+        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', providers.map(provider => ({ 0: 'Authenticator', 1: 'Email', 3: 'YubiKey', 7: 'WebAuthn' })[provider]).join(', ') || 'None'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
       ])}${user.emailVerified ? html`` : verifyEmailForm(user.id, session.csrf, user.email, directory.admins.has(user.email))}${userStatusForm(user.id, session.csrf, user.status)}${providers.length ? removeTwoFactorForm(user.id, session.csrf, user.email) : html``}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin/organizations') {

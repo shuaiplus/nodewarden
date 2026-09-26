@@ -97,7 +97,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   const result = await accepted.json() as { access_token: string };
   assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
 
-  await new StorageService(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' });
+  await new StorageService(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
   const challenged = await exchange('valid-code-2fa');
   assert.equal(challenged.status, 400);
   const challenge = await challenged.json() as Record<string, unknown>;

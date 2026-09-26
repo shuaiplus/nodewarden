@@ -99,6 +99,7 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
     status: 'active',
     totpSecret: null,
     totpRecoveryCode: null,
+    twoFactorEmail: null,
     yubikeyKey1: null,
     yubikeyKey2: null,
     yubikeyKey3: null,

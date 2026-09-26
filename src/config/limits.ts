@@ -26,6 +26,9 @@
     accessTokenTtlSeconds: 7200,
     smAccessTokenTtlSeconds: 3600,
     twoFactorUserVerificationTtlSeconds: 1800,
+    // Email one-time code lifetime in seconds.
+    // 邮件一次性验证码有效期（秒）。
+    emailOtpTtlSeconds: 300,
     // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
     // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
     refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
@@ -54,6 +57,11 @@
     clientSecretLength: 30,
   },
   rateLimit: {
+    // Per-subject email-code issue budgets and guesses per code lifetime.
+    // 每个目标的邮件验证码发送限额和有效期内验证次数。
+    emailOtpAttemptsPerWindow: 5,
+    emailOtpIssuesPerHour: 5,
+    emailSignInCodeIssuesPerHour: 20,
     // Max failed login attempts before temporary lock.
     // 触发临时锁定前允许的最大登录失败次数。
     loginMaxAttempts: 10,

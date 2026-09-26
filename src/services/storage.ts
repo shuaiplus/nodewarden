@@ -1,3 +1,4 @@
+import type { UserUpdateField } from './storage-user-repo';
 import { sql } from 'drizzle-orm';
 
 import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
@@ -169,7 +170,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/db/schema.ts changes or a migration is added (including
 // data-only --custom ones). Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-09-27-sm-token-payload';
+const STORAGE_SCHEMA_VERSION = '2026-09-27-two-factor-email';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',
@@ -307,8 +308,8 @@ export class StorageService {
     return listStoredUsers(this.db);
   }
 
-  async saveUser(user: User, rotateSecurityStamp = false): Promise<void> {
-    await saveStoredUser(this.db, user, rotateSecurityStamp);
+  async saveUser(user: User, fields?: readonly UserUpdateField[], originalSecurityStamp = user.securityStamp): Promise<boolean> {
+    return saveStoredUser(this.db, user, fields, originalSecurityStamp);
   }
 
   async createUser(user: User): Promise<void> {

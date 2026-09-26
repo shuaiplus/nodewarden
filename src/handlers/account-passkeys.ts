@@ -29,7 +29,7 @@ import {
   verifyAccountPasskeyToken,
 } from '../utils/account-passkeys';
 import { auditRequestMetadata, safeWriteAuditEvent } from '../services/audit-events';
-import { createRecoveryCode } from '../utils/recovery-code';
+import { ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
 import { createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
 
 const MAX_ACCOUNT_PASSKEYS = 5;
@@ -450,6 +450,7 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
     return errorResponse('Passkey is already registered', 409);
   }
 
+  if (!await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp)) return errorResponse('User verification failed.', 400);
   const now = new Date().toISOString();
   const transports = normalizeTransports(registrationResponse.response.transports);
   await storage.saveAccountPasskeyCredential({
@@ -471,11 +472,6 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
     updatedAt: now,
   });
 
-  if (!user.totpRecoveryCode) {
-    user.totpRecoveryCode = createRecoveryCode();
-    user.updatedAt = now;
-    await storage.saveUser(user);
-  }
   await storage.deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);
 

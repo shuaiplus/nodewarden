@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `two_factor_email` text;

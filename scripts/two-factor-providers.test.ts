@@ -110,7 +110,7 @@ for (const loginRecovery of [false, true]) {
     assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id = ?').bind(user.id).first('n'), loginRecovery ? 1 : 0);
     assert.deepEqual((await storage.getAccountPasskeyCredentialsByUserId(user.id)).map(key => key.id), [loginPasskey]);
     // Enrolling a new factor must not revive a remember token issued before recovery.
-    await storage.saveUser({ ...updated, totpSecret: TOTP });
+    await storage.saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
     const remembered = await authedFetch(env, {
       method: 'POST', path: '/identity/connect/token',
       body: { grant_type: 'password', username: user.email, password: PASSWORD, deviceIdentifier: 'device', twoFactorProvider: '5', twoFactorToken: 'remember-before-recovery' },

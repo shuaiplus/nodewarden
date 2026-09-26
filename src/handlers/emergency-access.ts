@@ -321,9 +321,10 @@ export async function handleEmergencyAccessRoute(
     const auth = new AuthService(env);
     grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, grantor.email);
     grantor.key = update.key;
+    const originalSecurityStamp = grantor.securityStamp;
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
-    await storage.saveUser(grantor, true);
+    if (!await storage.saveUser(grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
     await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash);
     await storage.deleteRefreshTokensByUserId(grantor.id);
     AuthService.invalidateUserCache(grantor.id);

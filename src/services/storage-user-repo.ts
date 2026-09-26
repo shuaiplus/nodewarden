@@ -26,6 +26,7 @@ function mapUserRow(row: typeof users.$inferSelect): User {
     verifyDevices: !!row.verifyDevices,
     totpSecret: row.totpSecret,
     totpRecoveryCode: row.totpRecoveryCode,
+    twoFactorEmail: row.twoFactorEmail,
     yubikeyKey1: row.yubikeyKey1,
     yubikeyKey2: row.yubikeyKey2,
     yubikeyKey3: row.yubikeyKey3,
@@ -60,6 +61,7 @@ function userValues(user: User) {
     verifyDevices: user.verifyDevices ? 1 : 0,
     totpSecret: user.totpSecret,
     totpRecoveryCode: user.totpRecoveryCode,
+    twoFactorEmail: user.twoFactorEmail,
     yubikeyKey1: user.yubikeyKey1,
     yubikeyKey2: user.yubikeyKey2,
     yubikeyKey3: user.yubikeyKey3,
@@ -100,43 +102,20 @@ export async function getAllUsersWithTwoFactor(db: D1Database): Promise<Array<Us
   return rows.map(({ user, hasTwoFactorPasskey }) => ({ ...mapUserRow(user), hasTwoFactorPasskey }));
 }
 
-export async function saveUser(db: D1Database, user: User, rotateSecurityStamp = false): Promise<void> {
+export type UserUpdateField = Exclude<keyof ReturnType<typeof userValues>,
+  'id' | 'email' | 'emailVerified' | 'role' | 'status' | 'createdAt' | 'updatedAt' | 'twoFactorEmail' | 'totpRecoveryCode'>;
+
+// Snapshot saves update only the intended fields and can never recreate a deleted account.
+export async function saveUser(db: D1Database, user: User, fields: readonly UserUpdateField[] = ['name', 'masterPasswordHint'], originalSecurityStamp = user.securityStamp): Promise<boolean> {
   const values = userValues(user);
-  await getOrm(db)
-    .insert(users)
-    .values(values)
-    .onConflictDoUpdate({
-      target: users.id,
-      set: {
-        email: values.email,
-        name: values.name,
-        masterPasswordHint: values.masterPasswordHint,
-        masterPasswordHash: values.masterPasswordHash,
-        key: values.key,
-        privateKey: values.privateKey,
-        publicKey: values.publicKey,
-        kdfType: values.kdfType,
-        kdfIterations: values.kdfIterations,
-        kdfMemory: values.kdfMemory,
-        kdfParallelism: values.kdfParallelism,
-        ...(rotateSecurityStamp ? { securityStamp: values.securityStamp } : {}),
-        verifyDevices: values.verifyDevices,
-        totpSecret: values.totpSecret,
-        totpRecoveryCode: values.totpRecoveryCode,
-        yubikeyKey1: values.yubikeyKey1,
-        yubikeyKey2: values.yubikeyKey2,
-        yubikeyKey3: values.yubikeyKey3,
-        yubikeyKey4: values.yubikeyKey4,
-        yubikeyKey5: values.yubikeyKey5,
-        yubikeyNfc: values.yubikeyNfc,
-        apiKey: values.apiKey,
-        updatedAt: values.updatedAt,
-      },
-    });
+  const result = await getOrm(db).update(users)
+    .set({ ...Object.fromEntries(fields.map(field => [field, values[field]])), updatedAt: new Date().toISOString() })
+    .where(and(eq(users.id, user.id), eq(users.securityStamp, originalSecurityStamp))).run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 export async function createUser(db: D1Database, user: User): Promise<void> {
-  await saveUser(db, user);
+  await getOrm(db).insert(users).values(userValues(user));
 }
 
 export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
@@ -145,14 +124,14 @@ export async function createFirstUser(db: D1Database, user: User): Promise<boole
     INSERT INTO users (
       id, email, email_verified, name, master_password_hint, master_password_hash, key, private_key, public_key,
       kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices,
-      totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5,
+      totp_secret, totp_recovery_code, two_factor_email, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5,
       yubikey_nfc, api_key, created_at, updated_at
     )
     SELECT
       ${values.id}, ${values.email}, ${values.emailVerified}, ${values.name}, ${values.masterPasswordHint}, ${values.masterPasswordHash},
       ${values.key}, ${values.privateKey}, ${values.publicKey}, ${values.kdfType}, ${values.kdfIterations},
       ${values.kdfMemory}, ${values.kdfParallelism}, ${values.securityStamp}, ${values.role}, ${values.status},
-      ${values.verifyDevices}, ${values.totpSecret}, ${values.totpRecoveryCode}, ${values.yubikeyKey1},
+      ${values.verifyDevices}, ${values.totpSecret}, ${values.totpRecoveryCode}, ${values.twoFactorEmail}, ${values.yubikeyKey1},
       ${values.yubikeyKey2}, ${values.yubikeyKey3}, ${values.yubikeyKey4}, ${values.yubikeyKey5},
       ${values.yubikeyNfc}, ${values.apiKey}, ${values.createdAt}, ${values.updatedAt}
     WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)
@@ -181,7 +160,7 @@ export async function searchUsersByEmailPrefix(db: D1Database, prefix: string, o
   const rows = await getOrm(db).select({
     user: { id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role },
     providers: {
-      totpSecret: users.totpSecret, yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2,
+      totpSecret: users.totpSecret, twoFactorEmail: users.twoFactorEmail, yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2,
       yubikeyKey3: users.yubikeyKey3, yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
     },
     hasTwoFactorPasskey: sql<number>`EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id=users.id AND w.purpose='twoFactor')`.mapWith(Boolean),

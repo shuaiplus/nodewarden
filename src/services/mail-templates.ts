@@ -4,6 +4,13 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  verificationCode: {
+    throttle: 'user',
+    render: (model: { code: string; reason: 'two-factor-setup' }): MailContent => ({
+      subject: 'Your NodeWarden verification code',
+      paragraphs: [`Use this code to set up email two-step login: ${model.code}`, 'The code expires in five minutes. If you did not request it, ignore this message.'],
+    }),
+  },
   passwordHint: {
     throttle: 'user',
     render: (model: { hint: string }): MailContent => ({ subject: 'Your NodeWarden password hint', paragraphs: ['You requested your saved master password hint.', sanitizeForEmail(model.hint), 'NodeWarden cannot recover your master password.'] }),
@@ -25,7 +32,7 @@ export const MAIL_TEMPLATES = {
     throttle: 'exempt',
     render: (model: { provider: number; time: string; ip: string }): MailContent => ({
       subject: 'Unsuccessful two-step sign-in to NodeWarden',
-      paragraphs: [`A sign-in with your password failed its two-step check (${({ 0: 'Authenticator', 3: 'YubiKey', 7: 'Passkey', 8: 'Recovery code' } as Record<number, string>)[model.provider] ?? 'Unknown provider'}).`, `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password.'],
+      paragraphs: [`A sign-in with your password failed its two-step check (${({ 0: 'Authenticator', 1: 'Email', 3: 'YubiKey', 7: 'Passkey', 8: 'Recovery code' } as Record<number, string>)[model.provider] ?? 'Unknown provider'}).`, `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password.'],
     }),
   },
   newDeviceLogin: {

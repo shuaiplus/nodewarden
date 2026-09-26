@@ -24,7 +24,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   const mail = captureEmail();
   const env = await createTestEnv({ ...mail.overrides, ADMIN_EMAILS: ADMIN });
   const auth = await signInToAdminPortal(env, ADMIN);
-  const user = await seedUser(env, { email: `factor@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP, totpRecoveryCode: 'RECOVERY', yubikeyKey1: '', yubikeyKey2: 'cccccccccccc' });
+  const user = await seedUser(env, { email: `factor@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP, totpRecoveryCode: 'RECOVERY', twoFactorEmail: `factor-2fa@${MAILABLE_DOMAIN}`, yubikeyKey1: '', yubikeyKey2: 'cccccccccccc' });
   const storage = new StorageService(env.DB);
   const loginPasskey = await passkey(env, user, 'login');
   await passkey(env, user, 'twoFactor');
@@ -33,13 +33,14 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   await storage.saveRefreshToken('old-session', user.id);
   const oldJwt = await new AuthService(env).generateAccessToken(user);
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
-  assert.match(await view.text(), /Authenticator, YubiKey, WebAuthn/);
+  assert.match(await view.text(), /Authenticator, Email, YubiKey, WebAuthn/);
   const response = await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(response.status, 303);
   assert.match(response.headers.get('Location')!, /m=two-factor-reset/);
   const updated = (await storage.getUserById(user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.totpRecoveryCode, null);
+  assert.equal(updated.twoFactorEmail, null);
   assert.equal(updated.yubikeyKey2, null);
   assert.notEqual(updated.securityStamp, user.securityStamp);
   for (const table of ['two_factor', 'trusted_two_factor_device_tokens', 'session']) {
@@ -55,7 +56,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   assert.equal(audit?.actor_user_id, null);
   assert.equal(JSON.parse(audit!.metadata).adminEmail, ADMIN);
 
-  await storage.saveUser({ ...updated, totpSecret: TOTP });
+  await storage.saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
   const remembered = await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password: PASSWORD, deviceIdentifier: 'device', twoFactorProvider: '5', twoFactorToken: 'old-remember' } });
   assert.equal(remembered.status, 400);
   assert.deepEqual((await remembered.json() as { TwoFactorProviders: string[] }).TwoFactorProviders, ['0']);

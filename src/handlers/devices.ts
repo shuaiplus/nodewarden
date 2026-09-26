@@ -484,14 +484,15 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
     return errorResponse('Invalid password', 400);
   }
 
+  const originalSecurityStamp = user.securityStamp;
+  user.securityStamp = generateUUID();
+  user.updatedAt = new Date().toISOString();
+  if (!await storage.saveUser(user, ['securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
   const [removedTrusted, removedSessions, removedDevices] = await Promise.all([
     storage.deleteTrustedTwoFactorTokensByUserId(userId),
     storage.deleteRefreshTokensByUserId(userId),
     storage.deleteDevicesByUserId(userId),
   ]);
-  user.securityStamp = generateUUID();
-  user.updatedAt = new Date().toISOString();
-  await storage.saveUser(user, true);
   AuthService.invalidateUserCache(userId);
   notifyUserLogout(env, userId, null);
   await writeAuditEvent(storage, {

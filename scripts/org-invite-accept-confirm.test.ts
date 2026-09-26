@@ -553,7 +553,7 @@ test('invite skips addresses already in the org by invited or account email and 
   const orgId = await createOrg(env, owner);
   await invite(env, owner, orgId, [pending]);
   const renamedOwner = { ...owner, email: `${crypto.randomUUID()}@${MAILABLE_DOMAIN}` };
-  await new StorageService(env.DB).saveUser(renamedOwner);
+  await env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(renamedOwner.email, owner.id).run();
   const revisionBeforeReinvite = await revisionDate(env, owner);
 
   await invite(env, owner, orgId, [pending.toUpperCase(), owner.email, renamedOwner.email]);
