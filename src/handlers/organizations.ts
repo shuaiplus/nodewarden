@@ -46,10 +46,13 @@ import { RateLimitService } from '../services/ratelimit';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { createOrgInviteToken, verifyOrgInviteToken } from '../utils/jwt';
 import {
-  getEmailSender,
+  readMailConfig,
+  mailStatusCheck,
+  EMAIL_PATTERN,
+  type StatusCheck,
   isReservedDocumentationEmail,
-  organizationInviteVaultOrigin,
-  sendOrganizationInviteEmail,
+  configuredVaultOrigin,
+  sendMail,
 } from '../services/mail';
 
 // Official clients always wrap a member's org key with that member's RSA public key (EncString
@@ -63,11 +66,9 @@ const MAX_INVITE_EMAILS = 20;
 const MAX_INVITE_EMAIL_LENGTH = 256;
 // Upstream EmailValidation.IsValidEmail: a local part of printable ASCII other than "@", one "@",
 // and a dotted host that ends in a letter.
-const INVITE_EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@]+\.\p{L}+$/u;
 
 type MessageCheck = { ok: true } | { ok: false; message: string };
 // Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
-type StatusCheck = { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
 
 function inviteEmailsCheck(emails: string[]): MessageCheck {
   if (!emails.length) return { ok: false, message: 'An email is required.' };
@@ -76,7 +77,7 @@ function inviteEmailsCheck(emails: string[]): MessageCheck {
   }
   // Upstream reports the first failing address, checking its format before its length.
   const [message] = emails.flatMap((email, index) => {
-    if (!INVITE_EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
+    if (!EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
     if (email.length > MAX_INVITE_EMAIL_LENGTH) return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
     return [];
   });
@@ -721,8 +722,9 @@ export async function mailOrganizationInvites(
   inviter: string,
   invites: Array<{ id: string; email: string }>,
 ): Promise<StatusCheck> {
-  if (!env.EMAIL || !getEmailSender(env)) return { ok: true };
-  const vaultOrigin = organizationInviteVaultOrigin(request, env);
+  const config = readMailConfig(env);
+  if (config.kind !== 'enabled') return mailStatusCheck(config);
+  const vaultOrigin = configuredVaultOrigin(request, env);
   if (!vaultOrigin) {
     console.warn('Organization invite email skipped: WEB_VAULT_ORIGINS is not set');
     return { ok: true };
@@ -746,20 +748,12 @@ export async function mailOrganizationInvites(
   }
   const organization = await orgRepo.getOrganization(env.DB, orgId);
   const registered = await orgRepo.listRegisteredEmails(env.DB, deliverable.map(({ email }) => email));
-  try {
-    await Promise.all(deliverable.map(async ({ id, email }) => sendOrganizationInviteEmail(env, {
-      vaultOrigin,
-      organizationId: orgId,
-      organizationUserId: id,
-      organizationName: organization?.name ?? '',
-      email,
-      token: await createOrgInviteToken(env.JWT_SECRET, id, email),
-      hasExistingUser: registered.has(email),
-    })));
-  } catch (error) {
-    console.error('Organization invite email failed:', error instanceof Error ? error.message : String(error));
-    return { ok: false, status: 502, message: 'Unable to send invitation email', headers: {} };
-  }
+  const outcomes = await Promise.all(deliverable.map(async ({ id, email }) => sendMail(env, email, 'organizationInvite', {
+    vaultOrigin, organizationId: orgId, organizationUserId: id,
+    organizationName: organization?.name ?? '', email,
+    token: await createOrgInviteToken(env.JWT_SECRET, id, email), hasExistingUser: registered.has(email),
+  })));
+  for (const outcome of outcomes) { const check = mailStatusCheck(outcome); if (!check.ok) return check; }
   return { ok: true };
 }
 

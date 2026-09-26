@@ -15,10 +15,11 @@ import { buildProfileResponse } from '../utils/profile-response';
 import { createRegisterVerifyToken, verifyRegisterVerifyToken } from '../utils/jwt';
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
-  getEmailSender,
+  readMailConfig,
+  mailStatusCheck,
   isReservedDocumentationEmail,
   registerVerifyVaultOrigin,
-  sendRegisterVerificationEmail,
+  sendMail,
 } from '../services/mail';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
@@ -534,18 +535,13 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
     return jsonResponse('');
   }
 
-  if (!env.EMAIL || !getEmailSender(env)) {
+  if (readMailConfig(env).kind !== 'enabled') {
     return errorResponse('Email sending is not configured', 503);
   }
 
   const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
-  try {
-    await sendRegisterVerificationEmail(env, email, registerVerifyVaultOrigin(request, env), token);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('Register verification email failed:', message);
-    return errorResponse('Unable to send verification email', 502);
-  }
+  const check = mailStatusCheck(await sendMail(env, email, 'registerVerification', { vaultOrigin: registerVerifyVaultOrigin(request, env), email, token }));
+  if (!check.ok) return errorResponse(check.message, check.status, check.headers);
 
   // Official clients treat a non-empty string as an inline token (no SMTP).
   // An empty JSON string means "check your email".

@@ -1,0 +1,33 @@
+import { html, toSafeUrl, type SafeUrl } from '../utils/html';
+import { buildRegisterVerifyUrl, buildOrganizationInviteUrl, sanitizeForEmail, type OrganizationInvite } from './mail';
+import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
+
+export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
+export const MAIL_TEMPLATES = {
+  registerVerification: {
+    render: (model: { vaultOrigin: string; email: string; token: string }): MailContent => ({
+      subject: 'Verify your NodeWarden email',
+      paragraphs: ['Verify your email to finish creating your NodeWarden account.', 'This link expires in 30 minutes. If you did not request an account, ignore this email.'],
+      action: { label: 'Verify email', url: toSafeUrl(new URL(buildRegisterVerifyUrl(model.vaultOrigin, model.email, model.token))) },
+    }),
+  },
+  organizationInvite: {
+    render: (model: OrganizationInvite): MailContent => ({
+      subject: `Join ${sanitizeForEmail(model.organizationName)}`,
+      paragraphs: [`You have been invited to join the ${sanitizeForEmail(model.organizationName)} organization.`, `This link expires in ${ORG_INVITE_TTL_DAYS} days.`],
+      action: { label: 'Accept invitation', url: toSafeUrl(new URL(buildOrganizationInviteUrl(model))) },
+    }),
+  },
+} satisfies Record<string, { render: (model: never) => MailContent }>;
+export type TemplateName = keyof typeof MAIL_TEMPLATES;
+export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
+
+export function renderMail(content: MailContent): { subject: string; text: string; html: string } {
+  const subject = content.subject.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const footer = 'NodeWarden account notification.';
+  return {
+    subject,
+    text: [...content.paragraphs, ...(content.action ? [content.action.url] : []), footer].join('\n\n'),
+    html: html`<!doctype html><html><body>${content.paragraphs.map((paragraph) => html`<p>${paragraph}</p>`)}${content.action ? html`<p><a href="${content.action.url}">${content.action.label}</a></p>` : html``}<hr><p>${footer}</p></body></html>`.safeHtml,
+  };
+}

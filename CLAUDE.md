@@ -22,3 +22,5 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - Machine JWTs carry `type=ServiceAccount`; only `router-sm`'s machine allowlist accepts them.
 
 - SM access = confirmed member, independent of licenses. Owners/Admins have full access; other members use object policies.
+
+- All transactional mail goes through `sendMail` and data-only templates. Links use configured vault origins or the Worker request origin, never `X-Forwarded-Host`.
