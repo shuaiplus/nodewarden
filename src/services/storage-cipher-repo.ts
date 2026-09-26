@@ -169,8 +169,8 @@ export async function deleteCipherById(db: D1Database, id: string): Promise<void
   await getOrm(db).delete(ciphers).where(eq(ciphers.id, id));
 }
 
-export async function deleteCiphersByOrganization(db: D1Database, organizationId: string): Promise<void> {
-  await getOrm(db).delete(ciphers).where(eq(ciphers.organizationId, organizationId));
+export function deleteCiphersByOrganization(db: D1Database, organizationId: string) {
+  return getOrm(db).delete(ciphers).where(eq(ciphers.organizationId, organizationId));
 }
 
 export function reassignOrganizationCiphers(db: D1Database, userId: string, guard: SQL) {

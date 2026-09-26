@@ -6,7 +6,8 @@ import type { Env } from '../types';
 import { AuthService } from './auth';
 import { auditEventStatement, type AuditEventInput } from './audit-events';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
-import { reassignOrganizationCiphers } from './storage-cipher-repo';
+import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
+import { bumpOrgMemberRevisions, deleteOrganization } from './storage-org-repo';
 
 export type DeleteUserAccountResult =
   | { kind: 'deleted' }
@@ -97,4 +98,17 @@ export async function deleteUserAccount(env: Env, userId: string, audit: AuditEv
   await deleteBlobs(env, keys);
   AuthService.invalidateUserCache(userId);
   return { kind: 'deleted' };
+}
+
+export async function deleteOrganizationAccount(env: Env, orgId: string, audit: AuditEventInput): Promise<void> {
+  const orm = getOrm(env.DB);
+  const [orgAttachments] = await orm.batch([
+    orm.select({ cipherId: attachments.cipherId, id: attachments.id }).from(attachments)
+      .innerJoin(ciphers, eq(attachments.cipherId, ciphers.id)).where(eq(ciphers.organizationId, orgId)),
+    bumpOrgMemberRevisions(env.DB, orgId),
+    deleteCiphersByOrganization(env.DB, orgId),
+    auditEventStatement(env.DB, audit, sql`EXISTS (SELECT 1 FROM organizations WHERE id = ${orgId})`),
+    deleteOrganization(env.DB, orgId),
+  ]);
+  await deleteBlobs(env, orgAttachments.map((attachment) => getAttachmentObjectKey(attachment.cipherId, attachment.id)));
 }

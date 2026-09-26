@@ -18,6 +18,7 @@ import {
   pendingCollectionUsers,
   ssoAuth,
   ssoUsers,
+  userRevisions,
   users,
 } from '../db/schema';
 import type { Attachment, Cipher, User } from '../types';
@@ -153,8 +154,8 @@ export async function getOrganization(db: D1Database, id: string): Promise<Organ
   return row ? mapOrganization(row) : null;
 }
 
-export async function deleteOrganization(db: D1Database, id: string): Promise<void> {
-  await getOrm(db).delete(organizations).where(eq(organizations.id, id));
+export function deleteOrganization(db: D1Database, id: string) {
+  return getOrm(db).delete(organizations).where(eq(organizations.id, id));
 }
 
 function membershipUpsert(orm: Orm, member: MembershipRecord) {
@@ -1112,10 +1113,9 @@ export async function getSsoUserByUserId(db: D1Database, userId: string): Promis
   return row ?? null;
 }
 
-export async function bumpOrgMemberRevisions(db: D1Database, orgId: string): Promise<void> {
+export function bumpOrgMemberRevisions(db: D1Database, orgId: string) {
   const now = new Date().toISOString();
-  await getOrm(db).run(sql`
-    INSERT INTO user_revisions(user_id, revision_date)
+  return getOrm(db).insert(userRevisions).select(sql`
     SELECT user_id, ${now} FROM organization_memberships
     WHERE org_id = ${orgId} AND user_id IS NOT NULL
     ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date

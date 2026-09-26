@@ -3,9 +3,12 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 
 import { getOrm } from '../src/db/client';
-import { ciphers, emergencyAccess, invites, organizationMemberships, sends } from '../src/db/schema';
+import {
+  ciphers, emergencyAccess, invites, organizationMemberships, sends, smAccessTokens, smProjects,
+  smSecretProjects, smSecrets, smServiceAccountProjects, smServiceAccounts, userRevisions,
+} from '../src/db/schema';
 import { createOwnedOrganization } from '../src/handlers/organizations';
-import { deleteUserAccount } from '../src/services/account-deletion';
+import { deleteOrganizationAccount, deleteUserAccount } from '../src/services/account-deletion';
 import { type AuditEventInput } from '../src/services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../src/services/blob-store';
 import { StorageService } from '../src/services/storage';
@@ -207,4 +210,71 @@ test('admin user deletion rejects non-admins, wrong passwords and self-deletion'
     assert.equal(response.status, status);
     await assertIntact(f);
   }
+});
+
+async function addSecretsManagerData(env: Env, orgId: string) {
+  const orm = getOrm(env.DB);
+  const projectId = crypto.randomUUID();
+  const secretId = crypto.randomUUID();
+  const serviceAccountId = crypto.randomUUID();
+  const tokenId = crypto.randomUUID();
+  await orm.batch([
+    orm.insert(smProjects).values({ id: projectId, orgId, name: ENCRYPTED, createdAt: PAST, updatedAt: PAST }),
+    orm.insert(smSecrets).values({ id: secretId, orgId, key: ENCRYPTED, value: ENCRYPTED, createdAt: PAST, updatedAt: PAST }),
+    orm.insert(smServiceAccounts).values({ id: serviceAccountId, orgId, name: ENCRYPTED, createdAt: PAST, updatedAt: PAST }),
+    orm.insert(smAccessTokens).values({ id: tokenId, serviceAccountId, name: ENCRYPTED, clientSecretHash: 'hash', createdAt: PAST }),
+    orm.insert(smSecretProjects).values({ secretId, projectId }),
+    orm.insert(smServiceAccountProjects).values({ serviceAccountId, projectId }),
+  ]);
+}
+
+test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 100 member revisions without touching another org', async () => {
+  const f = await setup();
+  const otherOwner = await seedUser(f.env);
+  const otherOrg = await createOwnedOrganization(f.env, otherOwner, { name: 'Unchanged', key: '4.dGVzdA==' });
+  const otherCipher = await addCipher(f.env, otherOwner.id, otherOrg.id);
+  for (const org of [f.org, otherOrg]) await addSecretsManagerData(f.env, org.id);
+  for (let index = 0; index < 100; index++) await addMember(f.env, f.org.id, await seedUser(f.env), 2);
+  await f.env.DB.prepare('UPDATE user_revisions SET revision_date = ?').bind(PAST).run();
+  // Leave one member with no revision row, which the batch must create.
+  await getOrm(f.env.DB).delete(userRevisions).where(eq(userRevisions.userId, f.successor.id));
+  const members = await orgRepo.listMembershipsByOrg(f.env.DB, f.org.id);
+  assert.equal(members.length, 102);
+
+  const response = await authedFetch(f.env, { method: 'DELETE', path: `/api/organizations/${f.org.id}`, userId: f.target.id });
+  assert.equal(response.status, 200);
+  assert.equal(await orgRepo.getOrganization(f.env.DB, f.org.id), null);
+  assert.equal(await f.storage.getCipher(f.orgCipher.id), null);
+  assert.equal(f.blobs.values.has(f.orgCipher.key), false);
+  assert.ok(f.blobs.values.has(f.personalCipher.key));
+  assert.ok(f.blobs.values.has(f.sendKey));
+  for (const member of members) assert.ok((await f.storage.getRevisionDate(member.userId!)) > PAST);
+  assert.equal(await f.storage.getRevisionDate(otherOwner.id), PAST);
+  assert.ok(await orgRepo.getOrganization(f.env.DB, otherOrg.id));
+  assert.ok(await f.storage.getCipher(otherCipher.id));
+  assert.ok(f.blobs.values.has(otherCipher.key));
+  for (const table of ['sm_projects', 'sm_secrets', 'sm_service_accounts', 'sm_access_tokens', 'sm_secret_projects', 'sm_service_account_projects']) {
+    assert.equal(await f.env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count'), 1, table);
+  }
+  assert.equal(await f.env.DB.prepare('SELECT action FROM audit_logs').first('action'), 'organization.delete');
+});
+
+test('a non-owner cannot delete an organization', async () => {
+  const f = await setup();
+  await getOrm(f.env.DB).update(organizationMemberships).set({ type: 1 })
+    .where(eq(organizationMemberships.userId, f.successor.id));
+  const response = await authedFetch(f.env, { method: 'DELETE', path: `/api/organizations/${f.org.id}`, userId: f.successor.id });
+  assert.equal(response.status, 403);
+  assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
+  await assertIntact(f);
+});
+
+test('an org deletion audit failure rolls back revisions, ciphers and the org before touching blobs', async () => {
+  const f = await setup();
+  await f.env.DB.prepare('UPDATE user_revisions SET revision_date = ?').bind(PAST).run();
+  await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
+  await assert.rejects(deleteOrganizationAccount(f.env, f.org.id, audit), /audit failure/);
+  assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
+  assert.equal(await f.storage.getRevisionDate(f.target.id), PAST);
+  await assertIntact(f);
 });

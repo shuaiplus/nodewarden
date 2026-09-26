@@ -35,7 +35,7 @@ import {
   type OrgPermissions,
   publicMembershipStatus,
 } from '../services/org-types';
-import { deleteCiphersByOrganization } from '../services/storage-cipher-repo';
+import { deleteOrganizationAccount } from '../services/account-deletion';
 import * as orgRepo from '../services/storage-org-repo';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
@@ -231,8 +231,14 @@ export async function handleDeleteOrganization(env: Env, userId: string, orgId: 
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canDeleteOrganization(member)) return errorResponse('Only an owner can delete the organization', 403);
-  await deleteCiphersByOrganization(env.DB, orgId);
-  await orgRepo.deleteOrganization(env.DB, orgId);
+  await deleteOrganizationAccount(env, orgId, {
+    actorUserId: userId,
+    action: 'organization.delete',
+    category: 'security',
+    level: 'security',
+    targetType: 'organization',
+    targetId: orgId,
+  });
   return jsonResponse({});
 }
 
