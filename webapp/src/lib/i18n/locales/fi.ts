@@ -65,6 +65,8 @@ const fi: Record<string, string> = {
   "txt_authenticator_app_help": "Syötä tunnistussovelluksen luoma koodi.",
   "txt_email_verification_code": "Sähköpostin vahvistuskoodi",
   "txt_check_email_for_code": "Tarkista sähköpostisi {email} saadaksesi vahvistuskoodin.",
+  "txt_new_device_verification": "Vahvista uusi laite",
+  "txt_new_device_code_hint": "Tarkista sähköpostisi {email} saadaksesi koodin tämän laitteen vahvistamiseen.",
   "txt_resend_code": "Lähetä koodi uudelleen",
   "txt_sending_code": "Lähetetään koodia…",
   "txt_send_code_failed": "Vahvistuskoodia ei voitu lähettää. Yritä uudelleen.",

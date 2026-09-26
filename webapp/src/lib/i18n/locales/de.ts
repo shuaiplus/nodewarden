@@ -65,6 +65,8 @@ const de: Record<string, string> = {
   "txt_authenticator_app_help": "Geben Sie einen Code ein, der von einer Authenticator-App generiert wurde.",
   "txt_email_verification_code": "E-Mail-Bestätigungscode",
   "txt_check_email_for_code": "Prüfen Sie Ihr Postfach {email}, um Ihren Bestätigungscode zu erhalten.",
+  "txt_new_device_verification": "Neues Gerät bestätigen",
+  "txt_new_device_code_hint": "Prüfen Sie Ihr Postfach {email}, um einen Code zur Bestätigung dieses Geräts zu erhalten.",
   "txt_resend_code": "Code erneut senden",
   "txt_sending_code": "Code wird gesendet…",
   "txt_send_code_failed": "Der Bestätigungscode konnte nicht gesendet werden. Versuchen Sie es erneut.",

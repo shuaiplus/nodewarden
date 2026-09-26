@@ -27,6 +27,7 @@ interface AppGlobalOverlaysProps {
   pendingTotpProviderType?: number;
   pendingTotpAvailableProviders?: number[];
   pendingTotpEmail?: string;
+  pendingNewDeviceVerification?: boolean;
   emailCodeSending?: boolean;
   onResendEmailCode?: () => void;
   totpCode: string;
@@ -128,13 +129,13 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
 
       <ConfirmDialog
         open={props.pendingTotpOpen}
-        title={isYubiKeyOtp ? `${t('txt_two_step_verification')} YubiKey` : isWebAuthn ? (
+        title={props.pendingNewDeviceVerification ? t('txt_new_device_verification') : isYubiKeyOtp ? `${t('txt_two_step_verification')} YubiKey` : isWebAuthn ? (
           <span className="dialog-title-stack">
             <span>{t('txt_two_step_verification')}</span>
             <span>{t('txt_passkey')}</span>
           </span>
         ) : t('txt_two_step_verification')}
-        message={isYubiKeyOtp ? t('txt_press_yubikey_to_authenticate') : isWebAuthn ? t('txt_use_passkey_to_complete_two_step_verification') : isEmail ? t('txt_check_email_for_code', { email: props.pendingTotpEmail ?? '' }) : t('txt_password_is_already_verified')}
+        message={props.pendingNewDeviceVerification ? t('txt_new_device_code_hint', { email: props.pendingTotpEmail ?? '' }) : isYubiKeyOtp ? t('txt_press_yubikey_to_authenticate') : isWebAuthn ? t('txt_use_passkey_to_complete_two_step_verification') : isEmail ? t('txt_check_email_for_code', { email: props.pendingTotpEmail ?? '' }) : t('txt_password_is_already_verified')}
         confirmText={t('txt_verify')}
         hideCancel
         closeButton
@@ -151,7 +152,7 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
                 {props.emailCodeSending ? t('txt_sending_code') : t('txt_resend_code')}
               </button>
             )}
-            {alternateProviders.length > 0 && (
+            {!props.pendingNewDeviceVerification && alternateProviders.length > 0 && (
               <div className="two-factor-method-switcher">
                 <button
                   type="button"
@@ -183,9 +184,11 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
                 )}
               </div>
             )}
-            <button type="button" className="btn btn-secondary dialog-btn" disabled={props.totpSubmitting} onClick={props.onUseRecoveryCode}>
-              {t('txt_use_recovery_code')}
-            </button>
+            {!props.pendingNewDeviceVerification && (
+              <button type="button" className="btn btn-secondary dialog-btn" disabled={props.totpSubmitting} onClick={props.onUseRecoveryCode}>
+                {t('txt_use_recovery_code')}
+              </button>
+            )}
           </div>
         )}
       >
@@ -197,10 +200,12 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
             <input className="input" type={isYubiKeyOtp ? 'password' : 'text'} inputMode={isEmail ? 'numeric' : undefined} value={props.totpCode} autoComplete="one-time-code" onInput={(e) => props.onTotpCodeChange((e.currentTarget as HTMLInputElement).value)} />
           </label>
         )}
-        <label className="check-line check-line-compact">
-          <input type="checkbox" checked={props.rememberDevice} onChange={(e) => props.onRememberDeviceChange((e.currentTarget as HTMLInputElement).checked)} />
-          <span>{t('txt_trust_this_device_for_30_days')}</span>
-        </label>
+        {!props.pendingNewDeviceVerification && (
+          <label className="check-line check-line-compact">
+            <input type="checkbox" checked={props.rememberDevice} onChange={(e) => props.onRememberDeviceChange((e.currentTarget as HTMLInputElement).checked)} />
+            <span>{t('txt_trust_this_device_for_30_days')}</span>
+          </label>
+        )}
       </ConfirmDialog>
 
       <ConfirmDialog

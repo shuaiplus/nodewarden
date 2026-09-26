@@ -23,6 +23,7 @@ export interface Env {
   ADMIN_EMAILS?: string;
   EMAIL_SENDS_PER_HOUR?: string;
   DISABLE_EMAIL_NEW_DEVICE?: string;
+  ENABLE_NEW_DEVICE_VERIFICATION?: string;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EVENTS_QUEUE?: Queue;

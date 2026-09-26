@@ -65,6 +65,8 @@ const it: Record<string, string> = {
   "txt_authenticator_app_help": "Inserisci un codice generato da un'app di autenticazione.",
   "txt_email_verification_code": "Codice di verifica via email",
   "txt_check_email_for_code": "Controlla la posta di {email} per trovare il codice di verifica.",
+  "txt_new_device_verification": "Verifica nuovo dispositivo",
+  "txt_new_device_code_hint": "Controlla la posta di {email} per trovare un codice con cui verificare questo dispositivo.",
   "txt_resend_code": "Invia nuovamente il codice",
   "txt_sending_code": "Invio del codice…",
   "txt_send_code_failed": "Impossibile inviare il codice di verifica. Riprova.",

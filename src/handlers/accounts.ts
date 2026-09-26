@@ -1,4 +1,4 @@
-import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
+import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
@@ -12,7 +12,7 @@ import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCo
 import { deleteTwoFactorSecret, upsertCredentialAccount, upsertTwoFactorSecret } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../services/audit-events';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { jsonResponse, errorResponse, unsupportedResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
@@ -363,7 +363,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     securityStamp: generateUUID(),
     role: 'user',
     status: 'active',
-    verifyDevices: false, // new-device verification requires email delivery (not available)
+    verifyDevices: true,
     totpSecret: null,
     totpRecoveryCode: null,
     twoFactorEmail: null,
@@ -670,31 +670,45 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
 }
 
 // PUT/POST /api/accounts/verify-devices
-// New-device verification requires an email delivery channel which NodeWarden
-// does not provide. This endpoint always rejects the request so clients receive
-// clear feedback that the feature is unavailable rather than silently ignoring
-// the user's preference.
+// Preferences are editable while opt-in new-device verification is active.
 export async function handleSetVerifyDevices(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const auth = new AuthService(env);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
+  const mail = readMailConfig(env);
+  if (mail.kind !== 'enabled' || !mail.newDeviceVerification) return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
+  if (!await verifyUserSecret(new AuthService(env), user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']))) return errorResponse('User verification failed.', 400);
+  const verifyDevices = body.verifyDevices ?? body.VerifyDevices;
+  if (typeof verifyDevices !== 'boolean') return errorResponse('verifyDevices must be true or false', 400);
+  user.verifyDevices = verifyDevices;
+  if (!await storage.saveUser(user, ['verifyDevices'])) return errorResponse('User verification failed.', 400);
+  await storage.updateRevisionDate(user.id);
+  AuthService.invalidateUserCache(user.id);
+  await writeAuditEvent(storage, { actorUserId: user.id, action: 'account.verify_devices.update', category: 'security', level: 'security', targetType: 'user', targetId: user.id, metadata: { verifyDevices, ...auditRequestMetadata(request) } });
+  return new Response(null, { status: 200 });
+}
 
-  // Log the attempt for audit purposes, but do not change state.
-  await writeAuditEvent(storage, {
-    actorUserId: user.id,
-    action: 'account.verify_devices.update.rejected',
-    category: 'security',
-    level: 'info',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: {
-      reason: 'new-device verification is not supported (no email delivery channel)',
-      ...auditRequestMetadata(request),
-    },
+export async function handleResendNewDeviceOtp(request: Request, env: Env): Promise<Response> {
+  const mail = readMailConfig(env);
+  if (mail.kind === 'disabled') return unsupportedResponse('Email delivery is not supported by this server.');
+  if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
+  if (mail.newDeviceVerification) runInBackground('new-device-resend', async () => {
+    const storage = new StorageService(env.DB);
+    const email = readBodyString(body, ['email', 'Email']).trim().toLowerCase();
+    const user = email ? await storage.getUser(email) : null;
+    if (!user || user.status !== 'active' || !user.verifyDevices
+      || !(Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000)) return;
+    if (!await verifyUserSecret(new AuthService(env), user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']))) return;
+    const hasPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+    if (twoFactorProviders(user, hasPasskey).length || !await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()) return;
+    const device = readAuthRequestDeviceInfo({ deviceType: readBodyString(body, ['deviceType', 'DeviceType']) }, request);
+    notifyNewDeviceVerification(env, request, user, device.deviceType);
   });
-
-  return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
+  return jsonResponse('');
 }
 
 // GET /api/accounts/keys
@@ -925,19 +939,9 @@ function yubiKeyResponse(user: User): Record<string, unknown> {
   return { ...provider, YubiKey: provider, Object: 'twoFactorYubiKey' };
 }
 
-// New-device verification requires an email delivery channel to send OTP
-// challenges to unknown devices. NodeWarden does not integrate with an email
-// provider, so this feature is intentionally unavailable. The settings
-// response always reports disabled regardless of any legacy DB value.
-function deviceVerificationSettingsResponse(_user: User): Record<string, unknown> {
-  return {
-    Enabled: false,
-    enabled: false,
-    VerifyDevices: false,
-    verifyDevices: false,
-    Object: 'deviceVerificationSettings',
-    object: 'deviceVerificationSettings',
-  };
+// This obsolete two-factor surface stays disabled; /accounts/verify-devices owns the preference.
+function deviceVerificationSettingsResponse(): Record<string, unknown> {
+  return { isDeviceVerificationSectionEnabled: false, unknownDeviceVerificationEnabled: false, object: 'deviceVerificationSettings' };
 }
 
 async function yubiKeySettingsResponse(storage: StorageService, env: Env, user: User): Promise<Record<string, unknown>> {
@@ -1122,48 +1126,12 @@ export async function handleGetDeviceVerificationSettings(request: Request, env:
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(deviceVerificationSettingsResponse(user));
+  return jsonResponse(deviceVerificationSettingsResponse());
 }
 
-// PUT/POST /api/two-factor/device-verification-settings
-// New-device verification is not supported (no email delivery channel).
-// Reject any attempt to enable it; always return disabled state.
+// Obsolete upstream compatibility route; the real account preference is separate.
 export async function handlePutDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
-  if (!user) return errorResponse('User not found', 404);
-
-  let body: Record<string, unknown>;
-  try {
-    body = await readRequestBody(request);
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const rawEnabled = body.enabled ?? body.Enabled ?? body.verifyDevices ?? body.VerifyDevices;
-
-  // Log the attempt for audit purposes — never change state.
-  await writeAuditEvent(storage, {
-    actorUserId: user.id,
-    action: 'account.verify_devices.update.rejected',
-    category: 'security',
-    level: 'info',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: {
-      requested: rawEnabled,
-      reason: 'new-device verification is not supported (no email delivery channel)',
-      source: 'two-factor.device-verification-settings',
-      ...auditRequestMetadata(request),
-    },
-  });
-
-  if (rawEnabled === true) {
-    return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
-  }
-
-  // Setting to false is the only supported state — return it.
-  return jsonResponse(deviceVerificationSettingsResponse(user));
+  return handleGetDeviceVerificationSettings(request, env, userId);
 }
 
 // PUT/POST /api/two-factor/authenticator

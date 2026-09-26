@@ -210,7 +210,7 @@ export async function handleAuthenticatedRoute(
     return handleGetTwoFactorYubiKey(request, env, userId);
   }
 
-  if (path === '/api/two-factor/get-device-verification-settings' && method === 'POST') {
+  if (path === '/api/two-factor/get-device-verification-settings' && (method === 'GET' || method === 'POST')) {
     return handleGetDeviceVerificationSettings(request, env, userId);
   }
 
@@ -273,7 +273,7 @@ export async function handleAuthenticatedRoute(
     return handleVerifyPassword(request, env, userId);
   }
 
-  if (path === '/api/accounts/verify-devices' && (method === 'PUT' || method === 'POST')) {
+  if ((path === '/api/accounts/verify-devices' || path === '/accounts/verify-devices') && (method === 'PUT' || method === 'POST')) {
     return handleSetVerifyDevices(request, env, userId);
   }
 

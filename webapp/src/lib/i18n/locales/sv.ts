@@ -65,6 +65,8 @@ const sv: Record<string, string> = {
   "txt_authenticator_app_help": "Ange en kod genererad av en autentiseringsapp.",
   "txt_email_verification_code": "Verifieringskod via e-post",
   "txt_check_email_for_code": "Kontrollera din e-post på {email} för verifieringskoden.",
+  "txt_new_device_verification": "Verifiera ny enhet",
+  "txt_new_device_code_hint": "Kontrollera din e-post på {email} för en kod som verifierar den här enheten.",
   "txt_resend_code": "Skicka koden igen",
   "txt_sending_code": "Skickar koden…",
   "txt_send_code_failed": "Det gick inte att skicka verifieringskoden. Försök igen.",

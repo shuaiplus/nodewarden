@@ -23,7 +23,7 @@ import {
   getTwoFactorProviderStatus,
   getVaultRevisionDate,
   saveSession,
-  sendEmailTwoFactorCode,
+  sendLoginEmailCode,
   stripProfileSecrets,
 } from '@/lib/api/auth';
 import {
@@ -243,7 +243,6 @@ export default function App() {
   const [rememberDevice, setRememberDevice] = useState(true);
   const [totpSubmitting, setTotpSubmitting] = useState(false);
   const [emailCodeSending, setEmailCodeSending] = useState(false);
-  const [emailCodeSendAttempt, setEmailCodeSendAttempt] = useState(0);
 
   const [disableTotpOpen, setDisableTotpOpen] = useState(false);
   const [disableTotpPassword, setDisableTotpPassword] = useState('');
@@ -295,13 +294,13 @@ export default function App() {
   const { toasts, pushToast, removeToast } = useToastManager();
 
   useEffect(() => {
-    if (pendingTotp?.providerType !== TWO_FACTOR_PROVIDER_EMAIL) {
+    if (pendingTotp?.providerType !== TWO_FACTOR_PROVIDER_EMAIL || (pendingTotp.newDeviceVerification && !pendingTotp.emailResendRequested)) {
       setEmailCodeSending(false);
       return;
     }
     const controller = new AbortController();
     setEmailCodeSending(true);
-    void sendEmailTwoFactorCode(pendingTotp, controller.signal)
+    void sendLoginEmailCode(pendingTotp, controller.signal)
       .catch(error => {
         if (!controller.signal.aborted) pushToast('error', error instanceof Error ? error.message : t('txt_send_code_failed'));
       })
@@ -309,7 +308,7 @@ export default function App() {
         if (!controller.signal.aborted) setEmailCodeSending(false);
       });
     return () => controller.abort();
-  }, [pendingTotp, emailCodeSendAttempt]);
+  }, [pendingTotp]);
 
   useEffect(() => {
     const handleAppNotify = (event: Event) => {
@@ -2348,8 +2347,9 @@ export default function App() {
           pendingTotpProviderType={pendingTotp?.providerType ?? 0}
           pendingTotpAvailableProviders={pendingTotp?.availableProviders ?? []}
           pendingTotpEmail={String((pendingTotp?.providerData as { Email?: string } | undefined)?.Email || pendingTotp?.email || '')}
+          pendingNewDeviceVerification={pendingTotp?.newDeviceVerification}
           emailCodeSending={emailCodeSending}
-          onResendEmailCode={() => setEmailCodeSendAttempt(attempt => attempt + 1)}
+          onResendEmailCode={() => setPendingTotp(pending => pending ? { ...pending, emailResendRequested: true } : pending)}
           totpCode={totpCode}
           rememberDevice={rememberDevice}
           onTotpCodeChange={setTotpCode}

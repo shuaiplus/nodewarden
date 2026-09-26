@@ -460,6 +460,7 @@ export interface TokenSuccess {
 export interface TokenError {
   error?: string;
   error_description?: string;
+  ErrorModel?: { Message?: string; Object?: string };
   Email?: string;
   SsoEmail2faSessionToken?: string | null;
   TwoFactorProviders?: unknown;

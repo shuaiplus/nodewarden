@@ -65,6 +65,8 @@ const fr: Record<string, string> = {
   "txt_authenticator_app_help": "Saisissez un code généré par une application d'authentification.",
   "txt_email_verification_code": "Code de vérification par e-mail",
   "txt_check_email_for_code": "Consultez votre messagerie {email} pour obtenir votre code de vérification.",
+  "txt_new_device_verification": "Vérifier le nouvel appareil",
+  "txt_new_device_code_hint": "Consultez votre messagerie {email} pour obtenir un code permettant de vérifier cet appareil.",
   "txt_resend_code": "Renvoyer le code",
   "txt_sending_code": "Envoi du code…",
   "txt_send_code_failed": "Impossible d'envoyer le code de vérification. Réessayez.",

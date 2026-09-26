@@ -100,8 +100,9 @@ import { TEST_ORIGIN } from './support/env';
 
 test('a verified passkey grant notifies its new device', async () => {
   const capture = captureEmail();
-  const env = await createTestEnv(capture.overrides);
-  const user = await seedUser(env, { email: `passkey@${MAILABLE_DOMAIN}`, createdAt: old });
+  const env = await createTestEnv({ ...capture.overrides, ENABLE_NEW_DEVICE_VERIFICATION: 'true' });
+  const user = await seedUser(env, { email: `passkey@${MAILABLE_DOMAIN}`, verifyDevices: true, createdAt: new Date(Date.now() - 2 * 86400_000).toISOString() });
+  await new StorageService(env.DB).upsertDevice(user.id, 'known-device', 'Known', 9);
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const jwk = await crypto.subtle.exportKey('jwk', keys.privateKey);
   type CborValue = Parameters<typeof isoCBOR.encode>[0];

@@ -298,6 +298,8 @@ async function prepareImportedConfigRows(
     nextConfigRows = upsertConfigRow(nextConfigRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
   }
   nextConfigRows = upsertConfigRow(nextConfigRows, 'registered', 'true');
+  // Imported preferences must survive a later baseline replay, including archives without this marker.
+  nextConfigRows = upsertConfigRow(nextConfigRows, 'migration.verify-devices-on', '1');
   return nextConfigRows;
 }
 

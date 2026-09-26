@@ -9,9 +9,10 @@ const masterPasswordHash = pbkdf2Sync(pbkdf2Sync(password, email, 600000, 32, 's
 
 test.use({ locale: 'en-US', serviceWorkers: 'block' });
 
-async function openChallenge(page: Page, providers: number[], firstSendFails = false) {
+async function openChallenge(page: Page, providers: number[] | 'new-device', firstSendFails = false) {
   const loginRequests: URLSearchParams[] = [];
   const sendRequests: Record<string, unknown>[] = [];
+  const resendRequests: Record<string, unknown>[] = [];
   await page.route((url) => /^\/(api|identity)\//.test(url.pathname), async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/web-bootstrap') {
@@ -19,6 +20,17 @@ async function openChallenge(page: Page, providers: number[], firstSendFails = f
     }
     if (path === '/identity/connect/token') {
       loginRequests.push(new URLSearchParams(route.request().postData() || ''));
+      if (providers === 'new-device') {
+        const description = loginRequests.length === 1 ? 'New device verification required' : 'Invalid New Device OTP';
+        return route.fulfill({
+          status: 400,
+          json: {
+            error: 'device_error',
+            error_description: description,
+            ErrorModel: { Message: description.toLowerCase(), Object: 'error' },
+          },
+        });
+      }
       return route.fulfill({
         status: 400,
         json: loginRequests.length === 1 ? {
@@ -37,6 +49,11 @@ async function openChallenge(page: Page, providers: number[], firstSendFails = f
         ? route.fulfill({ status: 503, json: { error_description: 'Email delivery unavailable.' } })
         : route.fulfill({ json: '' });
     }
+    if (path === '/api/accounts/resend-new-device-otp') {
+      expect(route.request().method()).toBe('POST');
+      resendRequests.push(route.request().postDataJSON());
+      return route.fulfill({ json: '' });
+    }
     return route.fulfill({ status: 404, json: {} });
   });
   await page.goto('/login');
@@ -47,7 +64,7 @@ async function openChallenge(page: Page, providers: number[], firstSendFails = f
   expect(loginRequests).toHaveLength(1);
   expect(loginRequests[0].get('password')).toBe(masterPasswordHash);
   expect(loginRequests[0].get('deviceIdentifier')).toBeTruthy();
-  return { loginRequests, sendRequests };
+  return { loginRequests, sendRequests, resendRequests };
 }
 
 test('Email 2FA preserves its challenge after send failure, resend, and invalid code', async ({ page }) => {
@@ -99,4 +116,48 @@ test('selecting Email sends a code while the default authenticator does not', as
   await expect(dialog.getByText(`Check ${maskedEmail} for your verification code.`, { exact: true })).toBeVisible();
   await expect.poll(() => sendRequests.length).toBe(1);
   expect(sendRequests[0]).toMatchObject({ email, masterPasswordHash, ssoEmail2FaSessionToken: sessionToken });
+});
+
+test('new-device verification retains its challenge and only resends on request', async ({ page }) => {
+  const { loginRequests, sendRequests, resendRequests } = await openChallenge(page, 'new-device');
+  const dialog = page.getByRole('dialog', { name: 'Verify new device', exact: true });
+  const code = dialog.getByLabel('Email verification code', { exact: true });
+  await expect(code).toBeVisible();
+  await expect(dialog.getByText(`Check ${email} for a code to verify this device.`, { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Use Recovery Code', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Select another verification method', exact: true })).toHaveCount(0);
+  expect(sendRequests).toHaveLength(0);
+  expect(resendRequests).toHaveLength(0);
+
+  await code.fill(' 123456 ');
+  await dialog.getByRole('button', { name: 'Verify', exact: true }).click();
+  await expect(page.getByText('The verification code is invalid. Try again.', { exact: true })).toBeVisible();
+  await expect(code).toBeVisible();
+  expect(loginRequests).toHaveLength(2);
+  expect(resendRequests).toHaveLength(0);
+
+  await dialog.getByRole('button', { name: 'Resend code', exact: true }).click();
+  await expect.poll(() => resendRequests.length).toBe(1);
+  await expect(dialog.getByRole('button', { name: 'Resend code', exact: true })).toBeEnabled();
+  expect(resendRequests).toEqual([{ email, masterPasswordHash }]);
+  await code.fill(' 654321 ');
+  await dialog.getByRole('button', { name: 'Verify', exact: true }).click();
+  await expect.poll(() => loginRequests.length).toBe(3);
+  await expect(dialog.getByRole('button', { name: 'Verify', exact: true })).toBeEnabled();
+  for (const [index, token] of ['123456', '654321'].entries()) {
+    const request = loginRequests[index + 1];
+    expect(Object.fromEntries(request)).toMatchObject({
+      grant_type: 'password',
+      username: email,
+      password: masterPasswordHash,
+      deviceIdentifier: loginRequests[0].get('deviceIdentifier'),
+      newDeviceOtp: token,
+    });
+    expect(request.has('twoFactorProvider')).toBe(false);
+    expect(request.has('twoFactorToken')).toBe(false);
+    expect(request.has('twoFactorRemember')).toBe(false);
+  }
+  expect(sendRequests).toHaveLength(0);
+  expect(resendRequests).toHaveLength(1);
 });

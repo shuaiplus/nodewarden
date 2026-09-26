@@ -263,6 +263,7 @@ export async function loginWithPassword(
   passwordHash: string,
   options?: {
     totpCode?: string;
+    newDeviceOtp?: string;
     twoFactorProvider?: number;
     rememberDevice?: boolean;
     useRememberToken?: boolean;
@@ -278,8 +279,10 @@ export async function loginWithPassword(
   body.set('deviceName', guessDeviceName());
   body.set('deviceType', '14');
 
-  const rememberedToken = options?.useRememberToken ? getRememberTwoFactorToken() : null;
-  if (rememberedToken) {
+  const rememberedToken = options?.useRememberToken && options.newDeviceOtp === undefined ? getRememberTwoFactorToken() : null;
+  if (options?.newDeviceOtp !== undefined) {
+    body.set('newDeviceOtp', options.newDeviceOtp);
+  } else if (rememberedToken) {
     body.set('twoFactorProvider', '5');
     body.set('twoFactorToken', rememberedToken);
   } else if (options?.totpCode) {
@@ -308,14 +311,17 @@ export async function loginWithPassword(
   return json;
 }
 
-export async function sendEmailTwoFactorCode(
-  pending: { email: string; passwordHash: string; ssoEmail2faSessionToken?: string },
+export async function sendLoginEmailCode(
+  pending: { email: string; passwordHash: string; ssoEmail2faSessionToken?: string; newDeviceVerification: boolean },
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch('/api/two-factor/send-email-login', {
+  const response = await fetch(pending.newDeviceVerification ? '/api/accounts/resend-new-device-otp' : '/api/two-factor/send-email-login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(pending.newDeviceVerification ? {
+      email: pending.email,
+      masterPasswordHash: pending.passwordHash,
+    } : {
       email: pending.email,
       masterPasswordHash: pending.passwordHash,
       ssoEmail2FaSessionToken: pending.ssoEmail2faSessionToken ?? '',

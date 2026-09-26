@@ -68,6 +68,8 @@ const zhTW: Record<string, string> = {
   "txt_authenticator_app_help": "輸入驗證器 App 生成的代碼。",
   "txt_email_verification_code": "電子郵件驗證碼",
   "txt_check_email_for_code": "請到 {email} 查收驗證碼。",
+  "txt_new_device_verification": "驗證新裝置",
+  "txt_new_device_code_hint": "請到 {email} 查收用於驗證此裝置的驗證碼。",
   "txt_resend_code": "重新傳送驗證碼",
   "txt_sending_code": "正在傳送驗證碼…",
   "txt_send_code_failed": "無法傳送驗證碼，請重試。",

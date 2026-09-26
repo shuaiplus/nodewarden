@@ -23,6 +23,7 @@ import {
   handleGetPasswordHint,
   handleRecoverTwoFactor,
   handleSendTwoFactorEmailLogin,
+  handleResendNewDeviceOtp,
 } from './handlers/accounts';
 import {
   handleCreateAuthRequest,
@@ -475,9 +476,13 @@ export async function handlePublicRoute(
     return handleSendTwoFactorEmailLogin(request, env);
   }
 
+  if ((path === '/api/accounts/resend-new-device-otp' || path === '/accounts/resend-new-device-otp') && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
+    if (blocked) return blocked;
+    return handleResendNewDeviceOtp(request, env);
+  }
+
   const publicMailBackedPaths = new Set([
-    '/api/accounts/resend-new-device-otp',
-    '/accounts/resend-new-device-otp',
     '/api/accounts/register/verification-email-clicked',
     '/accounts/register/verification-email-clicked',
     '/identity/accounts/register/verification-email-clicked',

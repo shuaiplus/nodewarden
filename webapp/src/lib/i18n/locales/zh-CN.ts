@@ -68,6 +68,8 @@ const zhCN: Record<string, string> = {
   "txt_authenticator_app_help": "输入验证器 App 生成的代码。",
   "txt_email_verification_code": "邮箱验证码",
   "txt_check_email_for_code": "请到 {email} 查收验证码。",
+  "txt_new_device_verification": "验证新设备",
+  "txt_new_device_code_hint": "请到 {email} 查收用于验证此设备的验证码。",
   "txt_resend_code": "重新发送验证码",
   "txt_sending_code": "正在发送验证码…",
   "txt_send_code_failed": "无法发送验证码，请重试。",

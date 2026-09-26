@@ -1,3 +1,4 @@
+import { readMailConfig } from '../services/mail';
 import type { Env, ProfileResponse, User } from '../types';
 import { buildAccountKeys } from './user-decryption';
 import { StorageService } from '../services/storage';
@@ -22,6 +23,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
     }
   }
   const accountKeys = buildAccountKeys(user);
+  const mail = env ? readMailConfig(env) : null;
   const hasTwoFactorPasskey = env?.DB ? await new StorageService(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0 : false;
 
   return {
@@ -47,9 +49,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
     forcePasswordReset: false,
     avatarColor: null,
     creationDate: user.createdAt,
-    // New-device verification is not supported without an email delivery channel.
-    // Always report disabled so clients do not present a false security posture.
-    verifyDevices: false,
+    verifyDevices: mail?.kind === 'enabled' && mail.newDeviceVerification && !!user.verifyDevices,
     role: user.role,
     status: user.status,
     object: 'profile',

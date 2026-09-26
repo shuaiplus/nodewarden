@@ -34,7 +34,7 @@ test('reads EMAIL_FROM from env', () => {
   assert.deepEqual(readMailConfig({}), { kind: 'disabled' });
   assert.deepEqual(
     readMailConfig({ EMAIL: binding, EMAIL_FROM: 'noreply@stevefan1999.tech', EMAIL_FROM_NAME: 'NW' }),
-    { kind: 'enabled', binding, sendsPerHour: 100, newDeviceNotices: true, from: { email: 'noreply@stevefan1999.tech', name: 'NW' } }
+    { kind: 'enabled', binding, sendsPerHour: 100, newDeviceNotices: true, newDeviceVerification: false, from: { email: 'noreply@stevefan1999.tech', name: 'NW' } }
   );
 });
 

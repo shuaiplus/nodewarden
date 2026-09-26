@@ -169,6 +169,14 @@ export function errorResponse(
   );
 }
 
+export function deviceErrorResponse(kind: 'required' | 'invalid_otp'): Response {
+  return jsonResponse({
+    error: 'device_error',
+    error_description: kind === 'required' ? 'New device verification required' : 'Invalid New Device OTP',
+    ErrorModel: { Message: kind === 'required' ? 'new device verification required' : 'invalid new device otp', Object: 'error' },
+  }, 400, { 'Cache-Control': 'no-store' });
+}
+
 export function unsupportedResponse(message: string = 'This feature is not supported by this server.'): Response {
   return errorResponse(message, 501);
 }

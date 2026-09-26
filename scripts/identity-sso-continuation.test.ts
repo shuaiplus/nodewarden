@@ -187,3 +187,11 @@ test('SSO email two-factor completes the same single-use authorization-code requ
   assert.equal(f.exchanges(), 1);
   assert.equal((await f.login({ twoFactorProvider: '1', twoFactorToken: code })).status, 400);
 });
+
+test('verified SSO is exempt from new-device verification on an old opted-in account', async t => {
+  const f = await setup(t, { totpSecret: null, verifyDevices: true, createdAt: new Date(Date.now() - 2 * 86400_000).toISOString() });
+  f.env.ENABLE_NEW_DEVICE_VERIFICATION = 'true';
+  f.env.DISABLE_EMAIL_NEW_DEVICE = 'true';
+  await new StorageService(f.env.DB).upsertDevice(f.user.id, 'known-device', 'Known', 9);
+  assert.equal((await f.login()).status, 200);
+});

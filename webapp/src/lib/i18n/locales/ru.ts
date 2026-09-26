@@ -66,6 +66,8 @@ const ru: Record<string, string> = {
   "txt_authenticator_app_help": "Введите код, созданный приложением-аутентификатором.",
   "txt_email_verification_code": "Код подтверждения из письма",
   "txt_check_email_for_code": "Проверьте почту {email}, чтобы получить код подтверждения.",
+  "txt_new_device_verification": "Подтвердить новое устройство",
+  "txt_new_device_code_hint": "Проверьте почту {email}, чтобы получить код для подтверждения этого устройства.",
   "txt_resend_code": "Отправить код повторно",
   "txt_sending_code": "Отправка кода…",
   "txt_send_code_failed": "Не удалось отправить код подтверждения. Попробуйте ещё раз.",

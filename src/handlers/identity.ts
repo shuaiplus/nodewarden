@@ -1,13 +1,14 @@
+import { markEmailVerified } from '../services/vault-admin-role';
 import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
 import { readMailConfig } from '../services/mail';
-import { notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
+import { notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { jsonResponse, errorResponse, identityErrorResponse } from '../utils/response';
+import { jsonResponse, errorResponse, identityErrorResponse, deviceErrorResponse } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
@@ -534,7 +535,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
-    if (twoFactorProviders(user, hasTwoFactorPasskey).length > 0) {
+    const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
+    if (enabledProviders.length > 0) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
       const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
       let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
@@ -628,6 +630,21 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream behavior: do not issue a new remember token when auth itself used remember provider.
       if (rememberRequested && !passedByRememberToken && deviceInfo.deviceIdentifier) {
         trustedTwoFactorTokenToReturn = createRefreshToken();
+      }
+    }
+
+    const mail = readMailConfig(env);
+    if (mail.kind === 'enabled' && mail.newDeviceVerification && !viaSsoShim && !validatedAuthRequestId
+      && enabledProviders.length === 0 && user.verifyDevices
+      && Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000) {
+      const otp = String(readBodyValue(body, ['newDeviceOtp', 'NewDeviceOtp']) ?? '').trim();
+      if (otp) {
+        if (!await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)) return deviceErrorResponse('invalid_otp');
+        await markEmailVerified(env, user.id);
+      } else if (await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()
+        && (!deviceInfo.deviceIdentifier || !await storage.isKnownDevice(user.id, deviceInfo.deviceIdentifier))) {
+        notifyNewDeviceVerification(env, request, user, deviceInfo.deviceType);
+        return deviceErrorResponse('required');
       }
     }
 

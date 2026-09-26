@@ -40,6 +40,8 @@ export interface PendingTotp {
   availableProviders: number[];
   providerDataByType: Record<number, unknown>;
   ssoEmail2faSessionToken?: string;
+  newDeviceVerification: boolean;
+  emailResendRequested?: boolean;
 }
 
 export interface PendingPasskeyPassword {
@@ -551,9 +553,10 @@ export async function performPasswordLogin(
   }
 
   const tokenError = token as TokenError;
+  const newDeviceVerification = tokenError.error === 'device_error' && tokenError.ErrorModel?.Message === 'new device verification required';
   const providers = readTwoFactorProviders(tokenError);
-  if (providers) {
-    const providerType = resolvePendingTwoFactorProvider(providers);
+  if (providers || newDeviceVerification) {
+    const providerType = newDeviceVerification ? TWO_FACTOR_PROVIDER_EMAIL : resolvePendingTwoFactorProvider(providers);
     const availableProviders = readTwoFactorProviderTypes(providers);
     const providerDataByType = readTwoFactorProviderDataMap(tokenError);
     return {
@@ -565,9 +568,10 @@ export async function performPasswordLogin(
         kdfIterations: derived.kdfIterations,
         providerType,
         providerData: providerDataByType[providerType] ?? readTwoFactorProviderData(tokenError, providerType),
-        availableProviders: availableProviders.length ? availableProviders : [providerType],
+        availableProviders: newDeviceVerification ? [] : availableProviders.length ? availableProviders : [providerType],
         providerDataByType,
         ssoEmail2faSessionToken: tokenError.SsoEmail2faSessionToken ?? tokenError.CustomResponse?.SsoEmail2faSessionToken ?? undefined,
+        newDeviceVerification,
       },
     };
   }
@@ -639,7 +643,9 @@ export async function performTotpLogin(
   totpCode: string,
   rememberDevice: boolean
 ): Promise<CompletedLogin> {
-  const token = await loginWithPassword(pendingTotp.email, pendingTotp.passwordHash, {
+  const token = await loginWithPassword(pendingTotp.email, pendingTotp.passwordHash, pendingTotp.newDeviceVerification ? {
+    newDeviceOtp: totpCode.trim(),
+  } : {
     totpCode: totpCode.trim(),
     twoFactorProvider: pendingTotp.providerType,
     rememberDevice,
@@ -647,7 +653,10 @@ export async function performTotpLogin(
   if ('access_token' in token && token.access_token) {
     return completeLogin(token, pendingTotp.email, pendingTotp.masterKey, pendingTotp.kdfIterations, pendingTotp.passwordHash);
   }
-  const tokenError = token as { error_description?: string; error?: string };
+  const tokenError = token as TokenError;
+  if (pendingTotp.newDeviceVerification && (tokenError.ErrorModel?.Message === 'invalid new device otp' || tokenError.error_description?.includes('Invalid New Device OTP'))) {
+    throw new Error(t('txt_email_code_verify_failed'));
+  }
   const fallback = pendingTotp.providerType === TWO_FACTOR_PROVIDER_WEBAUTHN
     ? t('txt_passkey_verification_failed')
     : pendingTotp.providerType === TWO_FACTOR_PROVIDER_EMAIL
@@ -756,9 +765,10 @@ export async function performUnlock(
   }
 
   const tokenError = token as TokenError;
+  const newDeviceVerification = tokenError.error === 'device_error' && tokenError.ErrorModel?.Message === 'new device verification required';
   const providers = readTwoFactorProviders(tokenError);
-  if (providers) {
-    const providerType = resolvePendingTwoFactorProvider(providers);
+  if (providers || newDeviceVerification) {
+    const providerType = newDeviceVerification ? TWO_FACTOR_PROVIDER_EMAIL : resolvePendingTwoFactorProvider(providers);
     const availableProviders = readTwoFactorProviderTypes(providers);
     const providerDataByType = readTwoFactorProviderDataMap(tokenError);
     return {
@@ -770,9 +780,10 @@ export async function performUnlock(
         kdfIterations: derived.kdfIterations,
         providerType,
         providerData: providerDataByType[providerType] ?? readTwoFactorProviderData(tokenError, providerType),
-        availableProviders: availableProviders.length ? availableProviders : [providerType],
+        availableProviders: newDeviceVerification ? [] : availableProviders.length ? availableProviders : [providerType],
         providerDataByType,
         ssoEmail2faSessionToken: tokenError.SsoEmail2faSessionToken ?? tokenError.CustomResponse?.SsoEmail2faSessionToken ?? undefined,
+        newDeviceVerification,
       },
     };
   }
