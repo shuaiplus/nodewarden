@@ -870,6 +870,7 @@ const es: Record<string, string> = {
   "txt_show_password_hint": "Mostrar pista de contraseña",
   "txt_hide_password_hint": "Ocultar pista de contraseña",
   "txt_loading_password_hint": "Cargando pista...",
+  "txt_password_hint_sent_email": "Revisa tu correo para ver la pista de contraseña.",
   "txt_password_hint_not_set": "No hay pista de contraseña disponible para este correo.",
   "txt_password_hint_load_failed": "Error al cargar la pista de contraseña",
   "txt_password_hint_too_long": "La pista de contraseña debe tener 120 caracteres o menos",

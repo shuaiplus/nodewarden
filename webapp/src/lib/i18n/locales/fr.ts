@@ -870,6 +870,7 @@ const fr: Record<string, string> = {
   "txt_show_password_hint": "Afficher l'indice du mot de passe",
   "txt_hide_password_hint": "Masquer l'indice du mot de passe",
   "txt_loading_password_hint": "Chargement de l'indice...",
+  "txt_password_hint_sent_email": "Consultez votre messagerie pour retrouver votre indice de mot de passe.",
   "txt_password_hint_not_set": "Aucun indice de mot de passe n'est disponible pour cet e-mail.",
   "txt_password_hint_load_failed": "Échec du chargement de l'indice du mot de passe",
   "txt_password_hint_too_long": "L'indice du mot de passe ne doit pas dépasser 120 caractères",

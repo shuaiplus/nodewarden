@@ -873,6 +873,7 @@ const zhTW: Record<string, string> = {
   "txt_show_password_hint": "查看密碼提示",
   "txt_hide_password_hint": "隱藏密碼提示",
   "txt_loading_password_hint": "正在加載提示...",
+  "txt_password_hint_sent_email": "請查看郵件以取得密碼提示。",
   "txt_password_hint_not_set": "這個郵箱沒有可顯示的密碼提示。",
   "txt_password_hint_load_failed": "加載密碼提示失敗",
   "txt_password_hint_too_long": "密碼提示最多隻能輸入 120 個字符",

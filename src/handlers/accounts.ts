@@ -614,6 +614,18 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     );
   }
 
+  const mail = readMailConfig(env);
+  if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
+  if (mail.kind === 'enabled') {
+    runInBackground('password-hint', async () => {
+      const user = await storage.getUser(email);
+      if (!user || user.status !== 'active') return;
+      const hint = normalizeMasterPasswordHint(user.masterPasswordHint);
+      if (hint) await sendMail(env, user.email, 'passwordHint', { hint });
+      else await sendMail(env, user.email, 'noPasswordHint', {});
+    });
+    return jsonResponse({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
+  }
   const user = await storage.getUser(email);
   const hint = user?.status === 'active' ? normalizeMasterPasswordHint(user.masterPasswordHint) : null;
   return jsonResponse({

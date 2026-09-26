@@ -845,11 +845,12 @@ export default function App() {
     try {
       const result = await getPasswordHint(email);
       if (loginHintRequestSeqRef.current !== requestSeq || loginEmailRef.current.trim().toLowerCase() !== email) return;
-      openPasswordHintDialog(result.masterPasswordHint);
+      const hint = result.sentByEmail ? t('txt_password_hint_sent_email') : result.masterPasswordHint;
+      openPasswordHintDialog(hint);
       setLoginHintState({
         email,
         loading: false,
-        hint: result.masterPasswordHint,
+        hint,
       });
     } catch (error) {
       if (loginHintRequestSeqRef.current !== requestSeq || loginEmailRef.current.trim().toLowerCase() !== email) return;

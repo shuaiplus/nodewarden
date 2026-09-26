@@ -870,6 +870,7 @@ const fi: Record<string, string> = {
   "txt_show_password_hint": "Näytä salasanavihje",
   "txt_hide_password_hint": "Piilota salasanavihje",
   "txt_loading_password_hint": "Ladataan vihjettä...",
+  "txt_password_hint_sent_email": "Tarkista sähköpostistasi salasanavihje.",
   "txt_password_hint_not_set": "Tälle sähköpostille ei ole saatavilla salasanavihjettä.",
   "txt_password_hint_load_failed": "Salasanavihjeen lataus epäonnistui",
   "txt_password_hint_too_long": "Salasanavihje saa olla enintään 120 merkkiä",

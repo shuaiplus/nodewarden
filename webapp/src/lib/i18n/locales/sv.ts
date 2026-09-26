@@ -870,6 +870,7 @@ const sv: Record<string, string> = {
   "txt_show_password_hint": "Visa lösenordsledtråd",
   "txt_hide_password_hint": "Dölj lösenordsledtråd",
   "txt_loading_password_hint": "Laddar ledtråd...",
+  "txt_password_hint_sent_email": "Kontrollera din e-post för lösenordsledtråden.",
   "txt_password_hint_not_set": "Ingen lösenordsledtråd är tillgänglig för denna e-post.",
   "txt_password_hint_load_failed": "Misslyckades med att ladda lösenordsledtråd",
   "txt_password_hint_too_long": "Lösenordsledtråden får vara högst 120 tecken",

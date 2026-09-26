@@ -870,6 +870,7 @@ const ru: Record<string, string> = {
   "txt_show_password_hint": "Показать подсказку к паролю",
   "txt_hide_password_hint": "Скрыть подсказку к паролю",
   "txt_loading_password_hint": "Загрузка подсказки...",
+  "txt_password_hint_sent_email": "Проверьте почту: подсказка к паролю отправлена письмом.",
   "txt_password_hint_not_set": "Для этого адреса электронной почты подсказка к паролю недоступна.",
   "txt_password_hint_load_failed": "Не удалось загрузить подсказку к паролю.",
   "txt_password_hint_too_long": "Подсказка к паролю должна содержать не более 120 символов.",

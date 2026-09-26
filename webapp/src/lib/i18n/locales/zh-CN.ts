@@ -873,6 +873,7 @@ const zhCN: Record<string, string> = {
   "txt_show_password_hint": "查看密码提示",
   "txt_hide_password_hint": "隐藏密码提示",
   "txt_loading_password_hint": "正在加载提示...",
+  "txt_password_hint_sent_email": "请查看邮件以获取密码提示。",
   "txt_password_hint_not_set": "这个邮箱没有可显示的密码提示。",
   "txt_password_hint_load_failed": "加载密码提示失败",
   "txt_password_hint_too_long": "密码提示最多只能输入 120 个字符",

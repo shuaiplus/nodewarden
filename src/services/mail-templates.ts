@@ -4,6 +4,14 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  passwordHint: {
+    throttle: 'user',
+    render: (model: { hint: string }): MailContent => ({ subject: 'Your NodeWarden password hint', paragraphs: ['You requested your saved master password hint.', sanitizeForEmail(model.hint), 'NodeWarden cannot recover your master password.'] }),
+  },
+  noPasswordHint: {
+    throttle: 'user',
+    render: (_model: Record<string, never>): MailContent => ({ subject: 'Your NodeWarden password hint', paragraphs: ['No master password hint is saved for your account.', 'NodeWarden cannot recover your master password.'] }),
+  },
   twoFactorRecovered: {
     throttle: 'exempt',
     render: (model: { time: string; ip: string }): MailContent => ({

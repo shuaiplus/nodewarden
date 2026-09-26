@@ -923,6 +923,7 @@ const en: Record<string, string> = {
   "txt_show_password_hint": "Show Password Hint",
   "txt_hide_password_hint": "Hide Password Hint",
   "txt_loading_password_hint": "Loading hint...",
+  "txt_password_hint_sent_email": "Check your email for your password hint.",
   "txt_password_hint_not_set": "No password hint is available for this email.",
   "txt_password_hint_load_failed": "Failed to load password hint",
   "txt_password_hint_too_long": "Password hint must be 120 characters or fewer",

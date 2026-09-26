@@ -870,6 +870,7 @@ const de: Record<string, string> = {
   "txt_show_password_hint": "Passworthinweis anzeigen",
   "txt_hide_password_hint": "Passworthinweis ausblenden",
   "txt_loading_password_hint": "Hinweis wird geladen...",
+  "txt_password_hint_sent_email": "Prüfen Sie Ihr E-Mail-Postfach auf den Passworthinweis.",
   "txt_password_hint_not_set": "Für diese E-Mail ist kein Passworthinweis verfügbar.",
   "txt_password_hint_load_failed": "Fehler beim Laden des Passworthinweises",
   "txt_password_hint_too_long": "Der Passworthinweis darf höchstens 120 Zeichen lang sein",

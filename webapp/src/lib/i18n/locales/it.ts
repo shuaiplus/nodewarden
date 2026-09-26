@@ -870,6 +870,7 @@ const it: Record<string, string> = {
   "txt_show_password_hint": "Mostra suggerimento password",
   "txt_hide_password_hint": "Nascondi suggerimento password",
   "txt_loading_password_hint": "Caricamento suggerimento...",
+  "txt_password_hint_sent_email": "Controlla la tua email per il suggerimento della password.",
   "txt_password_hint_not_set": "Nessun suggerimento per la password disponibile per questa email.",
   "txt_password_hint_load_failed": "Impossibile caricare il suggerimento per la password",
   "txt_password_hint_too_long": "Il suggerimento della password può contenere al massimo 120 caratteri",
