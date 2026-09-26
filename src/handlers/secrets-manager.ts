@@ -378,3 +378,12 @@ export async function handleSecretsSync(
     object: 'secretsSync',
   });
 }
+
+export async function handleSmEvents(env: Env, userId: string, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {
+  const row = kind === 'projects' ? await smRepo.getProject(env.DB, id) : kind === 'secrets' ? await smRepo.getSecret(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
+  if (!row || (orgId && row.orgId !== orgId) || ('deletedAt' in row && row.deletedAt)) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, row.orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const access = kind === 'projects' ? projectAccess(context.actor, context.grants, id) : 'projectIds' in row ? secretAccess(context.actor, context.grants, row) : serviceAccountAccess(context.actor, context.grants, id);
+  return access === 'none' ? errorResponse('Not found', 404) : jsonResponse(listResponse([]));
+}

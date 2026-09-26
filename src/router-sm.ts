@@ -11,6 +11,7 @@ import {
   handleDeleteServiceAccounts,
   handleRevokeAccessTokens,
   handleSmCounts,
+  handleSmEvents,
   handleDeleteSecrets,
   handleGetSecret,
   handleProjectSecrets,
@@ -23,6 +24,10 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  const event = path.match(/^\/api\/organization\/([a-f0-9-]+)\/(projects|secrets|service-account)\/([a-f0-9-]+)\/events$/i);
+  if (event && method === 'GET') return handleSmEvents(env, userId, event[2] as 'projects' | 'secrets' | 'service-account', event[3], event[1]);
+  const accountEvent = path.match(/^\/api\/sm\/events\/service-accounts\/([a-f0-9-]+)$/i);
+  if (accountEvent && method === 'GET') return handleSmEvents(env, userId, 'service-account', accountEvent[1]);
   if (path === '/api/service-accounts/delete' && method === 'POST') return handleDeleteServiceAccounts(request, env, userId);
   const account = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)(\/sm-counts)?$/i);
   if (account && (method === 'GET' || (!account[2] && method === 'PUT'))) return handleServiceAccount(request, env, userId, account[1], !!account[2]);
