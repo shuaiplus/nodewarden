@@ -54,6 +54,8 @@ export interface OrgPolicy {
 export interface SmProject {
   id: string;
   name: string;
+  read: boolean;
+  write: boolean;
 }
 
 export interface SmSecret {

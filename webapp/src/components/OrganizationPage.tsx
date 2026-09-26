@@ -23,6 +23,7 @@ import { t } from '@/lib/i18n';
 interface OrganizationPageProps {
   organizations: ProfileOrganization[];
   session: SessionState;
+  privateKey?: string | null;
   authedFetch: import('@/lib/api/shared').AuthedFetch;
   onOrganizationsChanged: () => Promise<void> | void;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
@@ -105,7 +106,7 @@ export default function OrganizationPage(props: OrganizationPageProps) {
     setBusy(true);
     try {
       const memberPublicKey = await getUserPublicKey(props.authedFetch, member.userId);
-      const wrapped = await wrapOrgKeyForMember(props.session, selected.key, memberPublicKey);
+      const wrapped = await wrapOrgKeyForMember(props.session, selected.key, memberPublicKey, props.privateKey);
       await confirmMember(props.authedFetch, selected.id, member.id, wrapped);
       await refresh();
       props.onNotify('success', t('txt_org_member_confirmed'));

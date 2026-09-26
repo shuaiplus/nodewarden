@@ -15,6 +15,7 @@ import { t } from '@/lib/i18n';
 interface SecretsManagerPageProps {
   organizations: ProfileOrganization[];
   session: SessionState;
+  privateKey?: string | null;
   authedFetch: import('@/lib/api/shared').AuthedFetch;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
 }
@@ -28,6 +29,8 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
   const [secretValue, setSecretValue] = useState('');
 
   const selected = props.organizations.find((org) => org.id === orgId) || props.organizations[0] || null;
+  const writableProject = projects.find((project) => project.write);
+  const canCreateSecret = !!selected && (selected.type <= 1 || !!writableProject);
 
   function wrappedOrgKey(): string {
     if (!selected?.key) throw new Error('Organization key unavailable');
@@ -40,7 +43,7 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
     // As upstream project.service: an org key that cannot be unwrapped fails the refresh, while a
     // name that fails to decrypt (the webapp once stored names in plaintext) shows a decrypt error
     // for its row alone.
-    const orgKey = await unwrapOrgKey(props.session, wrappedOrgKey());
+    const orgKey = await unwrapOrgKey(props.session, wrappedOrgKey(), props.privateKey);
     setProjects(await Promise.all(encryptedProjects.map(async (project) => ({
       ...project,
       name: await decryptWithOrgKey(orgKey, project.name).catch(() => t('txt_decrypt_failed')),
@@ -52,26 +55,24 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
     refresh().catch((error) => props.onNotify('error', String(error.message || error)));
   }, [selected?.id]);
 
-  async function encryptField(value: string): Promise<string> {
-    return encryptWithOrgKey(await unwrapOrgKey(props.session, wrappedOrgKey()), value);
-  }
-
   async function onCreateProject(event: Event): Promise<void> {
     event.preventDefault();
     if (!selected) return;
-    await createProject(props.authedFetch, selected.id, await encryptField(projectName));
+    const orgKey = await unwrapOrgKey(props.session, wrappedOrgKey(), props.privateKey);
+    await createProject(props.authedFetch, selected.id, await encryptWithOrgKey(orgKey, projectName));
     setProjectName('');
     await refresh();
   }
 
   async function onCreateSecret(event: Event): Promise<void> {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || !canCreateSecret) return;
+    const orgKey = await unwrapOrgKey(props.session, wrappedOrgKey(), props.privateKey);
     await createSecret(props.authedFetch, selected.id, {
-      key: await encryptField(secretKey),
-      value: await encryptField(secretValue),
-      note: await encryptField(''),
-      projectIds: projects[0] ? [projects[0].id] : [],
+      key: await encryptWithOrgKey(orgKey, secretKey),
+      value: await encryptWithOrgKey(orgKey, secretValue),
+      note: await encryptWithOrgKey(orgKey, ''),
+      projectIds: writableProject ? [writableProject.id] : [],
     });
     setSecretKey('');
     setSecretValue('');
@@ -95,15 +96,15 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
           </label>
           <form className="card form-grid" onSubmit={onCreateProject}>
             <h2>{t('txt_sm_projects')}</h2>
-            <input className="input" value={projectName} onInput={(event) => setProjectName((event.currentTarget as HTMLInputElement).value)} required />
+            <input className="input" aria-label={t('txt_name')} value={projectName} onInput={(event) => setProjectName((event.currentTarget as HTMLInputElement).value)} required />
             <button className="btn" type="submit">{t('txt_sm_add_project')}</button>
             <ul className="plain-list">{projects.map((project) => <li>{project.name}</li>)}</ul>
           </form>
           <form className="card form-grid" onSubmit={onCreateSecret}>
             <h2>{t('txt_sm_secrets')}</h2>
-            <input className="input" placeholder={t('txt_sm_secret_key')} value={secretKey} onInput={(event) => setSecretKey((event.currentTarget as HTMLInputElement).value)} required />
-            <input className="input" placeholder={t('txt_sm_secret_value')} value={secretValue} onInput={(event) => setSecretValue((event.currentTarget as HTMLInputElement).value)} required />
-            <button className="btn primary" type="submit">{t('txt_sm_add_secret')}</button>
+            <input className="input" aria-label={t('txt_sm_secret_key')} placeholder={t('txt_sm_secret_key')} value={secretKey} onInput={(event) => setSecretKey((event.currentTarget as HTMLInputElement).value)} required />
+            <input className="input" aria-label={t('txt_sm_secret_value')} placeholder={t('txt_sm_secret_value')} value={secretValue} onInput={(event) => setSecretValue((event.currentTarget as HTMLInputElement).value)} required />
+            <button className="btn primary" type="submit" disabled={!canCreateSecret}>{t('txt_sm_add_secret')}</button>
             <ul className="plain-list">{secrets.map((secret) => <li>{secret.id}</li>)}</ul>
           </form>
         </>

@@ -355,6 +355,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
           <OrganizationPage
             organizations={organizationsFromProfile(props.profile)}
             session={props.session}
+            privateKey={props.profile?.privateKey}
             authedFetch={props.authedFetch}
             onOrganizationsChanged={props.onRefreshProfile}
             onNotify={props.onNotify}
@@ -366,6 +367,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
           <SecretsManagerPage
             organizations={organizationsFromProfile(props.profile).filter(org => org.accessSecretsManager)}
             session={props.session}
+            privateKey={props.profile?.privateKey}
             authedFetch={props.authedFetch}
             onNotify={props.onNotify}
           />

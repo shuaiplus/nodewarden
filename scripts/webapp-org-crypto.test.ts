@@ -7,7 +7,7 @@ import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { confirmMember, createProject, createSecret, getUserPublicKey, listProjects } from '../webapp/src/lib/api/orgs';
 import type { AuthedFetch } from '../webapp/src/lib/api/shared';
-import { base64ToBytes, bytesToBase64, concatBytes } from '../webapp/src/lib/crypto';
+import { base64ToBytes, bytesToBase64, concatBytes, encryptBw, toBufferSource } from '../webapp/src/lib/crypto';
 import { createOrgKey, decryptWithOrgKey, encryptWithOrgKey, unwrapOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
@@ -88,6 +88,23 @@ test('webapp confirm stops at the public key lookup for a member without keys', 
   const keyless = await seedUser(env);
 
   await assert.rejects(getUserPublicKey(ownerFetch, keyless.id), /not found/i);
+});
+
+test('webapp unwraps RSA organization keys using the account encrypted private key', async () => {
+  const { adminSession, orgKey } = await setup();
+  const pair = await crypto.subtle.generateKey(MEMBER_RSA_KEY_PARAMS, true, ['encrypt', 'decrypt']);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+  const spki = await crypto.subtle.exportKey('spki', pair.publicKey);
+  const privateKey = await encryptBw(pkcs8, base64ToBytes(adminSession.symEncKey), base64ToBytes(adminSession.symMacKey));
+  for (const [type, hash] of [[3, 'SHA-256'], [4, 'SHA-1']] as const) {
+    const algorithm = { name: 'RSA-OAEP', hash };
+    const publicKey = await crypto.subtle.importKey('spki', spki, algorithm, false, ['encrypt']);
+    const wrap = async (raw: Uint8Array) => `${type}.${bytesToBase64(new Uint8Array(await crypto.subtle.encrypt(algorithm, publicKey, toBufferSource(raw))))}`;
+    const wrapped = await wrap(concatBytes(orgKey.encKey, orgKey.macKey));
+    assert.deepEqual(await unwrapOrgKey(adminSession, wrapped, privateKey), { encKey: orgKey.encKey, macKey: orgKey.macKey });
+    await assert.rejects(unwrapOrgKey(adminSession, wrapped), /private key unavailable/i);
+    await assert.rejects(unwrapOrgKey(adminSession, await wrap(new Uint8Array(32)), privateKey), /Invalid organization key/);
+  }
 });
 
 test('webapp Secrets Manager stores project names and secret notes as org-key EncStrings', async () => {
