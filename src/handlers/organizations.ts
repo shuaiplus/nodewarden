@@ -17,6 +17,7 @@ import {
   isActiveMember,
   type MemberCheck,
   memberCollectionsCheck,
+  memberRemovalCheck,
   memberRoleChangeCheck,
   resolveCollectionPermission,
   resolvePermissions,
@@ -110,6 +111,12 @@ async function requireMember(
   const member = await orgRepo.getMembershipByUserAndOrg(db, userId, orgId);
   if (!isActiveMember(member)) return errorResponse('Organization not found', 404);
   return member;
+}
+
+// Upstream HasConfirmedOwnersExceptAsync: whether a confirmed Owner other than this member remains.
+async function hasOtherConfirmedOwner(db: D1Database, membership: MembershipRecord): Promise<boolean> {
+  const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
+  return (await orgRepo.countConfirmedOwners(db, membership.orgId)) > (isConfirmedOwner ? 1 : 0);
 }
 
 async function parseJsonBody(request: Request): Promise<Record<string, unknown> | Response> {
@@ -930,10 +937,8 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (collections instanceof Response) return collections;
   const roleCheck = memberRoleChangeCheck(actor, clientMembershipType(membership.type), change.type, change.permissions, 'update');
   if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
-  // Upstream HasConfirmedOwnersExceptAsync: leaving Owner must leave another confirmed owner behind.
-  const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
-  const otherConfirmedOwners = (await orgRepo.countConfirmedOwners(env.DB, orgId)) - (isConfirmedOwner ? 1 : 0);
-  if (change.type !== MembershipType.Owner && otherConfirmedOwners < 1) {
+  // Leaving Owner must leave another confirmed owner behind.
+  if (change.type !== MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   membership.type = change.type;
@@ -956,8 +961,10 @@ export async function handleDeleteMember(env: Env, userId: string, orgId: string
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  if (membership.type === MembershipType.Owner && (await orgRepo.countConfirmedOwners(env.DB, orgId)) <= 1) {
-    return errorResponse('The last owner cannot be removed', 400);
+  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'remove');
+  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
+  if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
+    return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   await orgRepo.deleteMembership(env.DB, memberId);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
@@ -970,6 +977,12 @@ export async function handleRevokeMember(env: Env, userId: string, orgId: string
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
+  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'revoke');
+  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
+  // Only an Owner can restore an Owner, so revoking the last confirmed one would leave nobody able to undo it.
+  if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
+    return errorResponse('Organization must have at least one confirmed owner.', 400);
+  }
   membership.status = revokeStatus(membership.status);
   membership.updatedAt = new Date().toISOString();
   await orgRepo.saveMembership(env.DB, membership);
@@ -983,6 +996,8 @@ export async function handleRestoreMember(env: Env, userId: string, orgId: strin
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
+  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'restore');
+  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   membership.status = restoreStatus(membership.status);
   membership.updatedAt = new Date().toISOString();
   await orgRepo.saveMembership(env.DB, membership);

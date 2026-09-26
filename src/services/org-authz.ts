@@ -108,6 +108,16 @@ export function memberRoleChangeCheck(
     : { ok: true };
 }
 
+// Upstream RemoveOrganizationUserCommand and the v1 Revoke/RestoreOrganizationUserCommand: the same
+// role guard as a role change, applied to the member's current type and worded per action.
+export function memberRemovalCheck(actor: MembershipRecord, targetType: number, action: 'remove' | 'revoke' | 'restore'): RoleChangeCheck {
+  if (canManageMemberType(actor, targetType)) return { ok: true };
+  return {
+    ok: false,
+    message: targetType === MembershipType.Owner ? `Only owners can ${action} other owners.` : `Custom users can not ${action} admins.`,
+  };
+}
+
 // Upstream restricts self-edits unless admins may access all collection items. NodeWarden applies
 // that per actor: Owners and Admins always have the access, so only the other members are restricted.
 export function restrictsEditingSelf(actor: MembershipRecord, target: MembershipRecord): boolean {

@@ -179,6 +179,66 @@ test('PUT requires a real member type and keeps a confirmed owner', async () => 
   assert.equal((await details(env, admin.user, orgId, ownerMemberId)).type, MembershipType.Admin);
 });
 
+function removeMember(env: Env, actor: User, orgId: string, memberId: string): Promise<Response> {
+  return authedFetch(env, { method: 'DELETE', path: `/api/organizations/${orgId}/users/${memberId}`, userId: actor.id });
+}
+
+function setMemberRevoked(env: Env, actor: User, orgId: string, memberId: string, action: 'revoke' | 'restore'): Promise<Response> {
+  return authedFetch(env, { method: 'PUT', path: `/api/organizations/${orgId}/users/${memberId}/${action}`, userId: actor.id });
+}
+
+// Upstream RemoveOrganizationUserCommand and the v1 Revoke/RestoreOrganizationUserCommand apply the
+// same role guard as PUT: only an Owner acts on an Owner, and a Custom member never on an Admin.
+test('only an Owner removes, revokes or restores an Owner, and a Custom member no Admin', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const secondOwner = await addMember(env, orgId, MembershipType.Owner);
+  const admin = await addMember(env, orgId, MembershipType.Admin);
+  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
+  const member = await addMember(env, orgId, MembershipType.User);
+
+  await expectRejected(removeMember(env, admin.user, orgId, secondOwner.memberId), 400, 'Only owners can remove other owners.');
+  await expectRejected(removeMember(env, custom.user, orgId, secondOwner.memberId), 400, 'Only owners can remove other owners.');
+  await expectRejected(setMemberRevoked(env, admin.user, orgId, secondOwner.memberId, 'revoke'), 400, 'Only owners can revoke other owners.');
+  await expectRejected(removeMember(env, custom.user, orgId, admin.memberId), 400, 'Custom users can not remove admins.');
+  await expectRejected(setMemberRevoked(env, custom.user, orgId, admin.memberId, 'revoke'), 400, 'Custom users can not revoke admins.');
+  assert.equal((await details(env, owner, orgId, secondOwner.memberId)).status, MembershipStatus.Confirmed);
+  assert.equal((await details(env, owner, orgId, admin.memberId)).status, MembershipStatus.Confirmed);
+
+  assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'revoke')).status, 200);
+  assert.equal((await setMemberRevoked(env, admin.user, orgId, custom.memberId, 'revoke')).status, 200);
+  await expectRejected(setMemberRevoked(env, admin.user, orgId, secondOwner.memberId, 'restore'), 400, 'Only owners can restore other owners.');
+  assert.equal((await setMemberRevoked(env, admin.user, orgId, custom.memberId, 'restore')).status, 200);
+  assert.equal((await setMemberRevoked(env, owner, orgId, admin.memberId, 'revoke')).status, 200);
+  await expectRejected(setMemberRevoked(env, custom.user, orgId, admin.memberId, 'restore'), 400, 'Custom users can not restore admins.');
+  assert.equal((await details(env, owner, orgId, secondOwner.memberId)).status, MembershipStatus.Revoked);
+  assert.equal((await details(env, owner, orgId, admin.memberId)).status, MembershipStatus.Revoked);
+
+  // Owners act on anyone, and Custom manageUsers members still manage Users.
+  assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'restore')).status, 200);
+  assert.equal((await removeMember(env, owner, orgId, secondOwner.memberId)).status, 200);
+  assert.equal((await setMemberRevoked(env, custom.user, orgId, member.memberId, 'revoke')).status, 200);
+  assert.equal((await setMemberRevoked(env, custom.user, orgId, member.memberId, 'restore')).status, 200);
+  assert.equal((await removeMember(env, custom.user, orgId, member.memberId)).status, 200);
+});
+
+// Upstream HasConfirmedOwnersExceptAsync: only an Owner can restore an Owner, so revoking the last
+// confirmed one would leave nobody to undo it, and an Owner that is not confirmed never counts.
+test('the last confirmed owner cannot be revoked or removed', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const secondOwner = await addMember(env, orgId, MembershipType.Owner);
+
+  assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'revoke')).status, 200);
+  await expectRejected(setMemberRevoked(env, owner, orgId, ownerMemberId, 'revoke'), 400, LAST_OWNER);
+  await expectRejected(removeMember(env, owner, orgId, ownerMemberId), 400, LAST_OWNER);
+  assert.equal((await details(env, owner, orgId, ownerMemberId)).status, MembershipStatus.Confirmed);
+  assert.equal((await removeMember(env, owner, orgId, secondOwner.memberId)).status, 200);
+});
+
 // The org creator is stored with accessAll, which official web's update request never sends, so
 // PUT must not let that grant outlive a demotion the dialog cannot show or undo.
 test('demoting the organization creator drops the full collection access it was created with', async () => {
