@@ -1,3 +1,5 @@
+import { isSerializedEncString } from '../utils/account-passkeys';
+import { projectAccess, resolveSmActor, type SmAccess } from '../services/sm-authz';
 import type { Env } from '../types';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -127,37 +129,73 @@ export async function handleDeleteSecrets(request: Request, env: Env, userId: st
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
+export async function smContext(env: Env, userId: string, orgId: string) {
+  const actor = await resolveSmActor(env, userId, orgId);
+  return actor ? { actor, grants: await smRepo.loadSmGrants(env.DB, actor, orgId) } : null;
+}
+
+export function encryptedField(value: unknown, max = Infinity): value is string {
+  return typeof value === 'string' && value.length <= max && isSerializedEncString(value);
+}
+
+export function listResponse<T>(data: T[]) { return { data, object: 'list', continuationToken: null }; }
+
+function projectResponse(project: smRepo.SmProject, level: SmAccess) {
+  return { id: project.id, organizationId: project.orgId, name: project.name, creationDate: project.createdAt, revisionDate: project.updatedAt, read: level !== 'none', write: level === 'write', object: 'project' };
+}
+
+export async function readIds(request: Request): Promise<string[] | null> {
+  const ids: unknown = await request.json().catch(() => null);
+  return Array.isArray(ids) && ids.every(isUUID) ? ids.map(id => id.toLowerCase()) : null;
+}
+
 export async function handleListProjects(env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const projects = await smRepo.listProjects(env.DB, orgId);
-  return jsonResponse({
-    data: projects.map((project) => ({
-      id: project.id,
-      organizationId: project.orgId,
-      name: project.name,
-      creationDate: project.createdAt,
-      revisionDate: project.updatedAt,
-      object: 'project',
-    })),
-    object: 'list',
-    continuationToken: null,
-  });
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  // ponytail: in-memory filter loads every org row; push grants into SQL if an org passes ~10k secrets.
+  const projects = (await smRepo.listProjects(env.DB, orgId)).map(project => projectResponse(project, projectAccess(context.actor, context.grants, project.id))).filter(project => project.read);
+  return jsonResponse(listResponse(projects));
 }
 
 export async function handleCreateProject(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const body = await request.json() as { name?: string };
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  const body = await request.json().catch(() => null) as { name?: unknown } | null;
+  if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
   const now = new Date().toISOString();
-  const project = { id: generateUUID(), orgId, name: String(body.name || 'Project'), createdAt: now, updatedAt: now };
-  await smRepo.saveProject(env.DB, project);
-  return jsonResponse({
-    id: project.id,
-    organizationId: project.orgId,
-    name: project.name,
-    creationDate: project.createdAt,
-    revisionDate: project.updatedAt,
-    object: 'project',
-  });
+  const project = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
+  await smRepo.createProject(env.DB, project, context.actor);
+  return jsonResponse(projectResponse(project, 'write'));
+}
+
+export async function handleProject(request: Request, env: Env, userId: string, id: string, counts = false): Promise<Response> {
+  const project = await smRepo.getProject(env.DB, id);
+  const context = project && await smContext(env, userId, project.orgId);
+  if (!project || !context) return errorResponse('Not found', 404);
+  const access = projectAccess(context.actor, context.grants, id);
+  if (counts) return context.actor.kind === 'serviceAccount' ? errorResponse('Not found', 404) : jsonResponse(await smRepo.projectCounts(env.DB, project, access));
+  if (access === 'none' || (request.method === 'PUT' && access !== 'write')) return errorResponse('Not found', 404);
+  if (request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as { name?: unknown } | null;
+    if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+    project.name = body.name; project.updatedAt = new Date().toISOString();
+    if (!await smRepo.updateProject(env.DB, project)) return errorResponse('Not found', 404);
+  }
+  return jsonResponse(projectResponse(project, access));
+}
+
+export async function handleDeleteProjects(request: Request, env: Env, userId: string): Promise<Response> {
+  const ids = await readIds(request);
+  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
+  const projects = await smRepo.getProjectsByIds(env.DB, ids);
+  const orgId = projects[0]?.orgId;
+  if (!orgId || projects.length !== ids.length || projects.some(project => project.orgId !== orgId)) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  const data = ids.map(id => ({ id, error: projectAccess(context.actor, context.grants, id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
+  await smRepo.deleteProjects(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  return jsonResponse(listResponse(data));
 }
 
 export async function handleListServiceAccounts(env: Env, userId: string, orgId: string): Promise<Response> {

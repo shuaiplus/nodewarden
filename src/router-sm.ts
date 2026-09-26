@@ -3,6 +3,8 @@ import { errorResponse } from './utils/response';
 import {
   handleCreateAccessToken,
   handleCreateProject,
+  handleProject,
+  handleDeleteProjects,
   handleCreateSecret,
   handleCreateServiceAccount,
   handleDeleteSecrets,
@@ -15,6 +17,9 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  if (path === '/api/projects/delete' && method === 'POST') return handleDeleteProjects(request, env, userId);
+  const project = path.match(/^\/api\/projects\/([a-f0-9-]+)(\/sm-counts)?$/i);
+  if (project && (method === 'GET' || (!project[2] && method === 'PUT'))) return handleProject(request, env, userId, project[1], !!project[2]);
   if (path === '/api/secrets/delete' && method === 'POST') return handleDeleteSecrets(request, env, userId);
 
   const secretMatch = path.match(/^\/api\/secrets\/([a-f0-9-]+)$/i);
