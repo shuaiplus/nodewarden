@@ -20,6 +20,7 @@ export interface Env {
   ATTACHMENTS_KV?: KVNamespace;
   CACHE_KV?: KVNamespace;
   EMAIL?: import('../services/mail').SendEmailBinding;
+  ADMIN_EMAILS?: string;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EVENTS_QUEUE?: Queue;

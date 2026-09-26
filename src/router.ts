@@ -1,4 +1,6 @@
 import { handleSmMachineRoute, handleSmRoute } from './router-sm';
+import { isAdminPortalPath } from './web-vault-visibility';
+import { handleAdminPortal } from './handlers/admin-portal';
 import { Env } from './types';
 import { AuthService } from './services/auth';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
@@ -148,7 +150,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     );
   }
 
-  if (method === 'OPTIONS') {
+  if (method === 'OPTIONS' && !isAdminPortalPath(path)) {
     return handleCors(request, env);
   }
 
@@ -158,6 +160,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       return bodyLimitResult;
     }
     request = bodyLimitResult;
+    if (isAdminPortalPath(path)) return handleAdminPortal(request, env);
 
     const secretIssue = jwtSecretUnsafeReason(env);
     if (secretIssue && !canServeWithUnsafeJwtSecret(path, method)) {

@@ -2,6 +2,7 @@ import type { Env } from './types';
 
 const BACKEND_PATH_PREFIXES = [
   '/api',
+  '/admin',
   '/identity',
   '/icons',
   '/fill-assist',
@@ -53,4 +54,8 @@ export function webVaultNotFoundResponse(request: Request): Response {
       'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet',
     },
   });
+}
+
+export function isAdminPortalPath(path: string): boolean {
+  return path === '/admin' || path.startsWith('/admin/');
 }

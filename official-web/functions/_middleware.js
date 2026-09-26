@@ -1,3 +1,4 @@
+// Never add /admin to BACKEND_PREFIXES: portal cookies and forms require the Worker origin.
 const BACKEND_PREFIXES = [
   '/api',
   '/identity',

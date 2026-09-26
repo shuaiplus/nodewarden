@@ -164,3 +164,10 @@ export function failingEmail(code: string): NonNullable<Env['EMAIL']> {
   return { async send() { throw Object.assign(new Error('x'), { code }); } };
 }
 export { drainWaitUntil } from './cloudflare-workers';
+
+export function portalFetch(env: Env, { method = 'GET', path, form, cookie, headers }: { method?: string; path: string; form?: Record<string, string>; cookie?: string; headers?: HeadersInit }): Promise<Response> {
+  const requestHeaders = new Headers(headers);
+  if (method === 'POST' && !requestHeaders.has('Origin')) requestHeaders.set('Origin', TEST_ORIGIN);
+  if (cookie) requestHeaders.set('Cookie', cookie);
+  return authedFetch(env, { method, path, body: form ? new URLSearchParams(form) : undefined, headers: requestHeaders });
+}

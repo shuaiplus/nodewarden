@@ -1,4 +1,17 @@
 ﻿export const LIMITS = {
+  admin: {
+    // Administrator login, session, destructive-action and listing limits.
+    // 管理员登录、会话、敏感操作和列表限制。
+    loginLinkTtlSeconds: 900,
+    sessionTtlSeconds: 172800,
+    destructiveReauthSeconds: 900,
+    loginRequestsPerIpPerHour: 10,
+    loginLinksPerAdminPerWindow: 3,
+    deletesPerAdminPerHour: 20,
+    pageSizeDefault: 25,
+    pageSizeMax: 100,
+    recentAuditEvents: 20,
+  },
   auth: {
     // Access token lifetime in seconds.
     // 访问令牌有效期（秒）。
