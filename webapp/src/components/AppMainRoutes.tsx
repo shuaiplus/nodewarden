@@ -414,7 +414,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                     <Cloud size={18} />
                     <span>{t('nav_backup_strategy')}</span>
                   </Link>
-                  <Link href="/admin" className="mobile-settings-link">
+                  <Link href="/admin-panel" className="mobile-settings-link">
                     <ShieldUser size={18} />
                     <span>{t('nav_admin_panel')}</span>
                   </Link>
@@ -493,7 +493,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
           </Suspense>
         </div>
       </Route>
-      <Route path="/admin">
+      <Route path="/admin-panel">
         <div className="stack">
           {props.mobileLayout && (
             <div className="mobile-settings-subhead">

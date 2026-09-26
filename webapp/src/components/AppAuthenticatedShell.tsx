@@ -162,7 +162,7 @@ export default function AppAuthenticatedShell(props: AppAuthenticatedShellProps)
           <ShieldUser size={16} />,
           <>
             {renderSubLink('/backup', props.location === '/backup', t('nav_backup_strategy'))}
-            {renderSubLink('/admin', props.location === '/admin', t('nav_admin_panel'))}
+            {renderSubLink('/admin-panel', props.location === '/admin-panel', t('nav_admin_panel'))}
             {renderSubLink('/logs', props.location === '/logs', t('nav_log_center'))}
           </>
         )}
