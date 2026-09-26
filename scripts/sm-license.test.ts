@@ -7,8 +7,7 @@ import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support/sm';
 
 // Secrets Manager is on for every organization and never reads a license: no license upload may
-// switch it off or cap its seats, projects or machine accounts. Confirmed Owners and Admins get it
-// now.
+// switch it off or cap its seats, projects or machine accounts. Every confirmed member gets it.
 const SM_OFF_LICENSE = { useSecretsManager: false, smSeats: 0, smServiceAccounts: 0 };
 // More projects and machine accounts than SM_OFF_LICENSE's zero seats and machine accounts allow.
 const ITEMS_PAST_LICENSE = 3;
@@ -25,12 +24,11 @@ interface MemberAccess {
   accessSecretsManager: boolean;
 }
 
-// Only confirmed members hold the org key, and only Owners and Admins reach Secrets Manager until
-// access policies let other roles see what they are granted.
+// Confirmed members hold the org key; access policies determine which SM objects they can see.
 const MEMBER_ACCESS_CASES = [
   { role: 'an accepted Admin', type: MembershipType.Admin, status: MembershipStatus.Accepted, access: false },
   { role: 'a confirmed Admin', type: MembershipType.Admin, status: MembershipStatus.Confirmed, access: true },
-  { role: 'a confirmed User', type: MembershipType.User, status: MembershipStatus.Confirmed, access: false },
+  { role: 'a confirmed User', type: MembershipType.User, status: MembershipStatus.Confirmed, access: true },
 ];
 
 async function assertSecretsManagerOn(env: Env, orgId: string, members: User[]): Promise<void> {

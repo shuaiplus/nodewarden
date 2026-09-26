@@ -364,7 +364,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
       <Route path="/secrets">
         {props.session ? (
           <SecretsManagerPage
-            organizations={organizationsFromProfile(props.profile)}
+            organizations={organizationsFromProfile(props.profile).filter(org => org.accessSecretsManager)}
             session={props.session}
             authedFetch={props.authedFetch}
             onNotify={props.onNotify}

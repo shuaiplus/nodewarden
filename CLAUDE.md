@@ -20,3 +20,5 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - SM authorization goes through `src/services/sm-authz.ts` + `smContext`; no ad-hoc checks.
 
 - Machine JWTs carry `type=ServiceAccount`; only `router-sm`'s machine allowlist accepts them.
+
+- SM access = confirmed member, independent of licenses. Owners/Admins have full access; other members use object policies.

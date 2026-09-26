@@ -28,8 +28,9 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, principal: Principal, path: string, method: string): Promise<Response | null> {
+  path = path.toLowerCase();
   const trash = path.match(/^\/api\/secrets\/([a-f0-9-]+)\/trash(?:\/(empty|restore))?$/i);
-  if (trash && ((!trash[2] && method === 'GET') || (trash[2] && method === 'POST'))) return handleSecretsTrash(request, env, principal, trash[1], trash[2]?.toLowerCase() as 'empty' | 'restore' | undefined);
+  if (trash && ((!trash[2] && method === 'GET') || (trash[2] && method === 'POST'))) return handleSecretsTrash(request, env, principal, trash[1], trash[2] as 'empty' | 'restore' | undefined);
   const secretPolicies = path.match(/^\/api\/secrets\/([a-f0-9-]+)\/access-policies$/i);
   if (secretPolicies && method === 'GET') return handleSecretPolicies(env, principal, secretPolicies[1]);
   const machinePolicies = path.match(/^\/api\/projects\/([a-f0-9-]+)\/access-policies\/service-accounts$/i);

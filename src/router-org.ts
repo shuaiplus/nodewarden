@@ -13,6 +13,7 @@ import {
   handleDeleteOrgCollection,
   handleDeleteOrganization,
   handleEditMember,
+  handleEnableSecretsManager,
   handleGetAutoEnrollStatus,
   handleGetMember,
   handleGetOrganization,
@@ -93,7 +94,7 @@ export async function handleOrganizationRoute(
     return jsonResponse({ freeTrial: null, inactiveSubscription: null, resellerRenewal: null, taxId: null });
   }
   if (sub === '/billing/vnext/self-host/metadata' && method === 'GET') {
-    return jsonResponse({ isOnSecretsManagerStandalone: false, organizationOccupiedSeats: 0 });
+    return jsonResponse({ isOnSecretsManagerStandalone: true, organizationOccupiedSeats: 0 });
   }
 
   if (sub === '/collections' || sub === '/collections/details') {
@@ -109,6 +110,7 @@ export async function handleOrganizationRoute(
     if (method === 'GET' && colMatch[2] === 'users') return handleListOrgCollectionUsers(env, userId, orgId, colMatch[1]);
   }
 
+  if (sub === '/users/enable-secrets-manager' && method === 'PUT') return handleEnableSecretsManager(env, userId, orgId);
   if (sub === '/users' && method === 'GET') return handleListMembers(env, userId, orgId);
   if (sub === '/users/mini-details' && method === 'GET') return handleListMemberMiniDetails(env, userId, orgId);
   if (sub === '/users/invite' && method === 'POST') return handleInviteMembers(request, env, currentUser, orgId);

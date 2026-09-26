@@ -1212,3 +1212,10 @@ export async function handleGetAutoEnrollStatus(env: Env, userId: string, orgId:
 export function emptyCollectionAccess(): CollectionAccess[] {
   return [];
 }
+
+export async function handleEnableSecretsManager(env: Env, userId: string, orgId: string): Promise<Response> {
+  const member = await requireMember(env.DB, userId, orgId);
+  if (member instanceof Response) return member;
+  if (!canManageMembers(member)) return errorResponse('Access denied', 403);
+  return new Response(null, { status: 200 });
+}

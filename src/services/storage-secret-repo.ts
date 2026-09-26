@@ -318,6 +318,7 @@ export async function createProject(db: D1Database, project: SmProject, actor: S
 }
 
 export async function deleteProjects(db: D1Database, orgId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
   const orm = getOrm(db);
   await orm.batch([bumpServiceAccounts(db, orgId), ...chunkRows(ids, 1, 1).map(chunk => orm.delete(smProjects).where(and(eq(smProjects.orgId, orgId), inArray(smProjects.id, chunk))))]);
 }
@@ -392,6 +393,7 @@ export async function getSecretsByIds(db: D1Database, ids: string[]): Promise<Sm
 }
 
 export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
   const orm = getOrm(db);
   const now = new Date().toISOString();
   await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))))]);

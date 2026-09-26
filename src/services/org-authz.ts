@@ -200,9 +200,7 @@ export function canManageScim(member: MembershipRecord): boolean {
   );
 }
 
-export function canAccessSecretsManager(member: MembershipRecord): boolean {
-  return isActiveMember(member) && member.type <= MembershipType.Admin;
-}
+export const canAccessSecretsManager = isActiveMember;
 
 export function canCreateCollection(member: MembershipRecord): boolean {
   if (!isActiveMember(member)) return false;
