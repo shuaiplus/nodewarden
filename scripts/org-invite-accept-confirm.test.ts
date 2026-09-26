@@ -88,11 +88,15 @@ async function invite(env: Env, owner: User, orgId: string, emails: string[], he
   assert.equal((await postInvite(env, owner, orgId, emails, headers)).status, 200);
 }
 
-async function findMember(env: Env, owner: User, orgId: string, email: string): Promise<MemberBody> {
+async function listMembers(env: Env, owner: User, orgId: string): Promise<MemberBody[]> {
   const response = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
   assert.equal(response.status, 200);
   const { data } = await response.json() as { data: MemberBody[] };
-  const found = data.find((member) => member.email === email);
+  return data;
+}
+
+async function findMember(env: Env, owner: User, orgId: string, email: string): Promise<MemberBody> {
+  const found = (await listMembers(env, owner, orgId)).find((member) => member.email === email);
   assert.ok(found, `no member row for ${email}`);
   return found;
 }
@@ -109,6 +113,22 @@ async function revisionDate(env: Env, user: User): Promise<number> {
 
 function confirm(env: Env, owner: User, orgId: string, memberId: string, key: string): Promise<Response> {
   return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/confirm`, body: { key }, userId: owner.id });
+}
+
+async function postScimUser(env: Env, owner: User, orgId: string, email: string): Promise<Response> {
+  const scimKey = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/scim-key`, userId: owner.id });
+  assert.equal(scimKey.status, 200);
+  const { token } = await scimKey.json() as { token: string };
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/scim/v2/${orgId}/Users`,
+    body: { userName: email },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+async function provisionViaScim(env: Env, owner: User, orgId: string, email: string): Promise<void> {
+  assert.equal((await postScimUser(env, owner, orgId, email)).status, 201);
 }
 
 test('inviting an existing account keeps it Invited and unconfirmable until the invitee accepts with a token', async () => {
@@ -236,16 +256,7 @@ test('a SCIM-provisioned existing account stays Invited and cannot be confirmed 
   const orgId = await createOrg(env, owner);
 
   // Any org owner can mint a SCIM token, so SCIM must not bind the account either.
-  const scimKey = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/scim-key`, userId: owner.id });
-  assert.equal(scimKey.status, 200);
-  const { token } = await scimKey.json() as { token: string };
-  const provisioned = await authedFetch(env, {
-    method: 'POST',
-    path: `/scim/v2/${orgId}/Users`,
-    body: { userName: victim.email },
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  assert.equal(provisioned.status, 201);
+  await provisionViaScim(env, owner, orgId, victim.email);
 
   const member = await findMember(env, owner, orgId, victim.email);
   assert.equal(member.status, MembershipStatus.Invited);
@@ -253,6 +264,73 @@ test('a SCIM-provisioned existing account stays Invited and cannot be confirmed 
   const confirmed = await confirm(env, owner, orgId, member.id, MEMBER_KEY);
   assert.equal(confirmed.status, 400);
   assert.equal(await errorMessage(confirmed), 'User not valid.');
+});
+
+// Upstream PostUserCommand invites through the normal invite path, so the IdP-provisioned invitee
+// gets the same emailed token that accept requires.
+test('a SCIM-provisioned existing account is mailed an invite token that lets it accept', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const invitee = await seedMailableUser(env);
+  const orgId = await createOrg(env, owner);
+
+  await provisionViaScim(env, owner, orgId, invitee.email);
+  assert.deepEqual(capture.sent.map((message) => message.to), [invitee.email]);
+  const params = inviteParams(capture.sent[0]);
+  const memberId = (await findMember(env, owner, orgId, invitee.email)).id;
+  assert.equal(params.get('organizationUserId'), memberId);
+  assert.equal(params.get('orgUserHasExistingUser'), 'true');
+
+  assert.equal((await accept(env, invitee, orgId, memberId, { token: params.get('token') })).status, 200);
+  const accepted = await findMember(env, owner, orgId, invitee.email);
+  assert.equal(accepted.status, MembershipStatus.Accepted);
+  assert.equal(accepted.userId, invitee.id);
+});
+
+test('SCIM does not mail an address with no account, which stays staged', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const email = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
+
+  await provisionViaScim(env, owner, orgId, email);
+  assert.deepEqual(capture.sent, []);
+  assert.equal((await findMember(env, owner, orgId, email)).status, MembershipStatus.Staged);
+});
+
+// Upstream PostUserCommand answers 409 for a known member, so an IdP replaying a POST whose 201 was
+// lost, or assigning the owner, sends no second invite and adds no duplicate row.
+test('SCIM answers 409 for an address that is already a member and mails nothing', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const invitee = await seedMailableUser(env);
+  const orgId = await createOrg(env, owner);
+
+  await provisionViaScim(env, owner, orgId, invitee.email);
+  assert.equal((await postScimUser(env, owner, orgId, invitee.email.toUpperCase())).status, 409);
+  assert.equal((await postScimUser(env, owner, orgId, owner.email)).status, 409);
+  assert.equal(capture.sent.length, 1);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email, invitee.email]);
+});
+
+// Upstream deletes the rows it saved when the send fails. IdPs retry a 5xx, so a kept row would
+// multiply with every sync while the send keeps failing (suppressed recipient, unverified sender).
+test('a failed invite send saves no member row, for member invite and SCIM', async () => {
+  const env = await createTestEnv({
+    ...emailCapture().env,
+    EMAIL: { async send() { throw new Error('recipient suppressed'); } },
+  });
+  const owner = await seedUser(env);
+  const invitee = await seedMailableUser(env);
+  const orgId = await createOrg(env, owner);
+
+  assert.equal((await postInvite(env, owner, orgId, [invitee.email])).status, 502);
+  assert.equal((await postScimUser(env, owner, orgId, invitee.email)).status, 502);
+  assert.equal((await postScimUser(env, owner, orgId, invitee.email)).status, 502);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
 });
 
 test('invite mail only links to a configured web vault and skips documentation addresses', async () => {
@@ -297,9 +375,7 @@ test('invite rejects an empty, oversized or malformed email list before saving o
     assert.equal(await errorMessage(response), expected);
   }
 
-  const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
-  const { data } = await listed.json() as { data: MemberBody[] };
-  assert.deepEqual(data.map((member) => member.email), [owner.email]);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
   assert.deepEqual(capture.sent, []);
 });
 

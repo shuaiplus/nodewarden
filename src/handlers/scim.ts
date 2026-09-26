@@ -3,7 +3,7 @@ import { StorageService } from '../services/storage';
 import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import { generateUUID } from '../utils/uuid';
-import { verifyScimBearer } from './organizations';
+import { mailOrganizationInvites, verifyScimBearer } from './organizations';
 import { publishPlatformEvent } from '../services/queue-publisher';
 
 function scimJson(data: unknown, status = 200): Response {
@@ -68,6 +68,13 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     const body = await request.json() as Record<string, unknown>;
     const email = extractEmail(body);
     if (!email) return scimError(400, 'userName is required');
+    const externalId = String(body.externalId || '') || null;
+    // Upstream PostUserCommand: a known member or externalId is a conflict, so an IdP replay after a
+    // lost 201 neither mails a second invite nor adds a duplicate row. Bound rows carry the account email.
+    const members = await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId);
+    const conflict = members.some(({ item, account }) =>
+      (account?.email ?? item.email)?.toLowerCase() === email || (externalId !== null && item.externalId === externalId));
+    if (conflict) return scimError(409, 'User already exists.');
     const existingUser = await storage.getUser(email);
     const now = new Date().toISOString();
     // Upstream PostUserCommand never binds the account: only the invitee's own accept may do that,
@@ -84,10 +91,16 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
       type: MembershipType.User,
       permissions: null,
       resetPasswordKey: null,
-      externalId: String(body.externalId || '') || null,
+      externalId,
       createdAt: now,
       updatedAt: now,
     };
+    // Upstream PostUserCommand invites through the normal invite path, so the invitee gets the token
+    // that accept requires. Staged rows have no account to accept with yet.
+    if (existingUser) {
+      const mailed = await mailOrganizationInvites(request, env, orgId, [member]);
+      if (!mailed.ok) return scimError(502, mailed.message);
+    }
     await orgRepo.saveMembership(env.DB, member);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
     await publishPlatformEvent(env, { type: 'directory.applied', orgId, resource: 'user', resourceId: member.id });

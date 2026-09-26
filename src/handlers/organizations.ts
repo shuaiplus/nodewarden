@@ -59,9 +59,9 @@ const MAX_INVITE_EMAIL_LENGTH = 256;
 // and a dotted host that ends in a letter.
 const INVITE_EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@]+\.\p{L}+$/u;
 
-type InviteEmailsCheck = { ok: true } | { ok: false; message: string };
+type MessageCheck = { ok: true } | { ok: false; message: string };
 
-function inviteEmailsCheck(emails: string[]): InviteEmailsCheck {
+function inviteEmailsCheck(emails: string[]): MessageCheck {
   if (!emails.length) return { ok: false, message: 'An email is required.' };
   if (emails.length > MAX_INVITE_EMAILS) {
     return { ok: false, message: `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.` };
@@ -576,6 +576,8 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
   const invites = emails.map((email) => ({ id: generateUUID(), email }));
+  const mailed = await mailOrganizationInvites(request, env, orgId, invites);
+  if (!mailed.ok) return errorResponse(mailed.message, 502);
   await orgRepo.insertInvitedMemberships(env.DB, invites.map(({ id, email }) => ({
     id,
     userId: null,
@@ -594,11 +596,24 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     updatedAt: now,
   })), { ...change, collections });
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-  if (!env.EMAIL || !getEmailSender(env)) return jsonResponse({});
+  return jsonResponse({});
+}
+
+// Upstream SendOrganizationInvitesCommand, shared by member invite and SCIM provisioning: accept
+// needs the emailed token, so every Invited row is mailed. Callers mail before saving, so a failed
+// send leaves no row behind (upstream deletes the rows it saved) and a retried request cannot pile
+// up duplicates. Without mail configured the rows stay Invited and cannot be accepted yet.
+export async function mailOrganizationInvites(
+  request: Request,
+  env: Env,
+  orgId: string,
+  invites: Array<{ id: string; email: string }>,
+): Promise<MessageCheck> {
+  if (!env.EMAIL || !getEmailSender(env)) return { ok: true };
   const vaultOrigin = organizationInviteVaultOrigin(request, env);
   if (!vaultOrigin) {
     console.warn('Organization invite email skipped: WEB_VAULT_ORIGINS is not set');
-    return jsonResponse({});
+    return { ok: true };
   }
 
   const organization = await orgRepo.getOrganization(env.DB, orgId);
@@ -617,9 +632,9 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     })));
   } catch (error) {
     console.error('Organization invite email failed:', error instanceof Error ? error.message : String(error));
-    return errorResponse('Unable to send invitation email', 502);
+    return { ok: false, message: 'Unable to send invitation email' };
   }
-  return jsonResponse({});
+  return { ok: true };
 }
 
 export async function handleAcceptInvite(request: Request, env: Env, user: User, orgId: string, memberId: string): Promise<Response> {
