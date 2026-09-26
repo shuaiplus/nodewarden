@@ -107,7 +107,8 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
 export interface WorkerRequest {
   method?: string;
   path: string;
-  // JSON-encoded, except URLSearchParams, which is sent form-encoded as /identity expects.
+  // JSON-encoded, except URLSearchParams, which is sent form-encoded as /identity expects, and
+  // FormData, which is sent multipart as official web uploads files.
   body?: unknown;
   // Omit for an anonymous request.
   userId?: string;
@@ -122,7 +123,7 @@ export async function authedFetch(env: Env, { method = 'GET', path, body, userId
     if (!user) throw new Error(`authedFetch: no user ${userId}`);
     requestHeaders.set('Authorization', `Bearer ${await new AuthService(env).generateAccessToken(user)}`);
   }
-  const isForm = body instanceof URLSearchParams;
+  const isForm = body instanceof URLSearchParams || body instanceof FormData;
   if (body !== undefined && !isForm) requestHeaders.set('Content-Type', 'application/json');
   new Headers(headers).forEach((value, name) => requestHeaders.set(name, value));
 
