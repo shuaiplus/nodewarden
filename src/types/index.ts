@@ -21,6 +21,8 @@ export interface Env {
   CACHE_KV?: KVNamespace;
   EMAIL?: import('../services/mail').SendEmailBinding;
   ADMIN_EMAILS?: string;
+  EMAIL_SENDS_PER_HOUR?: string;
+  DISABLE_EMAIL_NEW_DEVICE?: string;
   EMAIL_FROM?: string;
   EMAIL_FROM_NAME?: string;
   EVENTS_QUEUE?: Queue;

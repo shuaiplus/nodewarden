@@ -8,6 +8,7 @@ import type { AuditLog, Invite } from '../types';
 export interface AuditLogListOptions {
   limit: number;
   offset: number;
+  actionPrefix?: string;
   category?: string | null;
   level?: string | null;
   q?: string | null;
@@ -158,6 +159,7 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
   const actor = alias(users, 'actor');
   const target = alias(users, 'target');
   const filters = [];
+  if (options.actionPrefix) filters.push(sql`${auditLogs.action} LIKE ${options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'} ESCAPE '\\'`);
   if (options.from) filters.push(gteCreated(options.from));
   if (options.to) filters.push(lteCreated(options.to));
   if (options.category) filters.push(eq(auditLogs.category, options.category));

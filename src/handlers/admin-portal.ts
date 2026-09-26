@@ -1,3 +1,8 @@
+import { listAuditLogs } from '../services/storage-admin-repo';
+import { isOpenRegistrationEnabled } from '../services/register-payload';
+import { getConfiguredWebVaultOrigins } from '../utils/origins';
+import { isSsoEnabled } from './sso';
+import { getYubicoCredentials } from '../services/yubico-config';
 import type { Env } from '../types';
 import { LIMITS } from '../config/limits';
 import {
@@ -88,7 +93,21 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     if (path === '/admin' || path === '/admin/') {
       if (request.method !== 'GET') return methodNotAllowed();
       const counts = await env.DB.prepare('SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM organizations) AS organizations').first<{ users: number; organizations: number }>();
-      return portalPage('Administration', html`${portalNavigation(session.csrf)}<p>Signed in as ${session.email}</p><dl><dt>Users</dt><dd>${counts?.users ?? 0}</dd><dt>Organizations</dt><dd>${counts?.organizations ?? 0}</dd><dt>Administrators</dt><dd>${directory.admins.size}</dd></dl>`);
+      const mail = readMailConfig(env);
+      const storage = new StorageService(env.DB);
+      const [events, pushId, pushKey, yubico] = await Promise.all([
+        listAuditLogs(env.DB, { actionPrefix: 'admin.portal.', limit: LIMITS.admin.recentAuditEvents, offset: 0 }),
+        storage.getConfigValue('push.installation.id'), storage.getConfigValue('push.installation.key'), getYubicoCredentials(env.DB),
+      ]);
+      const settings: Array<[string, string | number]> = [
+        ['Users', counts?.users ?? 0], ['Organizations', counts?.organizations ?? 0], ['Administrators', directory.admins.size],
+        ['Compatible server version', LIMITS.compatibility.bitwardenServerVersion], ['Mail', mail.kind],
+        ['Sender', mail.kind === 'enabled' ? `${mail.from.name} <${mail.from.email}>` : 'Unavailable'],
+        ['Open registration', isOpenRegistrationEnabled(env) ? 'Yes' : 'No'], ['Vault origins', getConfiguredWebVaultOrigins(env).join(', ') || 'None'],
+        ['SSO configured', isSsoEnabled(env) ? 'Yes' : 'No'], ['Push relay configured', pushId && pushKey ? 'Yes' : 'No'], ['Yubico configured', yubico ? 'Yes' : 'No'],
+        ['Disable new-device email', env.DISABLE_EMAIL_NEW_DEVICE || 'false'], ['Email sends per hour', env.EMAIL_SENDS_PER_HOUR || '100'],
+      ];
+      return portalPage('Administration', html`${portalNavigation(session.csrf)}<p>Signed in as ${session.email}</p><dl>${settings.map(([name, value]) => html`<dt>${name}</dt><dd>${value}</dd>`)}</dl><h2>Recent administrator events</h2><table><thead><tr><th>Time</th><th>Action</th><th>Administrator</th></tr></thead><tbody>${events.logs.map((event) => html`<tr><td>${event.createdAt}</td><td>${event.action}</td><td>${String(JSON.parse(event.metadata ?? '{}').adminEmail ?? '')}</td></tr>`)}</tbody></table>`);
     }
     return portalPage('Not found', html`${portalNavigation(session.csrf)}<p>This page does not exist.</p>`, 404);
   } catch {
