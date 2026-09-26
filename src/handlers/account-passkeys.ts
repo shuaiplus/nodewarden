@@ -453,7 +453,7 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   if (!await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp)) return errorResponse('User verification failed.', 400);
   const now = new Date().toISOString();
   const transports = normalizeTransports(registrationResponse.response.transports);
-  await storage.saveAccountPasskeyCredential({
+  const saved = await storage.saveAccountPasskeyCredential({
     id: generateUUID(),
     userId,
     purpose: 'twoFactor',
@@ -470,7 +470,8 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
     supportsPrf: false,
     createdAt: now,
     updatedAt: now,
-  });
+  }, user.securityStamp);
+  if (!saved) return errorResponse('User verification failed.', 400);
 
   await storage.deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);

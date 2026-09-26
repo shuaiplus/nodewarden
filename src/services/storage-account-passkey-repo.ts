@@ -1,4 +1,4 @@
-import { and, asc, count, eq, isNotNull, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { webauthnChallenges, webauthnCredentials } from '../db/schema';
@@ -49,8 +49,9 @@ function mapChallengeRow(row: typeof webauthnChallenges.$inferSelect): AccountPa
 
 export async function saveAccountPasskeyCredential(
   db: D1Database,
-  credential: AccountPasskeyCredential
-): Promise<void> {
+  credential: AccountPasskeyCredential,
+  securityStamp?: string
+): Promise<boolean> {
   const values = {
     id: credential.id,
     userId: credential.userId,
@@ -69,27 +70,34 @@ export async function saveAccountPasskeyCredential(
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
   };
-  await getOrm(db)
-    .insert(webauthnCredentials)
-    .values(values)
-    .onConflictDoUpdate({
-      target: webauthnCredentials.id,
-      set: {
-        purpose: values.purpose,
-        name: values.name,
-        publicKey: values.publicKey,
-        credentialId: values.credentialId,
-        counter: values.counter,
-        type: values.type,
-        aaGuid: values.aaGuid,
-        transports: values.transports,
-        encryptedUserKey: values.encryptedUserKey,
-        encryptedPublicKey: values.encryptedPublicKey,
-        encryptedPrivateKey: values.encryptedPrivateKey,
-        supportsPrf: values.supportsPrf,
-        updatedAt: values.updatedAt,
-      },
-    });
+  const insert = getOrm(db).insert(webauthnCredentials);
+  const write = securityStamp === undefined ? insert.values(values) : insert.select(sql`
+    SELECT ${values.id}, ${values.userId}, ${values.purpose}, ${values.name}, ${values.publicKey},
+      ${values.credentialId}, ${values.counter}, ${values.type}, ${values.aaGuid}, ${values.transports},
+      ${values.encryptedUserKey}, ${values.encryptedPublicKey}, ${values.encryptedPrivateKey},
+      ${values.supportsPrf}, ${values.createdAt}, ${values.updatedAt}
+    WHERE EXISTS (SELECT 1 FROM users WHERE id = ${values.userId} AND security_stamp = ${securityStamp}
+      AND (${values.purpose} <> 'twoFactor' OR COALESCE(totp_recovery_code, '') <> ''))
+  `);
+  const result = await write.onConflictDoUpdate({
+    target: webauthnCredentials.id,
+    set: {
+      purpose: values.purpose,
+      name: values.name,
+      publicKey: values.publicKey,
+      credentialId: values.credentialId,
+      counter: values.counter,
+      type: values.type,
+      aaGuid: values.aaGuid,
+      transports: values.transports,
+      encryptedUserKey: values.encryptedUserKey,
+      encryptedPublicKey: values.encryptedPublicKey,
+      encryptedPrivateKey: values.encryptedPrivateKey,
+      supportsPrf: values.supportsPrf,
+      updatedAt: values.updatedAt,
+    },
+  }).run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 export async function listAccountPasskeyCredentialsByUserId(

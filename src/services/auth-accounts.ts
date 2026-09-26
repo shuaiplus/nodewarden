@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { account, twoFactor } from '../db/schema';
@@ -27,19 +27,16 @@ export async function upsertCredentialAccount(db: D1Database, userId: string, pa
   });
 }
 
-export async function upsertTwoFactorSecret(db: D1Database, userId: string, secret: string, backupCodes: string): Promise<void> {
-  const orm = getOrm(db);
-  const [existing] = await orm.select({ id: twoFactor.id }).from(twoFactor).where(eq(twoFactor.userId, userId)).limit(1);
-  if (existing) {
-    await orm.update(twoFactor).set({ secret, backupCodes }).where(eq(twoFactor.id, existing.id));
-    return;
-  }
-  await orm.insert(twoFactor).values({
-    id: generateUUID(),
-    userId,
-    secret,
-    backupCodes,
-  });
+export async function upsertTwoFactorSecret(db: D1Database, userId: string, secret: string, backupCodes: string, securityStamp?: string): Promise<boolean> {
+  // Match the canonical factor at the write boundary, after any intervening reset or replacement.
+  const guard = securityStamp === undefined ? sql`1` : sql`EXISTS (
+    SELECT 1 FROM users WHERE id = ${userId} AND security_stamp = ${securityStamp}
+      AND totp_secret = ${secret} AND totp_recovery_code = ${backupCodes}
+  )`;
+  const result = await getOrm(db).insert(twoFactor).select(sql`
+    SELECT ${generateUUID()}, ${secret}, ${backupCodes}, ${userId} WHERE ${guard}
+  `).onConflictDoUpdate({ target: twoFactor.userId, set: { secret, backupCodes } }).run();
+  return (result.meta.changes ?? 0) > 0;
 }
 
 export async function deleteTwoFactorSecret(db: D1Database, userId: string): Promise<void> {

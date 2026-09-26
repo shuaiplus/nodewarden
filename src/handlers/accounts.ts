@@ -1199,7 +1199,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-  await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode);
+  if (!await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
@@ -1513,7 +1513,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
     user.updatedAt = new Date().toISOString();
     if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode);
+    if (!await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
     await storage.deleteRefreshTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
     await writeAuditEvent(storage, {

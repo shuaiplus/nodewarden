@@ -409,8 +409,8 @@ export class StorageService {
 
   // --- Account passkeys / WebAuthn login credentials ---
 
-  async saveAccountPasskeyCredential(credential: AccountPasskeyCredential): Promise<void> {
-    await saveStoredAccountPasskeyCredential(this.db, credential);
+  async saveAccountPasskeyCredential(credential: AccountPasskeyCredential, securityStamp?: string): Promise<boolean> {
+    return saveStoredAccountPasskeyCredential(this.db, credential, securityStamp);
   }
 
   async getAccountPasskeyCredentialsByUserId(
