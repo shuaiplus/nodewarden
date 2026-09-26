@@ -441,3 +441,31 @@ export async function serviceAccountCounts(db: D1Database, account: SmServiceAcc
     (SELECT COUNT(*) FROM sm_access_tokens WHERE service_account_id = ?) AS accessTokens`).bind(account.orgId, account.id, account.id, account.id, account.id)]);
   return { ...counts, ...row.results[0] };
 }
+
+export const peoplePolicyTables = {
+  project: { member: 'sm_project_members', group: 'sm_project_groups', target: 'project_id' },
+  serviceAccount: { member: 'sm_service_account_members', group: 'sm_service_account_groups', target: 'service_account_id' },
+} as const;
+export type SmPeopleTarget = keyof typeof peoplePolicyTables;
+
+export async function readPeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string) {
+  const tables = peoplePolicyTables[kind];
+  const permission = kind === 'serviceAccount' ? '1 AS write_access' : 'write_access';
+  const rows = await db.batch<{ id: string; write_access: number }>([
+    db.prepare(`SELECT membership_id AS id, ${permission} FROM ${tables.member} WHERE ${tables.target} = ?`).bind(id),
+    db.prepare(`SELECT group_id AS id, ${permission} FROM ${tables.group} WHERE ${tables.target} = ?`).bind(id),
+  ]);
+  return { users: new Map(rows[0].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])), groups: new Map(rows[1].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])) };
+}
+
+export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string, users: Map<string, SmAccess>, groups: Map<string, SmAccess>): Promise<void> {
+  const tables = peoplePolicyTables[kind];
+  const statements = [db.prepare(`DELETE FROM ${tables.member} WHERE ${tables.target} = ?`).bind(id), db.prepare(`DELETE FROM ${tables.group} WHERE ${tables.target} = ?`).bind(id)];
+  for (const [table, column, policies] of [[tables.member, 'membership_id', users], [tables.group, 'group_id', groups]] as const) {
+    const columns = kind === 'serviceAccount' ? 2 : 3;
+    for (const rows of chunkRows([...policies], columns)) {
+      statements.push(db.prepare(`INSERT INTO ${table} (${tables.target}, ${column}${columns === 3 ? ', write_access' : ''}) VALUES ${rows.map(() => `(${Array(columns).fill('?').join(',')})`).join(',')}`).bind(...rows.flatMap(([granteeId, access]) => columns === 3 ? [id, granteeId, access === 'write' ? 1 : 0] : [id, granteeId])));
+    }
+  }
+  await db.batch(statements);
+}

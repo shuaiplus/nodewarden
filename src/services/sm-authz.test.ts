@@ -31,3 +31,12 @@ test('machine-account management is human-only and its people grants always allo
   assert.equal(serviceAccountAccess({ kind: 'user', membershipId: 'u' }, grants, 'other'), 'none');
   assert.equal(serviceAccountAccess({ kind: 'serviceAccount', serviceAccountId: 'sa' }, grants, 'sa'), 'none');
 });
+
+test('policy parsing validates read/write, canonical uniqueness, and machine-account RW', async () => {
+  const { parsePolicyRequests } = await import('./sm-authz');
+  const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: true, write: false }], 'granteeId', false), { ok: true, value: new Map([[id, 'read']]) });
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: true }, { granteeId: id.toUpperCase(), read: true }], 'granteeId', false), { ok: false, message: 'Resources must be unique' });
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', false), { ok: false, message: 'Resources must be Read = true' });
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', true), { ok: false, message: 'Machine account access must be Can read, write' });
+});

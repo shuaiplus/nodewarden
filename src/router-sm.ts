@@ -1,3 +1,4 @@
+import { handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
 import type { Env } from './types';
 import { errorResponse } from './utils/response';
 import {
@@ -24,6 +25,8 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  const people = path.match(/^\/api\/(projects|service-accounts)\/([a-f0-9-]+)\/access-policies\/people$/i);
+  if (people && (method === 'GET' || method === 'PUT')) return handlePeoplePolicies(request, env, userId, people[1] === 'projects' ? 'project' : 'serviceAccount', people[2]);
   const event = path.match(/^\/api\/organization\/([a-f0-9-]+)\/(projects|secrets|service-account)\/([a-f0-9-]+)\/events$/i);
   if (event && method === 'GET') return handleSmEvents(env, userId, event[2] as 'projects' | 'secrets' | 'service-account', event[3], event[1]);
   const accountEvent = path.match(/^\/api\/sm\/events\/service-accounts\/([a-f0-9-]+)$/i);
@@ -57,6 +60,7 @@ export async function handleSmRoute(request: Request, env: Env, userId: string, 
   if (!orgMatch) return null;
   const orgId = orgMatch[1];
   const sub = orgMatch[2] || '';
+  if (sub === '/access-policies/people/potential-grantees' && method === 'GET') return handlePotentialPeople(env, userId, orgId);
   if (sub === '/sm-counts' && method === 'GET') return handleSmCounts(env, userId, orgId);
   if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, userId, orgId);
   if (sub === '/secrets' && method === 'POST') return handleCreateSecret(request, env, userId, orgId);

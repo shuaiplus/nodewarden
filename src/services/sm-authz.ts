@@ -1,3 +1,4 @@
+import { isUUID } from '../utils/uuid';
 import type { Env } from '../types';
 import { isActiveMember } from './org-authz';
 import { MembershipType } from './org-types';
@@ -47,4 +48,19 @@ export function canUpdateSecret(actor: SmActor, grants: SmGrants, secret: { id: 
 
 export function serviceAccountAccess(actor: SmActor, grants: SmGrants, id: string): SmAccess {
   return actor.kind === 'admin' || (actor.kind === 'user' && grants.serviceAccounts.has(id)) ? 'write' : 'none';
+}
+
+export function parsePolicyRequests(items: unknown, idKey: 'granteeId' | 'grantedId', requireWrite: boolean): { ok: true; value: Map<string, SmAccess> } | { ok: false; message: string } {
+  if (!Array.isArray(items)) return { ok: false, message: 'Access policies must be arrays.' };
+  const policies = new Map<string, SmAccess>();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !isUUID(item[idKey])) return { ok: false, message: 'Resources must have valid identifiers.' };
+    const id = item[idKey].toLowerCase();
+    if (policies.has(id)) return { ok: false, message: 'Resources must be unique' };
+    if (requireWrite && (item.read !== true || item.write !== true)) return { ok: false, message: 'Machine account access must be Can read, write' };
+    if (item.read !== true) return { ok: false, message: 'Resources must be Read = true' };
+    if (item.write !== undefined && typeof item.write !== 'boolean') return { ok: false, message: 'Write must be a boolean.' };
+    policies.set(id, item.write ? 'write' : 'read');
+  }
+  return { ok: true, value: policies };
 }
