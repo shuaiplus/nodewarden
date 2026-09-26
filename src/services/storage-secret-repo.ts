@@ -351,14 +351,24 @@ export async function createSecret(db: D1Database, secret: SmSecret, policies: D
   ]);
 }
 
-export async function updateSecret(db: D1Database, secret: SmSecret, previousProjectIds: string[], policies: D1PreparedStatement[] = []): Promise<boolean> {
-  const statements = [db.prepare('UPDATE sm_secrets SET key = ?, value = ?, note = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL').bind(secret.key, secret.value, secret.note, secret.updatedAt, secret.id)];
+export async function updateSecret(db: D1Database, secret: SmSecret, previousProjectIds: string[], previousRevision: string, policies: D1PreparedStatement[] = []): Promise<boolean> {
+  const statements = [db.prepare(`UPDATE sm_secrets SET key = ?, value = ?, note = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL AND updated_at = ?
+    AND (SELECT COUNT(*) FROM sm_secret_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sm_secrets.org_id WHERE sp.secret_id = sm_secrets.id) = ?
+    AND NOT EXISTS (SELECT 1 FROM sm_secret_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sm_secrets.org_id WHERE sp.secret_id = sm_secrets.id AND sp.project_id NOT IN (SELECT value FROM json_each(?)))`).bind(secret.key, secret.value, secret.note, secret.updatedAt, secret.id, previousRevision, previousProjectIds.length, JSON.stringify(previousProjectIds)),
+    // Abort the atomic batch before links or policies if the authorized snapshot changed.
+    db.prepare("SELECT CASE WHEN changes() = 0 THEN json('stale secret update') END"),
+  ];
   if (previousProjectIds[0] !== secret.projectIds[0]) {
     statements.push(db.prepare('DELETE FROM sm_secret_projects WHERE secret_id = ? AND EXISTS (SELECT 1 FROM sm_secrets WHERE id = ? AND deleted_at IS NULL)').bind(secret.id, secret.id));
     for (const projectId of secret.projectIds) statements.push(db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) SELECT id, ? FROM sm_secrets WHERE id = ? AND deleted_at IS NULL').bind(projectId, secret.id));
   }
-  const [result] = await db.batch([...statements, ...policies, revisionStatement(db, secret.orgId, secret.updatedAt)]);
-  return result.meta.changes > 0;
+  try {
+    await db.batch([...statements, ...policies, revisionStatement(db, secret.orgId, secret.updatedAt)]);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('malformed JSON')) return false;
+    throw error;
+  }
 }
 
 export async function getSecretsByIds(db: D1Database, ids: string[]): Promise<SmSecret[]> {

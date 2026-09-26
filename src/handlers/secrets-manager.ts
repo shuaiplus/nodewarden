@@ -98,7 +98,7 @@ export async function handleUpdateSecret(request: Request, env: Env, userId: str
   if (!(await allProjectsInOrg(env, existing.orgId, input.projectIds))) return errorResponse('Resource not found.', 404);
   if (!canUpdateSecret(context.actor, context.grants, existing, input.projectIds)) return errorResponse('Not found', 404);
   const secret = { ...existing, ...input, updatedAt: new Date().toISOString() };
-  if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds)) return errorResponse('Not found', 404);
+  if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds, existing.updatedAt)) return errorResponse('Not found', 404);
   await publishSecretChanged(env, secret.orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }

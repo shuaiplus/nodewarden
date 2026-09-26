@@ -168,7 +168,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
     await env.DB.prepare('UPDATE sm_secret_projects SET project_id = ? WHERE secret_id = ?').bind(newProject.id, moved.id).run();
     return { ...FIELDS, projectIds: [oldProject.id] };
   };
-  assert.equal((await handleUpdateSecret(put, env, owner.id, moved.id)).status, 200);
+  assert.equal((await handleUpdateSecret(put, env, owner.id, moved.id)).status, 404);
   assert.deepEqual((await smRepo.getSecret(env.DB, moved.id))!.projectIds, [newProject.id]);
 });
 
@@ -196,4 +196,44 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   assert.ok(body.data.every((item: any) => item.error === null && item.object === 'BulkDeleteResponseModel'));
   assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_secrets WHERE deleted_at IS NOT NULL').first<{ n: number }>())!.n, ids.length);
   assert.ok((await smRepo.getServiceAccount(env.DB, accountId))!.updatedAt > before);
+});
+
+test('a stale member edit cannot overwrite a secret after its project moved or was deleted', async () => {
+  const { env, orgId, owner, a, project, secret } = await setup();
+  const readable = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
+  const hidden = await project();
+  const changed = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';
+  for (const move of [true, false]) {
+    const source = move ? readable : await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
+    const target = await secret([source.id]);
+    const put = new Request('https://vault.example.test', { method: 'PUT' });
+    put.json = async () => {
+      if (move) await env.DB.prepare('UPDATE sm_secret_projects SET project_id = ? WHERE secret_id = ?').bind(hidden.id, target.id).run();
+      else await env.DB.prepare('DELETE FROM sm_projects WHERE id = ?').bind(source.id).run();
+      return { ...FIELDS, value: changed, projectIds: move ? [source.id] : [readable.id] };
+    };
+    assert.equal((await handleUpdateSecret(put, env, a.id, target.id)).status, 404);
+    const persisted = await smRepo.getSecret(env.DB, target.id);
+    assert.equal(persisted!.value, ENCRYPTED_FIELD);
+    assert.deepEqual(persisted!.projectIds, move ? [hidden.id] : []);
+  }
+});
+
+test('a rejected secret snapshot aborts links, policies and machine revision in the same batch', async () => {
+  const { env, orgId, owner, a, project, secret } = await setup();
+  const p = await project();
+  const q = await project();
+  const target = await secret([p.id]);
+  const before = (await smRepo.getSecret(env.DB, target.id))!;
+  const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
+  const previousAccount = await smRepo.getServiceAccount(env.DB, account.id);
+  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
+  await env.DB.prepare('UPDATE sm_secrets SET updated_at = ? WHERE id = ?').bind('2099-01-01T00:00:00.000Z', target.id).run();
+  const policies = [env.DB.prepare('INSERT INTO sm_secret_members (secret_id, membership_id, write_access) VALUES (?, ?, 1)').bind(target.id, member.id)];
+  assert.equal(await smRepo.updateSecret(env.DB, { ...before, value: '2.changed|value|mac', projectIds: [q.id], updatedAt: '2099-02-01T00:00:00.000Z' }, before.projectIds, before.updatedAt, policies), false);
+  const after = (await smRepo.getSecret(env.DB, target.id))!;
+  assert.equal(after.value, before.value);
+  assert.deepEqual(after.projectIds, [p.id]);
+  assert.equal(await env.DB.prepare('SELECT secret_id FROM sm_secret_members WHERE secret_id = ?').bind(target.id).first(), null);
+  assert.deepEqual(await smRepo.getServiceAccount(env.DB, account.id), previousAccount);
 });
