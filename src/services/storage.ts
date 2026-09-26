@@ -200,7 +200,7 @@ export class StorageService {
   private static readonly TOTP_REPLAY_MARKER_TTL_MS = 5 * 60 * 1000;
   private static readonly PERIODIC_CLEANUP_PROBABILITY = LIMITS.cleanup.cleanupProbability;
 
-  constructor(private db: D1Database) {}
+  constructor(readonly db: D1Database) {}
 
   private async hasRequiredSchemaTables(): Promise<boolean> {
     const rows = await getOrm(this.db).all(sql`

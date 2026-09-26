@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
@@ -171,6 +171,17 @@ export async function deleteCipherById(db: D1Database, id: string): Promise<void
 
 export async function deleteCiphersByOrganization(db: D1Database, organizationId: string): Promise<void> {
   await getOrm(db).delete(ciphers).where(eq(ciphers.organizationId, organizationId));
+}
+
+export function reassignOrganizationCiphers(db: D1Database, userId: string, guard: SQL) {
+  return getOrm(db).update(ciphers).set({
+    userId: sql`(
+      SELECT successor.user_id FROM organization_memberships successor
+      WHERE successor.org_id = ${ciphers.organizationId}
+        AND successor.user_id <> ${userId} AND successor.status = 2
+      ORDER BY (successor.type = 0) DESC, successor.created_at, successor.id LIMIT 1
+    )`,
+  }).where(and(eq(ciphers.userId, userId), isNotNull(ciphers.organizationId), guard));
 }
 
 async function chunkedUpdate(

@@ -69,6 +69,16 @@ export async function createTestEnv(overrides: Partial<Env> = {}): Promise<Env> 
   } as Env;
 }
 
+export function memoryKv(): { binding: KVNamespace; values: Map<string, string> } {
+  const values = new Map<string, string>();
+  const binding = {
+    get: async (key: string) => values.get(key) ?? null,
+    put: async (key: string, value: string) => { values.set(key, value); },
+    delete: async (key: string) => { values.delete(key); },
+  } as KVNamespace;
+  return { binding, values };
+}
+
 export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise<User> {
   const id = overrides.id ?? crypto.randomUUID();
   const now = new Date().toISOString();

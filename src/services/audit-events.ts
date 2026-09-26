@@ -1,3 +1,6 @@
+import { sql, type SQL } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { auditLogs } from '../db/schema';
 import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { StorageService } from './storage';
@@ -176,30 +179,25 @@ async function maybePruneAuditLogs(storage: StorageService): Promise<void> {
   await applyAuditLogRetention(storage);
 }
 
-async function insertAuditEvent(storage: StorageService, event: AuditEventInput): Promise<void> {
+export function auditEventStatement(db: D1Database, event: AuditEventInput, guard: SQL = sql`1`) {
   const metadata = sanitizeMetadata(event.metadata || {});
   let metadataJson = JSON.stringify(metadata);
   if (new TextEncoder().encode(metadataJson).byteLength > MAX_METADATA_BYTES) {
     metadataJson = JSON.stringify({ truncated: true });
   }
 
-  await storage.createAuditLog({
-    id: generateUUID(),
-    actorUserId: event.actorUserId ?? null,
-    action: event.action,
-    category: event.category,
-    level: event.level || 'info',
-    targetType: event.targetType ?? null,
-    targetId: event.targetId ?? null,
-    metadata: metadataJson,
-    createdAt: new Date().toISOString(),
-  });
-  await maybePruneAuditLogs(storage);
+  return getOrm(db).insert(auditLogs).select(sql`
+    SELECT ${generateUUID()}, ${event.actorUserId ?? null}, ${event.action}, ${event.category},
+      ${event.level || 'info'}, ${event.targetType ?? null}, ${event.targetId ?? null},
+      ${metadataJson}, ${new Date().toISOString()}
+    WHERE ${guard}
+  `);
 }
 
 export async function writeAuditEvent(storage: StorageService, event: AuditEventInput): Promise<void> {
   try {
-    await insertAuditEvent(storage, event);
+    await auditEventStatement(storage.db, event);
+    await maybePruneAuditLogs(storage);
   } catch (error) {
     console.error('audit log write failed', error);
   }
