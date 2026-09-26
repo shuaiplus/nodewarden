@@ -78,7 +78,7 @@ test('defuses addresses, domains and links in text that another user chose', () 
 
 import { html, toSafeUrl } from '../utils/html';
 import { sendMail, mailStatusCheck } from './mail';
-import { renderMail } from './mail-templates';
+import { MAIL_TEMPLATES, renderMail, type MailContent } from './mail-templates';
 import type { Env } from '../types';
 
 test('shared HTML escapes nested content and links reject unsafe protocols', () => {
@@ -108,4 +108,37 @@ test('mail config and delivery failures do not expose addresses or exception tex
   assert.deepEqual(mailStatusCheck(outcome), { ok: false, status: 502, message: 'Unable to send email', headers: {} });
   assert.doesNotMatch(JSON.stringify(warnings.mock.calls), /private@|secret-token/);
   assert.equal(sanitizeForEmail('x\r\ny\u202Ez\u2028 end'), 'x y z end');
+});
+
+test('emergency and organization mail templates sanitize untrusted text and preserve encoded invitation parameters', () => {
+  const unsafe = '<>&"\' @ https://bad.domain\r\n\u202E';
+  const safe = sanitizeForEmail(unsafe);
+  const content: MailContent[] = [
+    MAIL_TEMPLATES.emergencyAccessInvite.render({ vaultOrigin: 'https://vault.io', id: 'id', grantorName: unsafe, grantorEmail: 'a@x.io', token: 'private-token' }),
+    MAIL_TEMPLATES.organizationInvite.render({ vaultOrigin: 'https://vault.io', organizationId: 'o', organizationUserId: 'm', organizationName: unsafe, email: 'a+tag@x.io', token: 'private-token', hasExistingUser: false, inviterEmail: unsafe, expiresAt: '2030-01-01T00:00:00Z' }),
+    ...[
+      MAIL_TEMPLATES.emergencyAccessAccepted, MAIL_TEMPLATES.emergencyAccessConfirmed,
+      MAIL_TEMPLATES.emergencyAccessRecoveryInitiated, MAIL_TEMPLATES.emergencyAccessApproved,
+      MAIL_TEMPLATES.emergencyAccessRejected, MAIL_TEMPLATES.emergencyAccessTimedOut, MAIL_TEMPLATES.emergencyAccessReminder,
+    ].map((template) => template.render({ name: unsafe, accessType: unsafe, daysLeft: 1 })),
+    MAIL_TEMPLATES.organizationUserAccepted.render({ organizationName: unsafe, memberName: unsafe }),
+    MAIL_TEMPLATES.organizationUserConfirmed.render({ organizationName: unsafe, vaultOrigin: 'https://vault.io' }),
+  ];
+  for (const item of content) {
+    const rendered = renderMail(item);
+    assert.ok(rendered.subject.length <= 100);
+    assert.doesNotMatch(rendered.subject, /private-token|[\r\n\u202E]/);
+    assert.ok(item.paragraphs.join(' ').includes(safe));
+    assert.doesNotMatch(item.paragraphs.join(' '), /https:\/\/|@|[\r\n\u202E]/);
+    assert.match(rendered.html, /&lt;&gt;&amp;&quot;&#39;/);
+    if (item.action) {
+      assert.equal(new URL(item.action.url).origin, 'https://vault.io');
+      assert.match(rendered.html, /href="https:\/\/vault.io/);
+    }
+  }
+  const inviteUrl = content[1].action!.url;
+  const parameters = new URLSearchParams(inviteUrl.slice(inviteUrl.indexOf('?') + 1));
+  assert.equal(parameters.get('organizationName'), unsafe);
+  assert.equal(parameters.get('email'), 'a+tag@x.io');
+  assert.equal(parameters.get('token'), 'private-token');
 });

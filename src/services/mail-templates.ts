@@ -52,8 +52,12 @@ export const MAIL_TEMPLATES = {
   organizationInvite: {
     throttle: 'user',
     render: (model: OrganizationInvite): MailContent => ({
-      subject: `Join ${sanitizeForEmail(model.organizationName)}`,
-      paragraphs: [`You have been invited to join the ${sanitizeForEmail(model.organizationName)} organization.`, `This link expires in ${ORG_INVITE_TTL_DAYS} days.`],
+      subject: `${model.hasExistingUser ? 'Join' : 'Create an account to join'} ${sanitizeForEmail(model.organizationName)}`,
+      paragraphs: [
+        `You have been invited to join the ${sanitizeForEmail(model.organizationName)} organization.`,
+        ...(model.inviterEmail ? [`Invited by ${sanitizeForEmail(model.inviterEmail)}.`] : []),
+        `This invitation expires on ${new Date(model.expiresAt).toUTCString()}.`,
+      ],
       action: { label: 'Accept invitation', url: toSafeUrl(new URL(buildOrganizationInviteUrl(model))) },
     }),
   },

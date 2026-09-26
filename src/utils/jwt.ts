@@ -104,9 +104,9 @@ export type OrgInviteTokenCheck = { ok: true } | { ok: false; message: 'Expired 
 
 // Binds an emailed invite to one membership row and the address it was sent to, as upstream
 // OrgUserInviteTokenable does, so only that mailbox's owner can accept the row.
-export async function createOrgInviteToken(secret: string, orgUserId: string, email: string): Promise<string> {
+export async function createOrgInviteToken(secret: string, orgUserId: string, email: string, expiresAt = Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_SECONDS): Promise<string> {
   return signHs256Jwt({
-    exp: Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_SECONDS,
+    exp: expiresAt,
     iss: ORG_INVITE_ISSUER,
     sub: orgUserId,
     email: email.toLowerCase(),

@@ -6,7 +6,8 @@ import { MembershipStatus } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
-import { ORG_INVITE_TTL_DAYS } from '../src/utils/jwt';
+import { ORG_INVITE_TTL_DAYS, verifyHs256Jwt } from '../src/utils/jwt';
+import { sanitizeForEmail } from '../src/services/mail';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv, seedUser, captureEmail, MAILABLE_DOMAIN, type SentEmail } from './support/env';
 
@@ -506,6 +507,26 @@ test('one invite batch flags only the invitees that already have an account as e
   await invite(env, owner, orgId, [registered.email, unregistered]);
   const existingFlags = Object.fromEntries(capture.sent.map((message) => [message.to, inviteParams(message).get('orgUserHasExistingUser')]));
   assert.deepEqual(existingFlags, { [registered.email]: 'true', [unregistered]: 'false' });
+  assert.notEqual(capture.sent.find(({ to }) => to === registered.email)?.subject, capture.sent.find(({ to }) => to === unregistered)?.subject);
+  for (const mail of capture.sent) {
+    const claims = await verifyHs256Jwt(inviteParams(mail).get('token')!, env.JWT_SECRET);
+    const displayedExpiry = mail.text.match(/This invitation expires on (.+)\./)?.[1];
+    assert.ok(displayedExpiry);
+    assert.equal(Date.parse(displayedExpiry), Number(claims?.exp) * 1000);
+    assert.ok(mail.text.includes(`Invited by ${sanitizeForEmail(owner.email)}.`));
+  }
+});
+
+test('SCIM invitation has no human inviter line', async () => {
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const user = await seedMailableUser(env);
+  await provisionViaScim(env, owner, orgId, user.email);
+  assert.equal(capture.sent.length, 1);
+  assert.doesNotMatch(capture.sent[0].text, /Invited by|scim:/);
+  assert.equal(inviteParams(capture.sent[0]).get('email'), user.email);
 });
 
 // Upstream InviteUsersAsync invites each distinct address once and skips any address already in the

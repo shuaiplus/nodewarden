@@ -137,6 +137,8 @@ export interface OrganizationInvite {
   email: string;
   token: string;
   hasExistingUser: boolean;
+  inviterEmail?: string;
+  expiresAt: string;
 }
 
 // Upstream OrganizationUserInvitedViewModel.Url. Official web's /#/accept-organization route
@@ -154,4 +156,3 @@ export function buildOrganizationInviteUrl(invite: OrganizationInvite): string {
   });
   return `${invite.vaultOrigin.replace(/\/+$/, '')}/#/accept-organization?${params.toString()}`;
 }
-

@@ -44,7 +44,7 @@ import { enterprisePlansResponse } from '../services/enterprise-license';
 import { publishPlatformEvent } from '../services/queue-publisher';
 import { RateLimitService } from '../services/ratelimit';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
-import { createOrgInviteToken, verifyOrgInviteToken } from '../utils/jwt';
+import { createOrgInviteToken, verifyOrgInviteToken, ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 import { runInBackground } from '../services/mail-notify';
 import {
   readMailConfig,
@@ -691,7 +691,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   const now = new Date().toISOString();
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
-  const invites = [...new Set(emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email }));
+  const invites = [...new Set(emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
   if (!invites.length) return jsonResponse({});
   const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
@@ -727,7 +727,7 @@ export async function mailOrganizationInvites(
   env: Env,
   orgId: string,
   inviter: string,
-  invites: Array<{ id: string; email: string }>,
+  invites: Array<{ id: string; email: string; invitedByEmail?: string | null }>,
 ): Promise<StatusCheck> {
   const config = readMailConfig(env);
   if (config.kind !== 'enabled') return mailStatusCheck(config);
@@ -755,10 +755,13 @@ export async function mailOrganizationInvites(
   }
   const organization = await orgRepo.getOrganization(env.DB, orgId);
   const registered = await orgRepo.listRegisteredEmails(env.DB, deliverable.map(({ email }) => email));
-  const outcomes = await Promise.all(deliverable.map(async ({ id, email }) => sendMail(env, email, 'organizationInvite', {
+  const expiresAt = Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_DAYS * 86400;
+  const outcomes = await Promise.all(deliverable.map(async ({ id, email, invitedByEmail }) => sendMail(env, email, 'organizationInvite', {
     vaultOrigin, organizationId: orgId, organizationUserId: id,
     organizationName: organization?.name ?? '', email,
-    token: await createOrgInviteToken(env.JWT_SECRET, id, email), hasExistingUser: registered.has(email),
+    token: await createOrgInviteToken(env.JWT_SECRET, id, email, expiresAt), hasExistingUser: registered.has(email),
+    inviterEmail: !inviter.startsWith('scim:') && invitedByEmail && EMAIL_PATTERN.test(invitedByEmail) ? invitedByEmail : undefined,
+    expiresAt: new Date(expiresAt * 1000).toISOString(),
   })));
   for (const outcome of outcomes) { const check = mailStatusCheck(outcome); if (!check.ok) return check; }
   return { ok: true };
