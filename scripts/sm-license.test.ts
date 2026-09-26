@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
-import { ORG_CREATE_PATHS, seedSmOrg, TEST_ORG_KEY } from './support/sm';
+import { ORG_CREATE_PATHS, seedMember, seedSmOrg, TEST_ORG_KEY } from './support/sm';
 
 // Secrets Manager is on for every organization and never reads a license: no license upload may
-// switch it off or cap its seats, projects or machine accounts. Owners and Admins get it now.
+// switch it off or cap its seats, projects or machine accounts. Confirmed Owners and Admins get it
+// now.
 const SM_OFF_LICENSE = { useSecretsManager: false, smSeats: 0, smServiceAccounts: 0 };
 // More projects and machine accounts than SM_OFF_LICENSE's zero seats and machine accounts allow.
 const ITEMS_PAST_LICENSE = 3;
@@ -18,6 +20,20 @@ interface ProfileOrganization {
   useSecretsManager: boolean;
   accessSecretsManager: boolean;
 }
+
+interface MemberAccess {
+  id: string;
+  userId: string;
+  accessSecretsManager: boolean;
+}
+
+// Only confirmed members hold the org key, and only Owners and Admins reach Secrets Manager until
+// access policies let other roles see what they are granted.
+const MEMBER_ACCESS_CASES = [
+  { role: 'an accepted Admin', type: MembershipType.Admin, status: MembershipStatus.Accepted, access: false },
+  { role: 'a confirmed Admin', type: MembershipType.Admin, status: MembershipStatus.Confirmed, access: true },
+  { role: 'a confirmed User', type: MembershipType.User, status: MembershipStatus.Confirmed, access: false },
+];
 
 async function assertSecretsManagerOn(env: Env, orgId: string, members: User[]): Promise<void> {
   for (const member of members) {
@@ -37,6 +53,21 @@ async function assertNoSecretsManagerLimits(env: Env, orgId: string, owner: User
       assert.equal(response.status, 200, `${collection} #${created + 1}`);
     }
   }
+}
+
+// Where official web reads a member's Secrets Manager access: the member's own sync profile, and
+// the member list and edit-member dialog an owner opens.
+async function secretsManagerAccess(env: Env, orgId: string, owner: User, member: User) {
+  const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
+  const { profile } = await synced.json() as { profile: { organizations: ProfileOrganization[] } };
+  const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
+  const listEntry = (await listed.json() as { data: MemberAccess[] }).data.find((entry) => entry.userId === member.id);
+  const detail = await authedFetch(env, { path: `/api/organizations/${orgId}/users/${listEntry?.id}`, userId: owner.id });
+  return {
+    profile: profile.organizations.find((org) => org.id === orgId)?.accessSecretsManager,
+    list: listEntry?.accessSecretsManager,
+    detail: (await detail.json() as MemberAccess).accessSecretsManager,
+  };
 }
 
 // Official web's license dialogs post the file as the multipart `license` field; the self-hosted
@@ -72,3 +103,12 @@ test('uploading a license switching Secrets Manager off with zero seats changes 
   await assertSecretsManagerOn(env, orgId, [owner, admin]);
   await assertNoSecretsManagerLimits(env, orgId, owner);
 });
+
+for (const { role, type, status, access } of MEMBER_ACCESS_CASES) {
+  test(`${role} gets accessSecretsManager ${access} in the profile, member list and member detail`, async () => {
+    const env = await createTestEnv();
+    const { orgId, owner } = await seedSmOrg(env);
+    const member = await seedMember(env, orgId, type, status);
+    assert.deepEqual(await secretsManagerAccess(env, orgId, owner, member), { profile: access, list: access, detail: access });
+  });
+}

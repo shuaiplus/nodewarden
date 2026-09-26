@@ -4,6 +4,7 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import {
   acceptInviteCheck,
+  canAccessSecretsManager,
   canCreateCollection,
   canDeleteOrganization,
   canManageGroups,
@@ -607,7 +608,7 @@ export async function handleListMembers(env: Env, userId: string, orgId: string)
     twoFactorEnabled: !!(account?.totpSecret),
     resetPasswordEnrolled: !!item.resetPasswordKey,
     permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
-    accessSecretsManager: item.type <= MembershipType.Admin,
+    accessSecretsManager: canAccessSecretsManager(item),
     object: 'organizationUserUserDetails',
   }));
   return jsonResponse({ data, object: 'list', continuationToken: null });
@@ -644,7 +645,7 @@ export async function handleGetMember(request: Request, env: Env, userId: string
     type,
     status: publicMembershipStatus(membership.status),
     externalId: membership.externalId,
-    accessSecretsManager: membership.type <= MembershipType.Admin,
+    accessSecretsManager: canAccessSecretsManager(membership),
     accessPam: false,
     permissions: type === MembershipType.Custom ? resolvePermissions(membership) : null,
     resetPasswordEnrolled: !!membership.resetPasswordKey,

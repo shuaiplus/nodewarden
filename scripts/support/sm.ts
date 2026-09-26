@@ -16,6 +16,30 @@ export interface SmOrg {
   admin: User;
 }
 
+// A new account holding a membership of `orgId` in the given role and status. Only confirming a
+// member stores the org key, so earlier statuses keep it empty as the invite flow does.
+export async function seedMember(env: Env, orgId: string, type: number, status: number = MembershipStatus.Confirmed): Promise<User> {
+  const user = await seedUser(env);
+  const now = new Date().toISOString();
+  await orgRepo.saveMembership(env.DB, {
+    id: crypto.randomUUID(),
+    userId: user.id,
+    orgId,
+    email: user.email,
+    invitedByEmail: null,
+    accessAll: false,
+    key: status === MembershipStatus.Confirmed ? TEST_ORG_KEY : '',
+    status,
+    type,
+    permissions: null,
+    resetPasswordKey: null,
+    externalId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return user;
+}
+
 // An org its owner created by posting `createBody` to `createPath`, plus a confirmed Admin.
 export async function seedSmOrg(
   env: Env,
@@ -26,24 +50,5 @@ export async function seedSmOrg(
   const created = await authedFetch(env, { method: 'POST', path: createPath, body: createBody, userId: owner.id });
   if (!created.ok) throw new Error(`seedSmOrg: ${createPath} answered ${created.status}`);
   const { id: orgId } = await created.json() as { id: string };
-
-  const admin = await seedUser(env);
-  const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(),
-    userId: admin.id,
-    orgId,
-    email: admin.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: TEST_ORG_KEY,
-    status: MembershipStatus.Confirmed,
-    type: MembershipType.Admin,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return { orgId, owner, admin };
+  return { orgId, owner, admin: await seedMember(env, orgId, MembershipType.Admin) };
 }

@@ -7,7 +7,7 @@ import {
   type OrganizationRecord,
   type PolicyRecord,
 } from '../services/org-types';
-import { resolvePermissions } from '../services/org-authz';
+import { canAccessSecretsManager, resolvePermissions } from '../services/org-authz';
 
 export function organizationResponse(org: OrganizationRecord, options?: { useSso?: boolean; useScim?: boolean }) {
   return {
@@ -107,7 +107,7 @@ export function profileOrganizationResponse(
     productTierType: 3,
     keyConnectorEnabled: false,
     keyConnectorUrl: null,
-    accessSecretsManager: member.type <= MembershipType.Admin,
+    accessSecretsManager: canAccessSecretsManager(member),
     limitCollectionCreation: member.type > MembershipType.Manager && !member.accessAll,
     limitCollectionDeletion: true,
     limitItemDeletion: false,

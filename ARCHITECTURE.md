@@ -60,4 +60,4 @@ Official web's collection dialog opens from `GET /api/organizations/{orgId}/coll
 
 ## Secrets Manager
 
-Secrets Manager is on for every organization and never reads a license. Organization and profile responses always send `useSecretsManager: true`, license upload (`POST /api/organizations/licenses/self-hosted[/{orgId}]`) ignores every Secrets Manager field such as `useSecretsManager`, `smSeats` and `smServiceAccounts`, and there are no seat, project or machine-account limits. Owners and Admins get `accessSecretsManager`. `scripts/sm-license.test.ts` pins this.
+Secrets Manager is on for every organization and never reads a license. Organization and profile responses always send `useSecretsManager: true`, license upload (`POST /api/organizations/licenses/self-hosted[/{orgId}]`) ignores every Secrets Manager field such as `useSecretsManager`, `smSeats` and `smServiceAccounts`, and there are no seat, project or machine-account limits. Confirmed Owners and Admins get `accessSecretsManager` in the profile, member list and member detail through `canAccessSecretsManager`, the same gate the Secrets Manager API checks. `scripts/sm-license.test.ts` pins this.
