@@ -231,11 +231,12 @@ export async function replaceServiceAccountProjects(
   }
 }
 
-export async function listServiceAccountProjectIds(db: D1Database, serviceAccountId: string): Promise<string[]> {
+// Upstream ignores a machine-account project policy without Read, so only read grants count.
+export async function listReadableServiceAccountProjectIds(db: D1Database, serviceAccountId: string): Promise<string[]> {
   const rows = await getOrm(db)
     .select({ projectId: smServiceAccountProjects.projectId })
     .from(smServiceAccountProjects)
-    .where(eq(smServiceAccountProjects.serviceAccountId, serviceAccountId));
+    .where(and(eq(smServiceAccountProjects.serviceAccountId, serviceAccountId), eq(smServiceAccountProjects.readAccess, 1)));
   return rows.map((row) => row.projectId);
 }
 

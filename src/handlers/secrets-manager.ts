@@ -266,11 +266,11 @@ export async function handleSecretsSync(
   const url = new URL(request.url);
   const lastSynced = url.searchParams.get('lastSyncedDate');
   const lastMs = lastSynced ? Date.parse(lastSynced) : 0;
-  const projectIds = await smRepo.listServiceAccountProjectIds(env.DB, serviceAccountId);
-  const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter((secret) => {
-    if (projectIds.length && !secret.projectIds.some((id) => projectIds.includes(id))) return false;
-    return true;
-  });
+  // A machine account reads a secret only through a read grant on one of its projects, so an
+  // account with no readable project syncs nothing instead of the whole org.
+  const readableProjectIds = new Set(await smRepo.listReadableServiceAccountProjectIds(env.DB, serviceAccountId));
+  const secrets = (await smRepo.listSecrets(env.DB, orgId))
+    .filter((secret) => secret.projectIds.some((projectId) => readableProjectIds.has(projectId)));
   const changed = !lastMs || secrets.some((secret) => Date.parse(secret.updatedAt) > lastMs);
   return jsonResponse({
     hasChanges: changed,
