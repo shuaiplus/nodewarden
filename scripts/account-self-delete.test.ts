@@ -4,12 +4,13 @@ import test from 'node:test';
 import { createAuth } from '../src/auth';
 import { getOrm } from '../src/db/client';
 import { ciphers } from '../src/db/schema';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { AuthService } from '../src/services/auth';
 import { getAttachmentObjectKey } from '../src/services/blob-store';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 

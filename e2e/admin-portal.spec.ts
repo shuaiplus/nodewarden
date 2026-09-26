@@ -105,4 +105,14 @@ test('administrator disables and enables a vault account through the forms', asy
   await expect(page.getByRole('button', { name: 'Enable user', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Enable user', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Disable user', exact: true })).toBeVisible();
+  // Reuse this sign-in so the complete portal suite stays within its three-link issue budget.
+  const resetEmail = process.env.E2E_RESET_USER_EMAIL;
+  if (resetEmail) {
+    await page.goto(`${origin}/admin/users?email=${encodeURIComponent(resetEmail)}`);
+    await page.getByRole('link', { name: resetEmail, exact: true }).click();
+    await page.getByLabel(`Type ${resetEmail} to remove two-step login`).fill(resetEmail);
+    await page.getByRole('button', { name: 'Remove two-step login', exact: true }).click();
+    await expect(page).toHaveURL(/m=two-factor-reset/);
+    await expect(page.getByRole('button', { name: 'Remove two-step login', exact: true })).toHaveCount(0);
+  }
 });

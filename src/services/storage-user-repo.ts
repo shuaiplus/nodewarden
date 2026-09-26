@@ -3,6 +3,7 @@ import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
 import type { User } from '../types';
+import { twoFactorProviders } from './two-factor-providers';
 
 function mapUserRow(row: typeof users.$inferSelect): User {
   return {
@@ -177,7 +178,13 @@ export async function deleteUserById(db: D1Database, id: string): Promise<boolea
 
 export async function searchUsersByEmailPrefix(db: D1Database, prefix: string, offset: number, limit: number) {
   const pattern = prefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
-  return getOrm(db).select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role,
-    twoFactor: sql<number>`(${users.totpSecret} IS NOT NULL AND ${users.totpSecret} <> '') OR coalesce(${users.yubikeyKey1},${users.yubikeyKey2},${users.yubikeyKey3},${users.yubikeyKey4},${users.yubikeyKey5},'') <> '' OR EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id=users.id AND w.purpose='twoFactor')`,
+  const rows = await getOrm(db).select({
+    user: { id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role },
+    providers: {
+      totpSecret: users.totpSecret, yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2,
+      yubikeyKey3: users.yubikeyKey3, yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
+    },
+    hasTwoFactorPasskey: sql<number>`EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id=users.id AND w.purpose='twoFactor')`.mapWith(Boolean),
   }).from(users).where(sql`${users.email} LIKE ${pattern} ESCAPE '\\'`).orderBy(asc(users.email)).limit(limit + 1).offset(offset);
+  return rows.map(({ user, providers, hasTwoFactorPasskey }) => ({ ...user, twoFactor: twoFactorProviders(providers, hasTwoFactorPasskey).length > 0 }));
 }

@@ -1,3 +1,6 @@
+import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
+import { AuthService } from '../services/auth';
+import { notifyUserLogout } from '../durable/notifications-hub';
 import { markEmailVerified } from '../services/vault-admin-role';
 import * as orgRepo from '../services/storage-org-repo';
 import { canAccessSecretsManager } from '../services/org-authz';
@@ -6,7 +9,6 @@ import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
 import { countPersonalCiphers } from '../services/storage-cipher-repo';
 import { deleteUserAccount, deleteOrganizationAccount, setUserStatus } from '../services/account-deletion';
 import { sha256Base64Url } from '../utils/account-passkeys';
-import { isYubiKeyEnabled } from '../utils/yubico-otp';
 import { listAuditLogs } from '../services/storage-admin-repo';
 import { isOpenRegistrationEnabled } from '../services/register-payload';
 import { getConfiguredWebVaultOrigins } from '../utils/origins';
@@ -20,14 +22,14 @@ import {
   readAdminSession, issueAdminLogin, redeemAdminLogin,
 } from '../services/admin-portal-auth';
 import { readMailConfig, EMAIL_PATTERN } from '../services/mail';
-import { runInBackground } from '../services/mail-notify';
+import { runInBackground, notifyMail } from '../services/mail-notify';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../services/audit-events';
 import { StorageService } from '../services/storage';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
 import { html } from '../utils/html';
-import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm, verifyEmailForm } from '../views/admin-portal';
+import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm, verifyEmailForm, removeTwoFactorForm } from '../views/admin-portal';
 
 const forbidden = () => portalPage('Forbidden', html`<p>This request is not allowed.</p>`, 403);
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
@@ -115,7 +117,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const rows = await searchUsersByEmailPrefix(env.DB, email, (page - 1) * count, count);
       return portalPage('Users', html`${portalNavigation(session.csrf)}<form method="get" action="/admin/users"><label>Email prefix <input name="email" value="${email}"></label><input type="hidden" name="count" value="${count}"><button type="submit">Search</button></form><table><thead><tr><th>Email</th><th>Name</th><th>Created</th><th>Status</th><th>Vault role</th><th>Two-factor</th></tr></thead><tbody>${rows.slice(0, count).map((user) => html`<tr><td><a href="${'/admin/users/view/' + encodeURIComponent(user.id)}">${user.email}</a></td><td>${user.name ?? ''}</td><td>${user.createdAt}</td><td>${user.status}</td><td>${user.role}</td><td>${user.twoFactor ? 'Yes' : 'No'}</td></tr>`)}</tbody></table>${portalPagination(url, page, rows.length > count)}`);
     }
-    const userActionPath = path.match(/^\/admin\/users\/([^/]+)\/(disable|enable|verify-email)$/);
+    const userActionPath = path.match(/^\/admin\/users\/([^/]+)\/(disable|enable|verify-email|remove-2fa)$/);
     const userPath = path.match(/^\/admin\/users\/(view|delete)\/([^/]+)$/)
       ?? (userActionPath ? [userActionPath[0], userActionPath[2], userActionPath[1]] : null);
     if (userPath) {
@@ -154,14 +156,33 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         });
         return portalRedirect(viewPath + '?m=verified');
       }
+      if (userPath[1] === 'remove-2fa') {
+        const passkeys = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+        if (!twoFactorProviders(user, passkeys > 0).length) return portalRedirect(viewPath + '?m=nothing-to-reset');
+        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        if (check) return check;
+        const event = auditEventStatement(env.DB, {
+          action: 'admin.portal.user.two_factor.reset', category: 'security', level: 'security', actorUserId: null,
+          targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
+        }).toSQL();
+        await env.DB.batch([
+          ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
+          env.DB.prepare(event.sql).bind(...event.params),
+        ]);
+        AuthService.invalidateUserCache(user.id);
+        notifyUserLogout(env, user.id, null);
+        notifyMail(env, user.email, 'twoFactorRecovered', { by: 'administrator' });
+        return portalRedirect(viewPath + '?m=two-factor-reset');
+      }
       const [personalItems, memberships, passkeys] = await Promise.all([
         countPersonalCiphers(env.DB, user.id),
         env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
         storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'),
       ]);
+      const providers = twoFactorProviders(user, passkeys > 0);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
-        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
-      ])}${user.emailVerified ? html`` : verifyEmailForm(user.id, session.csrf, user.email, directory.admins.has(user.email))}${userStatusForm(user.id, session.csrf, user.status)}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
+        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', providers.map(provider => ({ 0: 'Authenticator', 3: 'YubiKey', 7: 'WebAuthn' })[provider]).join(', ') || 'None'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
+      ])}${user.emailVerified ? html`` : verifyEmailForm(user.id, session.csrf, user.email, directory.admins.has(user.email))}${userStatusForm(user.id, session.csrf, user.status)}${providers.length ? removeTwoFactorForm(user.id, session.csrf, user.email) : html``}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin/organizations') {
       if (request.method !== 'GET') return methodNotAllowed();

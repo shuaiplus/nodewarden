@@ -52,3 +52,7 @@ export function userStatusForm(userId: string, csrf: string, status: 'active' | 
 export function verifyEmailForm(userId: string, csrf: string, email: string, grantsVaultAdmin: boolean): SafeHtml {
   return html`<form method="post" action="${'/admin/users/' + encodeURIComponent(userId) + '/verify-email'}"><input type="hidden" name="csrf" value="${csrf}"><label>Type ${email} to confirm email verification <input name="confirmation" required autocomplete="off"></label><button type="submit">${grantsVaultAdmin ? 'Verify email and grant vault admin' : 'Verify email'}</button></form>`;
 }
+
+export function removeTwoFactorForm(userId: string, csrf: string, email: string): SafeHtml {
+  return html`<form method="post" action="${'/admin/users/' + encodeURIComponent(userId) + '/remove-2fa'}"><input type="hidden" name="csrf" value="${csrf}"><label>Type ${email} to remove two-step login <input name="confirmation" required autocomplete="off"></label><button type="submit">Remove two-step login</button></form>`;
+}

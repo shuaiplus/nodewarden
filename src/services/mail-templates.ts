@@ -14,9 +14,11 @@ export const MAIL_TEMPLATES = {
   },
   twoFactorRecovered: {
     throttle: 'exempt',
-    render: (model: { time: string; ip: string }): MailContent => ({
+    render: (model: { time: string; ip: string } | { by: 'administrator' }): MailContent => ({
       subject: 'NodeWarden two-step login was recovered',
-      paragraphs: ['A recovery code was used to remove two-step login from your account.', `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password and review your account security.'],
+      paragraphs: 'by' in model
+        ? ['An administrator removed two-step login from your account.', 'Review your account security and set up two-step login again. Contact your administrator if this was unexpected.']
+        : ['A recovery code was used to remove two-step login from your account.', `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password and review your account security.'],
     }),
   },
   failedTwoFactor: {

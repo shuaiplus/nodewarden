@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
@@ -10,6 +9,8 @@ import * as orgRepo from '../src/services/storage-org-repo';
 import { twoFactorClearStatements } from '../src/services/two-factor-providers';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const PASSWORD = 'client-master-password-hash';
 const TOTP = 'JBSWY3DPEHPK3PXP';

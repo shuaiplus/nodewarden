@@ -176,3 +176,11 @@ test('every mail template escapes and sanitizes untrusted text without tokens in
     if (content.action) { assert.equal(new URL(content.action.url).origin, vaultOrigin); assert.ok(rendered.text.includes(content.action.url), name); }
   }
 });
+
+test('administrator two-factor recovery notice omits IP and administrator identity', async () => {
+  const { MAIL_TEMPLATES, renderMail } = await import('./mail-templates');
+  const rendered = renderMail(MAIL_TEMPLATES.twoFactorRecovered.render({ by: 'administrator' }));
+  assert.match(rendered.text, /An administrator removed two-step login/);
+  assert.doesNotMatch(rendered.text, /IP address|recovery code|@/i);
+  assert.doesNotMatch(rendered.html, /IP address|recovery code|@/i);
+});
