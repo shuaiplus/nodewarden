@@ -70,3 +70,25 @@ test('failed two-factor notices deduplicate per account, skip Remember and ident
   env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
   await attempt('failure', '0');
 });
+
+test('both recovery paths send a security notice and delivery failure never rolls back recovery', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  for (const login of [false, true]) {
+    const capture = captureEmail();
+    const env = await createTestEnv(capture.overrides);
+    const user = await seedUser(env, { email: `recover@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(password), totpSecret: 'JBSWY3DPEHPK3PXP', totpRecoveryCode: 'ABCD EFGH IJKL MNOP QRST UVWX YZ23 4567' });
+    const attempt = (code: string) => authedFetch(env, { method: 'POST', path: login ? '/identity/connect/token' : '/identity/accounts/recover-2fa', body: login ? { grant_type: 'password', username: user.email, password, twoFactorProvider: '8', twoFactorToken: code } : { email: user.email, masterPasswordHash: password, recoveryCode: code } });
+    assert.equal((await attempt('WRONG')).status, 400);
+    await drainWaitUntil();
+    assert.equal(capture.sent.length, 1);
+    assert.match(capture.sent[0].subject, /Unsuccessful/);
+    assert.equal((await attempt(user.totpRecoveryCode!)).status, 200);
+    await drainWaitUntil();
+    assert.equal(capture.sent.length, 2);
+    assert.match(capture.sent[1].subject, /was recovered/);
+  }
+  const env = await createTestEnv({ ...captureEmail().overrides, EMAIL: failingEmail('E_RECIPIENT_SUPPRESSED') });
+  const user = await seedUser(env, { email: `failure@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(password), totpSecret: 'JBSWY3DPEHPK3PXP', totpRecoveryCode: 'ABCD EFGH IJKL MNOP QRST UVWX YZ23 4567' });
+  assert.equal((await authedFetch(env, { method: 'POST', path: '/identity/accounts/recover-2fa', body: { email: user.email, masterPasswordHash: password, recoveryCode: user.totpRecoveryCode } })).status, 200);
+  await drainWaitUntil();
+});

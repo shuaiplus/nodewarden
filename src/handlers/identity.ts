@@ -613,6 +613,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         await storage.saveUser(user);
         await storage.deleteRefreshTokensByUserId(user.id);
         AuthService.invalidateUserCache(user.id);
+        notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
         rememberRequested = false;
       } else {
         // Unsupported provider for this server profile behaves as an invalid 2FA attempt.

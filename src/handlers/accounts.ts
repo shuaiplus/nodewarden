@@ -1,4 +1,4 @@
-import { runInBackground } from '../services/mail-notify';
+import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
@@ -1536,6 +1536,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   }
 
   if (!recoveryCodeEquals(recoveryCode, user.totpRecoveryCode)) {
+    notifyFailedTwoFactor(env, request, user, 8);
     await rateLimit.recordFailedLogin(recoverLimitKey);
     return errorResponse('Invalid credentials or recovery code', 400);
   }
@@ -1557,6 +1558,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
   await rateLimit.clearLoginAttempts(recoverLimitKey);
   await safeWriteAuditEvent(env, {
     actorUserId: user.id,

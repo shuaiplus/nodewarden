@@ -4,6 +4,13 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  twoFactorRecovered: {
+    throttle: 'exempt',
+    render: (model: { time: string; ip: string }): MailContent => ({
+      subject: 'NodeWarden two-step login was recovered',
+      paragraphs: ['A recovery code was used to remove two-step login from your account.', `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password and review your account security.'],
+    }),
+  },
   failedTwoFactor: {
     throttle: 'exempt',
     render: (model: { provider: number; time: string; ip: string }): MailContent => ({
