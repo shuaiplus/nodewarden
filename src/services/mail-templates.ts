@@ -4,6 +4,14 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  verifyDelete: {
+    throttle: 'user',
+    render: (model: { url: SafeUrl }): MailContent => ({
+      subject: 'Confirm deletion of your NodeWarden account',
+      paragraphs: ['An account deletion was requested for this email address.', 'Use the link to review and confirm deletion within one day. If you did not request this, ignore this message.'],
+      action: { label: 'Review account deletion', url: model.url },
+    }),
+  },
   signInCode: {
     throttle: 'exempt',
     render: (model: { code: string; reason: 'two-factor' | 'new-device'; ip: string; deviceTypeName: string; utc: string }): MailContent => ({

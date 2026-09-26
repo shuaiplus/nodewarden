@@ -79,10 +79,10 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
   return { kind: 'updated' };
 }
 
-async function userDeletionRefusal(db: D1Database, userId: string): Promise<Exclude<DeleteUserAccountResult, { kind: 'deleted' }> | null> {
+async function userDeletionRefusal(db: D1Database, userId: string, securityStamp?: string): Promise<Exclude<DeleteUserAccountResult, { kind: 'deleted' }> | null> {
   const orm = getOrm(db);
   const [user] = await orm.select({ lastAdmin: sql<number>`(${lastActiveAdmin(userId)})` })
-    .from(users).where(eq(users.id, userId));
+    .from(users).where(and(eq(users.id, userId), securityStamp === undefined ? sql`1` : eq(users.securityStamp, securityStamp)));
   if (!user) return { kind: 'not-found' };
   const orgs = await orm.all<{ orgId: string }>(blockedOrganizations(userId));
   if (orgs.length) return { kind: 'blocked-by-orgs', orgIds: orgs.map((org) => org.orgId) };
@@ -99,12 +99,12 @@ async function deleteBlobs(env: Env, keys: string[]): Promise<void> {
   }
 }
 
-export async function deleteUserAccount(env: Env, userId: string, audit: AuditEventInput): Promise<DeleteUserAccountResult> {
-  const refusal = await userDeletionRefusal(env.DB, userId);
+export async function deleteUserAccount(env: Env, userId: string, audit: AuditEventInput, securityStamp?: string): Promise<DeleteUserAccountResult> {
+  const refusal = await userDeletionRefusal(env.DB, userId, securityStamp);
   if (refusal) return refusal;
 
   const orm = getOrm(env.DB);
-  const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId})
+  const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND ${securityStamp === undefined ? sql`1` : eq(users.securityStamp, securityStamp)})
     AND NOT EXISTS (${blockedOrganizations(userId)}) AND NOT (${lastActiveAdmin(userId)})`;
   // Read keys in the same transaction: a personal cipher shared before this batch must keep its blob.
   const [personalAttachments, fileSends, , , , , deletion] = await orm.batch([
@@ -120,7 +120,7 @@ export async function deleteUserAccount(env: Env, userId: string, audit: AuditEv
     orm.delete(users).where(and(eq(users.id, userId), guard)),
   ]);
   if (!deletion.meta.changes) {
-    const changedRefusal = await userDeletionRefusal(env.DB, userId);
+    const changedRefusal = await userDeletionRefusal(env.DB, userId, securityStamp);
     if (changedRefusal) return changedRefusal;
     throw new Error('User deletion preconditions changed; retry the request');
   }

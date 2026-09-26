@@ -121,6 +121,22 @@ export async function verifySsoEmail2faSessionToken(env: Env, user: User, token:
     && typeof payload.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > Math.floor(Date.now() / 1000);
 }
 
+const DELETE_RECOVER_ISSUER = 'nodewarden|delete_recover';
+
+export async function createDeleteRecoverToken(env: Env, user: User): Promise<string> {
+  return signHs256Jwt({
+    iss: DELETE_RECOVER_ISSUER, sub: user.id, sst: await sha256Base64Url(user.securityStamp),
+    exp: Math.floor(Date.now() / 1000) + LIMITS.auth.deleteRecoverTokenTtlSeconds,
+  }, env.JWT_SECRET);
+}
+
+export async function verifyDeleteRecoverToken(env: Env, user: User, token: string): Promise<boolean> {
+  const payload = await verifyHs256Jwt(token, env.JWT_SECRET);
+  return !!payload && payload.iss === DELETE_RECOVER_ISSUER && payload.sub === user.id
+    && typeof payload.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > Math.floor(Date.now() / 1000)
+    && payload.sst === await sha256Base64Url(user.securityStamp);
+}
+
 export const REGISTER_VERIFY_ISSUER = 'nodewarden|register_verify';
 
 export async function createRegisterVerifyToken(

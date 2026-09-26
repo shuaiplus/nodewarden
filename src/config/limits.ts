@@ -33,6 +33,7 @@
     // New-device verification exempts accounts younger than one day.
     // 注册不足一天的账户不要求新设备验证。
     newDeviceVerificationMinAccountAgeSeconds: 86400,
+    deleteRecoverTokenTtlSeconds: 86400,
     // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
     // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
     refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,
@@ -66,6 +67,7 @@
     emailOtpAttemptsPerWindow: 5,
     emailOtpIssuesPerHour: 5,
     emailSignInCodeIssuesPerHour: 20,
+    deleteRecoverPerIpPerHour: 5,
     // Max failed login attempts before temporary lock.
     // 触发临时锁定前允许的最大登录失败次数。
     loginMaxAttempts: 10,

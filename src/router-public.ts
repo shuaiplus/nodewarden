@@ -24,6 +24,8 @@ import {
   handleRecoverTwoFactor,
   handleSendTwoFactorEmailLogin,
   handleResendNewDeviceOtp,
+  handleDeleteRecover,
+  handleDeleteRecoverToken,
 } from './handlers/accounts';
 import {
   handleCreateAuthRequest,
@@ -480,6 +482,17 @@ export async function handlePublicRoute(
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
     if (blocked) return blocked;
     return handleResendNewDeviceOtp(request, env);
+  }
+
+  if ((path === '/api/accounts/delete-recover' || path === '/accounts/delete-recover') && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
+    if (blocked) return blocked;
+    return handleDeleteRecover(request, env);
+  }
+  if ((path === '/api/accounts/delete-recover-token' || path === '/accounts/delete-recover-token') && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
+    if (blocked) return blocked;
+    return handleDeleteRecoverToken(request, env);
   }
 
   const publicMailBackedPaths = new Set([

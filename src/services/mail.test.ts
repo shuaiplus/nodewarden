@@ -149,6 +149,7 @@ test('every mail template escapes and sanitizes untrusted text without tokens in
   const vaultOrigin = 'https://vault.io';
   const token = 'UNIQUE-SECRET-TOKEN';
   const models = {
+    verifyDelete: { url: toSafeUrl(new URL(`${vaultOrigin}/#/verify-recover-delete?token=${token}`)) },
     verificationCode: { code: '123456', reason: 'two-factor-setup' },
     signInCode: { code: '123456', reason: 'two-factor', ip: hostile, deviceTypeName: hostile, utc: hostile },
     passwordHint: { hint: hostile }, noPasswordHint: {},

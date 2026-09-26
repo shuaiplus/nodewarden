@@ -1,3 +1,4 @@
+import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
@@ -20,7 +21,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
-import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken, verifySsoEmail2faSessionToken } from '../utils/jwt';
+import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken, verifySsoEmail2faSessionToken, createDeleteRecoverToken, verifyDeleteRecoverToken } from '../utils/jwt';
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
   mailStatusCheck,
@@ -613,11 +614,51 @@ export async function handleDeleteAccount(request: Request, env: Env, userId: st
     targetType: 'user',
     targetId: userId,
     metadata: auditRequestMetadata(request),
-  });
+  }, user.securityStamp);
   if (result.kind === 'not-found') return errorResponse('User not found', 404);
   if (result.kind === 'blocked-by-orgs') return errorResponse('You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.', 400);
   if (result.kind === 'last-vault-admin') return errorResponse('You cannot delete the last instance administrator.', 400);
   notifyUserLogout(env, userId, null);
+  return new Response(null, { status: 200 });
+}
+
+export async function handleDeleteRecover(request: Request, env: Env): Promise<Response> {
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
+  const email = readBodyString(body, ['email', 'Email']).trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const clientId = getClientIdentifier(request);
+  if (!clientId) return errorResponse('Client IP is required', 403);
+  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`delete-recover:${clientId}`, LIMITS.rateLimit.deleteRecoverPerIpPerHour, 3600);
+  if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds ?? 3600) });
+  const origin = configuredVaultOrigin(request, env);
+  if (readMailConfig(env).kind !== 'enabled' || !origin) return errorResponse('Email sending is not configured', 503);
+  runInBackground('delete-recover', async () => {
+    const user = await new StorageService(env.DB).getUser(email);
+    if (!user || user.status !== 'active') return;
+    const token = await createDeleteRecoverToken(env, user);
+    const params = new URLSearchParams({ userId: user.id, token, email: user.email });
+    await sendMail(env, user.email, 'verifyDelete', { url: toSafeUrl(new URL(`${origin}/#/verify-recover-delete?${params}`)) });
+  });
+  return jsonResponse('');
+}
+
+export async function handleDeleteRecoverToken(request: Request, env: Env): Promise<Response> {
+  const invalid = () => errorResponse('Invalid token.', 400);
+  let body: Record<string, unknown>;
+  try { body = await readRequestBody(request); } catch { return invalid(); }
+  const userId = readBodyString(body, ['userId', 'UserId']);
+  const token = readBodyString(body, ['token', 'Token']);
+  const user = userId ? await new StorageService(env.DB).getUserById(userId) : null;
+  if (!user || user.status !== 'active' || !await verifyDeleteRecoverToken(env, user, token)) return invalid();
+  const result = await deleteUserAccount(env, user.id, {
+    actorUserId: null, action: 'user.account.delete_recover', category: 'security', level: 'security',
+    targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
+  }, user.securityStamp);
+  if (result.kind === 'not-found') return invalid();
+  if (result.kind === 'blocked-by-orgs') return errorResponse('You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.', 400);
+  if (result.kind === 'last-vault-admin') return errorResponse('You cannot delete the last instance administrator.', 400);
+  notifyUserLogout(env, user.id, null);
   return new Response(null, { status: 200 });
 }
 
