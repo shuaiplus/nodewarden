@@ -208,28 +208,3 @@ export async function createSecret(
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Create secret failed'));
 }
-
-export async function createServiceAccountToken(
-  authedFetch: AuthedFetch,
-  orgId: string,
-  name: string,
-  wrappedOrgKey: string
-): Promise<{ clientId: string; clientSecret: string }> {
-  const accountResp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/service-accounts`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-  if (!accountResp.ok) throw new Error(await parseErrorMessage(accountResp, 'Create service account failed'));
-  const account = await parseJson<{ id: string }>(accountResp);
-  if (!account?.id) throw createApiError('Create service account failed', 500);
-  const tokenResp = await authedFetch(`/api/service-accounts/${encodeURIComponent(account.id)}/access-tokens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: `${name} token`, wrappedOrgKey }),
-  });
-  if (!tokenResp.ok) throw new Error(await parseErrorMessage(tokenResp, 'Create access token failed'));
-  const token = await parseJson<{ clientId: string; clientSecret: string }>(tokenResp);
-  if (!token?.clientId || !token.clientSecret) throw createApiError('Create access token failed', 500);
-  return token;
-}

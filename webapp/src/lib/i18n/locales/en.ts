@@ -36,8 +36,6 @@ const en: Record<string, string> = {
   "txt_sm_secret_value": "Secret value",
   "txt_sm_add_secret": "Add secret",
   "txt_sm_secret_created": "Secret created",
-  "txt_sm_machine_account": "Machine account",
-  "txt_sm_create_token": "Create Kubernetes access token",
   "txt_sso_sign_in": "Sign in with SSO",
   "nav_vault_items": "Vault",
   "nav_sends": "Sends",

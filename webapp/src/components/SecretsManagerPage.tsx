@@ -3,14 +3,12 @@ import { LockKeyhole } from 'lucide-preact';
 import {
   createProject,
   createSecret,
-  createServiceAccountToken,
   listProjects,
   listSecrets,
   type ProfileOrganization,
   type SmProject,
 } from '@/lib/api/orgs';
-import { unwrapOrgKey, encodeOrgKeyB64 } from '@/lib/org-crypto';
-import { encryptBw } from '@/lib/crypto';
+import { decryptWithOrgKey, encryptWithOrgKey, unwrapOrgKey } from '@/lib/org-crypto';
 import type { SessionState } from '@/lib/types';
 import { t } from '@/lib/i18n';
 
@@ -28,13 +26,25 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
   const [projectName, setProjectName] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [secretValue, setSecretValue] = useState('');
-  const [tokenResult, setTokenResult] = useState('');
 
   const selected = props.organizations.find((org) => org.id === orgId) || props.organizations[0] || null;
 
+  function wrappedOrgKey(): string {
+    if (!selected?.key) throw new Error('Organization key unavailable');
+    return selected.key;
+  }
+
   async function refresh(): Promise<void> {
     if (!selected) return;
-    setProjects(await listProjects(props.authedFetch, selected.id));
+    const encryptedProjects = await listProjects(props.authedFetch, selected.id);
+    // As upstream project.service: an org key that cannot be unwrapped fails the refresh, while a
+    // name that fails to decrypt (the webapp once stored names in plaintext) shows a decrypt error
+    // for its row alone.
+    const orgKey = await unwrapOrgKey(props.session, wrappedOrgKey());
+    setProjects(await Promise.all(encryptedProjects.map(async (project) => ({
+      ...project,
+      name: await decryptWithOrgKey(orgKey, project.name).catch(() => t('txt_decrypt_failed')),
+    }))));
     setSecrets(await listSecrets(props.authedFetch, selected.id));
   }
 
@@ -43,15 +53,13 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
   }, [selected?.id]);
 
   async function encryptField(value: string): Promise<string> {
-    if (!selected?.key) throw new Error('Organization key unavailable');
-    const orgKey = await unwrapOrgKey(props.session, selected.key);
-    return encryptBw(new TextEncoder().encode(value), orgKey.encKey, orgKey.macKey);
+    return encryptWithOrgKey(await unwrapOrgKey(props.session, wrappedOrgKey()), value);
   }
 
   async function onCreateProject(event: Event): Promise<void> {
     event.preventDefault();
     if (!selected) return;
-    await createProject(props.authedFetch, selected.id, projectName);
+    await createProject(props.authedFetch, selected.id, await encryptField(projectName));
     setProjectName('');
     await refresh();
   }
@@ -62,20 +70,13 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
     await createSecret(props.authedFetch, selected.id, {
       key: await encryptField(secretKey),
       value: await encryptField(secretValue),
+      note: await encryptField(''),
       projectIds: projects[0] ? [projects[0].id] : [],
     });
     setSecretKey('');
     setSecretValue('');
     await refresh();
     props.onNotify('success', t('txt_sm_secret_created'));
-  }
-
-  async function onCreateToken(): Promise<void> {
-    if (!selected?.key) return;
-    const orgKey = await unwrapOrgKey(props.session, selected.key);
-    const wrapped = encodeOrgKeyB64(orgKey.encKey, orgKey.macKey);
-    const token = await createServiceAccountToken(props.authedFetch, selected.id, 'kubernetes', wrapped);
-    setTokenResult(`${token.clientId}\n${token.clientSecret}`);
   }
 
   return (
@@ -105,11 +106,6 @@ export default function SecretsManagerPage(props: SecretsManagerPageProps) {
             <button className="btn primary" type="submit">{t('txt_sm_add_secret')}</button>
             <ul className="plain-list">{secrets.map((secret) => <li>{secret.id}</li>)}</ul>
           </form>
-          <section className="card">
-            <h2>{t('txt_sm_machine_account')}</h2>
-            <button className="btn" type="button" onClick={onCreateToken}>{t('txt_sm_create_token')}</button>
-            {tokenResult && <pre className="code-block">{tokenResult}</pre>}
-          </section>
         </>
       )}
     </section>

@@ -35,8 +35,6 @@ const zhTW: Record<string, string> = {
   "txt_sm_secret_value": "Secret value",
   "txt_sm_add_secret": "Add secret",
   "txt_sm_secret_created": "Secret created",
-  "txt_sm_machine_account": "Machine account",
-  "txt_sm_create_token": "Create Kubernetes access token",
   "txt_sso_sign_in": "Sign in with SSO",
   "nav_my_vault": "我的密碼庫",
   "nav_vault_items": "密碼庫",

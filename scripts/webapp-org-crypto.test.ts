@@ -5,10 +5,10 @@ import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
-import { confirmMember, getUserPublicKey } from '../webapp/src/lib/api/orgs';
+import { confirmMember, createProject, createSecret, getUserPublicKey, listProjects } from '../webapp/src/lib/api/orgs';
 import type { AuthedFetch } from '../webapp/src/lib/api/shared';
 import { base64ToBytes, bytesToBase64, concatBytes } from '../webapp/src/lib/crypto';
-import { createOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
+import { createOrgKey, decryptWithOrgKey, encryptWithOrgKey, unwrapOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const SYMMETRIC_KEY_HALF_BYTES = 32;
@@ -88,4 +88,32 @@ test('webapp confirm stops at the public key lookup for a member without keys', 
   const keyless = await seedUser(env);
 
   await assert.rejects(getUserPublicKey(ownerFetch, keyless.id), /not found/i);
+});
+
+test('webapp Secrets Manager stores project names and secret notes as org-key EncStrings', async () => {
+  const { env, adminSession, orgKey, orgId, ownerFetch } = await setup();
+  const unwrappedOrgKey = await unwrapOrgKey(adminSession, orgKey.wrapped);
+  const encrypt = (value: string) => encryptWithOrgKey(unwrappedOrgKey, value);
+  const decrypt = (value: string) => decryptWithOrgKey(unwrappedOrgKey, value);
+
+  // Same sequence as SecretsManagerPage onCreateProject, refresh and onCreateSecret.
+  await createProject(ownerFetch, orgId, await encrypt('Payments'));
+  const [project] = await listProjects(ownerFetch, orgId);
+  await createSecret(ownerFetch, orgId, {
+    key: await encrypt('DB_PASSWORD'),
+    value: await encrypt('hunter2'),
+    note: await encrypt(''),
+    projectIds: [project.id],
+  });
+
+  assert.equal(await decrypt(project.name), 'Payments');
+  // The release-note query for names older webapps stored in plaintext.
+  const encryptedNames = await env.DB.prepare("SELECT COUNT(*) AS count FROM sm_projects WHERE org_id = ? AND name GLOB '[0-9].*|*'").bind(orgId).first('count');
+  assert.equal(encryptedNames, 1);
+  // Upstream requires Note; decryptStr maps a missing one to '' too, so check it was stored.
+  const note = await env.DB.prepare('SELECT note FROM sm_secrets WHERE org_id = ?').bind(orgId).first<string | null>('note');
+  assert.ok(note);
+  assert.equal(await decrypt(note), '');
+  // SecretsManagerPage shows a decrypt error for a legacy plaintext name instead of the raw value.
+  await assert.rejects(decrypt('Payments'));
 });

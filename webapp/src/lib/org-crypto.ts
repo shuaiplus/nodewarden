@@ -1,4 +1,4 @@
-import { base64ToBytes, bytesToBase64, concatBytes, decryptBw, encryptBw, encryptBwRsa, requireWebCrypto } from './crypto';
+import { base64ToBytes, concatBytes, decryptBw, decryptStr, encryptBw, encryptBwRsa, requireWebCrypto } from './crypto';
 import type { SessionState } from './types';
 
 export interface OrgKeyPair {
@@ -30,9 +30,13 @@ export async function wrapOrgKeyForMember(session: SessionState, wrappedOrgKey: 
   return encryptBwRsa(concatBytes(encKey, macKey), memberPublicKey);
 }
 
-export function encodeOrgKeyB64(encKey: Uint8Array, macKey: Uint8Array): string {
-  const raw = new Uint8Array(64);
-  raw.set(encKey, 0);
-  raw.set(macKey, 32);
-  return bytesToBase64(raw);
+// Secrets Manager names, keys, values and notes are EncStrings under the org key: upstream requires
+// [EncryptedString] on each, and official web and bws decrypt them with that key. Callers unwrap the
+// org key once, as upstream project.service, so a key failure is not mistaken for a bad field.
+export function encryptWithOrgKey(orgKey: Pick<OrgKeyPair, 'encKey' | 'macKey'>, value: string): Promise<string> {
+  return encryptBw(new TextEncoder().encode(value), orgKey.encKey, orgKey.macKey);
+}
+
+export function decryptWithOrgKey(orgKey: Pick<OrgKeyPair, 'encKey' | 'macKey'>, value: string): Promise<string> {
+  return decryptStr(value, orgKey.encKey, orgKey.macKey);
 }
