@@ -9,7 +9,7 @@ import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { ORG_INVITE_TTL_DAYS } from '../src/utils/jwt';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, seedUser, captureEmail, MAILABLE_DOMAIN, type SentEmail } from './support/env';
 
 // Upstream OrganizationService always stores invites as Invited with no user, and only
 // AcceptOrgUserCommand (after checking the emailed token) binds the user. Without that, anyone can
@@ -19,7 +19,6 @@ const OFFICIAL_WEB_ORIGIN = 'https://web.example.test';
 const MEMBER_KEY = '4.dGVzdA==';
 const INVITE_LINK_PATTERN = /https:\/\/\S+accept-organization\?\S+/;
 // seedUser's example.test addresses are RFC 6761 names, which invites never mail.
-const MAILABLE_DOMAIN = 'stevefan1999.tech';
 const FORWARDED_HOST = 'evil.example';
 // Upstream StrictEmailAddressListAttribute limits.
 const MAX_INVITE_EMAILS = 20;
@@ -35,29 +34,6 @@ interface MemberBody {
   name: string | null;
   email: string;
   status: number;
-}
-
-interface SentEmail {
-  to: unknown;
-  subject: string;
-  text?: string;
-}
-
-function emailCapture(): { env: Partial<Env>; sent: SentEmail[] } {
-  const sent: SentEmail[] = [];
-  return {
-    sent,
-    env: {
-      EMAIL: {
-        async send(message) {
-          sent.push(message);
-          return { messageId: crypto.randomUUID() };
-        },
-      },
-      EMAIL_FROM: 'noreply@nodewarden.test',
-      WEB_VAULT_ORIGINS: OFFICIAL_WEB_ORIGIN,
-    },
-  };
 }
 
 // The official web /#/accept-organization route reads these query params (DirectOrganizationInvite).
@@ -216,8 +192,8 @@ test('inviting an existing account keeps it Invited and unconfirmable until the 
 });
 
 test('the emailed invite token only lets the invited account accept, and confirm then needs an RSA-wrapped key', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
   const intruder = await seedUser(env);
@@ -266,8 +242,8 @@ test('the emailed invite token only lets the invited account accept, and confirm
 });
 
 test('an invite token is bound to its own row and expires, and a revoked invite cannot be accepted', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
   const other = await seedMailableUser(env);
@@ -315,8 +291,8 @@ test('a SCIM-provisioned existing account stays Invited and cannot be confirmed 
 // Upstream PostUserCommand invites through the normal invite path, so the IdP-provisioned invitee
 // gets the same emailed token that accept requires.
 test('a SCIM-provisioned existing account is mailed an invite token that lets it accept', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
   const orgId = await createOrg(env, owner);
@@ -335,8 +311,8 @@ test('a SCIM-provisioned existing account is mailed an invite token that lets it
 });
 
 test('SCIM does not mail an address with no account, which stays staged', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const email = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
@@ -349,8 +325,8 @@ test('SCIM does not mail an address with no account, which stays staged', async 
 // Upstream PostUserCommand answers 409 for a known member, so an IdP replaying a POST whose 201 was
 // lost, or assigning the owner, sends no second invite and adds no duplicate row.
 test('SCIM answers 409 for an address that is already a member and mails nothing', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
   const orgId = await createOrg(env, owner);
@@ -366,7 +342,7 @@ test('SCIM answers 409 for an address that is already a member and mails nothing
 // multiply with every sync while the send keeps failing (suppressed recipient, unverified sender).
 test('a failed invite send saves no member row, for member invite and SCIM', async () => {
   const env = await createTestEnv({
-    ...emailCapture().env,
+    ...captureEmail().overrides,
     EMAIL: { async send() { throw new Error('recipient suppressed'); } },
   });
   const owner = await seedUser(env);
@@ -383,16 +359,16 @@ test('invite mail only links to a configured web vault and skips documentation a
   const forwardedHeaders = { 'X-Forwarded-Host': FORWARDED_HOST, 'X-Forwarded-Proto': 'https' };
 
   // Without WEB_VAULT_ORIGINS the only candidate is the caller-controlled forwarded host.
-  const unconfigured = emailCapture();
-  const unconfiguredEnv = await createTestEnv({ ...unconfigured.env, WEB_VAULT_ORIGINS: '' });
+  const unconfigured = captureEmail();
+  const unconfiguredEnv = await createTestEnv({ ...unconfigured.overrides, WEB_VAULT_ORIGINS: '' });
   const unconfiguredOwner = await seedUser(unconfiguredEnv);
   const unconfiguredInvitee = await seedMailableUser(unconfiguredEnv);
   const unconfiguredOrgId = await createOrg(unconfiguredEnv, unconfiguredOwner);
   await invite(unconfiguredEnv, unconfiguredOwner, unconfiguredOrgId, [unconfiguredInvitee.email], forwardedHeaders);
   assert.deepEqual(unconfigured.sent, []);
 
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const reserved = await seedUser(env);
   const invitee = await seedMailableUser(env);
@@ -404,8 +380,8 @@ test('invite mail only links to a configured web vault and skips documentation a
 });
 
 test('invite rejects an empty, oversized or malformed email list before saving or mailing anything', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const tooMany = Array.from({ length: MAX_INVITE_EMAILS + 1 }, () => `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`);
@@ -426,8 +402,8 @@ test('invite rejects an empty, oversized or malformed email list before saving o
 });
 
 test('invite mail defuses links and addresses hidden in the organization name', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
   // Any user can create an org and name it, so the name is attacker text sent from EMAIL_FROM.
@@ -458,8 +434,8 @@ function pinClockToInviteMailWindow(context: TestContext): number {
 // inviter across all of their orgs. A batch that would overrun the budget mails nothing and, like a
 // failed send, saves no row.
 test('invite mail is budgeted per inviter per hour, and a batch that overruns it gets 429 with nothing mailed or saved', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const otherOrgId = await createOrg(env, owner);
@@ -489,8 +465,8 @@ test('invite mail is budgeted per inviter per hour, and a batch that overruns it
 // A SCIM token belongs to the org, so its directory spends the org's own budget rather than the
 // owner's. Identity providers pace their retries by Retry-After, so the SCIM 429 carries it.
 test('SCIM invite mail over its org budget gets a 429 SCIM error with Retry-After and saves no row', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;
@@ -519,8 +495,8 @@ test('SCIM invite mail over its org budget gets a 429 SCIM error with Retry-Afte
 
 // Official web's accept page sends existing accounts to login and everyone else to signup.
 test('one invite batch flags only the invitees that already have an account as existing users', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const registered = await seedMailableUser(env);
   const unregistered = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
@@ -534,8 +510,8 @@ test('one invite batch flags only the invitees that already have an account as e
 // Upstream InviteUsersAsync invites each distinct address once and skips any address already in the
 // org, so a re-invite neither mails nor adds a second row that accept would refuse.
 test('invite mails and saves an address listed twice in one request only once', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const invitee = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
   const orgId = await createOrg(env, owner);
@@ -548,8 +524,8 @@ test('invite mails and saves an address listed twice in one request only once', 
 // Upstream SelectKnownEmailsAsync matches either the row's invited email or its bound account's
 // email, which differ once the account changes its email.
 test('invite skips addresses already in the org by invited or account email and answers 200 when none remain', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedMailableUser(env);
   const pending = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
   const orgId = await createOrg(env, owner);
@@ -569,8 +545,8 @@ test('invite skips addresses already in the org by invited or account email and 
 // which drops entries it will not confirm, every entry gets a result, so another org's member reads
 // like an id that does not exist.
 test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped key and reports every other entry', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const otherOrgId = await createOrg(env, owner);
@@ -619,8 +595,8 @@ test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped 
 // Upstream ResendOrganizationInviteCommand. Invite tokens expire after ORG_INVITE_TTL_DAYS, and
 // "Resend invitation" is the only way back short of deleting and re-inviting the member.
 test('reinvite mails an Invited member a fresh token once the first has expired, and refuses every other row', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const otherOrgId = await createOrg(env, owner);
@@ -654,8 +630,8 @@ test('reinvite mails an Invited member a fresh token once the first has expired,
 // or belongs to another org; unlike upstream, a missing id answers the same rather than dropping out.
 // Official web sends up to 500 ids at once, more than one D1 statement can bind.
 test('bulk reinvite mails only the Invited members of the org once each and reports every other id', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const otherOrgId = await createOrg(env, owner);
@@ -681,8 +657,8 @@ test('bulk reinvite mails only the Invited members of the org once each and repo
 // Reinvite mails from EMAIL_FROM like invite, so it spends the same per-inviter budget, and a bulk
 // resend that would overrun it mails nothing.
 test('reinvite spends the inviter mail budget, and a resend over it gets 429 with nothing mailed', async (context) => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;
@@ -710,8 +686,8 @@ test('reinvite spends the inviter mail budget, and a resend over it gets 429 wit
 // A plain member holds the org key, so without the manageUsers guard it could confirm any Accepted
 // member, and it could spend the org's invite mail on resends.
 test('bulk confirm and reinvite refuse a member without manageUsers, confirming and mailing nothing', async () => {
-  const capture = emailCapture();
-  const env = await createTestEnv(capture.env);
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const plainMember = await acceptedMember(env, capture.sent, owner, orgId);

@@ -3,6 +3,14 @@ export class DurableObject<TEnv = unknown> {
   constructor(protected readonly ctx: DurableObjectState, protected readonly env: TEnv) {}
 }
 
+const pending = new Set<Promise<unknown>>();
+
 export function waitUntil(task: Promise<unknown>): void {
-  task.catch((error: unknown) => console.error('waitUntil task failed:', error));
+  const tracked = task.catch((error: unknown) => console.error('waitUntil task failed:', error));
+  pending.add(tracked);
+  void tracked.finally(() => pending.delete(tracked));
+}
+
+export async function drainWaitUntil(): Promise<void> {
+  while (pending.size) await Promise.all([...pending]);
 }

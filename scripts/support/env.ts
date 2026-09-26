@@ -7,7 +7,7 @@ import type { Env, User } from '../../src/types';
 import { waitUntil } from './cloudflare-workers';
 import { createSqliteD1 } from './d1-sqlite';
 
-const TEST_ORIGIN = 'https://vault.example.test';
+export const TEST_ORIGIN = 'https://vault.example.test';
 // Cloudflare always sets CF-Connecting-IP, and public routes refuse to rate-limit without it.
 // RFC 5737 documentation address.
 const TEST_CLIENT_IP = '203.0.113.10';
@@ -134,3 +134,23 @@ export async function authedFetch(env: Env, { method = 'GET', path, body, userId
   });
   return worker.fetch(request, env, executionContext);
 }
+
+export const MAILABLE_DOMAIN = 'stevefan1999.tech';
+export type SentEmail = Parameters<NonNullable<Env['EMAIL']>['send']>[0];
+
+export function captureEmail(): { overrides: Partial<Env>; sent: SentEmail[] } {
+  const sent: SentEmail[] = [];
+  return {
+    sent,
+    overrides: {
+      EMAIL: { async send(message) { sent.push(message); return { messageId: crypto.randomUUID() }; } },
+      EMAIL_FROM: `noreply@${MAILABLE_DOMAIN}`,
+      WEB_VAULT_ORIGINS: 'https://web.example.test',
+    },
+  };
+}
+
+export function failingEmail(code: string): NonNullable<Env['EMAIL']> {
+  return { async send() { throw Object.assign(new Error('x'), { code }); } };
+}
+export { drainWaitUntil } from './cloudflare-workers';
