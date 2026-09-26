@@ -14,6 +14,7 @@ import {
   handleGetMember,
   handleGetOrganization,
   handleGetOrganizationKeys,
+  handleGetOrgCollectionDetails,
   handleGetPlans,
   handleGetPolicy,
   handleInviteMembers,
@@ -22,6 +23,8 @@ import {
   handleListMemberMiniDetails,
   handleListMemberPublicKeys,
   handleListMembers,
+  handleListOrgCollectionDetails,
+  handleListOrgCollectionUsers,
   handleListOrgCollections,
   handleListPolicies,
   handleOrgApiKey,
@@ -118,14 +121,16 @@ export async function handleOrganizationRoute(
   }
 
   if (sub === '/collections' || sub === '/collections/details') {
-    if (method === 'GET') return handleListOrgCollections(env, userId, orgId, sub.endsWith('/details'));
+    if (method === 'GET' && sub.endsWith('/details')) return handleListOrgCollectionDetails(env, userId, orgId);
+    if (method === 'GET') return handleListOrgCollections(env, userId, orgId);
     if (method === 'POST') return handleCreateOrgCollection(request, env, userId, orgId);
   }
   const colMatch = sub.match(/^\/collections\/([a-f0-9-]+)(?:\/(delete|details|users))?$/i);
   if (colMatch) {
     if ((method === 'PUT' || method === 'POST') && !colMatch[2]) return handleUpdateOrgCollection(request, env, userId, orgId, colMatch[1]);
     if ((method === 'DELETE' || (method === 'POST' && colMatch[2] === 'delete'))) return handleDeleteOrgCollection(env, userId, orgId, colMatch[1]);
-    if (method === 'GET') return handleListOrgCollections(env, userId, orgId, true);
+    if (method === 'GET' && colMatch[2] === 'details') return handleGetOrgCollectionDetails(env, userId, orgId, colMatch[1]);
+    if (method === 'GET' && colMatch[2] === 'users') return handleListOrgCollectionUsers(env, userId, orgId, colMatch[1]);
   }
 
   if (sub === '/users' && method === 'GET') return handleListMembers(env, userId, orgId);

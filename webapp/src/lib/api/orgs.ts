@@ -84,7 +84,7 @@ export async function createOrganization(
 }
 
 export async function listCollections(authedFetch: AuthedFetch, orgId: string): Promise<OrgCollection[]> {
-  const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/collections/details`);
+  const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/collections`);
   return readList<OrgCollection>(resp);
 }
 

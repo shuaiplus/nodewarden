@@ -193,6 +193,26 @@ export function canCreateCollection(member: MembershipRecord): boolean {
   return resolvePermissions(member).createNewCollections;
 }
 
+// The org-wide permissions that let upstream's collection authorization handlers act on a collection
+// without managing it: BulkCollectionAuthorizationHandler.CanReadAsync (Read, ReadAccess),
+// CanReadWithAccessAsync (ReadWithAccess) and CanUpdateCollectionAsync (Update), and
+// CollectionAuthorizationHandler.CanReadAllWithAccessAsync. Owners and Admins hold every permission.
+const COLLECTION_OPERATION_PERMISSIONS = {
+  readAccess: ['editAnyCollection', 'deleteAnyCollection'],
+  readWithAccess: ['editAnyCollection', 'deleteAnyCollection', 'manageUsers'],
+  readAllWithAccess: ['editAnyCollection', 'deleteAnyCollection', 'manageUsers', 'manageGroups'],
+  update: ['editAnyCollection'],
+} as const satisfies Record<string, ReadonlyArray<keyof OrgPermissions>>;
+
+export type CollectionOperation = keyof typeof COLLECTION_OPERATION_PERMISSIONS;
+
+// Anyone else acts only on the collections it manages, by the stored Manage flag, own or via a group,
+// as upstream CanManageCollectionsAsync (and memberCollectionsCheck) counts it; "Can edit" does not count.
+export function canActOnCollection(member: MembershipRecord, access: CollectionAccess | null, operation: CollectionOperation): boolean {
+  const permissions = resolvePermissions(member);
+  return isActiveMember(member) && (COLLECTION_OPERATION_PERMISSIONS[operation].some((name) => permissions[name]) || !!access?.manage);
+}
+
 export function canDeleteOrganization(member: MembershipRecord): boolean {
   return isActiveMember(member) && member.type === MembershipType.Owner;
 }
@@ -221,11 +241,10 @@ export function resolveCollectionPermission(
       canEdit: false,
     };
   }
-  const managerManage = (member.type === MembershipType.Manager || member.type === MembershipType.Custom)
-    && (assigned.manage || (!assigned.readOnly && !assigned.hidePasswords));
+  // As upstream UserCollectionDetails, manage is the stored grant alone, the same flag
+  // canActOnCollection authorizes by, so a "Can edit" Custom member is never offered Edit collection.
   return {
     ...assigned,
-    manage: assigned.manage || managerManage,
     canView: true,
     canEdit: !assigned.readOnly,
   };

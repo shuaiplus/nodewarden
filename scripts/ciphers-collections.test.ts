@@ -177,7 +177,7 @@ test('collections_v2 honours write access granted through a group and keeps read
   await orgRepo.saveGroup(env.DB, { id: groupId, orgId, name: 'Editors', accessAll: false, externalId: null, createdAt: now, updatedAt: now });
   await orgRepo.replaceGroupMembers(env.DB, groupId, [membership.id]);
   await Promise.all([collectionB, collectionC].map((collectionId) =>
-    orgRepo.replaceCollectionGroups(env.DB, collectionId, [{ groupId, readOnly: false, hidePasswords: false, manage: false }])));
+    orgRepo.replaceCollectionAccess(env.DB, collectionId, { groups: [{ groupId, readOnly: false, hidePasswords: false, manage: false }] })));
   const cipherId = await createCipher(env, owner, orgId, [collectionA, collectionC]);
 
   assert.equal((await putCollections(env, member, cipherId, 'collections_v2', { collectionIds: [collectionB] })).status, 200);

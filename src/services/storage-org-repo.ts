@@ -127,6 +127,10 @@ function mapAccess(row: { collectionId: string; readOnly: number; hidePasswords:
   };
 }
 
+function accessRow({ collectionId, readOnly, hidePasswords, manage }: CollectionAccess) {
+  return { collectionId, readOnly: Number(readOnly), hidePasswords: Number(hidePasswords), manage: Number(manage) };
+}
+
 export async function insertOrganization(db: D1Database, org: OrganizationRecord): Promise<void> {
   await getOrm(db).insert(organizations).values({
     id: org.id,
@@ -341,18 +345,36 @@ export async function deleteCollection(db: D1Database, id: string): Promise<void
   await getOrm(db).delete(collections).where(eq(collections.id, id));
 }
 
-// Replaces every member's direct access to one collection, invited members included.
-export async function replaceCollectionUsers(
-  db: D1Database,
-  collectionId: string,
-  users: Array<{ member: MembershipRecord; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
-): Promise<void> {
+type AccessFlags = Omit<CollectionAccess, 'collectionId'>;
+
+// A collection's direct member access (invited members included) and group access; an omitted list is left as is.
+export interface CollectionAccessChange {
+  users?: Array<AccessFlags & { member: MembershipRecord }>;
+  groups?: Array<AccessFlags & { groupId: string }>;
+}
+
+// Replaces the given access lists in one batch with chunked inserts, so a save too large for one
+// statement cannot commit its deletes and then fail with the old grants gone.
+export async function replaceCollectionAccess(db: D1Database, collectionId: string, change: CollectionAccessChange): Promise<void> {
   const orm = getOrm(db);
-  await orm.batch([
-    orm.delete(collectionUsers).where(eq(collectionUsers.collectionId, collectionId)),
-    orm.delete(pendingCollectionUsers).where(eq(pendingCollectionUsers.collectionId, collectionId)),
-    ...memberAccessInserts(orm, users.map((user) => ({ ...user, collectionId }))),
-  ]);
+  const groupRows = (change.groups ?? []).map(({ groupId, ...flags }) => ({ ...accessRow({ ...flags, collectionId }), groupId }));
+  const statements = [
+    ...(change.users
+      ? [
+        orm.delete(collectionUsers).where(eq(collectionUsers.collectionId, collectionId)),
+        orm.delete(pendingCollectionUsers).where(eq(pendingCollectionUsers.collectionId, collectionId)),
+        ...memberAccessInserts(orm, change.users.map((user) => ({ ...user, collectionId }))),
+      ]
+      : []),
+    ...(change.groups
+      ? [
+        orm.delete(collectionGroups).where(eq(collectionGroups.collectionId, collectionId)),
+        ...chunkRows(groupRows, columnCount(collectionGroups)).map((chunk) => orm.insert(collectionGroups).values(chunk).onConflictDoNothing()),
+      ]
+      : []),
+  ];
+  if (!statements.length) return;
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
 }
 
 export async function listCollectionUsers(db: D1Database, collectionId: string): Promise<CollectionAccess[]> {
@@ -370,6 +392,75 @@ export async function listCollectionUsers(db: D1Database, collectionId: string):
     ...mapAccess(row),
     userId: row.userId,
   })) as CollectionAccess[];
+}
+
+// Upstream CollectionAccessSelection: one member (by membership id) or group granted a collection.
+export interface CollectionAccessSelection extends AccessFlags {
+  id: string;
+}
+
+export interface CollectionAccessGrants {
+  users: CollectionAccessSelection[];
+  groups: CollectionAccessSelection[];
+}
+
+// Every member and group grant on the org's collections (or just one), keyed by collection, as
+// official web's collection dialog edits them. collection_users is keyed by user, so it joins that
+// user's membership in this org, which also skips rows a removed member left behind; invited
+// members' grants come from pending_collection_users.
+export async function listCollectionAccessGrants(
+  db: D1Database,
+  orgId: string,
+  collectionId?: string
+): Promise<Map<string, CollectionAccessGrants>> {
+  const orm = getOrm(db);
+  const inScope = and(eq(collections.orgId, orgId), collectionId ? eq(collections.id, collectionId) : undefined);
+  const [bound, pending, groups] = await Promise.all([
+    orm
+      .select({
+        id: organizationMemberships.id,
+        collectionId: collectionUsers.collectionId,
+        readOnly: collectionUsers.readOnly,
+        hidePasswords: collectionUsers.hidePasswords,
+        manage: collectionUsers.manage,
+      })
+      .from(collectionUsers)
+      .innerJoin(collections, eq(collections.id, collectionUsers.collectionId))
+      .innerJoin(organizationMemberships, and(eq(organizationMemberships.userId, collectionUsers.userId), eq(organizationMemberships.orgId, orgId)))
+      .where(inScope),
+    orm
+      .select({
+        id: pendingCollectionUsers.membershipId,
+        collectionId: pendingCollectionUsers.collectionId,
+        readOnly: pendingCollectionUsers.readOnly,
+        hidePasswords: pendingCollectionUsers.hidePasswords,
+        manage: pendingCollectionUsers.manage,
+      })
+      .from(pendingCollectionUsers)
+      .innerJoin(collections, eq(collections.id, pendingCollectionUsers.collectionId))
+      .where(inScope),
+    orm
+      .select({
+        id: collectionGroups.groupId,
+        collectionId: collectionGroups.collectionId,
+        readOnly: collectionGroups.readOnly,
+        hidePasswords: collectionGroups.hidePasswords,
+        manage: collectionGroups.manage,
+      })
+      .from(collectionGroups)
+      .innerJoin(collections, eq(collections.id, collectionGroups.collectionId))
+      .where(inScope),
+  ]);
+  const grants = new Map<string, CollectionAccessGrants>();
+  const add = (kind: keyof CollectionAccessGrants) => ({ id, ...row }: (typeof groups)[number]) => {
+    const { collectionId: grantedCollectionId, ...flags } = mapAccess(row);
+    const entry = grants.get(grantedCollectionId) ?? { users: [], groups: [] };
+    entry[kind].push({ id, ...flags });
+    grants.set(grantedCollectionId, entry);
+  };
+  [...bound, ...pending].forEach(add('users'));
+  groups.forEach(add('groups'));
+  return grants;
 }
 
 export async function listUserCollectionAccess(db: D1Database, userId: string, orgId: string): Promise<CollectionAccess[]> {
@@ -447,10 +538,8 @@ type MemberGrant = CollectionAccess & { member: MembershipRecord };
 // pending_collection_users keyed by membership until accept binds a user. Each table gets as few
 // multi-row INSERTs as the bound-parameter limit allows, since D1 also caps statements per invocation.
 function memberAccessInserts(orm: Orm, grants: MemberGrant[]): BatchItem<'sqlite'>[] {
-  const flags = ({ collectionId, readOnly, hidePasswords, manage }: CollectionAccess) =>
-    ({ collectionId, readOnly: Number(readOnly), hidePasswords: Number(hidePasswords), manage: Number(manage) });
-  const boundRows = grants.flatMap(({ member, ...access }) => member.userId ? [{ ...flags(access), userId: member.userId }] : []);
-  const pendingRows = grants.flatMap(({ member, ...access }) => member.userId ? [] : [{ ...flags(access), membershipId: member.id }]);
+  const boundRows = grants.flatMap(({ member, ...access }) => member.userId ? [{ ...accessRow(access), userId: member.userId }] : []);
+  const pendingRows = grants.flatMap(({ member, ...access }) => member.userId ? [] : [{ ...accessRow(access), membershipId: member.id }]);
   return [
     ...chunkRows(boundRows, columnCount(collectionUsers))
       .map((chunk) => orm.insert(collectionUsers).values(chunk).onConflictDoNothing()),
@@ -811,24 +900,6 @@ export async function listMembershipGroupIds(db: D1Database, membershipId: strin
     .from(orgGroupMembers)
     .where(eq(orgGroupMembers.membershipId, membershipId));
   return rows.map((row) => row.groupId);
-}
-
-export async function replaceCollectionGroups(
-  db: D1Database,
-  collectionId: string,
-  groups: Array<{ groupId: string; readOnly: boolean; hidePasswords: boolean; manage: boolean }>
-): Promise<void> {
-  const orm = getOrm(db);
-  await orm.delete(collectionGroups).where(eq(collectionGroups.collectionId, collectionId));
-  if (groups.length) {
-    await orm.insert(collectionGroups).values(groups.map((group) => ({
-      collectionId,
-      groupId: group.groupId,
-      readOnly: group.readOnly ? 1 : 0,
-      hidePasswords: group.hidePasswords ? 1 : 0,
-      manage: group.manage ? 1 : 0,
-    })));
-  }
 }
 
 export async function savePolicy(db: D1Database, policy: PolicyRecord): Promise<void> {

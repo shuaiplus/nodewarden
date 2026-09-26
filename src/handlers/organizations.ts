@@ -10,6 +10,8 @@ import {
   canManageMembers,
   canManagePolicies,
   canManageScim,
+  canActOnCollection,
+  type CollectionOperation,
   confirmMemberCheck,
   hasFullCollectionAccess,
   isActiveMember,
@@ -25,6 +27,7 @@ import {
   MembershipStatus,
   MembershipType,
   type CollectionAccess,
+  type CollectionRecord,
   type MembershipRecord,
   type OrgPermissions,
   publicMembershipStatus,
@@ -294,7 +297,7 @@ export async function handleListAllCollections(env: Env, userId: string): Promis
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
-export async function handleListOrgCollections(env: Env, userId: string, orgId: string, details: boolean): Promise<Response> {
+export async function handleListOrgCollections(env: Env, userId: string, orgId: string): Promise<Response> {
   if (!orgId) return handleListAllCollections(env, userId);
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
@@ -303,16 +306,110 @@ export async function handleListOrgCollections(env: Env, userId: string, orgId: 
   const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
   const visible = collections.filter((collection) => hasFullCollectionAccess(member) || assignedMap.has(collection.id));
   return jsonResponse({
-    data: visible.map((collection) => {
-      const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);
-      return collectionJson(collection, details ? {
-        readOnly: permission.readOnly,
-        hidePasswords: permission.hidePasswords,
-        manage: permission.manage,
-      } : undefined);
-    }),
+    data: visible.map((collection) => collectionJson(collection)),
     object: 'list',
     continuationToken: null,
+  });
+}
+
+const NO_ACCESS_GRANTS: orgRepo.CollectionAccessGrants = { users: [], groups: [] };
+const NO_ACTOR_FLAGS = { readOnly: false, hidePasswords: false, manage: false };
+
+// Upstream CollectionAccessDetailsResponseModel: the collection with the actor's own access and
+// every member and group grant, which official web's collection dialog opens with and saves back
+// whole. NodeWarden's sync lists every collection to Owners and Admins, so assigned and the actor's
+// flags follow resolveCollectionPermission: the web drops a saved collection that is not assigned
+// from the local store that sync fills.
+function collectionAccessDetailsJson(
+  collection: CollectionRecord,
+  member: MembershipRecord,
+  access: CollectionAccess | null,
+  grants: orgRepo.CollectionAccessGrants
+) {
+  const permission = resolveCollectionPermission(member, access);
+  // Upstream aggregates the actor's own grants, so a reader holding none gets every flag false.
+  const { readOnly, hidePasswords, manage } = permission.canView ? permission : NO_ACTOR_FLAGS;
+  return collectionJson(collection, {
+    readOnly,
+    hidePasswords,
+    manage,
+    assigned: permission.canView,
+    // As upstream, no member (invited ones included) or group holds Manage on the collection.
+    unmanaged: ![...grants.users, ...grants.groups].some(({ manage }) => manage),
+    users: grants.users,
+    groups: grants.groups,
+    object: 'collectionAccessDetails',
+  });
+}
+
+async function actorCollectionAccess(db: D1Database, userId: string, orgId: string, collectionId: string): Promise<CollectionAccess | null> {
+  return (await orgRepo.listUserCollectionAccess(db, userId, orgId)).find((item) => item.collectionId === collectionId) || null;
+}
+
+// Upstream GetManyWithDetails: every collection for those who may read all access, otherwise only
+// the collections the member manages.
+export async function handleListOrgCollectionDetails(env: Env, userId: string, orgId: string): Promise<Response> {
+  const member = await requireMember(env.DB, userId, orgId);
+  if (member instanceof Response) return member;
+  const collections = await orgRepo.listCollectionsByOrg(env.DB, orgId);
+  const accessById = new Map((await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).map((item) => [item.collectionId, item]));
+  const grants = await orgRepo.listCollectionAccessGrants(env.DB, orgId);
+  const data = collections
+    .filter((collection) => canActOnCollection(member, accessById.get(collection.id) || null, 'readAllWithAccess'))
+    .map((collection) => collectionAccessDetailsJson(collection, member, accessById.get(collection.id) || null, grants.get(collection.id) || NO_ACCESS_GRANTS));
+  return jsonResponse({ data, object: 'list', continuationToken: null });
+}
+
+// Upstream answers a missing collection and one the actor may not read or update with the same 404.
+async function authorizedCollection(
+  db: D1Database,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+  operation: CollectionOperation
+): Promise<{ member: MembershipRecord; collection: CollectionRecord; access: CollectionAccess | null } | Response> {
+  const member = await requireMember(db, userId, orgId);
+  if (member instanceof Response) return member;
+  const collection = await orgRepo.getCollection(db, collectionId);
+  const access = await actorCollectionAccess(db, userId, orgId, collectionId);
+  if (!collection || collection.orgId !== orgId || !canActOnCollection(member, access, operation)) {
+    return errorResponse('Collection not found', 404);
+  }
+  return { member, collection, access };
+}
+
+async function collectionGrants(db: D1Database, orgId: string, collectionId: string): Promise<orgRepo.CollectionAccessGrants> {
+  return (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) || NO_ACCESS_GRANTS;
+}
+
+export async function handleGetOrgCollectionDetails(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readWithAccess');
+  if (target instanceof Response) return target;
+  const grants = await collectionGrants(env.DB, orgId, collectionId);
+  return jsonResponse(collectionAccessDetailsJson(target.collection, target.member, target.access, grants));
+}
+
+// Upstream GetUsers: a bare SelectionReadOnlyResponseModel array, not a list envelope.
+export async function handleListOrgCollectionUsers(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readAccess');
+  if (target instanceof Response) return target;
+  return jsonResponse((await collectionGrants(env.DB, orgId, collectionId)).users);
+}
+
+// Upstream Post and Put answer with the saved collection's fresh access details when the actor may
+// read them, and otherwise with the bare Collection constructor: no grants and every flag false.
+async function savedCollectionJson(db: D1Database, userId: string, member: MembershipRecord, collection: CollectionRecord) {
+  const access = await actorCollectionAccess(db, userId, collection.orgId, collection.id);
+  if (canActOnCollection(member, access, 'readWithAccess')) {
+    return collectionAccessDetailsJson(collection, member, access, await collectionGrants(db, collection.orgId, collection.id));
+  }
+  return collectionJson(collection, {
+    ...NO_ACTOR_FLAGS,
+    assigned: false,
+    unmanaged: false,
+    users: null,
+    groups: null,
+    object: 'collectionAccessDetails',
   });
 }
 
@@ -335,19 +432,13 @@ export async function handleCreateOrgCollection(request: Request, env: Env, user
   await orgRepo.saveCollection(env.DB, collection);
   await applyCollectionAccess(env.DB, orgId, collection.id, body);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-  return jsonResponse(collectionJson(collection));
+  return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
 
 export async function handleUpdateOrgCollection(request: Request, env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
-  const member = await requireMember(env.DB, userId, orgId);
-  if (member instanceof Response) return member;
-  const collection = await orgRepo.getCollection(env.DB, collectionId);
-  if (!collection || collection.orgId !== orgId) return errorResponse('Collection not found', 404);
-  const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, orgId);
-  const permission = resolveCollectionPermission(member, assigned.find((item) => item.collectionId === collectionId) || null);
-  if (!permission.canEdit && !hasFullCollectionAccess(member) && !permission.manage) {
-    return errorResponse('Access denied', 403);
-  }
+  const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'update');
+  if (target instanceof Response) return target;
+  const { member, collection } = target;
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
   collection.name = asString(readBody(body, ['name', 'Name'])) || collection.name;
@@ -356,7 +447,7 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   await orgRepo.saveCollection(env.DB, collection);
   await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-  return jsonResponse(collectionJson(collection));
+  return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
 
 export async function handleDeleteOrgCollection(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
@@ -380,34 +471,36 @@ function accessFlags(entry: Record<string, unknown>) {
   };
 }
 
-// Membership and group ids come straight from the request body, so every referenced
-// record must be re-checked against the collection's organization before it is granted access.
+// Membership and group ids come straight from the request body, so each posted entry is matched
+// against the organization's own records and unknown ids are skipped. An omitted list stays undefined.
+function grantedSelections<T extends { id: string }, R>(entries: unknown, records: T[], grantee: (record: T) => R) {
+  if (!Array.isArray(entries)) return undefined;
+  const recordsById = new Map(records.map((record) => [record.id, record]));
+  return entries.map(asRecord).flatMap((entry) => {
+    const record = recordsById.get(asString(readBody(entry, ['id', 'Id'])));
+    return record ? [{ ...grantee(record), ...accessFlags(entry) }] : [];
+  });
+}
+
+// As upstream ReplaceAsync, an omitted list leaves that access as is and an empty one removes it,
+// since official web's collection dialog always posts the full lists it opened with. The org's
+// members and groups are read once rather than per entry, as every save posts back each grant.
 async function applyCollectionAccess(
   db: D1Database,
   orgId: string,
   collectionId: string,
   body: Record<string, unknown>
 ): Promise<void> {
-  const users = (readBody(body, ['users', 'Users']) as Array<Record<string, unknown>> | undefined) || [];
-  const groups = (readBody(body, ['groups', 'Groups']) as Array<Record<string, unknown>> | undefined) || [];
-  if (users.length) {
-    const mapped = [];
-    for (const entry of users) {
-      const membership = await orgRepo.getMembership(db, asString(readBody(entry, ['id', 'Id'])));
-      if (!membership || membership.orgId !== orgId) continue;
-      mapped.push({ member: membership, ...accessFlags(entry) });
-    }
-    await orgRepo.replaceCollectionUsers(db, collectionId, mapped);
-  }
-  if (groups.length) {
-    const mapped = [];
-    for (const entry of groups) {
-      const group = await orgRepo.getGroup(db, asString(readBody(entry, ['id', 'Id'])));
-      if (!group || group.orgId !== orgId) continue;
-      mapped.push({ groupId: group.id, ...accessFlags(entry) });
-    }
-    await orgRepo.replaceCollectionGroups(db, collectionId, mapped);
-  }
+  const users = readBody(body, ['users', 'Users']);
+  const groups = readBody(body, ['groups', 'Groups']);
+  const [members, groupRecords] = await Promise.all([
+    Array.isArray(users) ? orgRepo.listMembershipsByOrg(db, orgId) : [],
+    Array.isArray(groups) ? orgRepo.listGroupsByOrg(db, orgId) : [],
+  ]);
+  await orgRepo.replaceCollectionAccess(db, collectionId, {
+    users: grantedSelections(users, members, (member) => ({ member })),
+    groups: grantedSelections(groups, groupRecords, (group) => ({ groupId: group.id })),
+  });
 }
 
 // Upstream deleted Manager (3), so EnumDataType on the request's Type rejects it like any unknown value.
