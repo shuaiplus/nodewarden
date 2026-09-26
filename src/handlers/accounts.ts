@@ -2,6 +2,8 @@ import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { deleteUserAccount } from '../services/account-deletion';
+import { notifyUserLogout } from '../durable/notifications-hub';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { deleteTwoFactorSecret, upsertCredentialAccount, upsertTwoFactorSecret } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -248,7 +250,9 @@ async function readRequestBody(request: Request): Promise<Record<string, unknown
     const formData = await request.formData();
     return Object.fromEntries(formData.entries()) as Record<string, unknown>;
   }
-  return await request.json();
+  const body: unknown = await request.json();
+  if (!isRecord(body)) throw new Error('Request body must be a JSON object');
+  return body;
 }
 
 function masterPasswordPolicyResponse(): Record<string, unknown> {
@@ -577,6 +581,34 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     hasHint: !!hint,
     masterPasswordHint: hint,
   });
+}
+
+// DELETE /api/accounts; POST /api/accounts/delete
+export async function handleDeleteAccount(request: Request, env: Env, userId: string): Promise<Response> {
+  const user = await new StorageService(env.DB).getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']);
+  if (!await verifyUserSecret(new AuthService(env), user, secret)) return errorResponse('User verification failed.', 400);
+  const result = await deleteUserAccount(env, userId, {
+    actorUserId: userId,
+    action: 'user.account.delete',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: userId,
+    metadata: auditRequestMetadata(request),
+  });
+  if (result.kind === 'not-found') return errorResponse('User not found', 404);
+  if (result.kind === 'blocked-by-orgs') return errorResponse('You cannot delete this member because they are the sole owner of at least one organization vault. Delete these organization vaults or make another member an owner.', 400);
+  if (result.kind === 'last-vault-admin') return errorResponse('You cannot delete the last instance administrator.', 400);
+  notifyUserLogout(env, userId, null);
+  return new Response(null, { status: 200 });
 }
 
 // GET /api/accounts/profile

@@ -10,6 +10,7 @@ import {
   handleSetUserKeyId,
   handleVerifyPassword,
   handleChangePassword,
+  handleDeleteAccount,
   handleSetVerifyDevices,
   handleGetTotpStatus,
   handleSetTotpStatus,
@@ -117,13 +118,17 @@ export async function handleAuthenticatedRoute(
   if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
     const blockedAccountPaths = new Set([
       '/api/accounts/set-password',
-      '/api/accounts/delete',
       '/api/accounts/delete-account',
       '/api/accounts/delete-vault',
     ]);
     if (blockedAccountPaths.has(path)) {
       return errorResponse('Not implemented', 501);
     }
+  }
+
+  if (((path === '/api/accounts' || path === '/accounts') && method === 'DELETE')
+    || (path === '/api/accounts/delete' && method === 'POST')) {
+    return handleDeleteAccount(request, env, userId);
   }
 
   if ((path === '/api/accounts/kdf' || path === '/accounts/kdf') && (method === 'POST' || method === 'PUT')) {

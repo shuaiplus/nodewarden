@@ -51,6 +51,8 @@ export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, re
       expiresIn: 60 * 60 * 24 * 30,
     },
     user: {
+      deleteUser: { enabled: false },
+      changeEmail: { enabled: false },
       additionalFields: {
         masterPasswordHash: { type: 'string', required: true, input: false },
         masterPasswordHint: { type: 'string', required: false, input: false },
