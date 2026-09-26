@@ -1121,3 +1121,26 @@ export function bumpOrgMemberRevisions(db: D1Database, orgId: string) {
     ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date
   `);
 }
+
+export async function searchOrganizations(db: D1Database, options: { nameContains: string; memberEmail: string; offset: number; limit: number }) {
+  const pattern = '%' + options.nameContains.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
+  const rows = await getOrm(db).select().from(organizations).where(and(
+    sql`${organizations.name} LIKE ${pattern} ESCAPE '\\'`,
+    options.memberEmail ? sql`EXISTS (SELECT 1 FROM organization_memberships m LEFT JOIN users u ON u.id=m.user_id WHERE m.org_id=${organizations.id} AND (lower(m.email)=lower(${options.memberEmail}) OR lower(u.email)=lower(${options.memberEmail})))` : undefined,
+  )).orderBy(asc(organizations.createdAt), asc(organizations.id)).limit(options.limit + 1).offset(options.offset);
+  return rows.map(mapOrganization);
+}
+
+export async function getOrganizationPortalStats(db: D1Database, orgId: string): Promise<Array<[string, number]>> {
+  const queries: Array<[string, string]> = [
+    ['Collections', 'SELECT count(*) AS total FROM collections WHERE org_id=?'],
+    ['Groups', 'SELECT count(*) AS total FROM org_groups WHERE org_id=?'],
+    ['Enabled policies', 'SELECT count(*) AS total FROM org_policies WHERE org_id=? AND enabled=1'],
+    ['Organization items', 'SELECT count(*) AS total FROM ciphers WHERE organization_id=?'],
+    ['SM projects', 'SELECT count(*) AS total FROM sm_projects WHERE org_id=?'],
+    ['SM secrets', 'SELECT count(*) AS total FROM sm_secrets WHERE org_id=? AND deleted_at IS NULL'],
+    ['SM machine accounts', 'SELECT count(*) AS total FROM sm_service_accounts WHERE org_id=?'],
+  ];
+  const results = await db.batch<{ total: number }>(queries.map(([, query]) => db.prepare(query).bind(orgId)));
+  return queries.map(([name], index) => [name, results[index].results[0]?.total ?? 0]);
+}

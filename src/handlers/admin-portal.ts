@@ -1,6 +1,9 @@
+import * as orgRepo from '../services/storage-org-repo';
+import { canAccessSecretsManager } from '../services/org-authz';
+import { MembershipStatus, MembershipType, publicMembershipStatus } from '../services/org-types';
 import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
 import { countPersonalCiphers } from '../services/storage-cipher-repo';
-import { deleteUserAccount } from '../services/account-deletion';
+import { deleteUserAccount, deleteOrganizationAccount } from '../services/account-deletion';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { isYubiKeyEnabled } from '../utils/yubico-otp';
 import { listAuditLogs } from '../services/storage-admin-repo';
@@ -134,6 +137,32 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
         ['Id', user.id], ['Email', user.email], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
       ])}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
+    }
+    if (path === '/admin/organizations') {
+      if (request.method !== 'GET') return methodNotAllowed();
+      const name = url.searchParams.get('name') ?? '';
+      const userEmail = url.searchParams.get('userEmail') ?? '';
+      const rows = await orgRepo.searchOrganizations(env.DB, { nameContains: name, memberEmail: userEmail, offset: (page - 1) * count, limit: count });
+      return portalPage('Organizations', html`${portalNavigation(session.csrf)}<form method="get" action="/admin/organizations"><label>Name contains <input name="name" value="${name}"></label><label>Member email <input name="userEmail" value="${userEmail}"></label><input type="hidden" name="count" value="${count}"><button type="submit">Search</button></form><table><thead><tr><th>Name</th><th>Created</th><th>Billing email</th></tr></thead><tbody>${rows.slice(0, count).map((org) => html`<tr><td><a href="${'/admin/organizations/view/' + encodeURIComponent(org.id)}">${org.name}</a></td><td>${org.createdAt}</td><td>${org.billingEmail}</td></tr>`)}</tbody></table>${portalPagination(url, page, rows.length > count)}`);
+    }
+    const orgPath = path.match(/^\/admin\/organizations\/(view|delete)\/([^/]+)$/);
+    if (orgPath) {
+      const deleting = orgPath[1] === 'delete';
+      if (request.method !== (deleting ? 'POST' : 'GET')) return methodNotAllowed();
+      const org = await orgRepo.getOrganization(env.DB, decodeURIComponent(orgPath[2]));
+      if (!org) return portalPage('Not found', html`<p>Organization not found.</p>`, 404);
+      if (deleting) {
+        const check = await deletionCheck(String(form?.get('confirmation') ?? ''), org.name, '/admin/organizations/view/' + encodeURIComponent(org.id));
+        if (check) return check;
+        await deleteOrganizationAccount(env, org.id, { action: 'admin.portal.org.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'organization', targetId: org.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
+        return portalRedirect('/admin/organizations?m=deleted');
+      }
+      const [members, stats] = await Promise.all([orgRepo.listMembershipsWithAccountsByOrg(env.DB, org.id), orgRepo.getOrganizationPortalStats(env.DB, org.id)]);
+      const membershipCounts: Array<[string, number]> = Object.entries(MembershipStatus).filter(([name]) => name !== 'Staged').map(([name, status]) => [name, members.filter(({ item }) => publicMembershipStatus(item.status) === status).length]);
+      const admins = members.filter(({ item }) => item.type === MembershipType.Owner || item.type === MembershipType.Admin);
+      return portalPage('Organization details', html`${portalNavigation(session.csrf)}${portalFields([
+        ['Id', org.id], ['Name', org.name], ['Created', org.createdAt], ['Modified', org.updatedAt], ['Billing email', org.billingEmail], ['SSO identifier', org.identifier ?? ''], ['Has keys', org.privateKey && org.publicKey ? 'Yes' : 'No'], ...membershipCounts, ['SM access', members.filter(({ item }) => canAccessSecretsManager(item)).length], ...stats,
+      ])}<h2>Administrators</h2><table><thead><tr><th>Email</th><th>Type</th><th>Status</th></tr></thead><tbody>${admins.map(({ item, account }) => html`<tr><td>${account?.email ?? item.email ?? ''}</td><td>${item.type === MembershipType.Owner ? 'Owner' : 'Admin'}</td><td>${Object.entries(MembershipStatus).find(([, status]) => status === publicMembershipStatus(item.status))?.[0] ?? 'Unknown'}</td></tr>`)}</tbody></table>${deleteForm('/admin/organizations/delete/' + encodeURIComponent(org.id), session.csrf, org.name)}`);
     }
     if (path === '/admin' || path === '/admin/') {
       if (request.method !== 'GET') return methodNotAllowed();
