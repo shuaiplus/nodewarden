@@ -3,7 +3,7 @@ import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
 import { canAccessSecretsManager, isActiveMember } from '../services/org-authz';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, isUUID } from '../utils/uuid';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { publishSecretChanged } from '../services/queue-publisher';
 
@@ -89,21 +89,30 @@ export async function handleUpdateSecret(request: Request, env: Env, userId: str
   return jsonResponse(secretResponse(secret));
 }
 
+// Official web and the SDK send a bare array of ids. Upstream binds `[FromBody] List<Guid> ids`, so any
+// other body, or an id that is not a GUID, is a 400 there.
 export async function handleDeleteSecrets(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await request.json() as { ids?: string[] };
-  const ids = body.ids || [];
+  let ids: unknown;
+  try {
+    ids = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  if (!Array.isArray(ids) || !ids.every(isUUID)) {
+    return errorResponse('Request body must be an array of secret GUIDs', 400);
+  }
   const data = [];
   for (const id of ids) {
     const secret = await smRepo.getSecret(env.DB, id);
     if (!secret || !(await requireSmMember(env, userId, secret.orgId))) {
-      data.push({ id, error: 'not found' });
+      data.push({ id, error: 'not found', object: 'BulkDeleteResponseModel' });
       continue;
     }
     secret.deletedAt = new Date().toISOString();
     secret.updatedAt = secret.deletedAt;
     await smRepo.saveSecret(env.DB, secret);
     await publishSecretChanged(env, secret.orgId, secret.id);
-    data.push({ id, error: null });
+    data.push({ id, error: null, object: 'BulkDeleteResponseModel' });
   }
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
