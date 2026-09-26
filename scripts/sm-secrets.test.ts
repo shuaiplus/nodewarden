@@ -237,3 +237,15 @@ test('a rejected secret snapshot aborts links, policies and machine revision in 
   assert.equal(await env.DB.prepare('SELECT secret_id FROM sm_secret_members WHERE secret_id = ?').bind(target.id).first(), null);
   assert.deepEqual(await smRepo.getServiceAccount(env.DB, account.id), previousAccount);
 });
+
+test('editing a legacy multi-project secret rewrites its complete mapping to the requested single project', async () => {
+  const { env, owner, request, project, secret } = await setup();
+  const p = await project();
+  const q = await project();
+  const target = await secret([p.id]);
+  await env.DB.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(target.id, q.id).run();
+  const original = (await smRepo.getSecret(env.DB, target.id))!;
+  const response = await request(owner.id, `/api/secrets/${target.id}`, 'PUT', { ...FIELDS, projectIds: [original.projectIds[0]] });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await smRepo.getSecret(env.DB, target.id))!.projectIds, [original.projectIds[0]]);
+});

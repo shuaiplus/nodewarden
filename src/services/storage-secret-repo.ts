@@ -369,7 +369,7 @@ export async function updateSecret(db: D1Database, secret: SmSecret, previousPro
     // Abort the atomic batch before links or policies if the authorized snapshot changed.
     db.prepare("SELECT CASE WHEN changes() = 0 THEN json('stale secret update') END"),
   ];
-  if (previousProjectIds[0] !== secret.projectIds[0]) {
+  if (previousProjectIds.length !== secret.projectIds.length || previousProjectIds[0] !== secret.projectIds[0]) {
     statements.push(db.prepare('DELETE FROM sm_secret_projects WHERE secret_id = ? AND EXISTS (SELECT 1 FROM sm_secrets WHERE id = ? AND deleted_at IS NULL)').bind(secret.id, secret.id));
     for (const projectId of secret.projectIds) statements.push(db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) SELECT id, ? FROM sm_secrets WHERE id = ? AND deleted_at IS NULL').bind(projectId, secret.id));
   }
