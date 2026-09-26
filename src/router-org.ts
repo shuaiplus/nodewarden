@@ -2,6 +2,8 @@ import type { Env, User } from './types';
 import { errorResponse, jsonResponse } from './utils/response';
 import {
   handleAcceptInvite,
+  handleBulkConfirmMembers,
+  handleBulkReinviteMembers,
   handleConfirmMember,
   handleCreateOrgCollection,
   handleCreateOrganization,
@@ -30,6 +32,7 @@ import {
   handleOrgApiKey,
   handlePostOrganizationKeys,
   handlePutPolicy,
+  handleReinviteMember,
   handleRestoreMember,
   handleRevokeMember,
   handleRotateScimKey,
@@ -137,12 +140,15 @@ export async function handleOrganizationRoute(
   if (sub === '/users/mini-details' && method === 'GET') return handleListMemberMiniDetails(env, userId, orgId);
   if (sub === '/users/invite' && method === 'POST') return handleInviteMembers(request, env, currentUser, orgId);
   if (sub === '/users/public-keys' && method === 'POST') return handleListMemberPublicKeys(request, env, userId, orgId);
-  const userMatch = sub.match(/^\/users\/([a-f0-9-]+)(?:\/(accept|confirm|revoke|restore|restore\/vnext))?$/i);
+  if (sub === '/users/confirm' && method === 'POST') return handleBulkConfirmMembers(request, env, userId, orgId);
+  if (sub === '/users/reinvite' && method === 'POST') return handleBulkReinviteMembers(request, env, userId, orgId);
+  const userMatch = sub.match(/^\/users\/([a-f0-9-]+)(?:\/(accept|confirm|reinvite|revoke|restore|restore\/vnext))?$/i);
   if (userMatch) {
     const memberId = userMatch[1];
     const action = userMatch[2] || '';
     if (action === 'accept' && method === 'POST') return handleAcceptInvite(request, env, currentUser, orgId, memberId);
     if (action === 'confirm' && method === 'POST') return handleConfirmMember(request, env, userId, orgId, memberId);
+    if (action === 'reinvite' && method === 'POST') return handleReinviteMember(request, env, userId, orgId, memberId);
     if (action === 'revoke' && method === 'PUT') return handleRevokeMember(env, userId, orgId, memberId);
     if ((action === 'restore' || action === 'restore/vnext') && method === 'PUT') return handleRestoreMember(env, userId, orgId, memberId);
     if (method === 'GET' && !action) return handleGetMember(request, env, userId, orgId, memberId);

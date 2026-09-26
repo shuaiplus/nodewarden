@@ -209,6 +209,16 @@ export async function saveMembership(db: D1Database, member: MembershipRecord): 
   await membershipUpsert(getOrm(db), member);
 }
 
+// A bulk member change saves every row in one batch, so it lands whole or not at all. Callers pass
+// at least one row.
+// ponytail: one upsert per row, which counts against D1's per-invocation query limit; move to a
+// chunked multi-row upsert if bulk confirms grow past it.
+export async function saveMemberships(db: D1Database, members: MembershipRecord[]): Promise<void> {
+  const orm = getOrm(db);
+  const statements = members.map((member) => membershipUpsert(orm, member));
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+}
+
 export async function getMembership(db: D1Database, id: string): Promise<MembershipRecord | null> {
   const [row] = await getOrm(db).select().from(organizationMemberships).where(eq(organizationMemberships.id, id)).limit(1);
   return row ? mapMembership(row) : null;

@@ -15,6 +15,7 @@ import {
   confirmMemberCheck,
   hasFullCollectionAccess,
   isActiveMember,
+  type MemberCheck,
   memberCollectionsCheck,
   memberRoleChangeCheck,
   resolveCollectionPermission,
@@ -702,10 +703,10 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   return jsonResponse({});
 }
 
-// Upstream SendOrganizationInvitesCommand, shared by member invite and SCIM provisioning: accept
-// needs the emailed token, so every Invited row is mailed. Callers mail before saving, so a failed
-// or refused send leaves no row behind (upstream deletes the rows it saved) and a retried request
-// cannot pile up duplicates. Without mail configured the rows stay Invited and cannot be accepted yet.
+// Upstream SendOrganizationInvitesCommand, shared by member invite, reinvite and SCIM provisioning:
+// accept needs the emailed token, so every Invited row is mailed. Callers mail before saving, so a
+// failed or refused send leaves no row behind (upstream deletes the rows it saved) and a retried
+// request cannot pile up duplicates. Without mail configured the rows stay Invited and cannot be accepted yet.
 // Any user can create an org and invite any address, so the mail spends a strict budget keyed by
 // the inviter across all of their orgs (upstream throttles the invite endpoint per IP instead).
 export async function mailOrganizationInvites(
@@ -788,6 +789,26 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
   return jsonResponse({});
 }
 
+// Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an empty
+// list, so an absent field fails MinLength and only an explicit null fails Required.
+function readBulkIds(body: Record<string, unknown>): string[] | Response {
+  const sentIds = readBody(body, ['ids', 'Ids']);
+  const ids = sentIds === undefined ? [] : sentIds;
+  if (!Array.isArray(ids)) return errorResponse('The Ids field is required.', 400);
+  if (!ids.length) return errorResponse("The field Ids must be a string or array type with a minimum length of '1'.", 400);
+  return ids.map(asString);
+}
+
+// Upstream OrganizationUserBulkResponseModel, whose object name is the same for every bulk member
+// action. Official web counts an entry as done only when its error is the empty string.
+function bulkResultsResponse(results: Array<{ id: string; error: string }>): Response {
+  return jsonResponse({
+    data: results.map((result) => ({ ...result, object: 'OrganizationBulkConfirmResponseModel' })),
+    object: 'list',
+    continuationToken: null,
+  });
+}
+
 // Upstream OrganizationUsersController.UserPublicKeys: official web's bulk confirm dialog wraps the
 // org key with each selected member's public key before it posts the confirm.
 export async function handleListMemberPublicKeys(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
@@ -796,13 +817,9 @@ export async function handleListMemberPublicKeys(request: Request, env: Env, use
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
-  // Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an
-  // empty list, so an absent field fails MinLength and only an explicit null fails Required.
-  const sentIds = readBody(body, ['ids', 'Ids']);
-  const ids = sentIds === undefined ? [] : sentIds;
-  if (!Array.isArray(ids)) return errorResponse('The Ids field is required.', 400);
-  if (!ids.length) return errorResponse("The field Ids must be a string or array type with a minimum length of '1'.", 400);
-  const keys = await orgRepo.listAcceptedMemberPublicKeys(env.DB, orgId, ids.map(asString));
+  const ids = readBulkIds(body);
+  if (ids instanceof Response) return ids;
+  const keys = await orgRepo.listAcceptedMemberPublicKeys(env.DB, orgId, ids);
   return jsonResponse({
     data: keys.map(({ publicKey, ...member }) => ({ ...member, key: publicKey, object: 'organizationUserPublicKeyResponseModel' })),
     object: 'list',
@@ -820,14 +837,83 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   if (body instanceof Response) return body;
   const key = asString(readBody(body, ['key', 'Key']));
   if (!key) return errorResponse('Key is required', 400);
-  if (!MEMBER_ORG_KEY_PATTERN.test(key)) return errorResponse('Key is not a valid encrypted string.', 400);
-  const confirmed = check.member;
-  confirmed.key = key;
-  confirmed.status = MembershipStatus.Confirmed;
-  confirmed.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, confirmed);
+  const confirmed = confirmedWithKey(check, key);
+  if (!confirmed.ok) return errorResponse(confirmed.message, 400);
+  await orgRepo.saveMembership(env.DB, confirmed.member);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
+}
+
+// The row a passed confirmMemberCheck saves, once its org key is wrapped for the member.
+function confirmedWithKey(check: MemberCheck, key: string): MemberCheck {
+  if (!check.ok) return check;
+  if (!MEMBER_ORG_KEY_PATTERN.test(key)) return { ok: false, message: 'Key is not a valid encrypted string.' };
+  return { ok: true, member: { ...check.member, key, status: MembershipStatus.Confirmed, updatedAt: new Date().toISOString() } };
+}
+
+// Upstream BulkConfirm: each {id, key} entry is confirmed on its own and reports its own error, and
+// the confirmed rows are saved together. Upstream drops entries it will not confirm; every entry
+// gets a result here, and the org's rows are read once, so another org's member reads like an id
+// that does not exist.
+export async function handleBulkConfirmMembers(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  const entries = readBody(body, ['keys', 'Keys']);
+  if (!Array.isArray(entries)) return errorResponse('The Keys field is required.', 400);
+  const membersById = new Map((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((member) => [member.id, member]));
+  // Upstream's ToDictionary rejects a repeated id; here the last key sent for an id wins, so each
+  // member is confirmed once.
+  const keysById = new Map(entries.map(asRecord).map((entry) => [asString(readBody(entry, ['id', 'Id'])), asString(readBody(entry, ['key', 'Key']))]));
+  const results = [...keysById].map(([id, key]) => ({ id, check: confirmedWithKey(confirmMemberCheck(membersById.get(id) ?? null, orgId), key) }));
+  const confirmed = results.flatMap(({ check }) => (check.ok ? [check.member] : []));
+  if (confirmed.length) {
+    await orgRepo.saveMemberships(env.DB, confirmed);
+    await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  }
+  return bulkResultsResponse(results.map(({ id, check }) => ({ id, error: check.ok ? '' : check.message })));
+}
+
+// Upstream ResendOrganizationInviteCommand and BulkResendOrganizationInvitesCommand only mail
+// Invited rows of the org; an accepted, confirmed, revoked or staged row is "User invalid.".
+const REINVITE_INVALID = 'User invalid.';
+
+function isReinvitable(membership: MembershipRecord | null, orgId: string): membership is MembershipRecord & { email: string } {
+  return membership?.status === MembershipStatus.Invited && membership.orgId === orgId && !!membership.email;
+}
+
+// A resend mails the row a fresh token through mailOrganizationInvites, so it spends the inviter's
+// budget like an invite and recovers an invite whose token has expired.
+export async function handleReinviteMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const membership = await orgRepo.getMembership(env.DB, memberId);
+  if (!isReinvitable(membership, orgId)) return errorResponse(REINVITE_INVALID, 400);
+  const mailed = await mailOrganizationInvites(request, env, orgId, userId, [membership]);
+  if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
+  return jsonResponse({});
+}
+
+// Every requested id gets a result and the Invited rows go out in one budgeted send, so a batch
+// over the budget mails nothing. Upstream drops missing ids and reports another org's rows; both
+// read as "User invalid." here, since only the org's own rows are loaded.
+export async function handleBulkReinviteMembers(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  const ids = readBulkIds(body);
+  if (ids instanceof Response) return ids;
+  const membersById = new Map((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((member) => [member.id, member]));
+  const targets = [...new Set(ids)].map((id) => ({ id, membership: membersById.get(id) ?? null }));
+  const invites = targets.flatMap(({ membership }) => (isReinvitable(membership, orgId) ? [membership] : []));
+  const mailed = await mailOrganizationInvites(request, env, orgId, userId, invites);
+  if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
+  return bulkResultsResponse(targets.map(({ id, membership }) => ({ id, error: isReinvitable(membership, orgId) ? '' : REINVITE_INVALID })));
 }
 
 export async function handleEditMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {

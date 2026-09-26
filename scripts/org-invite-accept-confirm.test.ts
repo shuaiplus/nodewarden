@@ -5,8 +5,10 @@ import { LIMITS } from '../src/config/limits';
 import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
+import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { ORG_INVITE_TTL_DAYS } from '../src/utils/jwt';
+import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 // Upstream OrganizationService always stores invites as Invited with no user, and only
@@ -24,6 +26,8 @@ const MAX_INVITE_EMAILS = 20;
 const MAX_INVITE_EMAIL_LENGTH = 256;
 const MS_PER_SECOND = 1000;
 const MS_PER_DAY = 24 * 60 * 60 * MS_PER_SECOND;
+// Upstream OrganizationUserBulkResponseModel passes this object name for every bulk member action.
+const BULK_RESULT_OBJECT = 'OrganizationBulkConfirmResponseModel';
 
 interface MemberBody {
   id: string;
@@ -62,6 +66,13 @@ function inviteParams(email: SentEmail): URLSearchParams {
   assert.ok(link, 'invite email has no accept-organization link');
   assert.ok(link.startsWith(`${OFFICIAL_WEB_ORIGIN}/#/accept-organization?`), link);
   return new URLSearchParams(link.slice(link.indexOf('?') + 1));
+}
+
+// The token from the latest invite mail to the address, which a reinvite replaces.
+function inviteToken(sent: SentEmail[], email: string): string | null {
+  const latest = sent.filter((message) => message.to === email).at(-1);
+  assert.ok(latest, `no invite email to ${email}`);
+  return inviteParams(latest).get('token');
 }
 
 function seedMailableUser(env: Env): Promise<User> {
@@ -115,6 +126,43 @@ async function revisionDate(env: Env, user: User): Promise<number> {
 
 function confirm(env: Env, owner: User, orgId: string, memberId: string, key: string): Promise<Response> {
   return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/confirm`, body: { key }, userId: owner.id });
+}
+
+function reinvite(env: Env, caller: User, orgId: string, memberId: string): Promise<Response> {
+  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/reinvite`, userId: caller.id });
+}
+
+function postBulk(env: Env, caller: User, orgId: string, action: 'confirm' | 'reinvite', body: Record<string, unknown>): Promise<Response> {
+  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${action}`, body, userId: caller.id });
+}
+
+// Upstream OrganizationUserBulkResponseModel list, as [id, error] pairs in response order. Official
+// web counts an entry as done only when its error is the empty string.
+async function bulkErrors(response: Response): Promise<Array<[string, string]>> {
+  assert.equal(response.status, 200);
+  const body = await response.json() as { object: string; data: Array<{ id: string; error: string; object: string }> };
+  assert.equal(body.object, 'list');
+  body.data.forEach((entry) => assert.equal(entry.object, BULK_RESULT_OBJECT));
+  return body.data.map(({ id, error }) => [id, error]);
+}
+
+async function memberStatuses(env: Env, owner: User, orgId: string): Promise<Record<string, number>> {
+  return Object.fromEntries((await listMembers(env, owner, orgId)).map(({ id, status }) => [id, status]));
+}
+
+// Invites a fresh account and accepts with its emailed token, leaving an Accepted row to confirm.
+async function acceptedMember(env: Env, sent: SentEmail[], owner: User, orgId: string): Promise<{ id: string; user: User }> {
+  const invitee = await seedMailableUser(env);
+  await invite(env, owner, orgId, [invitee.email]);
+  const memberId = (await findMember(env, owner, orgId, invitee.email)).id;
+  assert.equal((await accept(env, invitee, orgId, memberId, { token: inviteToken(sent, invitee.email) })).status, 200);
+  return { id: memberId, user: invitee };
+}
+
+async function invitedMember(env: Env, owner: User, orgId: string): Promise<{ id: string; email: string }> {
+  const email = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
+  await invite(env, owner, orgId, [email]);
+  return { id: (await findMember(env, owner, orgId, email)).id, email };
 }
 
 async function postScimUser(env: Env, owner: User, orgId: string, email: string): Promise<Response> {
@@ -226,11 +274,7 @@ test('an invite token is bound to its own row and expires, and a revoked invite 
   const orgId = await createOrg(env, owner);
 
   await invite(env, owner, orgId, [invitee.email, other.email]);
-  const tokenFor = (email: string) => {
-    const sent = capture.sent.find((message) => message.to === email);
-    assert.ok(sent, `no invite email to ${email}`);
-    return inviteParams(sent).get('token');
-  };
+  const tokenFor = (email: string) => inviteToken(capture.sent, email);
   const memberId = (await findMember(env, owner, orgId, invitee.email)).id;
 
   // Official web's accept page branches on upstream's distinct expiry message.
@@ -518,4 +562,170 @@ test('invite skips addresses already in the org by invited or account email and 
   assert.equal(await revisionDate(env, owner), revisionBeforeReinvite, 'an invite with nothing left to invite bumped member revisions');
   assert.deepEqual(capture.sent.map((message) => message.to), [pending]);
   assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [renamedOwner.email, pending]);
+});
+
+// Official web's bulk confirm dialog posts every selected Accepted member with the org key wrapped
+// for that member's public key. Upstream BulkConfirm confirms each entry on its own; unlike upstream,
+// which drops entries it will not confirm, every entry gets a result, so another org's member reads
+// like an id that does not exist.
+test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped key and reports every other entry', async (context) => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const otherOrgId = await createOrg(env, owner);
+  const { id: accepted, user: acceptedUser } = await acceptedMember(env, capture.sent, owner, orgId);
+  const symmetricKeyed = (await acceptedMember(env, capture.sent, owner, orgId)).id;
+  const invited = (await invitedMember(env, owner, orgId)).id;
+  const foreign = (await acceptedMember(env, capture.sent, owner, otherOrgId)).id;
+  const missing = crypto.randomUUID();
+
+  // The member only receives the wrapped org key through a sync, which is cached by revision date,
+  // so a confirm must move it and a batch that confirms nobody must not. Pin the clock past it so
+  // the comparison cannot tie within a millisecond.
+  const revisionBeforeConfirm = await revisionDate(env, acceptedUser);
+  context.mock.timers.enable({ apis: ['Date'], now: revisionBeforeConfirm + MS_PER_SECOND });
+  const confirmsNobody = await postBulk(env, owner, orgId, 'confirm', { keys: [{ id: missing, key: MEMBER_KEY }] });
+  assert.deepEqual(await bulkErrors(confirmsNobody), [[missing, 'User not valid.']]);
+  assert.equal(await revisionDate(env, acceptedUser), revisionBeforeConfirm, 'a bulk confirm that confirmed nobody bumped member revisions');
+
+  const keys = [
+    { id: accepted, key: MEMBER_KEY },
+    { id: symmetricKeyed, key: '2.a|b|c' },
+    { id: invited, key: MEMBER_KEY },
+    { id: foreign, key: MEMBER_KEY },
+    { id: missing, key: MEMBER_KEY },
+  ];
+  assert.deepEqual(await bulkErrors(await postBulk(env, owner, orgId, 'confirm', { keys })), [
+    [accepted, ''],
+    [symmetricKeyed, 'Key is not a valid encrypted string.'],
+    [invited, 'User not valid.'],
+    [foreign, 'User not valid.'],
+    [missing, 'User not valid.'],
+  ]);
+  assert.ok((await revisionDate(env, acceptedUser)) > revisionBeforeConfirm, 'bulk confirm did not bump the confirmed member revision date');
+  const statuses = await memberStatuses(env, owner, orgId);
+  assert.equal(statuses[accepted], MembershipStatus.Confirmed);
+  assert.equal((await orgRepo.getMembership(env.DB, accepted))?.key, MEMBER_KEY);
+  assert.equal(statuses[symmetricKeyed], MembershipStatus.Accepted);
+  assert.equal(statuses[invited], MembershipStatus.Invited);
+  assert.equal((await memberStatuses(env, owner, otherOrgId))[foreign], MembershipStatus.Accepted);
+
+  const keyless = await postBulk(env, owner, orgId, 'confirm', {});
+  assert.equal(keyless.status, 400);
+  assert.equal(await errorMessage(keyless), 'The Keys field is required.');
+});
+
+// Upstream ResendOrganizationInviteCommand. Invite tokens expire after ORG_INVITE_TTL_DAYS, and
+// "Resend invitation" is the only way back short of deleting and re-inviting the member.
+test('reinvite mails an Invited member a fresh token once the first has expired, and refuses every other row', async (context) => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const otherOrgId = await createOrg(env, owner);
+  const invited = await invitedMember(env, owner, orgId);
+  const expiredToken = inviteToken(capture.sent, invited.email);
+  const ownerMemberId = (await findMember(env, owner, orgId, owner.email)).id;
+  const invitee = await seedUser(env, { email: invited.email });
+
+  context.mock.timers.enable({ apis: ['Date'], now: Date.now() + ORG_INVITE_TTL_DAYS * MS_PER_DAY + MS_PER_SECOND });
+  const refusals: Array<[string, string]> = [[orgId, ownerMemberId], [otherOrgId, invited.id], [orgId, crypto.randomUUID()]];
+  for (const [targetOrgId, memberId] of refusals) {
+    const refused = await reinvite(env, owner, targetOrgId, memberId);
+    assert.equal(refused.status, 400);
+    assert.equal(await errorMessage(refused), 'User invalid.');
+  }
+  assert.equal(capture.sent.length, 1);
+
+  assert.equal((await reinvite(env, owner, orgId, invited.id)).status, 200);
+  assert.deepEqual(capture.sent.map((message) => message.to), [invited.email, invited.email]);
+  const expired = await accept(env, invitee, orgId, invited.id, { token: expiredToken });
+  assert.equal(await errorMessage(expired), 'Expired token.');
+  assert.equal((await accept(env, invitee, orgId, invited.id, { token: inviteToken(capture.sent, invited.email) })).status, 200);
+
+  const afterAccept = await reinvite(env, owner, orgId, invited.id);
+  assert.equal(afterAccept.status, 400);
+  assert.equal(await errorMessage(afterAccept), 'User invalid.');
+  assert.equal(capture.sent.length, 2);
+});
+
+// Upstream BulkResendOrganizationInvitesCommand reports "User invalid." for a row that is not Invited
+// or belongs to another org; unlike upstream, a missing id answers the same rather than dropping out.
+// Official web sends up to 500 ids at once, more than one D1 statement can bind.
+test('bulk reinvite mails only the Invited members of the org once each and reports every other id', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const otherOrgId = await createOrg(env, owner);
+  const [first, second] = [await invitedMember(env, owner, orgId), await invitedMember(env, owner, orgId)];
+  const accepted = (await acceptedMember(env, capture.sent, owner, orgId)).id;
+  const foreign = (await invitedMember(env, owner, otherOrgId)).id;
+  const missing = Array.from({ length: D1_MAX_BOUND_PARAMETERS + 1 }, () => crypto.randomUUID());
+  const mailedBefore = capture.sent.length;
+
+  const ids = [first.id, second.id, second.id, accepted, foreign, ...missing];
+  assert.deepEqual(await bulkErrors(await postBulk(env, owner, orgId, 'reinvite', { ids })), [
+    [first.id, ''],
+    [second.id, ''],
+    ...[accepted, foreign, ...missing].map((id): [string, string] => [id, 'User invalid.']),
+  ]);
+  assert.deepEqual(capture.sent.slice(mailedBefore).map((message) => message.to).sort(), [first.email, second.email].sort());
+
+  const empty = await postBulk(env, owner, orgId, 'reinvite', {});
+  assert.equal(empty.status, 400);
+  assert.equal(await errorMessage(empty), "The field Ids must be a string or array type with a minimum length of '1'.");
+});
+
+// Reinvite mails from EMAIL_FROM like invite, so it spends the same per-inviter budget, and a bulk
+// resend that would overrun it mails nothing.
+test('reinvite spends the inviter mail budget, and a resend over it gets 429 with nothing mailed', async (context) => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;
+  const windowSeconds = String(LIMITS.rateLimit.orgInviteEmailWindowSeconds);
+  pinClockToInviteMailWindow(context);
+
+  for (let spent = 0; spent < budget - 1; spent += MAX_INVITE_EMAILS) {
+    const count = Math.min(MAX_INVITE_EMAILS, budget - 1 - spent);
+    await invite(env, owner, orgId, Array.from({ length: count }, () => `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`));
+  }
+  const [first, second] = (await listMembers(env, owner, orgId)).filter(({ status }) => status === MembershipStatus.Invited);
+
+  const bulkBlocked = await postBulk(env, owner, orgId, 'reinvite', { ids: [first.id, second.id] });
+  assert.equal(bulkBlocked.status, 429);
+  assert.equal(bulkBlocked.headers.get('Retry-After'), windowSeconds);
+  assert.equal(capture.sent.length, budget - 1);
+
+  assert.equal((await reinvite(env, owner, orgId, first.id)).status, 200);
+  const blocked = await reinvite(env, owner, orgId, second.id);
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.headers.get('Retry-After'), windowSeconds);
+  assert.equal(capture.sent.length, budget);
+});
+
+// A plain member holds the org key, so without the manageUsers guard it could confirm any Accepted
+// member, and it could spend the org's invite mail on resends.
+test('bulk confirm and reinvite refuse a member without manageUsers, confirming and mailing nothing', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const plainMember = await acceptedMember(env, capture.sent, owner, orgId);
+  assert.equal((await confirm(env, owner, orgId, plainMember.id, MEMBER_KEY)).status, 200);
+  const accepted = (await acceptedMember(env, capture.sent, owner, orgId)).id;
+  const invited = (await invitedMember(env, owner, orgId)).id;
+  const mailedBefore = capture.sent.length;
+
+  const refusals = [
+    await postBulk(env, plainMember.user, orgId, 'confirm', { keys: [{ id: accepted, key: MEMBER_KEY }] }),
+    await reinvite(env, plainMember.user, orgId, invited),
+    await postBulk(env, plainMember.user, orgId, 'reinvite', { ids: [invited] }),
+  ];
+  assert.deepEqual(refusals.map(({ status }) => status), [403, 403, 403]);
+  assert.equal((await memberStatuses(env, owner, orgId))[accepted], MembershipStatus.Accepted);
+  assert.equal(capture.sent.length, mailedBefore);
 });
