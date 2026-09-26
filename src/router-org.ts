@@ -47,20 +47,7 @@ import {
   handleSyncSelfHostedOrganizationLicense,
   handleUpdateSelfHostedOrganizationLicense,
 } from './handlers/licenses';
-import {
-  handleCreateAccessToken,
-  handleCreateProject,
-  handleCreateSecret,
-  handleCreateServiceAccount,
-  handleDeleteSecrets,
-  handleGetSecret,
-  handleListAccessTokens,
-  handleListProjects,
-  handleListSecrets,
-  handleListServiceAccounts,
-  handleSecretsSync,
-  handleUpdateSecret,
-} from './handlers/secrets-manager';
+import { handleSmRoute } from './router-sm';
 
 export async function handleOrganizationRoute(
   request: Request,
@@ -85,19 +72,8 @@ export async function handleOrganizationRoute(
     if (licenseUpdate[2]) return handleSyncSelfHostedOrganizationLicense(env, currentUser, licenseUpdate[1]);
     return handleUpdateSelfHostedOrganizationLicense(request, env, currentUser, licenseUpdate[1]);
   }
-  if (path === '/api/secrets/delete' && method === 'POST') return handleDeleteSecrets(request, env, userId);
-
-  const secretMatch = path.match(/^\/api\/secrets\/([a-f0-9-]+)$/i);
-  if (secretMatch) {
-    if (method === 'GET') return handleGetSecret(env, userId, secretMatch[1]);
-    if (method === 'PUT') return handleUpdateSecret(request, env, userId, secretMatch[1]);
-  }
-
-  const saTokenMatch = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/access-tokens$/i);
-  if (saTokenMatch) {
-    if (method === 'GET') return handleListAccessTokens(env, userId, saTokenMatch[1]);
-    if (method === 'POST') return handleCreateAccessToken(request, env, userId, saTokenMatch[1]);
-  }
+  const sm = await handleSmRoute(request, env, userId, path, method);
+  if (sm) return sm;
 
   const orgMatch = path.match(/^\/api\/organizations\/([a-f0-9-]+)(\/.*)?$/i);
   if (!orgMatch) return null;
@@ -185,15 +161,6 @@ export async function handleOrganizationRoute(
     return handleRotateScimKey(env, userId, orgId);
   }
 
-  if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, userId, orgId);
-  if (sub === '/secrets' && method === 'POST') return handleCreateSecret(request, env, userId, orgId);
-  if (sub === '/secrets/sync' && method === 'GET') return errorResponse('Service account required', 400);
-  if (sub === '/projects' && method === 'GET') return handleListProjects(env, userId, orgId);
-  if (sub === '/projects' && method === 'POST') return handleCreateProject(request, env, userId, orgId);
-  if (sub === '/service-accounts' && method === 'GET') return handleListServiceAccounts(env, userId, orgId);
-  if (sub === '/service-accounts' && method === 'POST') return handleCreateServiceAccount(request, env, userId, orgId);
-
   return errorResponse('Not found', 404);
 }
 
-export { handleSecretsSync };
