@@ -3,7 +3,10 @@ import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import { verifyRegisterVerifyToken } from '../utils/jwt';
+import { createEmergencyAccessInviteToken, verifyEmergencyAccessInviteToken } from '../utils/jwt';
+import { LIMITS } from '../config/limits';
+import { RateLimitService } from '../services/ratelimit';
+import { configuredVaultOrigin, EMAIL_PATTERN, mailStatusCheck, readMailConfig, sendMail, type MailOutcome } from '../services/mail';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { cipherToResponse } from './ciphers';
 import { parseMasterPasswordUpdate } from './accounts';
@@ -68,6 +71,21 @@ function canAct(record: emergencyRepo.EmergencyAccessRecord, userId: string, typ
   return Number.isFinite(started) && Date.now() - started >= record.waitTimeDays * 24 * 60 * 60 * 1000;
 }
 
+async function mailEmergencyAccessInvite(request: Request, env: Env, grantor: User, record: emergencyRepo.EmergencyAccessRecord): Promise<MailOutcome> {
+  const config = readMailConfig(env);
+  if (config.kind !== 'enabled') return config;
+  const vaultOrigin = configuredVaultOrigin(request, env);
+  if (!vaultOrigin) return { kind: 'disabled' };
+  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+    `ea-invite-mail:${grantor.id}`, LIMITS.mail.emergencyAccessInvitesPerGrantorPerHour, 3600,
+  );
+  if (!budget.allowed) return { kind: 'throttled', retryAfterSeconds: budget.retryAfterSeconds ?? 3600 };
+  return sendMail(env, record.email!, 'emergencyAccessInvite', {
+    vaultOrigin, id: record.id, grantorName: grantor.name || grantor.email, grantorEmail: grantor.email,
+    token: await createEmergencyAccessInviteToken(env.JWT_SECRET, record.id, record.email!),
+  });
+}
+
 export async function handleEmergencyAccessRoute(
   request: Request,
   env: Env,
@@ -94,7 +112,7 @@ export async function handleEmergencyAccessRoute(
   if (normalized === '/emergency-access/invite' && method === 'POST') {
     const body = await request.json() as Record<string, unknown>;
     const email = String(body.email || '').trim().toLowerCase();
-    if (!email.includes('@')) return errorResponse('Email is required', 400);
+    if (email.length > 256 || !EMAIL_PATTERN.test(email)) return errorResponse('Email is not valid.', 400);
     if (email === user.email.toLowerCase()) return errorResponse('Cannot invite yourself', 400);
     const existing = await emergencyRepo.findInvite(env.DB, user.id, email);
     if (existing) return errorResponse('User already invited', 400);
@@ -114,6 +132,10 @@ export async function handleEmergencyAccessRoute(
       createdAt: now,
       updatedAt: now,
     };
+    const outcome = await mailEmergencyAccessInvite(request, env, user, record);
+    const check = mailStatusCheck(outcome);
+    if (!check.ok) return errorResponse(check.message, check.status, check.headers);
+    if (outcome.kind === 'sent') record.status = EmergencyAccessStatus.Invited;
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
     return new Response(null, { status: 200 });
   }
@@ -148,6 +170,11 @@ export async function handleEmergencyAccessRoute(
   }
   if (action === 'reinvite' && method === 'POST') {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
+    if (record.status !== EmergencyAccessStatus.Invited || !record.email) return errorResponse('Emergency access not valid', 400);
+    const outcome = await mailEmergencyAccessInvite(request, env, user, record);
+    const check = mailStatusCheck(outcome);
+    if (!check.ok) return errorResponse(check.message, check.status, check.headers);
+    if (outcome.kind === 'sent') return new Response(null, { status: 200 });
     if (record.email) {
       const grantee = await storage.getUser(record.email);
       if (grantee && record.status === EmergencyAccessStatus.Invited) {
@@ -169,11 +196,12 @@ export async function handleEmergencyAccessRoute(
     }
     const body = await request.json() as Record<string, unknown>;
     const token = String(body.token || '');
-    if (token) {
-      const claims = await verifyRegisterVerifyToken(token, env.JWT_SECRET);
-      if (!claims || claims.email !== email) {
-        return errorResponse('Invite email does not match this account', 400);
-      }
+    const config = readMailConfig(env);
+    const check = mailStatusCheck(config.kind === 'enabled' ? { kind: 'sent' } : config);
+    if (!check.ok) return errorResponse(check.message, check.status, check.headers);
+    if (config.kind === 'enabled' && configuredVaultOrigin(request, env)
+      && !await verifyEmergencyAccessInviteToken(token, env.JWT_SECRET, record.id, email)) {
+      return errorResponse('Emergency access invitation is invalid or expired', 400);
     }
     record.granteeId = user.id;
     record.status = EmergencyAccessStatus.Accepted;
@@ -288,5 +316,3 @@ export async function approveExpiredEmergencyAccess(env: Env): Promise<void> {
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
   }
 }
-
-

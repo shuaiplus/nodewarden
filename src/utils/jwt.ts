@@ -129,6 +129,24 @@ export async function verifyOrgInviteToken(
   return bound ? { ok: true } : { ok: false, message: 'Invalid token.' };
 }
 
+const EMERGENCY_ACCESS_INVITE_ISSUER = 'nodewarden|emergency_access_invite';
+
+export async function createEmergencyAccessInviteToken(secret: string, id: string, email: string): Promise<string> {
+  return signHs256Jwt({
+    exp: Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_SECONDS,
+    iss: EMERGENCY_ACCESS_INVITE_ISSUER,
+    sub: id,
+    email: email.toLowerCase(),
+  }, secret);
+}
+
+export async function verifyEmergencyAccessInviteToken(token: string, secret: string, id: string, email: string): Promise<boolean> {
+  const payload = await verifyHs256Jwt(token, secret);
+  return !!payload && payload.iss === EMERGENCY_ACCESS_INVITE_ISSUER && payload.sub === id
+    && payload.email === email.toLowerCase() && typeof payload.exp === 'number'
+    && payload.exp > Math.floor(Date.now() / 1000);
+}
+
 function getHmacKey(secret: string): Promise<CryptoKey> {
   const cacheKey = secret;
   let cached = hmacKeyCache.get(cacheKey);

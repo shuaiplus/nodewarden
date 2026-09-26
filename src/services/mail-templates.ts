@@ -57,6 +57,14 @@ export const MAIL_TEMPLATES = {
       action: { label: 'Accept invitation', url: toSafeUrl(new URL(buildOrganizationInviteUrl(model))) },
     }),
   },
+  emergencyAccessInvite: {
+    throttle: 'user',
+    render: (model: { vaultOrigin: string; id: string; grantorName: string; grantorEmail: string; token: string }): MailContent => ({
+      subject: 'Emergency access invitation',
+      paragraphs: [`${sanitizeForEmail(model.grantorName)} invited you to be an emergency contact for their NodeWarden account.`, `This invitation expires in ${ORG_INVITE_TTL_DAYS} days.`],
+      action: { label: 'Accept invitation', url: toSafeUrl(new URL(`${model.vaultOrigin}/#/accept-emergency?${new URLSearchParams({ id: model.id, name: model.grantorName, email: model.grantorEmail, token: model.token })}`)) },
+    }),
+  },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
