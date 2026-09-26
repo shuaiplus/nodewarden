@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import { createOwnedOrganization } from '../src/handlers/organizations';
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 import * as orgRepo from '../src/services/storage-org-repo';
 import { getOrm } from '../src/db/client';
 import { organizations, smSecrets, smProjects } from '../src/db/schema';

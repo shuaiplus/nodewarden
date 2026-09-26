@@ -23,7 +23,6 @@ import {
   configuredVaultOrigin,
   sendMail,
 } from '../services/mail';
-import { notifyMail } from '../services/mail-notify';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,

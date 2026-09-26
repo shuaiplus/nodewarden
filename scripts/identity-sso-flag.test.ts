@@ -81,9 +81,9 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
     }
   });
 
-  const exchange = (code: string) => authedFetch(env, {
+  const exchange = (code: string, factors: Record<string, string> = {}) => authedFetch(env, {
     method: 'POST', path: TOKEN_PATH,
-    body: new URLSearchParams({ grant_type: 'authorization_code', code, deviceIdentifier: 'sso-device' }),
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, deviceIdentifier: 'sso-device', ...factors }),
   });
   const rejected = await exchange('invalid-code');
   assert.equal(rejected.status, 400);
@@ -103,4 +103,8 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   const challenge = await challenged.json() as Record<string, unknown>;
   assert.deepEqual(challenge.TwoFactorProviders, ['0']);
   assert.equal(challenge.access_token, undefined);
+  assert.equal((await exchange('valid-code', { twoFactorProvider: '0', twoFactorToken: 'invalid' })).status, 400);
+  await drainWaitUntil();
+  assert.equal(capture.sent.length, 2);
+  assert.match(capture.sent[1].subject, /Unsuccessful/);
 });

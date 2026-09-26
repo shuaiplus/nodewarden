@@ -92,3 +92,35 @@ test('both recovery paths send a security notice and delivery failure never roll
   assert.equal((await authedFetch(env, { method: 'POST', path: '/identity/accounts/recover-2fa', body: { email: user.email, masterPasswordHash: password, recoveryCode: user.totpRecoveryCode } })).status, 200);
   await drainWaitUntil();
 });
+
+import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
+import { createPrivateKey, sign } from 'node:crypto';
+import { StorageService } from '../src/services/storage';
+import { TEST_ORIGIN } from './support/env';
+
+test('a verified passkey grant notifies its new device', async () => {
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
+  const user = await seedUser(env, { email: `passkey@${MAILABLE_DOMAIN}`, createdAt: old });
+  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = await crypto.subtle.exportKey('jwk', keys.privateKey);
+  type CborValue = Parameters<typeof isoCBOR.encode>[0];
+  const publicKey = isoCBOR.encode(new Map<number, CborValue>([
+    [cose.COSEKEYS.kty, cose.COSEKTY.EC2], [cose.COSEKEYS.alg, cose.COSEALG.ES256], [cose.COSEKEYS.crv, cose.COSECRV.P256],
+    [cose.COSEKEYS.x, Buffer.from(jwk.x!, 'base64url')], [cose.COSEKEYS.y, Buffer.from(jwk.y!, 'base64url')],
+  ]));
+  const credentialId = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
+  await new StorageService(env.DB).saveAccountPasskeyCredential({ id: crypto.randomUUID(), userId: user.id, purpose: 'login', name: 'Test key', publicKey: Buffer.from(publicKey).toString('base64url'), credentialId, counter: 0, type: 'public-key', aaGuid: null, transports: ['usb'], encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, supportsPrf: false, createdAt: old, updatedAt: old });
+  const optionsResponse = await authedFetch(env, { path: '/identity/accounts/webauthn/assertion-options' });
+  assert.equal(optionsResponse.status, 200);
+  const { options, token } = await optionsResponse.json() as { options: { challenge: string; rpId: string }; token: string };
+  const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: options.challenge, origin: TEST_ORIGIN }));
+  const authenticatorData = Buffer.concat([new Uint8Array(await crypto.subtle.digest('SHA-256', Buffer.from(options.rpId))), Buffer.from([5, 0, 0, 0, 1])]);
+  const signed = Buffer.concat([authenticatorData, new Uint8Array(await crypto.subtle.digest('SHA-256', clientData))]);
+  const deviceResponse = { id: credentialId, rawId: credentialId, type: 'public-key', clientExtensionResults: {}, response: { clientDataJSON: clientData.toString('base64url'), authenticatorData: authenticatorData.toString('base64url'), signature: sign('sha256', signed, createPrivateKey({ key: jwk, format: 'jwk' })).toString('base64url'), userHandle: Buffer.from(user.id).toString('base64url') } };
+  const response = await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'webauthn', token, deviceResponse: JSON.stringify(deviceResponse), deviceIdentifier: 'new-passkey-device' } });
+  assert.equal(response.status, 200, await response.clone().text());
+  await drainWaitUntil();
+  assert.equal(capture.sent.length, 1);
+  assert.match(capture.sent[0].subject, /New device/);
+});

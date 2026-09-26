@@ -99,7 +99,8 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       await audit('admin.portal.logout', session.email);
       return portalRedirect('/admin/login?m=loggedout', [adminCookie(ADMIN_COOKIE)]);
     }
-    const page = Math.max(1, Math.floor(Number(url.searchParams.get('page')) || 1));
+    const requestedPage = Number(url.searchParams.get('page'));
+    const page = Number.isFinite(requestedPage) ? Math.max(1, Math.floor(requestedPage)) : 1;
     const count = Math.min(LIMITS.admin.pageSizeMax, Math.max(1, Math.floor(Number(url.searchParams.get('count')) || LIMITS.admin.pageSizeDefault)));
     const deletionCheck = async (confirmation: string, expected: string, viewPath: string): Promise<Response | null> => {
       if (Date.now() - session.authTime > LIMITS.admin.destructiveReauthSeconds * 1000) return portalRedirect(`/admin/login?returnUrl=${encodeURIComponent(viewPath)}&m=reauth`);

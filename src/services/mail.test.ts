@@ -78,7 +78,7 @@ test('defuses addresses, domains and links in text that another user chose', () 
 
 import { html, toSafeUrl } from '../utils/html';
 import { sendMail, mailStatusCheck } from './mail';
-import { MAIL_TEMPLATES, renderMail, type MailContent } from './mail-templates';
+import { MAIL_TEMPLATES, renderMail, type MailContent, type TemplateName, type TemplateModel } from './mail-templates';
 import type { Env } from '../types';
 
 test('shared HTML escapes nested content and links reject unsafe protocols', () => {
@@ -142,4 +142,37 @@ test('emergency and organization mail templates sanitize untrusted text and pres
   assert.equal(parameters.get('organizationName'), unsafe);
   assert.equal(parameters.get('email'), 'a+tag@x.io');
   assert.equal(parameters.get('token'), 'private-token');
+});
+
+test('every mail template escapes and sanitizes untrusted text without tokens in subjects', () => {
+  const hostile = '<>&"\'\r\n\u202E https://evil.io help@evil.io';
+  const vaultOrigin = 'https://vault.io';
+  const token = 'UNIQUE-SECRET-TOKEN';
+  const models = {
+    passwordHint: { hint: hostile }, noPasswordHint: {},
+    twoFactorRecovered: { time: hostile, ip: hostile },
+    failedTwoFactor: { provider: 8, time: hostile, ip: hostile },
+    newDeviceLogin: { device: hostile, time: hostile, ip: hostile },
+    adminSignIn: { url: toSafeUrl(new URL(`${vaultOrigin}/admin/login/confirm?token=${token}`)) },
+    registerVerification: { vaultOrigin, email: 'mail@x.io', token },
+    organizationInvite: { vaultOrigin, organizationId: 'org', organizationUserId: 'member', organizationName: hostile, email: 'mail@x.io', token, hasExistingUser: false, inviterEmail: hostile, expiresAt: '2026-10-01T00:00:00.000Z' },
+    emergencyAccessInvite: { vaultOrigin, id: 'id', grantorName: hostile, grantorEmail: 'mail@x.io', token },
+    emergencyAccessAccepted: { name: hostile }, emergencyAccessConfirmed: { name: hostile },
+    emergencyAccessRecoveryInitiated: { name: hostile, accessType: hostile, daysLeft: 7 },
+    emergencyAccessApproved: { name: hostile }, emergencyAccessRejected: { name: hostile }, emergencyAccessTimedOut: { name: hostile }, emergencyAccessReminder: { name: hostile, daysLeft: 1 },
+    organizationUserAccepted: { organizationName: hostile, memberName: hostile },
+    organizationUserConfirmed: { organizationName: hostile, vaultOrigin }, welcome: { name: hostile, vaultOrigin },
+  } satisfies { [N in TemplateName]: TemplateModel<N> };
+  for (const name of Object.keys(models) as TemplateName[]) {
+    const render = MAIL_TEMPLATES[name].render as (model: TemplateModel<TemplateName>) => import('./mail-templates').MailContent;
+    const content = render(models[name]);
+    const rendered = renderMail(content);
+    assert.ok(rendered.subject.length <= 100, name);
+    assert.ok(!rendered.subject.includes(token), name);
+    assert.doesNotMatch(rendered.subject, /[\r\n\u202E]/, name);
+    assert.doesNotMatch(content.paragraphs.join(''), /[\r\n\u202E]|https:\/\/evil.io|help@evil.io/, name);
+    assert.doesNotMatch(rendered.html, /<>&"'/, name);
+    content.paragraphs.forEach((paragraph) => assert.ok(rendered.text.includes(paragraph), name));
+    if (content.action) { assert.equal(new URL(content.action.url).origin, vaultOrigin); assert.ok(rendered.text.includes(content.action.url), name); }
+  }
 });

@@ -13,7 +13,7 @@ test('portal user search escapes LIKE wildcards, bounds paging and safely render
   await seedUser(env, { email: 'axb@x.io' });
   assert.equal((await searchUsersByEmailPrefix(env.DB, 'A_B@', 0, 10)).length, 1);
   assert.equal((await searchUsersByEmailPrefix(env.DB, '%', 0, 10)).length, 0);
-  for (const page of ['0', '-1', 'abc']) {
+  for (const page of ['0', '-1', 'abc', 'Infinity']) {
     const response = await portalFetch(env, { path: `/admin/users?email=u&count=1000&page=${page}`, cookie: auth.cookie });
     assert.equal(response.status, 200);
     const body = await response.text();
