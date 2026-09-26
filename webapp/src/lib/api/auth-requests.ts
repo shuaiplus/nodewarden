@@ -1,4 +1,4 @@
-import { base64ToBytes, bytesToBase64, hkdfExpand, toBufferSource } from '@/lib/crypto';
+import { base64ToBytes, concatBytes, encryptBwRsa, hkdfExpand, toBufferSource } from '@/lib/crypto';
 import { EFFLongWordList } from '@/lib/fingerprint-wordlist';
 import { t } from '@/lib/i18n';
 import type { AuthRequest, ListResponse, SessionState } from '@/lib/types';
@@ -79,22 +79,7 @@ export async function encryptSessionUserKeyForAuthRequest(session: SessionState,
   if (!session.symEncKey || !session.symMacKey) throw new Error(t('txt_vault_key_unavailable'));
   if (!authRequest.publicKey) throw new Error(t('txt_auth_request_missing_public_key'));
 
-  const userKeyBytes = new Uint8Array(64);
-  userKeyBytes.set(base64ToBytes(session.symEncKey), 0);
-  userKeyBytes.set(base64ToBytes(session.symMacKey), 32);
-  const publicKey = await crypto.subtle.importKey(
-    'spki',
-    toBufferSource(base64ToBytes(authRequest.publicKey)),
-    { name: 'RSA-OAEP', hash: 'SHA-1' },
-    false,
-    ['encrypt']
-  );
-  const encryptedBytes = new Uint8Array(await crypto.subtle.encrypt(
-    { name: 'RSA-OAEP' },
-    publicKey,
-    toBufferSource(userKeyBytes)
-  ));
-  return `4.${bytesToBase64(encryptedBytes)}`;
+  return encryptBwRsa(concatBytes(base64ToBytes(session.symEncKey), base64ToBytes(session.symMacKey)), authRequest.publicKey);
 }
 
 export async function getFingerprintPhrase(email: string, publicKey: Uint8Array): Promise<string> {
