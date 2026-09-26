@@ -23,6 +23,7 @@ import {
   handleListSecrets,
   handleListServiceAccounts,
   handleUpdateSecret,
+  handleSecretsSync,
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, principal: Principal, path: string, method: string): Promise<Response | null> {
@@ -73,7 +74,7 @@ export async function handleSmRoute(request: Request, env: Env, principal: Princ
   if (sub === '/sm-counts' && method === 'GET') return handleSmCounts(env, principal, orgId);
   if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, principal, orgId);
   if (sub === '/secrets' && method === 'POST') return handleCreateSecret(request, env, principal, orgId);
-  if (sub === '/secrets/sync' && method === 'GET') return errorResponse('Service account required', 400);
+  if (sub === '/secrets/sync' && method === 'GET') return handleSecretsSync(request, env, principal, orgId);
   if (sub === '/projects' && method === 'GET') return handleListProjects(env, principal, orgId);
   if (sub === '/projects' && method === 'POST') return handleCreateProject(request, env, principal, orgId);
   if (sub === '/service-accounts' && method === 'GET') return handleListServiceAccounts(env, principal, orgId);

@@ -308,3 +308,19 @@ export async function handleSmEvents(env: Env, principal: Principal, kind: 'proj
   const access = kind === 'projects' ? projectAccess(context.actor, context.grants, id) : 'projectIds' in row ? secretAccess(context.actor, context.grants, row) : serviceAccountAccess(context.actor, context.grants, id);
   return access === 'none' ? errorResponse('Not found', 404) : jsonResponse(listResponse([]));
 }
+
+export async function handleSecretsSync(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const lastSyncedDate = new URL(request.url).searchParams.get('lastSyncedDate');
+  const lastSynced = lastSyncedDate === null ? null : Date.parse(lastSyncedDate);
+  if (lastSynced !== null && (!Number.isFinite(lastSynced) || lastSynced > Date.now())) return errorResponse('LastSyncedDate must be a valid date in the past.', 400);
+  const context = await smContext(env, principal, orgId);
+  if (!context) return errorResponse('Not found', 404);
+  if (context.actor.kind !== 'serviceAccount') return errorResponse('Only service accounts can sync secrets.', 400);
+  const account = await smRepo.getServiceAccount(env.DB, context.actor.serviceAccountId);
+  if (!account) return errorResponse('Not found', 404);
+  const hasChanges = lastSynced === null || lastSynced <= Date.parse(account.updatedAt);
+  if (!hasChanges) return jsonResponse({ hasChanges, secrets: null, object: 'secretsSync' });
+  const names = await projectNames(env, orgId);
+  const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(secret => secretAccess(context.actor, context.grants, secret) !== 'none');
+  return jsonResponse({ hasChanges, secrets: listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))), object: 'secretsSync' });
+}

@@ -86,7 +86,7 @@
 
 - Optional SSO: set `SSO_ENABLED=1`, `SSO_AUTHORITY`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`.
 - Uploads larger than 100 MB use R2 S3 presigned PUTs. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET`.
-- Kubernetes: install `operator/config/crd.yaml` and run `operator/` against your NodeWarden origin.
+- Kubernetes: use the official [Bitwarden Secrets Manager operator](https://github.com/bitwarden/sm-kubernetes). See [NodeWarden configuration](#kubernetes-secrets-manager).
 
 
 > [!TIP] 
@@ -194,3 +194,37 @@ LGPL-3.0 License
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=shuaiplus/NodeWarden&type=timeline&legend=top-left&sealed_token=ck0AMqR8EFMjJ6tMbnGDHT5QwMpO85IUuN7i8e82zRRNPtjoLsAAFwVzxmSZwaid97wLUwy56EEiVE9M-OY0cf16bQKBrU9GaauFoOFXGq-vMqcOyk0tIc4b3o1ZGfDw9IH8o6NUxC125TJkjKSLn9fxhFUUeNr1f1El0UcAUcjsMPl_LX80qQrlvQqp" />
  </picture>
 </a>
+
+## Kubernetes Secrets Manager
+
+Create a machine account and grant its projects or individual secrets in official web, then issue an access token. The full token has the form `0.<id>.<secret>:<seed>`. The operator decrypts secrets locally.
+
+Install the official [Bitwarden operator Helm chart](https://github.com/bitwarden/helm-charts/tree/main/charts/sm-operator) with these values (replace the origin):
+
+```yaml
+settings:
+  cloudRegion: ""
+  bwApiUrlOverride: https://nodewarden.example/api
+  bwIdentityUrlOverride: https://nodewarden.example/identity
+  bwSecretsManagerRefreshInterval: 300
+```
+
+Store the full token in a Kubernetes Secret named `nodewarden-sm-token`, under the key `token`, in the same namespace as this resource:
+
+```yaml
+apiVersion: k8s.bitwarden.com/v1
+kind: BitwardenSecret
+metadata:
+  name: nodewarden-secrets
+spec:
+  organizationId: "<organization UUID>"
+  secretName: app-secrets
+  authToken:
+    secretName: nodewarden-sm-token
+    secretKey: token
+  map:
+    - bwSecretId: "<secret UUID>"
+      secretKeyName: DATABASE_PASSWORD
+```
+
+The operator writes the decrypted value to `app-secrets`. Existing NodeWarden machine tokens must be re-issued after upgrading to the upstream token format. The former `operator/` implementation has been removed; replace its resources with the official operator and the `BitwardenSecret` resource above.
