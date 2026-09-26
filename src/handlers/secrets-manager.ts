@@ -219,13 +219,9 @@ export async function handleCreateServiceAccount(request: Request, env: Env, use
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const body = await request.json().catch(() => null) as { name?: unknown; projectIds?: unknown } | null;
   if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
-  if (body.projectIds != null && (!Array.isArray(body.projectIds) || !body.projectIds.every(isUUID))) return errorResponse('ProjectIds must be an array of GUIDs.', 400);
-  const projectIds = (body.projectIds as string[] | null | undefined)?.map(id => id.toLowerCase()) ?? [];
-  if (!(await allProjectsInOrg(env, orgId, projectIds))) return errorResponse('Resource not found.', 404);
-  if (projectIds.some(id => projectAccess(context.actor, context.grants, id) !== 'write')) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
   const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
-  await smRepo.createServiceAccount(env.DB, account, context.actor.membershipId, projectIds);
+  await smRepo.createServiceAccount(env.DB, account, context.actor.membershipId);
   return jsonResponse(serviceAccountResponse(account));
 }
 

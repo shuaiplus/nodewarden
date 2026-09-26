@@ -57,8 +57,6 @@ const PROJECT_WRITES = [
     authedFetch(env, { method: 'POST', path: `/api/organizations/${yOrgId}/secrets`, body: { ...SECRET_FIELDS, projectIds }, userId: admin.id })],
   ['moving a secret', ({ env, admin, ySecretId }: CrossOrgFixture, projectIds: string[]) =>
     authedFetch(env, { method: 'PUT', path: `/api/secrets/${ySecretId}`, body: { ...SECRET_FIELDS, projectIds }, userId: admin.id })],
-  ['creating a machine account', ({ env, admin, yOrgId }: CrossOrgFixture, projectIds: string[]) =>
-    authedFetch(env, { method: 'POST', path: `/api/organizations/${yOrgId}/service-accounts`, body: { name: ENCRYPTED_FIELD, projectIds }, userId: admin.id })],
 ] as const;
 
 const REJECTED_PROJECT_IDS = [
@@ -67,16 +65,15 @@ const REJECTED_PROJECT_IDS = [
   ['Y\'s project twice', (fixture: CrossOrgFixture) => [fixture.yProjectId, fixture.yProjectId]],
 ] as const;
 
-// Upstream ProjectsAreInOrganization: every project on a secret (and, for NodeWarden's legacy
-// projectIds, a machine account) must be a distinct project of the target's org, else 404 before any write.
+// Upstream ProjectsAreInOrganization: a secret project must belong to the target's org.
 for (const [write, send] of PROJECT_WRITES) {
   for (const [target, projectIds] of REJECTED_PROJECT_IDS) {
-    test(`an Admin of Y who owns X ${write} in Y with ${target} gets 404 and changes nothing`, async () => {
+    test(`an Admin of Y who owns X ${write} in Y with ${target} is rejected and changes nothing`, async () => {
       const fixture = await seedCrossOrg();
       const before = await yOrgState(fixture);
 
       const response = await send(fixture, projectIds(fixture));
-      const tooMany = target === "Y's project twice" && write !== 'creating a machine account';
+      const tooMany = target === "Y's project twice";
       assert.equal(response.status, tooMany ? 400 : 404);
       assert.equal((await response.json() as { message: string }).message, tooMany ? 'Only one project assignment is supported.' : RESOURCE_NOT_FOUND);
       assert.deepEqual(await yOrgState(fixture), before);
@@ -115,7 +112,11 @@ test('a seeded cross-org secret link never appears in projects[], and the schema
 
 test('the schema step removes cross-org and unreadable machine-account project grants and replays cleanly', async () => {
   const { env, admin, yOrgId, yProjectId, xProjectId } = await seedCrossOrg();
-  const createAccount = async () => (await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`, { name: ENCRYPTED_FIELD, projectIds: [yProjectId] })).id;
+  const createAccount = async () => {
+    const { id } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`, { name: ENCRYPTED_FIELD });
+    await smRepo.replaceServiceAccountProjects(env.DB, id, [yProjectId]);
+    return id;
+  };
   const [granted, unreadable] = [await createAccount(), await createAccount()];
   await env.DB.prepare('INSERT INTO sm_service_account_projects (service_account_id, project_id, read_access, write_access) VALUES (?, ?, 1, 0)').bind(granted, xProjectId).run();
   await env.DB.prepare('UPDATE sm_service_account_projects SET read_access = 0 WHERE service_account_id = ?').bind(unreadable).run();
@@ -143,6 +144,7 @@ test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets and a machine account gra
   assert.equal(secrets.length, LARGE_ORG_SECRET_COUNT);
 
   const { id: serviceAccountId } = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD, projectIds: [projectId] });
+  await smRepo.replaceServiceAccountProjects(env.DB, serviceAccountId, [projectId]);
   const token = await postJson<{ clientId: string; clientSecret: string }>(env, owner, `/api/service-accounts/${serviceAccountId}/access-tokens`, { name: ENCRYPTED_FIELD });
   const synced = await authedFetch(env, {
     path: `/api/organizations/${orgId}/secrets/sync`,

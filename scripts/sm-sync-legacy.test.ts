@@ -35,6 +35,7 @@ async function seedSyncFixture(): Promise<SyncFixture> {
 // bearer the legacy sync route authenticates.
 async function issueMachineToken({ env, orgId, owner }: SyncFixture, grantedProjectIds: string[]): Promise<MachineToken> {
   const { id: serviceAccountId } = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD, projectIds: grantedProjectIds });
+  assert.equal((await authedFetch(env, { userId: owner.id, method: 'PUT', path: `/api/service-accounts/${serviceAccountId}/granted-policies`, body: { projectGrantedPolicyRequests: grantedProjectIds.map(grantedId => ({ grantedId, read: true, write: false })) } })).status, 200);
   const token = await postJson<{ clientId: string; clientSecret: string }>(env, owner, `/api/service-accounts/${serviceAccountId}/access-tokens`, { name: ENCRYPTED_FIELD });
   return { serviceAccountId, authorization: `Bearer ${token.clientId}:${token.clientSecret}` };
 }

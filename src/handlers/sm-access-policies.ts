@@ -2,7 +2,7 @@ import type { Env } from '../types';
 import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
-import { parsePolicyRequests, projectAccess, serviceAccountAccess } from '../services/sm-authz';
+import { diffPolicies, parsePolicyRequests, projectAccess, serviceAccountAccess } from '../services/sm-authz';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { listResponse, smContext } from './secrets-manager';
 
@@ -54,4 +54,53 @@ export async function handlePeoplePolicies(request: Request, env: Env, userId: s
     await smRepo.replacePeoplePolicies(env.DB, kind, id, users.value, groups.value);
   }
   return jsonResponse(await peoplePolicyResponse(env, kind, id, row.orgId, context.actor.membershipId));
+}
+
+export async function handlePotentialMachines(env: Env, userId: string, orgId: string, kind: 'projects' | 'serviceAccounts'): Promise<Response> {
+  const context = await smContext(env, userId, orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const rows = kind === 'projects' ? await smRepo.listProjects(env.DB, orgId) : await smRepo.listServiceAccounts(env.DB, orgId);
+  const access = kind === 'projects' ? projectAccess : serviceAccountAccess;
+  return jsonResponse(listResponse(rows.filter(row => access(context.actor, context.grants, row.id) === 'write').map(row => ({ id: row.id, name: row.name, type: kind === 'projects' ? 'project' : 'serviceAccount', object: 'potentialGrantee' }))));
+}
+
+export function policyConflict(error: unknown): Response | null {
+  let cause: unknown = error;
+  while (cause instanceof Error) {
+    if (cause.message.includes('UNIQUE constraint failed: sm_')) return errorResponse('Access policy already exists.', 409);
+    cause = cause.cause;
+  }
+  return null;
+}
+
+export async function handleMachinePolicies(request: Request, env: Env, userId: string, kind: 'project' | 'serviceAccount', id: string): Promise<Response> {
+  const row = kind === 'project' ? await smRepo.getProject(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
+  const context = row && await smContext(env, userId, row.orgId);
+  if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const access = kind === 'project' ? projectAccess(context.actor, context.grants, id) : serviceAccountAccess(context.actor, context.grants, id);
+  if (access !== 'write') return errorResponse('Not found', 404);
+  let policies = kind === 'project' ? await smRepo.readProjectMachinePolicies(env.DB, row.orgId, id) : await smRepo.readGrantedProjects(env.DB, row.orgId, id);
+  if (request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    const parsed = parsePolicyRequests(body?.[kind === 'project' ? 'serviceAccountAccessPolicyRequests' : 'projectGrantedPolicyRequests'], kind === 'project' ? 'granteeId' : 'grantedId', false);
+    if (!parsed.ok) return errorResponse(parsed.message, 400);
+    const current = new Map(policies.map(policy => [policy.id, policy.write_access ? 'write' as const : 'read' as const]));
+    const { created, updated, deleted } = diffPolicies(current, parsed.value);
+    const known = kind === 'project' ? new Set((await smRepo.listServiceAccounts(env.DB, row.orgId)).map(account => account.id)) : await smRepo.projectsInOrg(env.DB, row.orgId, [...parsed.value.keys()]);
+    if ([...parsed.value.keys()].some(id => !known.has(id))) return errorResponse('Not found', 404);
+    if (kind === 'project' ? created.some(id => serviceAccountAccess(context.actor, context.grants, id) !== 'write') : [...created, ...updated, ...deleted].some(id => projectAccess(context.actor, context.grants, id) !== 'write')) return errorResponse('Not found', 404);
+    try {
+      await env.DB.batch([...smRepo.policyDiffStatements(env.DB, kind === 'project' ? 'projectServiceAccounts' : 'serviceAccountProjects', id, current, parsed.value), smRepo.revisionStatement(env.DB, row.orgId)]);
+    } catch (error) {
+      const conflict = policyConflict(error);
+      if (conflict) return conflict;
+      throw error;
+    }
+    policies = kind === 'project' ? await smRepo.readProjectMachinePolicies(env.DB, row.orgId, id) : await smRepo.readGrantedProjects(env.DB, row.orgId, id);
+  }
+  return jsonResponse(kind === 'project' ? {
+    serviceAccountAccessPolicies: policies.map(policy => ({ serviceAccountId: policy.id, serviceAccountName: policy.name, read: true, write: !!policy.write_access, object: 'serviceAccountProjectAccessPolicy' })), object: 'ProjectServiceAccountsAccessPolicies',
+  } : {
+    grantedProjectPolicies: policies.map(policy => ({ accessPolicy: { grantedProjectId: policy.id, grantedProjectName: policy.name, read: true, write: !!policy.write_access, object: 'grantedProjectAccessPolicy' }, hasPermission: projectAccess(context.actor, context.grants, policy.id) === 'write', object: 'grantedProjectAccessPolicyPermissionDetails' })), object: 'ServiceAccountGrantedPoliciesPermissionDetails',
+  });
 }

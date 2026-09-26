@@ -1,4 +1,4 @@
-import { handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
+import { handleMachinePolicies, handlePotentialMachines, handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
 import type { Env } from './types';
 import { errorResponse } from './utils/response';
 import {
@@ -25,6 +25,10 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  const machinePolicies = path.match(/^\/api\/projects\/([a-f0-9-]+)\/access-policies\/service-accounts$/i);
+  if (machinePolicies && (method === 'GET' || method === 'PUT')) return handleMachinePolicies(request, env, userId, 'project', machinePolicies[1]);
+  const granted = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/granted-policies$/i);
+  if (granted && (method === 'GET' || method === 'PUT')) return handleMachinePolicies(request, env, userId, 'serviceAccount', granted[1]);
   const people = path.match(/^\/api\/(projects|service-accounts)\/([a-f0-9-]+)\/access-policies\/people$/i);
   if (people && (method === 'GET' || method === 'PUT')) return handlePeoplePolicies(request, env, userId, people[1] === 'projects' ? 'project' : 'serviceAccount', people[2]);
   const event = path.match(/^\/api\/organization\/([a-f0-9-]+)\/(projects|secrets|service-account)\/([a-f0-9-]+)\/events$/i);
@@ -60,6 +64,8 @@ export async function handleSmRoute(request: Request, env: Env, userId: string, 
   if (!orgMatch) return null;
   const orgId = orgMatch[1];
   const sub = orgMatch[2] || '';
+  if (sub === '/access-policies/service-accounts/potential-grantees' && method === 'GET') return handlePotentialMachines(env, userId, orgId, 'serviceAccounts');
+  if (sub === '/access-policies/projects/potential-grantees' && method === 'GET') return handlePotentialMachines(env, userId, orgId, 'projects');
   if (sub === '/access-policies/people/potential-grantees' && method === 'GET') return handlePotentialPeople(env, userId, orgId);
   if (sub === '/sm-counts' && method === 'GET') return handleSmCounts(env, userId, orgId);
   if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, userId, orgId);

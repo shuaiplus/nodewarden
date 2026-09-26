@@ -64,3 +64,11 @@ export function parsePolicyRequests(items: unknown, idKey: 'granteeId' | 'grante
   }
   return { ok: true, value: policies };
 }
+
+export function diffPolicies(current: ReadonlyMap<string, SmAccess>, requested: ReadonlyMap<string, SmAccess>) {
+  return {
+    created: [...requested.keys()].filter(id => !current.has(id)),
+    updated: [...requested.keys()].filter(id => current.has(id) && current.get(id) !== requested.get(id)),
+    deleted: [...current.keys()].filter(id => !requested.has(id)),
+  };
+}

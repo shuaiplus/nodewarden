@@ -40,3 +40,8 @@ test('policy parsing validates read/write, canonical uniqueness, and machine-acc
   assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', false), { ok: false, message: 'Resources must be Read = true' });
   assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', true), { ok: false, message: 'Machine account access must be Can read, write' });
 });
+
+test('policy diffs exclude unchanged grants and distinguish create from update', async () => {
+  const { diffPolicies } = await import('./sm-authz');
+  assert.deepEqual(diffPolicies(new Map([['same', 'read'], ['changed', 'read'], ['gone', 'write']]), new Map([['same', 'read'], ['changed', 'write'], ['new', 'read']])), { created: ['new'], updated: ['changed'], deleted: ['gone'] });
+});

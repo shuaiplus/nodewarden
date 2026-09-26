@@ -88,21 +88,20 @@ test('machine accessToSecrets is distinct across direct and project policies, an
   }
 });
 
-test('legacy project grants require project write, creation rolls back atomically, and bulk account delete returns per-item results', async () => {
+test('machine creation ignores legacy projectIds, rolls back creator grants atomically, and bulk delete returns per-item results', async () => {
   const { env, orgId, owner, a, path, request, account } = await setup();
   const ownProject = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const deniedProject = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
-  assert.equal((await request(a.id, path, 'POST', { name: ENCRYPTED_FIELD, projectIds: [deniedProject.id] })).status, 404);
   assert.equal((await request(a.id, path, 'POST', { name: 'plaintext' })).status, 400);
-  await env.DB.exec("CREATE TRIGGER fail_machine_grant BEFORE INSERT ON sm_service_account_projects BEGIN SELECT RAISE(ABORT, 'test machine rollback'); END;");
+  await env.DB.exec("CREATE TRIGGER fail_machine_grant BEFORE INSERT ON sm_service_account_members BEGIN SELECT RAISE(ABORT, 'test machine rollback'); END;");
   await assert.rejects(() => handleCreateServiceAccount(new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }) }), env, a.id, orgId), /test machine rollback/);
   assert.equal((await smRepo.listServiceAccounts(env.DB, orgId)).length, 0);
   assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_service_account_members').first<{ n: number }>())!.n, 0);
   await env.DB.exec('DROP TRIGGER fail_machine_grant;');
-  const own = await account(a, [ownProject.id]);
+  const own = await account(a, [ownProject.id, deniedProject.id, crypto.randomUUID()]);
   const denied = await account(owner);
   const token = await postJson<{ id: string }>(env, a, `/api/service-accounts/${own.id}/access-tokens`, { name: ENCRYPTED_FIELD });
-  assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, own.id), [ownProject.id]);
+  assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, own.id), []);
   const foreign = await seedSmOrg(env);
   const foreignAccount = await postJson<{ id: string }>(env, foreign.owner, `/api/organizations/${foreign.orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
   assert.equal((await request(owner.id, '/api/service-accounts/delete', 'POST', [own.id, foreignAccount.id])).status, 404);

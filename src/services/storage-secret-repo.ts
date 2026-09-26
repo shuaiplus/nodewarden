@@ -1,4 +1,4 @@
-import { grantsFromRows, type GrantRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
+import { diffPolicies, grantsFromRows, type GrantRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
 import { and, asc, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 
 import { chunkRows, columnCount, getOrm } from '../db/client';
@@ -387,13 +387,11 @@ export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]
   await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))))]);
 }
 
-export async function createServiceAccount(db: D1Database, account: SmServiceAccount, membershipId: string, projectIds: string[]): Promise<void> {
+export async function createServiceAccount(db: D1Database, account: SmServiceAccount, membershipId: string): Promise<void> {
   const orm = getOrm(db);
-  const rows = projectIds.map(projectId => ({ serviceAccountId: account.id, projectId, readAccess: 1, writeAccess: 0 }));
   await orm.batch([
     orm.insert(smServiceAccounts).values(account),
     orm.insert(smServiceAccountMembers).values({ serviceAccountId: account.id, membershipId }),
-    ...chunkRows(rows, columnCount(smServiceAccountProjects)).map(chunk => orm.insert(smServiceAccountProjects).values(chunk)),
   ]);
 }
 
@@ -468,4 +466,30 @@ export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget
     }
   }
   await db.batch(statements);
+}
+
+export const machinePolicyTables = {
+  projectServiceAccounts: { table: 'sm_service_account_projects', target: 'project_id', grantee: 'service_account_id', read: true },
+  serviceAccountProjects: { table: 'sm_service_account_projects', target: 'service_account_id', grantee: 'project_id', read: true },
+} as const;
+export type SmMachinePolicy = keyof typeof machinePolicyTables;
+
+export function policyDiffStatements(db: D1Database, kind: SmMachinePolicy, id: string, current: ReadonlyMap<string, SmAccess>, requested: ReadonlyMap<string, SmAccess>): D1PreparedStatement[] {
+  const { table, target, grantee, read } = machinePolicyTables[kind];
+  const { created, updated, deleted } = diffPolicies(current, requested);
+  const statements = deleted.map(granteeId => db.prepare(`DELETE FROM ${table} WHERE ${target} = ? AND ${grantee} = ?`).bind(id, granteeId));
+  statements.push(...updated.map(granteeId => db.prepare(`UPDATE ${table} SET write_access = ?${read ? ', read_access = 1' : ''} WHERE ${target} = ? AND ${grantee} = ?`).bind(requested.get(granteeId) === 'write' ? 1 : 0, id, granteeId)));
+  const columns = read ? 4 : 3;
+  for (const chunk of chunkRows(created, columns)) statements.push(db.prepare(`INSERT INTO ${table} (${target}, ${grantee}, write_access${read ? ', read_access' : ''}) VALUES ${chunk.map(() => `(${Array(columns).fill('?').join(',')})`).join(',')}`).bind(...chunk.flatMap(granteeId => [id, granteeId, requested.get(granteeId) === 'write' ? 1 : 0, ...(read ? [1] : [])])));
+  return statements;
+}
+
+export async function readProjectMachinePolicies(db: D1Database, orgId: string, id: string) {
+  const rows = await db.prepare('SELECT sa.id, sa.name, sp.write_access FROM sm_service_account_projects sp JOIN sm_service_accounts sa ON sa.id = sp.service_account_id AND sa.org_id = ? WHERE sp.project_id = ? AND sp.read_access = 1').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
+  return rows.results;
+}
+
+export async function readGrantedProjects(db: D1Database, orgId: string, id: string) {
+  const rows = await db.prepare('SELECT p.id, p.name, sp.write_access FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
+  return rows.results;
 }
