@@ -817,7 +817,6 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         token_type: 'Bearer',
         scope: 'api.secrets',
         organizationId: machine.orgId,
-        wrappedOrgKey: machine.wrappedOrgKey,
       });
     }
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);

@@ -188,14 +188,13 @@ export async function handleCreateAccessToken(request: Request, env: Env, userId
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
   if (!account) return errorResponse('Not found', 404);
   if (!(await requireSmMember(env, userId, account.orgId))) return errorResponse('Not found', 404);
-  const body = await request.json() as { name?: string; expireAt?: string | null; wrappedOrgKey?: string };
+  const body = await request.json() as { name?: string; expireAt?: string | null };
   const clientSecret = `nws_${generateUUID().replace(/-/g, '')}`;
   const token = {
     id: generateUUID(),
     serviceAccountId,
     name: String(body.name || 'Access token'),
     clientSecretHash: await hashApiKey(clientSecret),
-    wrappedOrgKey: body.wrappedOrgKey || null,
     expireAt: body.expireAt || null,
     revokedAt: null,
     createdAt: new Date().toISOString(),
@@ -235,7 +234,7 @@ export async function authenticateServiceAccount(
   env: Env,
   clientId: string,
   clientSecret: string
-): Promise<{ orgId: string; serviceAccountId: string; tokenId: string; wrappedOrgKey: string | null } | null> {
+): Promise<{ orgId: string; serviceAccountId: string; tokenId: string } | null> {
   const match = clientId.match(/^organization\.([a-f0-9-]+)\.sa\.([a-f0-9-]+)\.([a-f0-9-]+)$/i);
   if (!match) return null;
   const token = await smRepo.getAccessToken(env.DB, match[3]);
@@ -244,7 +243,7 @@ export async function authenticateServiceAccount(
   if (!(await verifyApiKey(clientSecret, token.clientSecretHash))) return null;
   const account = await smRepo.getServiceAccount(env.DB, token.serviceAccountId);
   if (!account || account.orgId !== match[1]) return null;
-  return { orgId: account.orgId, serviceAccountId: account.id, tokenId: token.id, wrappedOrgKey: token.wrappedOrgKey };
+  return { orgId: account.orgId, serviceAccountId: account.id, tokenId: token.id };
 }
 
 export async function handlePublicSecretsSync(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -253,15 +252,14 @@ export async function handlePublicSecretsSync(request: Request, env: Env, orgId:
   const [clientId, clientSecret] = bearer.includes('\n') ? bearer.split('\n') : bearer.split(':');
   const machine = await authenticateServiceAccount(env, String(clientId || '').trim(), String(clientSecret || '').trim());
   if (!machine || machine.orgId !== orgId) return errorResponse('Unauthorized', 401);
-  return handleSecretsSync(request, env, orgId, machine.serviceAccountId, machine.wrappedOrgKey);
+  return handleSecretsSync(request, env, orgId, machine.serviceAccountId);
 }
 
 export async function handleSecretsSync(
   request: Request,
   env: Env,
   orgId: string,
-  serviceAccountId: string,
-  wrappedOrgKey: string | null
+  serviceAccountId: string
 ): Promise<Response> {
   const url = new URL(request.url);
   const lastSynced = url.searchParams.get('lastSyncedDate');
@@ -274,7 +272,6 @@ export async function handleSecretsSync(
   const changed = !lastMs || secrets.some((secret) => Date.parse(secret.updatedAt) > lastMs);
   return jsonResponse({
     hasChanges: changed,
-    wrappedOrgKey,
     secrets: changed ? secrets.map((secret) => ({
       id: secret.id,
       organizationId: secret.orgId,

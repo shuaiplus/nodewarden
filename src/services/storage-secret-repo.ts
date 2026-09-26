@@ -43,7 +43,6 @@ export interface SmAccessToken {
   serviceAccountId: string;
   name: string;
   clientSecretHash: string;
-  wrappedOrgKey: string | null;
   expireAt: string | null;
   revokedAt: string | null;
   createdAt: string;
@@ -89,7 +88,6 @@ function mapAccessToken(row: typeof smAccessTokens.$inferSelect): SmAccessToken 
     serviceAccountId: row.serviceAccountId,
     name: row.name,
     clientSecretHash: row.clientSecretHash,
-    wrappedOrgKey: row.wrappedOrgKey,
     expireAt: row.expireAt,
     revokedAt: row.revokedAt,
     createdAt: row.createdAt,

@@ -1,0 +1,1 @@
+UPDATE `sm_access_tokens` SET `wrapped_org_key` = NULL WHERE `wrapped_org_key` IS NOT NULL;

@@ -612,6 +612,8 @@ export const smAccessTokens = sqliteTable('sm_access_tokens', {
   serviceAccountId: text('service_account_id').notNull(),
   name: text('name').notNull(),
   clientSecretHash: text('client_secret_hash').notNull(),
+  // Legacy, never written: it held the plaintext org key, which the sm-scrub-org-key migration
+  // clears. Replayed migrations cannot drop a column.
   wrappedOrgKey: text('wrapped_org_key'),
   expireAt: text('expire_at'),
   revokedAt: text('revoked_at'),
