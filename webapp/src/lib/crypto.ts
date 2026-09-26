@@ -219,6 +219,19 @@ export async function encryptBw(data: Uint8Array, encKey: Uint8Array, macKey: Ui
   return `2.${bytesToBase64(iv)}|${bytesToBase64(cipher)}|${bytesToBase64(mac)}`;
 }
 
+// EncryptionType.Rsa2048_OaepSha1_B64: official clients hand a symmetric key to another account
+// (auth request approval, org member confirm) by RSA-OAEP SHA-1 wrapping it with that account's
+// SPKI public key, so only its private key can open it.
+const RSA_OAEP_SHA1_ENC_TYPE = 4;
+const RSA_OAEP_SHA1: RsaHashedImportParams = { name: 'RSA-OAEP', hash: 'SHA-1' };
+
+export async function encryptBwRsa(data: Uint8Array, publicKeyB64: string): Promise<string> {
+  const subtle = requireWebCrypto().subtle;
+  const publicKey = await subtle.importKey('spki', toBufferSource(base64ToBytes(publicKeyB64)), RSA_OAEP_SHA1, false, ['encrypt']);
+  const encrypted = await subtle.encrypt(RSA_OAEP_SHA1, publicKey, toBufferSource(data));
+  return `${RSA_OAEP_SHA1_ENC_TYPE}.${bytesToBase64(new Uint8Array(encrypted))}`;
+}
+
 function parseCipherString(s: string): { type: number; iv: Uint8Array; ct: Uint8Array; mac: Uint8Array | null } {
   if (!s || typeof s !== 'string') throw new Error('invalid encrypted string');
   const p = s.indexOf('.');

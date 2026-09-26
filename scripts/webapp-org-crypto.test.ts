@@ -1,0 +1,91 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createOwnedOrganization } from '../src/handlers/organizations';
+import { MembershipStatus, MembershipType } from '../src/services/org-types';
+import * as orgRepo from '../src/services/storage-org-repo';
+import type { Env, User } from '../src/types';
+import { confirmMember, getUserPublicKey } from '../webapp/src/lib/api/orgs';
+import type { AuthedFetch } from '../webapp/src/lib/api/shared';
+import { base64ToBytes, bytesToBase64, concatBytes } from '../webapp/src/lib/crypto';
+import { createOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
+import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const SYMMETRIC_KEY_HALF_BYTES = 32;
+const MEMBER_RSA_KEY_PARAMS: RsaHashedKeyGenParams = {
+  name: 'RSA-OAEP',
+  modulusLength: 2048,
+  publicExponent: new Uint8Array([1, 0, 1]),
+  hash: 'SHA-1',
+};
+
+// The webapp API helpers take a browser-style fetch; route it through the real Worker as `actor`.
+function webappFetch(env: Env, actor: User): AuthedFetch {
+  return (path, init) => authedFetch(env, {
+    method: init?.method,
+    path,
+    body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+    userId: actor.id,
+  });
+}
+
+async function addAcceptedMember(env: Env, orgId: string, publicKey: string) {
+  const user = await seedUser(env, { publicKey });
+  const now = new Date().toISOString();
+  const membership = {
+    id: crypto.randomUUID(),
+    userId: user.id,
+    orgId,
+    email: user.email,
+    invitedByEmail: null,
+    accessAll: false,
+    key: '',
+    status: MembershipStatus.Accepted,
+    type: MembershipType.User,
+    permissions: null,
+    resetPasswordKey: null,
+    externalId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await orgRepo.saveMembership(env.DB, membership);
+  return { user, memberId: membership.id };
+}
+
+async function setup() {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const randomHalf = () => bytesToBase64(crypto.getRandomValues(new Uint8Array(SYMMETRIC_KEY_HALF_BYTES)));
+  const adminSession = { email: owner.email, symEncKey: randomHalf(), symMacKey: randomHalf() };
+  const orgKey = await createOrgKey(adminSession);
+  const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: orgKey.wrapped })).id;
+  return { env, owner, adminSession, orgKey, orgId, ownerFetch: webappFetch(env, owner) };
+}
+
+test('webapp confirm wraps the org key for the member public key, and the server stores it', async () => {
+  const { env, adminSession, orgKey, orgId, ownerFetch } = await setup();
+  const member = await crypto.subtle.generateKey(MEMBER_RSA_KEY_PARAMS, true, ['encrypt', 'decrypt']);
+  const memberPublicKey = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('spki', member.publicKey)));
+  const { user, memberId } = await addAcceptedMember(env, orgId, memberPublicKey);
+
+  // Same sequence as OrganizationPage onConfirm.
+  const fetchedKey = await getUserPublicKey(ownerFetch, user.id);
+  await confirmMember(ownerFetch, orgId, memberId, await wrapOrgKeyForMember(adminSession, orgKey.wrapped, fetchedKey));
+
+  const stored = await orgRepo.getMembership(env.DB, memberId);
+  assert.equal(stored?.status, MembershipStatus.Confirmed);
+  // EncryptionType.Rsa2048_OaepSha1_B64 has a single base64 part; the server's confirm rejects
+  // symmetric (type 0-2) keys, which the member could not open anyway.
+  const [encType, payload, ...extraParts] = (stored?.key ?? '').split(/[.|]/);
+  assert.equal(encType, '4');
+  assert.deepEqual(extraParts, []);
+  const unwrapped = await crypto.subtle.decrypt(MEMBER_RSA_KEY_PARAMS, member.privateKey, base64ToBytes(payload));
+  assert.deepEqual(new Uint8Array(unwrapped), concatBytes(orgKey.encKey, orgKey.macKey));
+});
+
+test('webapp confirm stops at the public key lookup for a member without keys', async () => {
+  const { env, ownerFetch } = await setup();
+  const keyless = await seedUser(env);
+
+  await assert.rejects(getUserPublicKey(ownerFetch, keyless.id), /not found/i);
+});

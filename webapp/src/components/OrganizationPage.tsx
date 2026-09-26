@@ -4,6 +4,7 @@ import {
   confirmMember,
   createCollection,
   createOrganization,
+  getUserPublicKey,
   inviteMembers,
   listCollections,
   listMembers,
@@ -100,10 +101,11 @@ export default function OrganizationPage(props: OrganizationPageProps) {
   }
 
   async function onConfirm(member: OrgMember): Promise<void> {
-    if (!selected?.key) return;
+    if (!selected?.key || !member.userId) return;
     setBusy(true);
     try {
-      const wrapped = await wrapOrgKeyForMember(props.session, selected.key);
+      const memberPublicKey = await getUserPublicKey(props.authedFetch, member.userId);
+      const wrapped = await wrapOrgKeyForMember(props.session, selected.key, memberPublicKey);
       await confirmMember(props.authedFetch, selected.id, member.id, wrapped);
       await refresh();
       props.onNotify('success', t('txt_org_member_confirmed'));

@@ -114,6 +114,14 @@ export async function inviteMembers(authedFetch: AuthedFetch, orgId: string, ema
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Invite failed'));
 }
 
+export async function getUserPublicKey(authedFetch: AuthedFetch, userId: string): Promise<string> {
+  const resp = await authedFetch(`/api/users/${encodeURIComponent(userId)}/public-key`);
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Public key lookup failed'));
+  const body = await parseJson<{ publicKey?: string }>(resp);
+  if (!body?.publicKey) throw createApiError('Public key lookup failed', 500);
+  return body.publicKey;
+}
+
 export async function confirmMember(authedFetch: AuthedFetch, orgId: string, memberId: string, key: string): Promise<void> {
   const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/users/${encodeURIComponent(memberId)}/confirm`, {
     method: 'POST',
