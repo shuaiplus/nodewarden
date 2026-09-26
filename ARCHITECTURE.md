@@ -88,11 +88,13 @@ Machine access tokens now use the upstream `0.<id>.<secret>:<seed>` format. Upgr
 
 SM access equals confirmed membership, including User and Custom roles. Owners and admins can read/write every resource; other members need project, secret or machine-account policies. Invited, accepted and revoked memberships have no SM access. The member-enable endpoint is an authorized no-op because there is no per-member SM flag. Trash is admin-only, restores preserve policies, and scheduled cleanup permanently deletes secrets after 30 days. The Worker webapp exposes SM only for profile organizations advertising `accessSecretsManager`.
 
+NodeWarden's webapp unwraps organization keys with the current account's encrypted private key for RSA EncStrings (types 3/4), while retaining symmetric wrapping for its own created organizations. It creates member secrets only in a writable project; Owners and Admins may also create projectless secrets.
+
+## Administration and email
+
 Transactional email uses one typed sender with data-only templates and escaped text/HTML rendering; see [admin portal and mail](docs/architecture/05-admin-portal-and-mail.md).
 
 The Worker `/admin` portal authenticates configured `ADMIN_EMAILS` independently of vault JWTs and `users.role`. Hashed, browser-bound single-use email links create fixed two-day D1 sessions. All form POSTs enforce origin and CSRF; top-level navigation checks and CSP isolate the portal from webapp scripts. `/admin` is never forwarded by the official-web Pages proxy.
 The system administrator portal reads Secrets Manager tables for counts only; it never renders encrypted names or values.
 Registration verification returns an empty JSON string before background mail delivery, uniformly for registered and new addresses; disabled or misconfigured mail gives 503 for both.
 Password hints are emailed with uniform anonymous responses when email is configured; with mail disabled, the legacy inline hint remains a documented disclosure risk.
-
-NodeWarden's webapp unwraps organization keys with the current account's encrypted private key for RSA EncStrings (types 3/4), while retaining symmetric wrapping for its own created organizations. It creates member secrets only in a writable project; Owners and Admins may also create projectless secrets.

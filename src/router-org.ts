@@ -161,4 +161,3 @@ export async function handleOrganizationRoute(
 
   return errorResponse('Not found', 404);
 }
-
