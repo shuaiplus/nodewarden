@@ -31,6 +31,8 @@ interface VaultDetailViewProps {
   repromptApprovedCipherId: string | null;
   showPassword: boolean;
   totpLive: TotpCodeResult | null;
+  hideTotpByDefault: boolean;
+  showTotp: boolean;
   passkeyCreatedAt: string | null;
   hiddenFieldVisibleMap: Record<number, boolean>;
   folderName: (id: string | null | undefined) => string;
@@ -38,6 +40,7 @@ interface VaultDetailViewProps {
   attachmentDownloadPercent: number | null;
   onOpenReprompt: () => void;
   onToggleShowPassword: () => void;
+  onToggleShowTotp: () => void;
   onToggleHiddenField: (index: number) => void;
   onDownloadAttachment: (cipher: Cipher, attachmentId: string) => void;
   onStartEdit: () => void;
@@ -227,7 +230,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                   <span className="kv-label">{t('txt_totp')}</span>
                   <div className="kv-main">
                     <div className="totp-inline">
-                      <strong>{props.totpLive ? formatTotp(props.totpLive.code) : t('txt_text_3')}</strong>
+                      <strong>{props.totpLive ? (props.hideTotpByDefault && !props.showTotp ? maskSecret(props.totpLive.code) : formatTotp(props.totpLive.code)) : t('txt_text_3')}</strong>
                       <div
                         className="totp-timer"
                         title={t('txt_refresh_in_seconds_s', { seconds: props.totpLive ? props.totpLive.remain : 0 })}
@@ -254,6 +257,12 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                     </div>
                   </div>
                   <div className="kv-actions">
+                    {props.hideTotpByDefault && (
+                      <button type="button" className="btn btn-secondary small" onClick={props.onToggleShowTotp}>
+                        {props.showTotp ? <EyeOff size={14} className="btn-icon" /> : <Eye size={14} className="btn-icon" />}
+                        {props.showTotp ? t('txt_hide') : t('txt_reveal')}
+                      </button>
+                    )}
                     <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(props.totpLive?.code || '')}>
                       <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
                     </button>
