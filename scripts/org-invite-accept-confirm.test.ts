@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
@@ -10,6 +9,8 @@ import type { Env, User } from '../src/types';
 import { ORG_INVITE_TTL_DAYS } from '../src/utils/jwt';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv, seedUser, captureEmail, MAILABLE_DOMAIN, type SentEmail } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Upstream OrganizationService always stores invites as Invited with no user, and only
 // AcceptOrgUserCommand (after checking the emailed token) binds the user. Without that, anyone can

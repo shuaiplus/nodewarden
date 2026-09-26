@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { hashPassword } from '../src/services/auth-password';
 import { PolicyType } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { verifyJWT } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser, captureEmail, drainWaitUntil, MAILABLE_DOMAIN } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const SSO_CONFIG = {
   SSO_ENABLED: '1',

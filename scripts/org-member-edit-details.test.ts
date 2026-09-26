@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { hasFullCollectionAccess } from '../src/services/org-authz';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { createOrgInviteToken } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official web's edit-member dialog loads GET /organizations/{orgId}/users/{id}?includeGroups=true
 // (UserAdminService.get) and saves the full OrganizationUserUpdateRequest. Upstream

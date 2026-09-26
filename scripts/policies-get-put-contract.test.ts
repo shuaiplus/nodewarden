@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, PolicyType, type OrgPermissions } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official web's policy drawer loads one policy with GET /policies/{type} (policy-api.service.ts
 // getPolicy wraps the body in a single PolicyResponse) and saves the SavePolicyRequest envelope

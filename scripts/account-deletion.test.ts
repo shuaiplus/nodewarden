@@ -7,7 +7,6 @@ import {
   ciphers, emergencyAccess, invites, organizationMemberships, sends, smAccessTokens, smProjects,
   smSecretProjects, smSecrets, smServiceAccountProjects, smServiceAccounts, userRevisions,
 } from '../src/db/schema';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { deleteOrganizationAccount, deleteUserAccount } from '../src/services/account-deletion';
 import { type AuditEventInput } from '../src/services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../src/services/blob-store';
@@ -15,6 +14,8 @@ import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, memoryKv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const PAST = '2020-01-01T00:00:00.000Z';

@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus, MembershipType, revokeStatus } from '../src/services/org-types';
 import * as emergencyRepo from '../src/services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../src/services/storage-emergency-repo';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official web fetches the other account's RSA public key before every confirm: emergency access
 // and single member confirm call GET /users/{id}/public-key (ApiService.getUserPublicKey), and the

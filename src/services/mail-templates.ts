@@ -114,6 +114,21 @@ export const MAIL_TEMPLATES = {
       paragraphs: [`${sanitizeForEmail(model.name)} will receive emergency access to your account in ${model.daysLeft} day(s). Open your vault to review or reject the request.`],
     }),
   },
+  organizationUserAccepted: {
+    throttle: 'user',
+    render: (model: { organizationName: string; memberName: string }): MailContent => ({
+      subject: 'Organization invitation accepted',
+      paragraphs: [`${sanitizeForEmail(model.memberName)} accepted an invitation to ${sanitizeForEmail(model.organizationName)}. Confirm the member in your vault to grant access.`],
+    }),
+  },
+  organizationUserConfirmed: {
+    throttle: 'user',
+    render: (model: { organizationName: string; vaultOrigin: string | null }): MailContent => ({
+      subject: 'Organization membership confirmed',
+      paragraphs: [`Your membership in ${sanitizeForEmail(model.organizationName)} is confirmed. Sign in to your vault to access the organization.`],
+      ...(model.vaultOrigin ? { action: { label: 'Open vault', url: toSafeUrl(new URL(model.vaultOrigin)) } } : {}),
+    }),
+  },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];

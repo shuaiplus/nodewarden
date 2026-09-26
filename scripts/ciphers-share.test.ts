@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official clients move a personal item into an org (cipher form owner change, assign-collections,
 // the data-ownership item transfer) by re-encrypting it under the org key and calling

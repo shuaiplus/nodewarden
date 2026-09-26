@@ -22,10 +22,11 @@ import {
   smServiceAccountProjects,
   smServiceAccounts,
 } from '../src/db/schema';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env } from '../src/types';
 import { createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 import { ENCRYPTED_FIELD, TEST_ORG_KEY } from './support/sm';
 
 // The seed puts exactly one row in each, so a cascade shows up as a table dropping to zero.

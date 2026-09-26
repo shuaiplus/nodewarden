@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
@@ -10,6 +9,8 @@ import type { AuthedFetch } from '../webapp/src/lib/api/shared';
 import { base64ToBytes, bytesToBase64, concatBytes, encryptBw, toBufferSource } from '../webapp/src/lib/crypto';
 import { createOrgKey, decryptWithOrgKey, encryptWithOrgKey, unwrapOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const SYMMETRIC_KEY_HALF_BYTES = 32;
 const MEMBER_RSA_KEY_PARAMS: RsaHashedKeyGenParams = {

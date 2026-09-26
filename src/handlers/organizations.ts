@@ -45,6 +45,7 @@ import { publishPlatformEvent } from '../services/queue-publisher';
 import { RateLimitService } from '../services/ratelimit';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { createOrgInviteToken, verifyOrgInviteToken } from '../utils/jwt';
+import { runInBackground } from '../services/mail-notify';
 import {
   readMailConfig,
   mailStatusCheck,
@@ -791,7 +792,28 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
   });
   // The invitee now sees the org in their profile, so their cached sync must refresh.
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  runInBackground('organization-user-accepted', async () => {
+    for (const { item, account } of await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)) {
+      const email = account?.email || item.email;
+      if (item.status !== MembershipStatus.Confirmed || item.type > MembershipType.Admin || item.userId === user.id || !email) continue;
+      await sendMail(env, email, 'organizationUserAccepted', { organizationName: organization?.name || '', memberName: user.name || user.email });
+    }
+  });
   return jsonResponse({});
+}
+
+function notifyConfirmedMembers(request: Request, env: Env, orgId: string, members: MembershipRecord[]): void {
+  const vaultOrigin = configuredVaultOrigin(request, env);
+  runInBackground('organization-user-confirmed', async () => {
+    const ids = new Set(members.map((member) => member.id));
+    const [organization, rows] = await Promise.all([
+      orgRepo.getOrganization(env.DB, orgId), orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId),
+    ]);
+    for (const { item, account } of rows) {
+      const email = account?.email || item.email;
+      if (ids.has(item.id) && email) await sendMail(env, email, 'organizationUserConfirmed', { organizationName: organization?.name || '', vaultOrigin });
+    }
+  });
 }
 
 // Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an empty
@@ -846,6 +868,7 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   if (!confirmed.ok) return errorResponse(confirmed.message, 400);
   await orgRepo.saveMembership(env.DB, confirmed.member);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  notifyConfirmedMembers(request, env, orgId, [confirmed.member]);
   return jsonResponse({});
 }
 
@@ -877,6 +900,7 @@ export async function handleBulkConfirmMembers(request: Request, env: Env, userI
   if (confirmed.length) {
     await orgRepo.saveMemberships(env.DB, confirmed);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+    notifyConfirmedMembers(request, env, orgId, confirmed);
   }
   return bulkResultsResponse(results.map(({ id, check }) => ({ id, error: check.ok ? '' : check.message })));
 }

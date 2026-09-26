@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { D1_MAX_BOUND_PARAMETERS } from '../src/db/client';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type CollectionAccess, type OrgPermissions } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official clients change an org item's collections with a call separate from PUT /ciphers/{id}:
 // the cipher form, "Assign to collections" and `bw edit item-collections` send

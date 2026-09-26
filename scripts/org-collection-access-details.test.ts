@@ -5,11 +5,12 @@ import { getColumns } from 'drizzle-orm';
 
 import { D1_MAX_BOUND_PARAMETERS } from '../src/db/client';
 import { collectionGroups } from '../src/db/schema';
-import { createOwnedOrganization } from '../src/handlers/organizations';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Official web's collection dialog builds its Access tab from GET /organizations/{orgId}/collections/details
 // and saves the whole list back, so a details row without users and groups made every save wipe the
