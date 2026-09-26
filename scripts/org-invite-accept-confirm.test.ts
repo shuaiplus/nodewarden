@@ -4,6 +4,7 @@ import test, { type TestContext } from 'node:test';
 import { LIMITS } from '../src/config/limits';
 import { createOwnedOrganization } from '../src/handlers/organizations';
 import { MembershipStatus } from '../src/services/org-types';
+import { StorageService } from '../src/services/storage';
 import type { Env, User } from '../src/types';
 import { ORG_INVITE_TTL_DAYS } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
@@ -484,4 +485,37 @@ test('one invite batch flags only the invitees that already have an account as e
   await invite(env, owner, orgId, [registered.email, unregistered]);
   const existingFlags = Object.fromEntries(capture.sent.map((message) => [message.to, inviteParams(message).get('orgUserHasExistingUser')]));
   assert.deepEqual(existingFlags, { [registered.email]: 'true', [unregistered]: 'false' });
+});
+
+// Upstream InviteUsersAsync invites each distinct address once and skips any address already in the
+// org, so a re-invite neither mails nor adds a second row that accept would refuse.
+test('invite mails and saves an address listed twice in one request only once', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedUser(env);
+  const invitee = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
+  const orgId = await createOrg(env, owner);
+
+  await invite(env, owner, orgId, [invitee, invitee.toUpperCase()]);
+  assert.deepEqual(capture.sent.map((message) => message.to), [invitee]);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email, invitee]);
+});
+
+// Upstream SelectKnownEmailsAsync matches either the row's invited email or its bound account's
+// email, which differ once the account changes its email.
+test('invite skips addresses already in the org by invited or account email and answers 200 when none remain', async () => {
+  const capture = emailCapture();
+  const env = await createTestEnv(capture.env);
+  const owner = await seedMailableUser(env);
+  const pending = `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
+  const orgId = await createOrg(env, owner);
+  await invite(env, owner, orgId, [pending]);
+  const renamedOwner = { ...owner, email: `${crypto.randomUUID()}@${MAILABLE_DOMAIN}` };
+  await new StorageService(env.DB).saveUser(renamedOwner);
+  const revisionBeforeReinvite = await revisionDate(env, owner);
+
+  await invite(env, owner, orgId, [pending.toUpperCase(), owner.email, renamedOwner.email]);
+  assert.equal(await revisionDate(env, owner), revisionBeforeReinvite, 'an invite with nothing left to invite bumped member revisions');
+  assert.deepEqual(capture.sent.map((message) => message.to), [pending]);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [renamedOwner.email, pending]);
 });

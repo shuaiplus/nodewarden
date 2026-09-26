@@ -669,10 +669,16 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   // requested one stands on both sides.
   const roleCheck = memberRoleChangeCheck(member, change.type, change.type, change.permissions, 'invite');
   if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
+  // Upstream InviteUsersAsync invites each distinct address once and skips any address already in the
+  // org by its invited or bound account email (SelectKnownEmailsAsync), so a re-invite neither mails
+  // nor adds a row that accept would refuse. Nothing left to invite still succeeds, as upstream.
+  const knownEmails = new Set((await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId))
+    .flatMap(({ item, account }) => [item.email?.toLowerCase(), account?.email.toLowerCase()]));
   const now = new Date().toISOString();
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
-  const invites = emails.map((email) => ({ id: generateUUID(), email }));
+  const invites = [...new Set(emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email }));
+  if (!invites.length) return jsonResponse({});
   const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
   await orgRepo.insertInvitedMemberships(env.DB, invites.map(({ id, email }) => ({
