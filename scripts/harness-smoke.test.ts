@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 test('authenticated sync through the Worker returns the seeded profile', async () => {
@@ -33,7 +34,7 @@ test('the SQLite D1 keeps D1 batch atomicity, INTEGER binding and the bound-para
   await insert.bind(1).run();
   assert.deepEqual(await DB.prepare('SELECT label FROM probe').raw(), [['1']]);
 
-  const maxBindings = 100;
-  const placeholders = Array.from({ length: maxBindings + 1 }, () => '?').join(', ');
-  await assert.rejects(DB.prepare(`SELECT ${placeholders}`).bind(...Array(maxBindings + 1).fill(0)).all(), /too many SQL variables/);
+  const tooManyBindings = D1_MAX_BOUND_PARAMETERS + 1;
+  const placeholders = Array.from({ length: tooManyBindings }, () => '?').join(', ');
+  await assert.rejects(DB.prepare(`SELECT ${placeholders}`).bind(...Array(tooManyBindings).fill(0)).all(), /too many SQL variables/);
 });

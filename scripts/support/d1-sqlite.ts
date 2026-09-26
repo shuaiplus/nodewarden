@@ -13,7 +13,7 @@ interface ExecutedStatement {
 
 // Production D1 rejects statements above this; SQLite alone allows thousands, so enforce it
 // here to catch unchunked queries before they reach a real database.
-const D1_MAX_BOUND_PARAMETERS = 100;
+export const D1_MAX_BOUND_PARAMETERS = 100;
 
 // D1 validates bindings eagerly: undefined is a type error, and booleans and integral numbers
 // bind as INTEGER. better-sqlite3 rejects booleans and binds every number as REAL (a TEXT column
