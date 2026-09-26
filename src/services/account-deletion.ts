@@ -6,6 +6,7 @@ import type { Env } from '../types';
 import { AuthService } from './auth';
 import { StorageService } from './storage';
 import { normalizeImportedBackupSettings } from './backup-config';
+import { syncVaultAdminRoles } from './vault-admin-role';
 import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
 import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
@@ -71,6 +72,8 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
   if (next === 'banned') {
     const { notifyUserLogout } = await import('../durable/notifications-hub');
     notifyUserLogout(env, userId, null);
+  } else {
+    await syncVaultAdminRoles(env);
   }
   if (user.role === 'admin') await normalizeImportedBackupSettings(storage, env);
   return { kind: 'updated' };

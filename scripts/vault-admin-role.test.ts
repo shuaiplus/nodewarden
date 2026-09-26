@@ -7,11 +7,30 @@ import { importBackupArchiveBytes, importRemoteBackupArchiveBytes } from '../src
 import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../src/services/backup-config';
 import { parseBackupSettingsEnvelope } from '../src/services/backup-settings-crypto';
 import { StorageService } from '../src/services/storage';
+import { AuthService } from '../src/services/auth';
 import { markEmailVerified, syncVaultAdminRoles } from '../src/services/vault-admin-role';
 import { createRegisterVerifyToken } from '../src/utils/jwt';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
+
+test('enabling the first verified listed account synchronizes roles and revokes cached legacy admin access', async () => {
+  const env = await createTestEnv({ ADMIN_EMAILS: 'listed@x.io' });
+  const storage = new StorageService(env.DB);
+  const legacy = await seedUser(env, { role: 'admin' });
+  const listed = await seedUser(env, { email: 'listed@x.io', emailVerified: true, status: 'banned' });
+  await syncVaultAdminRoles(env);
+  const token = await new AuthService(env).generateAccessToken(legacy);
+  const headers = { Authorization: `Bearer ${token}` };
+  assert.equal((await authedFetch(env, { path: '/api/admin/users', headers })).status, 200);
+
+  const portal = await signInToAdminPortal(env, listed.email);
+  const enabled = await portalFetch(env, { method: 'POST', path: `/admin/users/${listed.id}/enable`, cookie: portal.cookie, form: { csrf: portal.csrf } });
+  assert.equal(enabled.status, 303);
+  assert.equal((await storage.getUserById(listed.id))?.role, 'admin');
+  assert.equal((await storage.getUserById(legacy.id))?.role, 'user');
+  assert.equal((await authedFetch(env, { path: '/api/admin/users', headers })).status, 403);
+});
 
 for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', 'enabled']) {
   test(`directory ${config} obeys the verified active-account guard`, async () => {
