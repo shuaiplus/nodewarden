@@ -10,6 +10,7 @@ import {
   smSecrets,
   smServiceAccountProjects,
   smServiceAccounts,
+  smServiceAccountMembers,
 } from '../db/schema';
 
 export interface SmProject {
@@ -251,7 +252,8 @@ export async function listReadableServiceAccountProjectIds(db: D1Database, servi
 }
 
 export async function saveAccessToken(db: D1Database, token: SmAccessToken): Promise<void> {
-  await getOrm(db).insert(smAccessTokens).values(token);
+  const orm = getOrm(db);
+  await orm.batch([orm.insert(smAccessTokens).values(token)]);
 }
 
 export async function listAccessTokens(db: D1Database, serviceAccountId: string): Promise<SmAccessToken[]> {
@@ -267,8 +269,9 @@ export async function getAccessToken(db: D1Database, id: string): Promise<SmAcce
   return row ? mapAccessToken(row) : null;
 }
 
-export async function revokeAccessToken(db: D1Database, id: string, revokedAt: string): Promise<void> {
-  await getOrm(db).update(smAccessTokens).set({ revokedAt }).where(eq(smAccessTokens.id, id));
+export async function revokeAccessToken(db: D1Database, id: string, _revokedAt?: string): Promise<void> {
+  const orm = getOrm(db);
+  await orm.batch([orm.delete(smAccessTokens).where(eq(smAccessTokens.id, id))]);
 }
 
 export async function loadSmGrants(db: D1Database, actor: SmActor, orgId: string): Promise<SmGrants> {
@@ -372,4 +375,59 @@ export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]
   const orm = getOrm(db);
   const now = new Date().toISOString();
   await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))))]);
+}
+
+export async function createServiceAccount(db: D1Database, account: SmServiceAccount, membershipId: string, projectIds: string[]): Promise<void> {
+  const orm = getOrm(db);
+  const rows = projectIds.map(projectId => ({ serviceAccountId: account.id, projectId, readAccess: 1, writeAccess: 0 }));
+  await orm.batch([
+    orm.insert(smServiceAccounts).values(account),
+    orm.insert(smServiceAccountMembers).values({ serviceAccountId: account.id, membershipId }),
+    ...chunkRows(rows, columnCount(smServiceAccountProjects)).map(chunk => orm.insert(smServiceAccountProjects).values(chunk)),
+  ]);
+}
+
+export async function updateServiceAccount(db: D1Database, account: SmServiceAccount): Promise<boolean> {
+  const orm = getOrm(db);
+  const [rows] = await orm.batch([orm.update(smServiceAccounts).set({ name: account.name, updatedAt: account.updatedAt }).where(eq(smServiceAccounts.id, account.id)).returning({ id: smServiceAccounts.id })]);
+  return rows.length > 0;
+}
+
+export async function getServiceAccountsByIds(db: D1Database, ids: string[]): Promise<SmServiceAccount[]> {
+  const orm = getOrm(db);
+  return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smServiceAccounts).where(inArray(smServiceAccounts.id, chunk))))).flat().map(mapServiceAccount);
+}
+
+export async function deleteServiceAccounts(db: D1Database, orgId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const orm = getOrm(db);
+  const statements = chunkRows(ids, 1, 1).map(chunk => orm.delete(smServiceAccounts).where(and(eq(smServiceAccounts.orgId, orgId), inArray(smServiceAccounts.id, chunk))));
+  await orm.batch([statements[0], ...statements.slice(1)]);
+}
+
+export async function revokeAccessTokens(db: D1Database, serviceAccountId: string, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const orm = getOrm(db);
+  const statements = chunkRows(ids, 1, 1).map(chunk => orm.delete(smAccessTokens).where(and(eq(smAccessTokens.serviceAccountId, serviceAccountId), inArray(smAccessTokens.id, chunk))));
+  await orm.batch([statements[0], ...statements.slice(1)]);
+}
+
+export async function serviceAccountSecretCounts(db: D1Database, orgId: string): Promise<Map<string, number>> {
+  const rows = await db.prepare(`SELECT sa.id, COUNT(s.id) AS n FROM sm_service_accounts sa
+    LEFT JOIN sm_secrets s ON s.org_id = sa.org_id AND s.deleted_at IS NULL AND (
+      EXISTS (SELECT 1 FROM sm_secret_service_accounts sp WHERE sp.secret_id = s.id AND sp.service_account_id = sa.id)
+      OR EXISTS (SELECT 1 FROM sm_secret_projects sp JOIN sm_service_account_projects ap ON ap.project_id = sp.project_id AND ap.service_account_id = sa.id AND ap.read_access = 1
+        JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sa.org_id WHERE sp.secret_id = s.id))
+    WHERE sa.org_id = ? GROUP BY sa.id`).bind(orgId).all<{ id: string; n: number }>();
+  return new Map(rows.results.map(row => [row.id, row.n]));
+}
+
+export async function serviceAccountCounts(db: D1Database, account: SmServiceAccount, access: SmAccess) {
+  const counts = { projects: 0, people: 0, accessTokens: 0, object: 'serviceAccountCounts' };
+  if (access === 'none') return counts;
+  const [row] = await db.batch<{ projects: number; people: number; accessTokens: number }>([db.prepare(`SELECT
+    (SELECT COUNT(*) FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1) AS projects,
+    ((SELECT COUNT(*) FROM sm_service_account_members WHERE service_account_id = ?) + (SELECT COUNT(*) FROM sm_service_account_groups WHERE service_account_id = ?)) AS people,
+    (SELECT COUNT(*) FROM sm_access_tokens WHERE service_account_id = ?) AS accessTokens`).bind(account.orgId, account.id, account.id, account.id, account.id)]);
+  return { ...counts, ...row.results[0] };
 }

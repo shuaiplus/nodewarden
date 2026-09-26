@@ -1,19 +1,11 @@
 import { isSerializedEncString } from '../utils/account-passkeys';
-import { projectAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
+import { projectAccess, serviceAccountAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
 import type { Env } from '../types';
-import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
-import { canAccessSecretsManager, isActiveMember } from '../services/org-authz';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { hashApiKey, verifyApiKey } from '../utils/api-key';
 import { publishSecretChanged } from '../services/queue-publisher';
-
-async function requireSmMember(env: Env, userId: string, orgId: string) {
-  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
-  if (!isActiveMember(member) || !canAccessSecretsManager(member)) return null;
-  return member;
-}
 
 // Upstream ProjectsAreInOrganization: a missing or foreign project is 404 before any write, so a
 // secret or machine account in one org can never link to another org's project. Like upstream's
@@ -210,46 +202,85 @@ export async function handleDeleteProjects(request: Request, env: Env, userId: s
   return jsonResponse(listResponse(data));
 }
 
+function serviceAccountResponse(account: smRepo.SmServiceAccount) {
+  return { id: account.id, organizationId: account.orgId, name: account.name, creationDate: account.createdAt, revisionDate: account.updatedAt, object: 'serviceAccount' };
+}
+
 export async function handleListServiceAccounts(env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const accounts = await smRepo.listServiceAccounts(env.DB, orgId);
-  return jsonResponse({
-    data: accounts.map((account) => ({
-      id: account.id,
-      organizationId: account.orgId,
-      name: account.name,
-      creationDate: account.createdAt,
-      revisionDate: account.updatedAt,
-      object: 'serviceAccount',
-    })),
-    object: 'list',
-    continuationToken: null,
-  });
+  const context = await smContext(env, userId, orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const counts = await smRepo.serviceAccountSecretCounts(env.DB, orgId);
+  const accounts = (await smRepo.listServiceAccounts(env.DB, orgId)).filter(account => serviceAccountAccess(context.actor, context.grants, account.id) !== 'none');
+  return jsonResponse(listResponse(accounts.map(account => ({ ...serviceAccountResponse(account), accessToSecrets: counts.get(account.id) ?? 0 }))));
 }
 
 export async function handleCreateServiceAccount(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
-  const body = await request.json() as { name?: string; projectIds?: string[] };
-  const projectIds = Array.isArray(body.projectIds) ? body.projectIds.map(String) : [];
+  const context = await smContext(env, userId, orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const body = await request.json().catch(() => null) as { name?: unknown; projectIds?: unknown } | null;
+  if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+  if (body.projectIds != null && (!Array.isArray(body.projectIds) || !body.projectIds.every(isUUID))) return errorResponse('ProjectIds must be an array of GUIDs.', 400);
+  const projectIds = (body.projectIds as string[] | null | undefined)?.map(id => id.toLowerCase()) ?? [];
   if (!(await allProjectsInOrg(env, orgId, projectIds))) return errorResponse('Resource not found.', 404);
+  if (projectIds.some(id => projectAccess(context.actor, context.grants, id) !== 'write')) return errorResponse('Not found', 404);
   const now = new Date().toISOString();
-  const account = { id: generateUUID(), orgId, name: String(body.name || 'Machine account'), createdAt: now, updatedAt: now };
-  await smRepo.saveServiceAccount(env.DB, account);
-  await smRepo.replaceServiceAccountProjects(env.DB, account.id, projectIds);
-  return jsonResponse({
-    id: account.id,
-    organizationId: account.orgId,
-    name: account.name,
-    creationDate: account.createdAt,
-    revisionDate: account.updatedAt,
-    object: 'serviceAccount',
-  });
+  const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
+  await smRepo.createServiceAccount(env.DB, account, context.actor.membershipId, projectIds);
+  return jsonResponse(serviceAccountResponse(account));
+}
+
+export async function handleServiceAccount(request: Request, env: Env, userId: string, id: string, counts = false): Promise<Response> {
+  const account = await smRepo.getServiceAccount(env.DB, id);
+  const context = account && await smContext(env, userId, account.orgId);
+  if (!account || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const access = serviceAccountAccess(context.actor, context.grants, id);
+  if (counts) return jsonResponse(await smRepo.serviceAccountCounts(env.DB, account, access));
+  if (access === 'none') return errorResponse('Not found', 404);
+  if (request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as { name?: unknown } | null;
+    if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+    account.name = body.name; account.updatedAt = new Date().toISOString();
+    if (!await smRepo.updateServiceAccount(env.DB, account)) return errorResponse('Not found', 404);
+  }
+  return jsonResponse(serviceAccountResponse(account));
+}
+
+export async function handleDeleteServiceAccounts(request: Request, env: Env, userId: string): Promise<Response> {
+  const ids = await readIds(request);
+  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
+  const accounts = await smRepo.getServiceAccountsByIds(env.DB, ids);
+  const orgId = accounts[0]?.orgId;
+  if (!orgId || accounts.length !== ids.length || accounts.some(account => account.orgId !== orgId)) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const data = accounts.map(account => ({ id: account.id, error: serviceAccountAccess(context.actor, context.grants, account.id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
+  await smRepo.deleteServiceAccounts(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  return jsonResponse(listResponse(data));
+}
+
+export async function handleRevokeAccessTokens(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+  const account = await smRepo.getServiceAccount(env.DB, id);
+  const context = account && await smContext(env, userId, account.orgId);
+  if (!context || serviceAccountAccess(context.actor, context.grants, id) !== 'write') return errorResponse('Not found', 404);
+  const body = await request.json().catch(() => null) as { ids?: unknown } | null;
+  if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
+  await smRepo.revokeAccessTokens(env.DB, id, body.ids.map(id => id.toLowerCase()));
+  return new Response(null, { status: 200 });
+}
+
+export async function handleSmCounts(env: Env, userId: string, orgId: string): Promise<Response> {
+  const context = await smContext(env, userId, orgId);
+  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
+  const [projects, secrets, accounts] = await Promise.all([smRepo.listProjects(env.DB, orgId), smRepo.listSecrets(env.DB, orgId), smRepo.listServiceAccounts(env.DB, orgId)]);
+  return jsonResponse({ projects: projects.filter(row => projectAccess(context.actor, context.grants, row.id) !== 'none').length, secrets: secrets.filter(row => secretAccess(context.actor, context.grants, row) !== 'none').length, serviceAccounts: accounts.filter(row => serviceAccountAccess(context.actor, context.grants, row.id) !== 'none').length, object: 'organizationCounts' });
 }
 
 export async function handleCreateAccessToken(request: Request, env: Env, userId: string, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
   if (!account) return errorResponse('Not found', 404);
-  if (!(await requireSmMember(env, userId, account.orgId))) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, account.orgId);
+  if (!context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
   const body = await request.json() as { name?: string; expireAt?: string | null };
   const clientSecret = `nws_${generateUUID().replace(/-/g, '')}`;
   const token = {
@@ -276,7 +307,8 @@ export async function handleCreateAccessToken(request: Request, env: Env, userId
 export async function handleListAccessTokens(env: Env, userId: string, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
   if (!account) return errorResponse('Not found', 404);
-  if (!(await requireSmMember(env, userId, account.orgId))) return errorResponse('Not found', 404);
+  const context = await smContext(env, userId, account.orgId);
+  if (!context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
   const tokens = await smRepo.listAccessTokens(env.DB, serviceAccountId);
   return jsonResponse({
     data: tokens.map((token) => ({

@@ -44,3 +44,7 @@ export function canCreateSecret(actor: SmActor, grants: SmGrants, projectId: str
 export function canUpdateSecret(actor: SmActor, grants: SmGrants, secret: { id: string; projectIds: readonly string[] }, requested: readonly string[]): boolean {
   return secretAccess(actor, grants, secret) === 'write' && (actor.kind === 'admin' || secret.projectIds[0] === requested[0] || (!!requested[0] && projectAccess(actor, grants, requested[0]) === 'write'));
 }
+
+export function serviceAccountAccess(actor: SmActor, grants: SmGrants, id: string): SmAccess {
+  return actor.kind === 'admin' || (actor.kind === 'user' && grants.serviceAccounts.has(id)) ? 'write' : 'none';
+}

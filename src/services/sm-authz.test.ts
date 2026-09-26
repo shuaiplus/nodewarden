@@ -22,3 +22,12 @@ test('secret writes require destination write but preserve directly granted proj
   assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: ['write'] }, ['read']), false);
   assert.equal(canUpdateSecret(user, grants, { id: 's', projectIds: ['read'] }, ['write']), true);
 });
+
+test('machine-account management is human-only and its people grants always allow writes', async () => {
+  const { serviceAccountAccess } = await import('./sm-authz');
+  const grants = grantsFromRows({ projects: [], secrets: [], serviceAccounts: [{ id: 'sa' }] });
+  assert.equal(serviceAccountAccess({ kind: 'admin', membershipId: 'a' }, grants, 'other'), 'write');
+  assert.equal(serviceAccountAccess({ kind: 'user', membershipId: 'u' }, grants, 'sa'), 'write');
+  assert.equal(serviceAccountAccess({ kind: 'user', membershipId: 'u' }, grants, 'other'), 'none');
+  assert.equal(serviceAccountAccess({ kind: 'serviceAccount', serviceAccountId: 'sa' }, grants, 'sa'), 'none');
+});

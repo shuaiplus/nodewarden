@@ -7,6 +7,10 @@ import {
   handleDeleteProjects,
   handleCreateSecret,
   handleCreateServiceAccount,
+  handleServiceAccount,
+  handleDeleteServiceAccounts,
+  handleRevokeAccessTokens,
+  handleSmCounts,
   handleDeleteSecrets,
   handleGetSecret,
   handleProjectSecrets,
@@ -19,6 +23,11 @@ import {
 } from './handlers/secrets-manager';
 
 export async function handleSmRoute(request: Request, env: Env, userId: string, path: string, method: string): Promise<Response | null> {
+  if (path === '/api/service-accounts/delete' && method === 'POST') return handleDeleteServiceAccounts(request, env, userId);
+  const account = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)(\/sm-counts)?$/i);
+  if (account && (method === 'GET' || (!account[2] && method === 'PUT'))) return handleServiceAccount(request, env, userId, account[1], !!account[2]);
+  const revoke = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/access-tokens\/revoke$/i);
+  if (revoke && method === 'POST') return handleRevokeAccessTokens(request, env, userId, revoke[1]);
   if (path === '/api/projects/delete' && method === 'POST') return handleDeleteProjects(request, env, userId);
   if (path === '/api/secrets/get-by-ids' && method === 'POST') return handleSecretsByIds(request, env, userId);
   const projectSecrets = path.match(/^\/api\/projects\/([a-f0-9-]+)\/secrets$/i);
@@ -43,6 +52,7 @@ export async function handleSmRoute(request: Request, env: Env, userId: string, 
   if (!orgMatch) return null;
   const orgId = orgMatch[1];
   const sub = orgMatch[2] || '';
+  if (sub === '/sm-counts' && method === 'GET') return handleSmCounts(env, userId, orgId);
   if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, userId, orgId);
   if (sub === '/secrets' && method === 'POST') return handleCreateSecret(request, env, userId, orgId);
   if (sub === '/secrets/sync' && method === 'GET') return errorResponse('Service account required', 400);
