@@ -166,3 +166,10 @@ export async function deleteUserById(db: D1Database, id: string): Promise<boolea
   const result = await getOrm(db).delete(users).where(eq(users.id, id)).run();
   return (result.meta.changes ?? 0) > 0;
 }
+
+export async function searchUsersByEmailPrefix(db: D1Database, prefix: string, offset: number, limit: number) {
+  const pattern = prefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
+  return getOrm(db).select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role,
+    twoFactor: sql<number>`(${users.totpSecret} IS NOT NULL AND ${users.totpSecret} <> '') OR coalesce(${users.yubikeyKey1},${users.yubikeyKey2},${users.yubikeyKey3},${users.yubikeyKey4},${users.yubikeyKey5},'') <> '' OR EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id=users.id AND w.purpose='twoFactor')`,
+  }).from(users).where(sql`${users.email} LIKE ${pattern} ESCAPE '\\'`).orderBy(asc(users.email)).limit(limit + 1).offset(offset);
+}

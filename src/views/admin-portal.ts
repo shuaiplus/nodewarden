@@ -32,3 +32,14 @@ export function loginPage(returnPath: string, mailEnabled: boolean, message = ''
 export function portalNavigation(csrf: string): SafeHtml {
   return html`<nav><a href="/admin">Dashboard</a><a href="/admin/users">Users</a><a href="/admin/organizations">Organizations</a><form method="post" action="/admin/login/logout"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">Sign out</button></form></nav>`;
 }
+
+export function portalFields(values: Array<[string, string | number]>): SafeHtml {
+  return html`<dl>${values.map(([name, value]) => html`<dt>${name}</dt><dd>${value}</dd>`)}</dl>`;
+}
+export function deleteForm(action: string, csrf: string, label: string): SafeHtml {
+  return html`<form method="post" action="${action}"><input type="hidden" name="csrf" value="${csrf}"><label>Type ${label} to confirm deletion <input name="confirmation" required autocomplete="off"></label><button type="submit">Delete</button></form>`;
+}
+export function portalPagination(url: URL, page: number, hasMore: boolean): SafeHtml {
+  const pageUrl = (value: number) => { const params = new URLSearchParams(url.searchParams); params.set('page', String(value)); return url.pathname + '?' + params; };
+  return html`<nav>${page > 1 ? html`<a href="${pageUrl(page - 1)}">Previous</a>` : html``}<span>Page ${page}</span>${hasMore ? html`<a href="${pageUrl(page + 1)}">Next</a>` : html``}</nav>`;
+}

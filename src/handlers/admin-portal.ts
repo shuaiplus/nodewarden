@@ -1,3 +1,8 @@
+import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
+import { countPersonalCiphers } from '../services/storage-cipher-repo';
+import { deleteUserAccount } from '../services/account-deletion';
+import { sha256Base64Url } from '../utils/account-passkeys';
+import { isYubiKeyEnabled } from '../utils/yubico-otp';
 import { listAuditLogs } from '../services/storage-admin-repo';
 import { isOpenRegistrationEnabled } from '../services/register-payload';
 import { getConfiguredWebVaultOrigins } from '../utils/origins';
@@ -18,7 +23,7 @@ import { StorageService } from '../services/storage';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
 import { html } from '../utils/html';
-import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation } from '../views/admin-portal';
+import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination } from '../views/admin-portal';
 
 const forbidden = () => portalPage('Forbidden', html`<p>This request is not allowed.</p>`, 403);
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
@@ -89,6 +94,46 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       await env.DB.prepare('DELETE FROM verification WHERE id=?').bind(session.id).run();
       await audit('admin.portal.logout', session.email);
       return portalRedirect('/admin/login?m=loggedout', [adminCookie(ADMIN_COOKIE)]);
+    }
+    const page = Math.max(1, Math.floor(Number(url.searchParams.get('page')) || 1));
+    const count = Math.min(LIMITS.admin.pageSizeMax, Math.max(1, Math.floor(Number(url.searchParams.get('count')) || LIMITS.admin.pageSizeDefault)));
+    const deletionCheck = async (confirmation: string, expected: string, viewPath: string): Promise<Response | null> => {
+      if (Date.now() - session.authTime > LIMITS.admin.destructiveReauthSeconds * 1000) return portalRedirect(`/admin/login?returnUrl=${encodeURIComponent(viewPath)}&m=reauth`);
+      if (confirmation !== expected) return portalPage('Confirmation does not match', html`${portalNavigation(session.csrf)}<p>The typed confirmation does not match.</p><a href="${viewPath}">Return</a>`, 400);
+      const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-portal-delete:${await sha256Base64Url(session.email)}`, LIMITS.admin.deletesPerAdminPerHour, 3600);
+      return budget.allowed ? null : portalPage('Too many requests', html`<p>Try again later.</p>`, 429, { 'Retry-After': String(budget.retryAfterSeconds) });
+    };
+    if (path === '/admin/users') {
+      if (request.method !== 'GET') return methodNotAllowed();
+      const email = url.searchParams.get('email') ?? '';
+      const rows = await searchUsersByEmailPrefix(env.DB, email, (page - 1) * count, count);
+      return portalPage('Users', html`${portalNavigation(session.csrf)}<form method="get" action="/admin/users"><label>Email prefix <input name="email" value="${email}"></label><input type="hidden" name="count" value="${count}"><button type="submit">Search</button></form><table><thead><tr><th>Email</th><th>Name</th><th>Created</th><th>Status</th><th>Vault role</th><th>Two-factor</th></tr></thead><tbody>${rows.slice(0, count).map((user) => html`<tr><td><a href="${'/admin/users/view/' + encodeURIComponent(user.id)}">${user.email}</a></td><td>${user.name ?? ''}</td><td>${user.createdAt}</td><td>${user.status}</td><td>${user.role}</td><td>${user.twoFactor ? 'Yes' : 'No'}</td></tr>`)}</tbody></table>${portalPagination(url, page, rows.length > count)}`);
+    }
+    const userPath = path.match(/^\/admin\/users\/(view|delete)\/([^/]+)$/);
+    if (userPath) {
+      const deleting = userPath[1] === 'delete';
+      if (request.method !== (deleting ? 'POST' : 'GET')) return methodNotAllowed();
+      const storage = new StorageService(env.DB);
+      const user = await storage.getUserById(decodeURIComponent(userPath[2]));
+      if (!user) return portalPage('Not found', html`<p>User not found.</p>`, 404);
+      const viewPath = '/admin/users/view/' + encodeURIComponent(user.id);
+      let refusal = '';
+      if (deleting) {
+        const check = await deletionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        if (check) return check;
+        const outcome = await deleteUserAccount(env, user.id, { action: 'admin.portal.user.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
+        if (outcome.kind === 'deleted') return portalRedirect('/admin/users?m=deleted');
+        if (outcome.kind === 'not-found') return portalPage('Not found', html`<p>User not found.</p>`, 404);
+        refusal = outcome.kind === 'last-vault-admin' ? 'Cannot delete the last active instance administrator.' : 'Transfer or delete these organizations first: ' + outcome.orgIds.join(', ');
+      }
+      const [personalItems, memberships, passkeys] = await Promise.all([
+        countPersonalCiphers(env.DB, user.id),
+        env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
+        storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'),
+      ]);
+      return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
+        ['Id', user.id], ['Email', user.email], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
+      ])}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin' || path === '/admin/') {
       if (request.method !== 'GET') return methodNotAllowed();
