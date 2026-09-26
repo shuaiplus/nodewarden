@@ -28,3 +28,7 @@ export const LOGIN_MESSAGES: Record<string, string> = {
 export function loginPage(returnPath: string, mailEnabled: boolean, message = '', status = 200): Response {
   return portalPage('Administrator sign-in', html`${mailEnabled ? html`` : html`<p class="notice">Sign-in links cannot be sent. Check the instance email configuration.</p>`}${message ? html`<p class="notice">${message}</p>` : html``}<form method="post" action="/admin/login"><label>Email <input type="email" name="email" required maxlength="256" autocomplete="email"></label><input type="hidden" name="returnUrl" value="${returnPath}"><button type="submit">Send sign-in link</button></form>`, status);
 }
+
+export function portalNavigation(csrf: string): SafeHtml {
+  return html`<nav><a href="/admin">Dashboard</a><a href="/admin/users">Users</a><a href="/admin/organizations">Organizations</a><form method="post" action="/admin/login/logout"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">Sign out</button></form></nav>`;
+}

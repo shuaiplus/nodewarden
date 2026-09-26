@@ -24,3 +24,4 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - SM access = confirmed member, independent of licenses. Owners/Admins have full access; other members use object policies.
 
 - All transactional mail goes through `sendMail` and data-only templates. Links use configured vault origins or the Worker request origin, never `X-Forwarded-Host`.
+- Portal admins come from `ADMIN_EMAILS`, independently of `users.role`; portal handlers render HTML and never call `errorResponse`. Keep `/admin` off the official-web Pages proxy.

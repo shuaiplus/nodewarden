@@ -36,5 +36,5 @@ test('portal rejects fetch and cross-origin form requests', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: 'admin@x.io' });
   assert.equal((await portalFetch(env, { path: '/admin/login', headers: { 'Sec-Fetch-Mode': 'cors' } })).status, 403);
   for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.io' }, {}]) assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', headers })).status, 403);
-  assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 405);
+  assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', body: new URLSearchParams({ email: 'bad' }), headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 400);
 });

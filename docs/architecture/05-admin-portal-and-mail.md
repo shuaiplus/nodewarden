@@ -9,3 +9,11 @@ Set `EMAIL_FROM` to an address on an onboarded sending domain and optionally set
 Vault links use configured `WEB_VAULT_ORIGINS`. They never follow `X-Forwarded-Host`. Delivery code is independent of the background task adapter, which attaches notices to Workers `waitUntil`.
 
 Cloudflare API references: [Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/), [local email simulation](https://developers.cloudflare.com/email-service/local-development/sending/).
+
+## Administrator access
+
+`ADMIN_EMAILS` enables `/admin` on the Worker origin and defines full administrators independently of vault accounts. Each comma-separated entry is `email` or `email:stamp`. Removing an address or rotating its stamp immediately invalidates links and sessions. Unset configuration hides the portal; malformed entries give a generic portal error without disabling the vault.
+
+Sign-in links use 32 random bytes, stored hashed in `verification`, and expire in 15 minutes. GET only renders a button. POST consumes the row atomically, requires the requesting browser's secure HttpOnly nonce cookie, and creates a fixed two-day revocable session. Requesting another link replaces that browser nonce. Links cannot be opened on another device. Worker request logs can contain the GET token, so disable Email preview and protect logs; the token alone is insufficient without its browser cookie.
+
+All portal responses disable caching and CORS. Form POSTs require the exact Worker origin (or same-origin Fetch Metadata when Origin is absent); authenticated forms also need a session-derived CSRF token. Requests with Fetch Metadata must be document navigations, preventing webapp scripts from reading forms. Logout deletes the server session. Login requests are capped per IP; link delivery is separately capped per administrator without revealing that budget or directory membership in the response.

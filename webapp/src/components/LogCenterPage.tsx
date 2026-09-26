@@ -558,7 +558,7 @@ export default function LogCenterPage(props: LogCenterPageProps) {
               <div className="log-detail-meta">
                 <div><span>{t('txt_time')}</span><strong>{formatTime(selectedLog.createdAt)}</strong></div>
                 <div><span>{t('txt_log_category')}</span><strong>{t(`txt_log_category_${selectedCategory}`)}</strong></div>
-                <div><span>{t('txt_actor')}</span><strong>{selectedLog.actorEmail || selectedLog.actorUserId || t('txt_dash')}</strong></div>
+                <div><span>{t('txt_actor')}</span><strong>{selectedLog.actorEmail || selectedLog.actorUserId || String(parseMetadata(selectedLog).adminEmail || t('txt_dash'))}</strong></div>
                 <div><span>{t('txt_target')}</span><strong>{formatLogTarget(selectedLog, selectedMetadata)}</strong></div>
               </div>
               <div className="log-detail-json">

@@ -171,3 +171,11 @@ export function portalFetch(env: Env, { method = 'GET', path, form, cookie, head
   if (cookie) requestHeaders.set('Cookie', cookie);
   return authedFetch(env, { method, path, body: form ? new URLSearchParams(form) : undefined, headers: requestHeaders });
 }
+
+export async function signInToAdminPortal(env: Env, email: string): Promise<{ cookie: string; csrf: string }> {
+  const { parseAdminDirectory, createAdminSession, adminCookie, ADMIN_COOKIE } = await import('../../src/services/admin-portal-auth');
+  const directory = parseAdminDirectory(env);
+  if (directory.kind !== 'enabled' || !directory.admins.has(email)) throw new Error('Test administrator is not configured');
+  const session = await createAdminSession(env, email, directory.admins.get(email)!);
+  return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
+}

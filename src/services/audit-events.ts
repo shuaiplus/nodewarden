@@ -40,6 +40,7 @@ const ALLOWED_METADATA_KEYS = new Set([
   'ip',
   'userAgent',
   'email',
+  'adminEmail',
   'targetEmail',
   'grantType',
   'webSession',

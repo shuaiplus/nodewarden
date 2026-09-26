@@ -4,6 +4,13 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  adminSignIn: {
+    render: (model: { url: SafeUrl }): MailContent => ({
+      subject: 'Sign in to NodeWarden administration',
+      paragraphs: ['Use this link in the browser where you requested it to sign in to administration.', 'This single-use link expires in 15 minutes. Ignore this email if you did not request it.'],
+      action: { label: 'Sign in', url: model.url },
+    }),
+  },
   registerVerification: {
     render: (model: { vaultOrigin: string; email: string; token: string }): MailContent => ({
       subject: 'Verify your NodeWarden email',
