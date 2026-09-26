@@ -169,7 +169,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/db/schema.ts changes or a migration is added (including
 // data-only --custom ones). Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-09-26-sm-scrub-org-key';
+const STORAGE_SCHEMA_VERSION = '2026-09-26-sm-same-org-links';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',

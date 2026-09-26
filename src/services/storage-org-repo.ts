@@ -113,7 +113,7 @@ function columnCount(table: Table): number {
 
 // Splits multi-row INSERT values so each statement stays within D1's bound-parameter limit, less
 // any parameters every chunk's statement binds besides the rows.
-function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters = 0): T[][] {
+export function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters = 0): T[][] {
   const size = Math.floor((D1_MAX_BOUND_PARAMETERS - fixedParameters) / columnsPerRow);
   return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
 }

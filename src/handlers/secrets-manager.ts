@@ -13,6 +13,14 @@ async function requireSmMember(env: Env, userId: string, orgId: string) {
   return member;
 }
 
+// Upstream ProjectsAreInOrganization: a missing or foreign project is 404 before any write, so a
+// secret or machine account in one org can never link to another org's project. Like upstream's
+// count comparison, a repeated id fails too instead of hitting the link table's primary key.
+async function allProjectsInOrg(env: Env, orgId: string, projectIds: string[]): Promise<boolean> {
+  const orgProjectIds = await smRepo.projectsInOrg(env.DB, orgId, projectIds);
+  return new Set(projectIds).size === projectIds.length && projectIds.every((id) => orgProjectIds.has(id));
+}
+
 function secretResponse(secret: smRepo.SmSecret) {
   return {
     id: secret.id,
@@ -62,6 +70,7 @@ export async function handleCreateSecret(request: Request, env: Env, userId: str
     deletedAt: null,
   };
   if (!secret.key || !secret.value) return errorResponse('key and value are required', 400);
+  if (!(await allProjectsInOrg(env, orgId, secret.projectIds))) return errorResponse('Resource not found.', 404);
   await smRepo.saveSecret(env.DB, secret);
   await publishSecretChanged(env, orgId, secret.id);
   return jsonResponse(secretResponse(secret));
@@ -83,6 +92,7 @@ export async function handleUpdateSecret(request: Request, env: Env, userId: str
   if (body.value) secret.value = String(body.value);
   if (body.note !== undefined) secret.note = body.note == null ? null : String(body.note);
   if (Array.isArray(body.projectIds)) secret.projectIds = body.projectIds.map(String);
+  if (!(await allProjectsInOrg(env, secret.orgId, secret.projectIds))) return errorResponse('Resource not found.', 404);
   secret.updatedAt = new Date().toISOString();
   await smRepo.saveSecret(env.DB, secret);
   await publishSecretChanged(env, secret.orgId, secret.id);
@@ -170,10 +180,12 @@ export async function handleListServiceAccounts(env: Env, userId: string, orgId:
 export async function handleCreateServiceAccount(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
   if (!(await requireSmMember(env, userId, orgId))) return errorResponse('Not found', 404);
   const body = await request.json() as { name?: string; projectIds?: string[] };
+  const projectIds = Array.isArray(body.projectIds) ? body.projectIds.map(String) : [];
+  if (!(await allProjectsInOrg(env, orgId, projectIds))) return errorResponse('Resource not found.', 404);
   const now = new Date().toISOString();
   const account = { id: generateUUID(), orgId, name: String(body.name || 'Machine account'), createdAt: now, updatedAt: now };
   await smRepo.saveServiceAccount(env.DB, account);
-  await smRepo.replaceServiceAccountProjects(env.DB, account.id, body.projectIds || []);
+  await smRepo.replaceServiceAccountProjects(env.DB, account.id, projectIds);
   return jsonResponse({
     id: account.id,
     organizationId: account.orgId,

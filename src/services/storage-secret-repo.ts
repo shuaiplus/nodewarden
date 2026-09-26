@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import {
@@ -9,6 +9,7 @@ import {
   smServiceAccountProjects,
   smServiceAccounts,
 } from '../db/schema';
+import { chunkRows } from './storage-org-repo';
 
 export interface SmProject {
   id: string;
@@ -94,13 +95,17 @@ function mapAccessToken(row: typeof smAccessTokens.$inferSelect): SmAccessToken 
   };
 }
 
-async function projectIdsBySecret(db: D1Database, secretIds: string[]): Promise<Map<string, string[]>> {
+// A link counts only when its project is in the secret's org, so a link stored across
+// organizations never shows. `secretScope` filters sm_secrets by org or by one id, never by an id
+// list, which broke past D1's bound-parameter cap.
+async function projectIdsBySecret(db: D1Database, secretScope: SQL): Promise<Map<string, string[]>> {
   const grouped = new Map<string, string[]>();
-  if (!secretIds.length) return grouped;
   const rows = await getOrm(db)
     .select({ secretId: smSecretProjects.secretId, projectId: smSecretProjects.projectId })
     .from(smSecretProjects)
-    .where(inArray(smSecretProjects.secretId, secretIds));
+    .innerJoin(smSecrets, eq(smSecrets.id, smSecretProjects.secretId))
+    .innerJoin(smProjects, and(eq(smProjects.id, smSecretProjects.projectId), eq(smProjects.orgId, smSecrets.orgId)))
+    .where(secretScope);
   for (const row of rows) {
     const list = grouped.get(row.secretId);
     if (list) list.push(row.projectId);
@@ -131,6 +136,14 @@ export async function listProjects(db: D1Database, orgId: string): Promise<SmPro
 export async function getProject(db: D1Database, id: string): Promise<SmProject | null> {
   const [row] = await getOrm(db).select().from(smProjects).where(eq(smProjects.id, id)).limit(1);
   return row ? mapProject(row) : null;
+}
+
+// The subset of `ids` that are projects of `orgId`. Each chunk also binds the org id.
+export async function projectsInOrg(db: D1Database, orgId: string, ids: string[]): Promise<Set<string>> {
+  const orm = getOrm(db);
+  const chunks = await Promise.all(chunkRows(ids, 1, 1)
+    .map((chunk) => orm.select({ id: smProjects.id }).from(smProjects).where(and(eq(smProjects.orgId, orgId), inArray(smProjects.id, chunk)))));
+  return new Set(chunks.flat().map(({ id }) => id));
 }
 
 export async function deleteProject(db: D1Database, id: string): Promise<void> {
@@ -172,7 +185,7 @@ export async function saveSecret(db: D1Database, secret: SmSecret): Promise<void
 export async function getSecret(db: D1Database, id: string): Promise<SmSecret | null> {
   const [row] = await getOrm(db).select().from(smSecrets).where(eq(smSecrets.id, id)).limit(1);
   if (!row) return null;
-  const projects = await projectIdsBySecret(db, [id]);
+  const projects = await projectIdsBySecret(db, eq(smSecrets.id, id));
   return mapSecret(row, projects.get(id) ?? []);
 }
 
@@ -182,7 +195,7 @@ export async function listSecrets(db: D1Database, orgId: string, includeDeleted 
     .from(smSecrets)
     .where(includeDeleted ? eq(smSecrets.orgId, orgId) : and(eq(smSecrets.orgId, orgId), isNull(smSecrets.deletedAt)))
     .orderBy(desc(smSecrets.updatedAt));
-  const projects = await projectIdsBySecret(db, rows.map((row) => row.id));
+  const projects = await projectIdsBySecret(db, eq(smSecrets.orgId, orgId));
   return rows.map((row) => mapSecret(row, projects.get(row.id) ?? []));
 }
 

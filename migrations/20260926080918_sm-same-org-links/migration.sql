@@ -1,0 +1,3 @@
+DELETE FROM `sm_secret_projects` WHERE EXISTS (SELECT 1 FROM `sm_secrets` s JOIN `sm_projects` p ON p.`id` = `sm_secret_projects`.`project_id` WHERE s.`id` = `sm_secret_projects`.`secret_id` AND s.`org_id` <> p.`org_id`);
+--> statement-breakpoint
+DELETE FROM `sm_service_account_projects` WHERE `read_access` = 0 OR EXISTS (SELECT 1 FROM `sm_service_accounts` sa JOIN `sm_projects` p ON p.`id` = `sm_service_account_projects`.`project_id` WHERE sa.`id` = `sm_service_account_projects`.`service_account_id` AND sa.`org_id` <> p.`org_id`);
