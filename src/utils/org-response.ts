@@ -9,7 +9,7 @@ import {
 } from '../services/org-types';
 import { resolvePermissions } from '../services/org-authz';
 
-export function organizationResponse(org: OrganizationRecord, options?: { useSso?: boolean; useScim?: boolean; useSecretsManager?: boolean }) {
+export function organizationResponse(org: OrganizationRecord, options?: { useSso?: boolean; useScim?: boolean }) {
   return {
     id: org.id,
     name: org.name,
@@ -27,7 +27,8 @@ export function organizationResponse(org: OrganizationRecord, options?: { useSso
     useSso: options?.useSso ?? true,
     useKeyConnector: false,
     usePasswordManager: true,
-    useSecretsManager: options?.useSecretsManager ?? true,
+    // Secrets Manager is on for every org; no license or caller may switch it off.
+    useSecretsManager: true,
     selfHost: true,
     useApi: true,
     useDisableSMAdsForUsers: true,
