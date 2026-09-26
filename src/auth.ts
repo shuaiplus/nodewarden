@@ -1,5 +1,6 @@
 import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import { sso } from '@better-auth/sso';
+import { eq } from 'drizzle-orm';
 import { betterAuth } from 'better-auth/minimal';
 import { bearer } from 'better-auth/plugins/bearer';
 import { twoFactor } from 'better-auth/plugins/two-factor';
@@ -17,16 +18,6 @@ const AUTH_TABLES = {
   twoFactor: twoFactorTable,
 };
 
-function kvSecondaryStorage(kv: KVNamespace) {
-  return {
-    get: (key: string) => kv.get(key),
-    set: async (key: string, value: string, ttl?: number) => {
-      await kv.put(key, value, ttl ? { expirationTtl: Math.max(60, ttl) } : undefined);
-    },
-    delete: (key: string) => kv.delete(key),
-  };
-}
-
 export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, request?: Request) {
   const origin = request ? new URL(request.url).origin : 'http://localhost';
   const orm = env?.DB ? getOrm(env.DB) : undefined;
@@ -38,12 +29,35 @@ export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, re
     database: orm
       ? drizzleAdapter(orm as never, { provider: 'sqlite', schema: AUTH_TABLES, transaction: false })
       : undefined,
-    secondaryStorage: env?.CACHE_KV ? kvSecondaryStorage(env.CACHE_KV) : undefined,
+    // Sessions stay in D1 so disable/delete revocation cannot be undone by stale KV entries.
+    rateLimit: env?.CACHE_KV ? {
+      customStorage: {
+        get: async (key) => {
+          const value = await env.CACHE_KV!.get(key);
+          return value ? JSON.parse(value) : null;
+        },
+        set: async (key, value) => {
+          // ponytail: built-in windows are at most 60s; raise this with any longer custom rule.
+          await env.CACHE_KV!.put(key, JSON.stringify(value), { expirationTtl: 60 });
+        },
+      },
+    } : undefined,
     emailAndPassword: {
       enabled: true,
       password: {
         hash: hashPassword,
         verify: verifyBetterAuthPassword,
+      },
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          before: async (session) => {
+            if (!orm) return false;
+            const [user] = await orm.select({ status: users.status }).from(users).where(eq(users.id, session.userId));
+            return user?.status === 'active' ? { data: session } : false;
+          },
+        },
       },
     },
     session: {

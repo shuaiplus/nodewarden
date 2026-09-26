@@ -323,7 +323,7 @@ export async function handleEmergencyAccessRoute(
     grantor.key = update.key;
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
-    await storage.saveUser(grantor);
+    await storage.saveUser(grantor, true);
     await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash);
     await storage.deleteRefreshTokensByUserId(grantor.id);
     AuthService.invalidateUserCache(grantor.id);

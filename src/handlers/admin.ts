@@ -4,7 +4,7 @@ import { twoFactorProviders } from '../services/two-factor-providers';
 import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { deleteUserAccount } from '../services/account-deletion';
+import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 
 function isAdmin(user: User): boolean {
@@ -369,22 +369,19 @@ export async function handleAdminSetUserStatus(
     return errorResponse('User not found', 404);
   }
 
-  target.status = nextStatus;
-  target.updatedAt = new Date().toISOString();
-  await storage.saveUser(target);
-  if (nextStatus === 'banned') {
-    await storage.deleteRefreshTokensByUserId(target.id);
-  }
-  AuthService.invalidateUserCache(target.id);
-  await writeAuditLog(storage, actorUser.id, 'admin.user.status', 'user', target.id, {
-    status: nextStatus,
-  }, request);
+  const outcome = await setUserStatus(env, target.id, nextStatus, {
+    actorUserId: actorUser.id, action: 'admin.user.status', category: 'security', level: 'security',
+    targetType: 'user', targetId: target.id,
+    metadata: { status: nextStatus, ...auditRequestMetadata(request) },
+  });
+  if (outcome.kind === 'not-found') return errorResponse('User not found', 404);
+  if (outcome.kind === 'last-vault-admin') return errorResponse('Cannot disable the last active instance administrator.', 400);
 
   return jsonResponse({
     id: target.id,
     email: target.email,
     role: target.role,
-    status: target.status,
+    status: nextStatus,
     object: 'user',
   });
 }

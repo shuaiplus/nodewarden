@@ -43,3 +43,8 @@ export function portalPagination(url: URL, page: number, hasMore: boolean): Safe
   const pageUrl = (value: number) => { const params = new URLSearchParams(url.searchParams); params.set('page', String(value)); return url.pathname + '?' + params; };
   return html`<nav>${page > 1 ? html`<a href="${pageUrl(page - 1)}">Previous</a>` : html``}<span>Page ${page}</span>${hasMore ? html`<a href="${pageUrl(page + 1)}">Next</a>` : html``}</nav>`;
 }
+
+export function userStatusForm(userId: string, csrf: string, status: 'active' | 'banned'): SafeHtml {
+  const action = status === 'active' ? 'disable' : 'enable';
+  return html`<form method="post" action="${'/admin/users/' + encodeURIComponent(userId) + '/' + action}"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">${status === 'active' ? 'Disable user' : 'Enable user'}</button></form>`;
+}

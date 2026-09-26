@@ -97,7 +97,7 @@ export async function getAllUsersWithTwoFactor(db: D1Database): Promise<Array<Us
   return rows.map(({ user, hasTwoFactorPasskey }) => ({ ...mapUserRow(user), hasTwoFactorPasskey }));
 }
 
-export async function saveUser(db: D1Database, user: User): Promise<void> {
+export async function saveUser(db: D1Database, user: User, rotateSecurityStamp = false): Promise<void> {
   const values = userValues(user);
   await getOrm(db)
     .insert(users)
@@ -116,9 +116,8 @@ export async function saveUser(db: D1Database, user: User): Promise<void> {
         kdfIterations: values.kdfIterations,
         kdfMemory: values.kdfMemory,
         kdfParallelism: values.kdfParallelism,
-        securityStamp: values.securityStamp,
+        ...(rotateSecurityStamp ? { securityStamp: values.securityStamp } : {}),
         role: values.role,
-        status: values.status,
         verifyDevices: values.verifyDevices,
         totpSecret: values.totpSecret,
         totpRecoveryCode: values.totpRecoveryCode,

@@ -141,7 +141,7 @@ test('sole Owners and item creators without a confirmed successor are refused wi
 test('deleting the last active vault admin is refused even if an inactive admin exists', async () => {
   const f = await setup();
   await f.storage.saveUser({ ...f.target, role: 'admin' });
-  await f.storage.saveUser({ ...f.admin, status: 'disabled' });
+  await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.admin.id).run();
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'last-vault-admin' });
   await assertIntact(f);
   assert.deepEqual(await deleteUserAccount(f.env, 'missing', audit), { kind: 'not-found' });
@@ -157,7 +157,7 @@ test('a concurrent successor revocation or admin deactivation makes every batch 
         await getOrm(f.env.DB).update(organizationMemberships).set({ status: 1 })
           .where(eq(organizationMemberships.userId, f.successor.id));
       } else {
-        await f.env.DB.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").bind(f.admin.id).run();
+        await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.admin.id).run();
       }
       return batch(statements);
     };

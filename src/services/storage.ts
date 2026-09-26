@@ -307,8 +307,8 @@ export class StorageService {
     return listStoredUsers(this.db);
   }
 
-  async saveUser(user: User): Promise<void> {
-    await saveStoredUser(this.db, user);
+  async saveUser(user: User, rotateSecurityStamp = false): Promise<void> {
+    await saveStoredUser(this.db, user, rotateSecurityStamp);
   }
 
   async createUser(user: User): Promise<void> {

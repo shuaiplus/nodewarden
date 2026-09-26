@@ -840,7 +840,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   }
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  await storage.saveUser(user);
+  await storage.saveUser(user, true);
   await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);

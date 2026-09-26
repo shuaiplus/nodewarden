@@ -3,7 +3,7 @@ import { canAccessSecretsManager } from '../services/org-authz';
 import { MembershipStatus, MembershipType, publicMembershipStatus } from '../services/org-types';
 import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
 import { countPersonalCiphers } from '../services/storage-cipher-repo';
-import { deleteUserAccount, deleteOrganizationAccount } from '../services/account-deletion';
+import { deleteUserAccount, deleteOrganizationAccount, setUserStatus } from '../services/account-deletion';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { isYubiKeyEnabled } from '../utils/yubico-otp';
 import { listAuditLogs } from '../services/storage-admin-repo';
@@ -26,7 +26,7 @@ import { StorageService } from '../services/storage';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
 import { html } from '../utils/html';
-import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination } from '../views/admin-portal';
+import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm } from '../views/admin-portal';
 
 const forbidden = () => portalPage('Forbidden', html`<p>This request is not allowed.</p>`, 403);
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
@@ -114,10 +114,12 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const rows = await searchUsersByEmailPrefix(env.DB, email, (page - 1) * count, count);
       return portalPage('Users', html`${portalNavigation(session.csrf)}<form method="get" action="/admin/users"><label>Email prefix <input name="email" value="${email}"></label><input type="hidden" name="count" value="${count}"><button type="submit">Search</button></form><table><thead><tr><th>Email</th><th>Name</th><th>Created</th><th>Status</th><th>Vault role</th><th>Two-factor</th></tr></thead><tbody>${rows.slice(0, count).map((user) => html`<tr><td><a href="${'/admin/users/view/' + encodeURIComponent(user.id)}">${user.email}</a></td><td>${user.name ?? ''}</td><td>${user.createdAt}</td><td>${user.status}</td><td>${user.role}</td><td>${user.twoFactor ? 'Yes' : 'No'}</td></tr>`)}</tbody></table>${portalPagination(url, page, rows.length > count)}`);
     }
-    const userPath = path.match(/^\/admin\/users\/(view|delete)\/([^/]+)$/);
+    const userActionPath = path.match(/^\/admin\/users\/([^/]+)\/(disable|enable)$/);
+    const userPath = path.match(/^\/admin\/users\/(view|delete)\/([^/]+)$/)
+      ?? (userActionPath ? [userActionPath[0], userActionPath[2], userActionPath[1]] : null);
     if (userPath) {
       const deleting = userPath[1] === 'delete';
-      if (request.method !== (deleting ? 'POST' : 'GET')) return methodNotAllowed();
+      if (request.method !== (userPath[1] === 'view' ? 'GET' : 'POST')) return methodNotAllowed();
       const storage = new StorageService(env.DB);
       const user = await storage.getUserById(decodeURIComponent(userPath[2]));
       if (!user) return portalPage('Not found', html`<p>User not found.</p>`, 404);
@@ -131,6 +133,16 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         if (outcome.kind === 'not-found') return portalPage('Not found', html`<p>User not found.</p>`, 404);
         refusal = outcome.kind === 'last-vault-admin' ? 'Cannot delete the last active instance administrator.' : 'Transfer or delete these organizations first: ' + outcome.orgIds.join(', ');
       }
+      if (userPath[1] === 'disable' || userPath[1] === 'enable') {
+        const next = userPath[1] === 'disable' ? 'banned' : 'active';
+        const outcome = await setUserStatus(env, user.id, next, {
+          action: `admin.portal.user.${userPath[1]}`, category: 'security', level: 'security', actorUserId: null,
+          targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
+        });
+        if (outcome.kind === 'updated' || outcome.kind === 'unchanged') return portalRedirect(viewPath + (next === 'banned' ? '?m=disabled' : '?m=enabled'));
+        if (outcome.kind === 'not-found') return portalPage('Not found', html`<p>User not found.</p>`, 404);
+        refusal = 'Cannot disable the last active instance administrator.';
+      }
       const [personalItems, memberships, passkeys] = await Promise.all([
         countPersonalCiphers(env.DB, user.id),
         env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
@@ -138,7 +150,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       ]);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
         ['Id', user.id], ['Email', user.email], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
-      ])}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
+      ])}${userStatusForm(user.id, session.csrf, user.status)}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin/organizations') {
       if (request.method !== 'GET') return methodNotAllowed();

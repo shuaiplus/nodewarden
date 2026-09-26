@@ -491,7 +491,7 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
   ]);
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  await storage.saveUser(user);
+  await storage.saveUser(user, true);
   AuthService.invalidateUserCache(userId);
   notifyUserLogout(env, userId, null);
   await writeAuditEvent(storage, {

@@ -4,7 +4,9 @@ import { getOrm } from '../db/client';
 import { attachments, ciphers, emergencyAccess, sends, session, users } from '../db/schema';
 import type { Env } from '../types';
 import { AuthService } from './auth';
-import { auditEventStatement, type AuditEventInput } from './audit-events';
+import { StorageService } from './storage';
+import { normalizeImportedBackupSettings } from './backup-config';
+import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
 import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
 import { bumpOrgMemberRevisions, deleteOrganization } from './storage-org-repo';
@@ -38,6 +40,40 @@ function blockedOrganizations(userId: string) {
 function lastActiveAdmin(userId: string) {
   return sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND role = 'admin' AND status = 'active')
     AND NOT EXISTS (SELECT 1 FROM users WHERE id <> ${userId} AND role = 'admin' AND status = 'active')`;
+}
+
+export type SetUserStatusResult = { kind: 'updated' | 'unchanged' | 'not-found' | 'last-vault-admin' };
+
+export async function setUserStatus(env: Env, userId: string, next: 'active' | 'banned', audit: AuditEventInput): Promise<SetUserStatusResult> {
+  const storage = new StorageService(env.DB);
+  const orm = getOrm(env.DB);
+  let changed: boolean;
+  if (next === 'banned') {
+    const securityStamp = crypto.randomUUID();
+    const updated = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND security_stamp = ${securityStamp})`;
+    const [update] = await orm.batch([
+      orm.update(users).set({ status: 'banned', securityStamp, updatedAt: new Date().toISOString() })
+        .where(and(eq(users.id, userId), eq(users.status, 'active'), sql`NOT (${lastActiveAdmin(userId)})`)),
+      orm.delete(session).where(and(eq(session.userId, userId), updated)),
+      auditEventStatement(env.DB, audit, updated),
+    ]);
+    changed = (update.meta.changes ?? 0) > 0;
+  } else {
+    const updated = await orm.update(users).set({ status: 'active', updatedAt: new Date().toISOString() })
+      .where(and(eq(users.id, userId), eq(users.status, 'banned'))).returning({ id: users.id });
+    changed = updated.length > 0;
+    if (changed) await writeAuditEvent(storage, audit);
+  }
+  const user = await storage.getUserById(userId);
+  if (!user) return { kind: 'not-found' };
+  if (!changed) return { kind: user.status === next ? 'unchanged' : 'last-vault-admin' };
+  AuthService.invalidateUserCache(userId);
+  if (next === 'banned') {
+    const { notifyUserLogout } = await import('../durable/notifications-hub');
+    notifyUserLogout(env, userId, null);
+  }
+  if (user.role === 'admin') await normalizeImportedBackupSettings(storage, env);
+  return { kind: 'updated' };
 }
 
 async function userDeletionRefusal(db: D1Database, userId: string): Promise<Exclude<DeleteUserAccountResult, { kind: 'deleted' }> | null> {
