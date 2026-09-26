@@ -3,6 +3,7 @@ import { errorResponse, jsonResponse } from './utils/response';
 import {
   handleAcceptInvite,
   handleBulkConfirmMembers,
+  handleBulkMemberAction,
   handleBulkReinviteMembers,
   handleConfirmMember,
   handleCreateOrgCollection,
@@ -142,6 +143,12 @@ export async function handleOrganizationRoute(
   if (sub === '/users/public-keys' && method === 'POST') return handleListMemberPublicKeys(request, env, userId, orgId);
   if (sub === '/users/confirm' && method === 'POST') return handleBulkConfirmMembers(request, env, userId, orgId);
   if (sub === '/users/reinvite' && method === 'POST') return handleBulkReinviteMembers(request, env, userId, orgId);
+  if ((sub === '/users' && method === 'DELETE') || (sub === '/users/remove' && method === 'POST')) {
+    return handleBulkMemberAction(request, env, userId, orgId, 'remove');
+  }
+  if ((sub === '/users/revoke' || sub === '/users/restore') && (method === 'PUT' || method === 'PATCH')) {
+    return handleBulkMemberAction(request, env, userId, orgId, sub === '/users/revoke' ? 'revoke' : 'restore');
+  }
   const userMatch = sub.match(/^\/users\/([a-f0-9-]+)(?:\/(accept|confirm|reinvite|revoke|restore|restore\/vnext))?$/i);
   if (userMatch) {
     const memberId = userMatch[1];
@@ -149,8 +156,8 @@ export async function handleOrganizationRoute(
     if (action === 'accept' && method === 'POST') return handleAcceptInvite(request, env, currentUser, orgId, memberId);
     if (action === 'confirm' && method === 'POST') return handleConfirmMember(request, env, userId, orgId, memberId);
     if (action === 'reinvite' && method === 'POST') return handleReinviteMember(request, env, userId, orgId, memberId);
-    if (action === 'revoke' && method === 'PUT') return handleRevokeMember(env, userId, orgId, memberId);
-    if ((action === 'restore' || action === 'restore/vnext') && method === 'PUT') return handleRestoreMember(env, userId, orgId, memberId);
+    if (action === 'revoke' && (method === 'PUT' || method === 'PATCH')) return handleRevokeMember(env, userId, orgId, memberId);
+    if ((action === 'restore' || action === 'restore/vnext') && (method === 'PUT' || method === 'PATCH')) return handleRestoreMember(env, userId, orgId, memberId);
     if (method === 'GET' && !action) return handleGetMember(request, env, userId, orgId, memberId);
     if ((method === 'PUT' || method === 'POST') && !action) return handleEditMember(request, env, userId, orgId, memberId);
     if (method === 'DELETE') return handleDeleteMember(env, userId, orgId, memberId);

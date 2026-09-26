@@ -126,8 +126,7 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
   if (request.method === 'DELETE' && id) {
     const member = await orgRepo.getMembership(env.DB, id);
     if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
-    await orgRepo.deleteMembership(env.DB, id);
-    await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+    await orgRepo.applyMembershipAction(env.DB, orgId, [id], 'remove');
     return new Response(null, { status: 204 });
   }
 

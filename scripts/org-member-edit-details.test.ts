@@ -260,6 +260,70 @@ test('member actions reject self-management and repeated revoke or restore witho
   assert.equal((await details(env, owner, orgId, member.memberId)).status, MembershipStatus.Confirmed);
 });
 
+test('bulk member actions report per-member errors, preserve other organizations, and retain the owner', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const self = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
+  const admin = await addMember(env, orgId, MembershipType.Admin);
+  const member = await addMember(env, orgId, MembershipType.User);
+  const foreignOrg = await createOrg(env, await seedUser(env));
+  const foreign = await addMember(env, foreignOrg, MembershipType.User);
+  const missing = crypto.randomUUID();
+  const bulk = async (method: string, suffix: string, ids: string[]) => {
+    const response = await authedFetch(env, {
+      method, path: `/api/organizations/${orgId}/users${suffix}`, body: { ids }, userId: owner.id,
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { object: string; data: Array<{ id: string; error: string; object: string }> };
+    assert.equal(body.object, 'list');
+    assert.ok(body.data.every((item) => item.object === 'OrganizationBulkConfirmResponseModel'));
+    return body.data.map(({ id, error }) => ({ id, error }));
+  };
+  assert.deepEqual(await bulk('PUT', '/revoke', [admin.memberId, member.memberId, self, foreign.memberId, missing]), [
+    { id: admin.memberId, error: '' }, { id: member.memberId, error: '' },
+    { id: self, error: 'You cannot revoke yourself.' },
+    { id: foreign.memberId, error: 'Invalid user.' }, { id: missing, error: 'Invalid user.' },
+  ]);
+  assert.deepEqual(await bulk('PATCH', '/revoke', [member.memberId]), [{ id: member.memberId, error: 'Already revoked.' }]);
+  assert.deepEqual(await bulk('PATCH', '/restore', [member.memberId, admin.memberId]), [
+    { id: member.memberId, error: '' }, { id: admin.memberId, error: '' },
+  ]);
+  assert.deepEqual(await bulk('PUT', '/restore', [member.memberId]), [{ id: member.memberId, error: 'Already active.' }]);
+  assert.deepEqual(await bulk('POST', '/remove', [member.memberId]), [{ id: member.memberId, error: '' }]);
+  assert.deepEqual(await bulk('DELETE', '', [admin.memberId, self]), [
+    { id: admin.memberId, error: '' }, { id: self, error: 'You cannot remove yourself.' },
+  ]);
+  assert.deepEqual((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((row) => row.id), [self]);
+  assert.equal((await orgRepo.getMembership(env.DB, foreign.memberId))?.status, MembershipStatus.Confirmed);
+  assert.ok(await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(member.user.id).first());
+});
+
+test('bulk member writes chunk 150 ids and roll back revisions with a failed later chunk', async (t) => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const ids: string[] = [];
+  for (let i = 0; i < 150; i++) ids.push((await addMember(env, orgId, MembershipType.User)).memberId);
+  const revisionBefore = await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first();
+  await env.DB.prepare(`CREATE TRIGGER fail_last_member BEFORE UPDATE ON organization_memberships
+    WHEN NEW.id = '${ids[149]}' BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
+  const request = { method: 'PUT', path: `/api/organizations/${orgId}/users/revoke`, body: { ids }, userId: owner.id };
+  const failed = await authedFetch(env, request);
+  assert.equal(failed.status, 500);
+  assert.ok((await orgRepo.listMembershipsByOrg(env.DB, orgId)).every((member) => member.status === MembershipStatus.Confirmed));
+  assert.deepEqual(await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first(), revisionBefore);
+  await env.DB.exec('DROP TRIGGER fail_last_member');
+  const batch = t.mock.method(env.DB, 'batch');
+  const response = await authedFetch(env, request);
+  assert.equal(response.status, 200);
+  const result = await response.json() as { data: Array<{ error: string }> };
+  assert.equal(result.data.length, 150);
+  assert.ok(result.data.every((item) => item.error === ''));
+  assert.equal(batch.mock.callCount(), 1);
+  assert.equal((await orgRepo.listMembershipsByOrg(env.DB, orgId)).filter((member) => member.status < 0).length, 150);
+});
+
 // The org creator is stored with accessAll, which official web's update request never sends, so
 // PUT must not let that grant outlive a demotion the dialog cannot show or undo.
 test('demoting the organization creator drops the full collection access it was created with', async () => {

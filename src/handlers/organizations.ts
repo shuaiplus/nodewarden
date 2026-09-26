@@ -34,13 +34,11 @@ import {
   type MembershipRecord,
   type OrgPermissions,
   publicMembershipStatus,
-  revokeStatus,
-  restoreStatus,
 } from '../services/org-types';
 import { deleteCiphersByOrganization } from '../services/storage-cipher-repo';
 import * as orgRepo from '../services/storage-org-repo';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, isUUID } from '../utils/uuid';
 import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
 import { publishPlatformEvent } from '../services/queue-publisher';
@@ -243,8 +241,7 @@ export async function handleLeaveOrganization(env: Env, userId: string, orgId: s
   if (member.type === MembershipType.Owner && (await orgRepo.countConfirmedOwners(env.DB, orgId)) <= 1) {
     return errorResponse('The last owner cannot leave', 400);
   }
-  await orgRepo.deleteMembership(env.DB, member.id);
-  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  await orgRepo.applyMembershipAction(env.DB, orgId, [member.id], 'remove');
   return jsonResponse({});
 }
 
@@ -967,8 +964,7 @@ export async function handleDeleteMember(env: Env, userId: string, orgId: string
   if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
-  await orgRepo.deleteMembership(env.DB, memberId);
-  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'remove');
   return jsonResponse({});
 }
 
@@ -984,10 +980,7 @@ export async function handleRevokeMember(env: Env, userId: string, orgId: string
   if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
-  membership.status = revokeStatus(membership.status);
-  membership.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, membership);
-  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'revoke');
   return jsonResponse({});
 }
 
@@ -999,11 +992,35 @@ export async function handleRestoreMember(env: Env, userId: string, orgId: strin
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
   const removalCheck = memberRemovalCheck(actor, membership, 'restore');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
-  membership.status = restoreStatus(membership.status);
-  membership.updatedAt = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, membership);
-  await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
+  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'restore');
   return jsonResponse({});
+}
+
+export async function handleBulkMemberAction(request: Request, env: Env, userId: string, orgId: string, action: 'remove' | 'revoke' | 'restore'): Promise<Response> {
+  const actor = await requireMember(env.DB, userId, orgId);
+  if (actor instanceof Response) return actor;
+  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  const ids = readBulkIds(body);
+  if (ids instanceof Response) return ids;
+  if (!ids.every(isUUID)) return errorResponse('The Ids field must contain valid GUIDs.', 400);
+  const members = await orgRepo.listMembershipsByOrg(env.DB, orgId);
+  const byId = new Map(members.map((member) => [member.id, member]));
+  const results = [...new Set(ids)].map((id) => {
+    const member = byId.get(id);
+    const check = member ? memberRemovalCheck(actor, member, action) : { ok: false as const, message: 'Invalid user.' };
+    return { id, error: check.ok ? '' : check.message };
+  });
+  if (action !== 'restore') {
+    const owners = new Set(members.filter((member) => member.type === MembershipType.Owner && isActiveMember(member)).map((member) => member.id));
+    const removedOwners = results.filter((result) => !result.error && owners.has(result.id));
+    if (removedOwners.length && removedOwners.length === owners.size) {
+      for (const result of removedOwners) result.error = 'Organization must have at least one confirmed owner.';
+    }
+  }
+  await orgRepo.applyMembershipAction(env.DB, orgId, results.filter((result) => !result.error).map((result) => result.id), action);
+  return bulkResultsResponse(results);
 }
 
 export async function handleListGroups(env: Env, userId: string, orgId: string): Promise<Response> {

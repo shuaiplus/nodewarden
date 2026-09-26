@@ -26,6 +26,7 @@ import { attachmentUpsert } from './storage-attachment-repo';
 import { cipherUpsert } from './storage-cipher-repo';
 import {
   MembershipStatus,
+  REVOKE_STATUS_OFFSET,
   type CollectionAccess,
   type CollectionRecord,
   type GroupRecord,
@@ -271,8 +272,24 @@ export async function listRegisteredEmails(db: D1Database, emails: string[]): Pr
   return new Set(chunks.flat().map(({ email }) => email));
 }
 
-export async function deleteMembership(db: D1Database, id: string): Promise<void> {
-  await getOrm(db).delete(organizationMemberships).where(eq(organizationMemberships.id, id));
+// Bump revisions before deleting memberships so removed users also invalidate their cached sync.
+// The revision write and every chunk commit together, including a failed later chunk.
+export async function applyMembershipAction(db: D1Database, orgId: string, ids: string[], action: 'remove' | 'revoke' | 'restore'): Promise<void> {
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const revision = db.prepare(`
+    INSERT INTO user_revisions(user_id, revision_date)
+    SELECT user_id, ? FROM organization_memberships
+    WHERE org_id = ? AND user_id IS NOT NULL
+    ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date
+  `).bind(now, orgId);
+  const operation = action === 'remove' ? 'DELETE FROM organization_memberships'
+    : `UPDATE organization_memberships SET status = status ${action === 'revoke' ? '-' : '+'} ${REVOKE_STATUS_OFFSET}, updated_at = ?`;
+  const statusGuard = action === 'remove' ? '' : ` AND status ${action === 'revoke' ? '> -1' : '<= -1'}`;
+  const writes = chunkRows(ids, 1, action === 'remove' ? 1 : 2).map((chunk) => db.prepare(
+    `${operation} WHERE org_id = ? AND id IN (${chunk.map(() => '?').join(',')})${statusGuard}`,
+  ).bind(...(action === 'remove' ? [] : [now]), orgId, ...chunk));
+  await db.batch([revision, ...writes]);
 }
 
 export async function countConfirmedOwners(db: D1Database, orgId: string): Promise<number> {
