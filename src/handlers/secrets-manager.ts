@@ -1,3 +1,4 @@
+import type { Principal } from '../services/auth';
 import { LIMITS } from '../config/limits';
 import { policyConflict, prepareSecretPolicies } from './sm-access-policies';
 import { isSerializedEncString } from '../utils/account-passkeys';
@@ -43,16 +44,16 @@ export async function secretsListResponse(env: Env, orgId: string, secrets: smRe
   };
 }
 
-export async function handleListSecrets(env: Env, userId: string, orgId: string, projectId?: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleListSecrets(env: Env, principal: Principal, orgId: string, projectId?: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(secret => !projectId || secret.projectIds.includes(projectId));
   return jsonResponse(await secretsListResponse(env, orgId, secrets, context));
 }
 
-export async function handleProjectSecrets(env: Env, userId: string, id: string): Promise<Response> {
+export async function handleProjectSecrets(env: Env, principal: Principal, id: string): Promise<Response> {
   const project = await smRepo.getProject(env.DB, id);
-  return project ? handleListSecrets(env, userId, project.orgId, id) : errorResponse('Not found', 404);
+  return project ? handleListSecrets(env, principal, project.orgId, id) : errorResponse('Not found', 404);
 }
 
 async function secretInput(request: Request) {
@@ -64,8 +65,8 @@ async function secretInput(request: Request) {
   return { key: body.key, value: body.value, note: body.note, projectIds, accessPoliciesRequests: body.accessPoliciesRequests };
 }
 
-export async function handleCreateSecret(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleCreateSecret(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const input = await secretInput(request);
   if (input instanceof Response) return input;
@@ -81,18 +82,18 @@ export async function handleCreateSecret(request: Request, env: Env, userId: str
   return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
 }
 
-export async function handleGetSecret(env: Env, userId: string, secretId: string): Promise<Response> {
+export async function handleGetSecret(env: Env, principal: Principal, secretId: string): Promise<Response> {
   const secret = await smRepo.getSecret(env.DB, secretId);
-  const context = secret && !secret.deletedAt && await smContext(env, userId, secret.orgId);
+  const context = secret && !secret.deletedAt && await smContext(env, principal, secret.orgId);
   if (!secret || !context) return errorResponse('Not found', 404);
   const access = secretAccess(context.actor, context.grants, secret);
   if (access === 'none') return errorResponse('Not found', 404);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId), access));
 }
 
-export async function handleUpdateSecret(request: Request, env: Env, userId: string, secretId: string): Promise<Response> {
+export async function handleUpdateSecret(request: Request, env: Env, principal: Principal, secretId: string): Promise<Response> {
   const existing = await smRepo.getSecret(env.DB, secretId);
-  const context = existing && !existing.deletedAt && await smContext(env, userId, existing.orgId);
+  const context = existing && !existing.deletedAt && await smContext(env, principal, existing.orgId);
   if (!existing || !context) return errorResponse('Not found', 404);
   const input = await secretInput(request);
   if (input instanceof Response) return input;
@@ -108,14 +109,14 @@ export async function handleUpdateSecret(request: Request, env: Env, userId: str
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }
 
-export async function handleDeleteSecrets(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleDeleteSecrets(request: Request, env: Env, principal: Principal): Promise<Response> {
   const ids = await readIds(request);
   if (!ids) return errorResponse('Request body must be an array of secret GUIDs', 400);
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   const orgId = secrets[0]?.orgId;
   if (!orgId || secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || secret.deletedAt)) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, orgId);
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const data = secrets.map(secret => ({ id: secret.id, error: secretAccess(context.actor, context.grants, secret) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
   const allowed = data.filter(item => !item.error).map(item => item.id);
@@ -124,7 +125,7 @@ export async function handleDeleteSecrets(request: Request, env: Env, userId: st
   return jsonResponse(listResponse(data));
 }
 
-export async function handleSecretsByIds(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleSecretsByIds(request: Request, env: Env, principal: Principal): Promise<Response> {
   const body = await request.json().catch(() => null) as { ids?: unknown } | null;
   if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
   const ids = body.ids.map(id => id.toLowerCase());
@@ -132,14 +133,14 @@ export async function handleSecretsByIds(request: Request, env: Env, userId: str
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   const orgId = secrets[0]?.orgId;
   if (!orgId || secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || secret.deletedAt)) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, orgId);
+  const context = await smContext(env, principal, orgId);
   if (!context || secrets.some(secret => secretAccess(context.actor, context.grants, secret) === 'none')) return errorResponse('Not found', 404);
   const names = await projectNames(env, orgId);
   return jsonResponse(listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))));
 }
 
-export async function smContext(env: Env, userId: string, orgId: string) {
-  const actor = await resolveSmActor(env, userId, orgId);
+export async function smContext(env: Env, principal: Principal, orgId: string) {
+  const actor = await resolveSmActor(env, principal, orgId);
   return actor ? { actor, grants: await smRepo.loadSmGrants(env.DB, actor, orgId) } : null;
 }
 
@@ -158,16 +159,16 @@ export async function readIds(request: Request): Promise<string[] | null> {
   return Array.isArray(ids) && ids.every(isUUID) ? ids.map(id => id.toLowerCase()) : null;
 }
 
-export async function handleListProjects(env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleListProjects(env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   // ponytail: in-memory filter loads every org row; push grants into SQL if an org passes ~10k secrets.
   const projects = (await smRepo.listProjects(env.DB, orgId)).map(project => projectResponse(project, projectAccess(context.actor, context.grants, project.id))).filter(project => project.read);
   return jsonResponse(listResponse(projects));
 }
 
-export async function handleCreateProject(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleCreateProject(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const body = await request.json().catch(() => null) as { name?: unknown } | null;
   if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
@@ -177,9 +178,9 @@ export async function handleCreateProject(request: Request, env: Env, userId: st
   return jsonResponse(projectResponse(project, 'write'));
 }
 
-export async function handleProject(request: Request, env: Env, userId: string, id: string, counts = false): Promise<Response> {
+export async function handleProject(request: Request, env: Env, principal: Principal, id: string, counts = false): Promise<Response> {
   const project = await smRepo.getProject(env.DB, id);
-  const context = project && await smContext(env, userId, project.orgId);
+  const context = project && await smContext(env, principal, project.orgId);
   if (!project || !context) return errorResponse('Not found', 404);
   const access = projectAccess(context.actor, context.grants, id);
   if (counts) return context.actor.kind === 'serviceAccount' ? errorResponse('Not found', 404) : jsonResponse(await smRepo.projectCounts(env.DB, project, access));
@@ -193,14 +194,14 @@ export async function handleProject(request: Request, env: Env, userId: string, 
   return jsonResponse(projectResponse(project, access));
 }
 
-export async function handleDeleteProjects(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleDeleteProjects(request: Request, env: Env, principal: Principal): Promise<Response> {
   const ids = await readIds(request);
   if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const projects = await smRepo.getProjectsByIds(env.DB, ids);
   const orgId = projects[0]?.orgId;
   if (!orgId || projects.length !== ids.length || projects.some(project => project.orgId !== orgId)) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, orgId);
+  const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const data = ids.map(id => ({ id, error: projectAccess(context.actor, context.grants, id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
   await smRepo.deleteProjects(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
@@ -211,16 +212,16 @@ function serviceAccountResponse(account: smRepo.SmServiceAccount) {
   return { id: account.id, organizationId: account.orgId, name: account.name, creationDate: account.createdAt, revisionDate: account.updatedAt, object: 'serviceAccount' };
 }
 
-export async function handleListServiceAccounts(env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleListServiceAccounts(env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const counts = await smRepo.serviceAccountSecretCounts(env.DB, orgId);
   const accounts = (await smRepo.listServiceAccounts(env.DB, orgId)).filter(account => serviceAccountAccess(context.actor, context.grants, account.id) !== 'none');
   return jsonResponse(listResponse(accounts.map(account => ({ ...serviceAccountResponse(account), accessToSecrets: counts.get(account.id) ?? 0 }))));
 }
 
-export async function handleCreateServiceAccount(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleCreateServiceAccount(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const body = await request.json().catch(() => null) as { name?: unknown; projectIds?: unknown } | null;
   if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
@@ -230,9 +231,9 @@ export async function handleCreateServiceAccount(request: Request, env: Env, use
   return jsonResponse(serviceAccountResponse(account));
 }
 
-export async function handleServiceAccount(request: Request, env: Env, userId: string, id: string, counts = false): Promise<Response> {
+export async function handleServiceAccount(request: Request, env: Env, principal: Principal, id: string, counts = false): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, id);
-  const context = account && await smContext(env, userId, account.orgId);
+  const context = account && await smContext(env, principal, account.orgId);
   if (!account || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const access = serviceAccountAccess(context.actor, context.grants, id);
   if (counts) return jsonResponse(await smRepo.serviceAccountCounts(env.DB, account, access));
@@ -246,23 +247,23 @@ export async function handleServiceAccount(request: Request, env: Env, userId: s
   return jsonResponse(serviceAccountResponse(account));
 }
 
-export async function handleDeleteServiceAccounts(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleDeleteServiceAccounts(request: Request, env: Env, principal: Principal): Promise<Response> {
   const ids = await readIds(request);
   if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const accounts = await smRepo.getServiceAccountsByIds(env.DB, ids);
   const orgId = accounts[0]?.orgId;
   if (!orgId || accounts.length !== ids.length || accounts.some(account => account.orgId !== orgId)) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, orgId);
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const data = accounts.map(account => ({ id: account.id, error: serviceAccountAccess(context.actor, context.grants, account.id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
   await smRepo.deleteServiceAccounts(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
   return jsonResponse(listResponse(data));
 }
 
-export async function handleRevokeAccessTokens(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+export async function handleRevokeAccessTokens(request: Request, env: Env, principal: Principal, id: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, id);
-  const context = account && await smContext(env, userId, account.orgId);
+  const context = account && await smContext(env, principal, account.orgId);
   if (!context || serviceAccountAccess(context.actor, context.grants, id) !== 'write') return errorResponse('Not found', 404);
   const body = await request.json().catch(() => null) as { ids?: unknown } | null;
   if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
@@ -270,16 +271,16 @@ export async function handleRevokeAccessTokens(request: Request, env: Env, userI
   return new Response(null, { status: 200 });
 }
 
-export async function handleSmCounts(env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handleSmCounts(env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const [projects, secrets, accounts] = await Promise.all([smRepo.listProjects(env.DB, orgId), smRepo.listSecrets(env.DB, orgId), smRepo.listServiceAccounts(env.DB, orgId)]);
   return jsonResponse({ projects: projects.filter(row => projectAccess(context.actor, context.grants, row.id) !== 'none').length, secrets: secrets.filter(row => secretAccess(context.actor, context.grants, row) !== 'none').length, serviceAccounts: accounts.filter(row => serviceAccountAccess(context.actor, context.grants, row.id) !== 'none').length, object: 'organizationCounts' });
 }
 
-export async function handleCreateAccessToken(request: Request, env: Env, userId: string, serviceAccountId: string): Promise<Response> {
+export async function handleCreateAccessToken(request: Request, env: Env, principal: Principal, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
-  const context = account && await smContext(env, userId, account.orgId);
+  const context = account && await smContext(env, principal, account.orgId);
   if (!account || !context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body || !encryptedField(body.name, 200) || !encryptedField(body.encryptedPayload, 4000) || !encryptedField(body.key)) return errorResponse('Name, encryptedPayload and key must be encrypted strings within their size limits.', 400);
@@ -291,18 +292,18 @@ export async function handleCreateAccessToken(request: Request, env: Env, userId
   return jsonResponse({ id: token.id, name: token.name, clientSecret, expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessTokenCreation' });
 }
 
-export async function handleListAccessTokens(env: Env, userId: string, serviceAccountId: string): Promise<Response> {
+export async function handleListAccessTokens(env: Env, principal: Principal, serviceAccountId: string): Promise<Response> {
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
-  const context = account && await smContext(env, userId, account.orgId);
+  const context = account && await smContext(env, principal, account.orgId);
   if (!context || serviceAccountAccess(context.actor, context.grants, serviceAccountId) !== 'write') return errorResponse('Not found', 404);
   const tokens = await smRepo.listAccessTokens(env.DB, serviceAccountId);
   return jsonResponse(listResponse(tokens.map(token => ({ id: token.id, name: token.name, scopes: ['api.secrets'], expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessToken' }))));
 }
 
-export async function handleSmEvents(env: Env, userId: string, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {
+export async function handleSmEvents(env: Env, principal: Principal, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {
   const row = kind === 'projects' ? await smRepo.getProject(env.DB, id) : kind === 'secrets' ? await smRepo.getSecret(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
   if (!row || (orgId && row.orgId !== orgId) || ('deletedAt' in row && row.deletedAt)) return errorResponse('Not found', 404);
-  const context = await smContext(env, userId, row.orgId);
+  const context = await smContext(env, principal, row.orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const access = kind === 'projects' ? projectAccess(context.actor, context.grants, id) : 'projectIds' in row ? secretAccess(context.actor, context.grants, row) : serviceAccountAccess(context.actor, context.grants, id);
   return access === 'none' ? errorResponse('Not found', 404) : jsonResponse(listResponse([]));

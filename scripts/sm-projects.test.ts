@@ -2,7 +2,7 @@ import { handleProject } from '../src/handlers/secrets-manager';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authedFetch, createTestEnv } from './support/env';
-import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
+import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 
@@ -44,6 +44,6 @@ test('project updates cannot resurrect a concurrently deleted row and reject nul
   assert.equal((await authedFetch(env, { userId: owner.id, method: 'PUT', path: `/api/projects/${p.id}`, body: null })).status, 400);
   const request = new Request(`https://example.test/api/projects/${p.id}`, { method: 'PUT' });
   request.json = async () => { await env.DB.prepare('DELETE FROM sm_projects WHERE id = ?').bind(p.id).run(); return { name: ENCRYPTED_FIELD }; };
-  assert.equal((await handleProject(request, env, owner.id, p.id)).status, 404);
+  assert.equal((await handleProject(request, env, await smUser(env, owner), p.id)).status, 404);
   assert.equal(await env.DB.prepare('SELECT id FROM sm_projects WHERE id = ?').bind(p.id).first(), null);
 });

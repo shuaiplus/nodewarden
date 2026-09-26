@@ -1,3 +1,4 @@
+import { getAccessTokenWithAccount } from './storage-secret-repo';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { Env, JWTPayload, User } from '../types';
 import { createJWT, createRefreshToken, verifyJWT } from '../utils/jwt';
@@ -20,6 +21,12 @@ export interface VerifiedAccessContext {
   payload: JWTPayload;
   user: User;
 }
+
+export type Principal =
+  | { kind: 'user'; payload: JWTPayload; user: User }
+  | { kind: 'serviceAccount'; serviceAccountId: string; orgId: string; accessTokenId: string };
+
+type AccessClaims = JWTPayload & { type?: unknown; scope?: unknown; organization?: unknown; client_id?: unknown; nbf?: unknown };
 
 export type RefreshAccessTokenFailureReason =
   | 'token_not_found_or_expired'
@@ -176,17 +183,32 @@ export class AuthService {
     return token;
   }
 
-  async verifyAccessTokenWithUser(authHeader: string | null): Promise<VerifiedAccessContext | null> {
-    if (!authHeader) return null;
+  private async bearerPayload(authHeader: string | null): Promise<AccessClaims | null> {
+    const parts = authHeader?.split(' ');
+    return parts?.length === 2 && parts[0].toLowerCase() === 'bearer' ? verifyJWT(parts[1], this.env.JWT_SECRET) : null;
+  }
 
-    const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
-      return null;
-    }
-
-    const payload = await verifyJWT(parts[1], this.env.JWT_SECRET);
+  async verifyPrincipal(authHeader: string | null): Promise<Principal | null> {
+    const payload = await this.bearerPayload(authHeader);
     if (!payload) return null;
+    if (payload.type === 'ServiceAccount') {
+      const now = Math.floor(Date.now() / 1000);
+      if (!Array.isArray(payload.scope) || !payload.scope.includes('api.secrets') || typeof payload.organization !== 'string' || typeof payload.client_id !== 'string' || typeof payload.sub !== 'string' || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) || payload.exp <= now || typeof payload.nbf !== 'number' || payload.nbf > now || payload.iss !== 'nodewarden') return null;
+      const token = await getAccessTokenWithAccount(this.env.DB, payload.client_id);
+      if (!token || !token.key || token.serviceAccountId !== payload.sub || token.orgId !== payload.organization || (token.expireAt && !(Date.parse(token.expireAt) > Date.now()))) return null;
+      return { kind: 'serviceAccount', serviceAccountId: token.serviceAccountId, orgId: token.orgId, accessTokenId: token.id };
+    }
+    const verified = await this.verifyUserPayload(payload);
+    return verified ? { kind: 'user', ...verified } : null;
+  }
 
+  async verifyAccessTokenWithUser(authHeader: string | null): Promise<VerifiedAccessContext | null> {
+    const payload = await this.bearerPayload(authHeader);
+    if (!payload || payload.type === 'ServiceAccount') return null;
+    return this.verifyUserPayload(payload);
+  }
+
+  private async verifyUserPayload(payload: JWTPayload): Promise<VerifiedAccessContext | null> {
     let user = await this.getCachedUser(payload.sub);
     if (!user || user.status !== 'active' || payload.sstamp !== user.securityStamp) {
       user = await this.getFreshUser(payload.sub);

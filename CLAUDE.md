@@ -18,3 +18,5 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - Tests: `npm test` runs `src/**/*.test.ts` and `scripts/*.test.{ts,mjs}`. Route tests among them drive the real Worker `fetch` via `scripts/support/env.ts` (`createTestEnv`, `seedUser`, `authedFetch`) on a SQLite-backed D1 that enforces the 100-parameter cap and batch atomicity. `npx tsc --noEmit` skips `scripts/` and tests.
 
 - SM authorization goes through `src/services/sm-authz.ts` + `smContext`; no ad-hoc checks.
+
+- Machine JWTs carry `type=ServiceAccount`; only `router-sm`'s machine allowlist accepts them.

@@ -1,3 +1,4 @@
+import type { Principal } from '../services/auth';
 import type { Env } from '../types';
 import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
@@ -14,8 +15,8 @@ export async function peopleDirectory(env: Env, orgId: string, membershipId: str
   return { members, groups, ownGroups: new Set(ownGroups.results.map(row => row.id)) };
 }
 
-export async function handlePotentialPeople(env: Env, userId: string, orgId: string): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handlePotentialPeople(env: Env, principal: Principal, orgId: string): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const membershipId = context.actor.membershipId;
   const { members, groups, ownGroups } = await peopleDirectory(env, orgId, membershipId);
@@ -34,9 +35,9 @@ export async function peoplePolicyResponse(env: Env, kind: smRepo.SmPeopleTarget
   };
 }
 
-export async function handlePeoplePolicies(request: Request, env: Env, userId: string, kind: 'project' | 'serviceAccount', id: string): Promise<Response> {
+export async function handlePeoplePolicies(request: Request, env: Env, principal: Principal, kind: 'project' | 'serviceAccount', id: string): Promise<Response> {
   const row = kind === 'project' ? await smRepo.getProject(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
-  const context = row && await smContext(env, userId, row.orgId);
+  const context = row && await smContext(env, principal, row.orgId);
   if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const access = kind === 'project' ? projectAccess(context.actor, context.grants, id) : serviceAccountAccess(context.actor, context.grants, id);
   if (access !== 'write') return errorResponse('Not found', 404);
@@ -56,8 +57,8 @@ export async function handlePeoplePolicies(request: Request, env: Env, userId: s
   return jsonResponse(await peoplePolicyResponse(env, kind, id, row.orgId, context.actor.membershipId));
 }
 
-export async function handlePotentialMachines(env: Env, userId: string, orgId: string, kind: 'projects' | 'serviceAccounts'): Promise<Response> {
-  const context = await smContext(env, userId, orgId);
+export async function handlePotentialMachines(env: Env, principal: Principal, orgId: string, kind: 'projects' | 'serviceAccounts'): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const rows = kind === 'projects' ? await smRepo.listProjects(env.DB, orgId) : await smRepo.listServiceAccounts(env.DB, orgId);
   const access = kind === 'projects' ? projectAccess : serviceAccountAccess;
@@ -73,9 +74,9 @@ export function policyConflict(error: unknown): Response | null {
   return null;
 }
 
-export async function handleMachinePolicies(request: Request, env: Env, userId: string, kind: 'project' | 'serviceAccount', id: string): Promise<Response> {
+export async function handleMachinePolicies(request: Request, env: Env, principal: Principal, kind: 'project' | 'serviceAccount', id: string): Promise<Response> {
   const row = kind === 'project' ? await smRepo.getProject(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
-  const context = row && await smContext(env, userId, row.orgId);
+  const context = row && await smContext(env, principal, row.orgId);
   if (!row || !context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const access = kind === 'project' ? projectAccess(context.actor, context.grants, id) : serviceAccountAccess(context.actor, context.grants, id);
   if (access !== 'write') return errorResponse('Not found', 404);
@@ -131,9 +132,9 @@ export async function prepareSecretPolicies(env: Env, context: NonNullable<Await
   ];
 }
 
-export async function handleSecretPolicies(env: Env, userId: string, id: string): Promise<Response> {
+export async function handleSecretPolicies(env: Env, principal: Principal, id: string): Promise<Response> {
   const secret = await smRepo.getSecret(env.DB, id);
-  const context = secret && !secret.deletedAt && await smContext(env, userId, secret.orgId);
+  const context = secret && !secret.deletedAt && await smContext(env, principal, secret.orgId);
   if (!secret || !context || context.actor.kind === 'serviceAccount' || secretAccess(context.actor, context.grants, secret) !== 'write') return errorResponse('Not found', 404);
   const people = await peoplePolicyResponse(env, 'secret', id, secret.orgId, context.actor.membershipId);
   const accounts = await smRepo.readSecretMachinePolicies(env.DB, secret.orgId, id);

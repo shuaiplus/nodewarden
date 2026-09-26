@@ -1,3 +1,4 @@
+import type { Principal } from './auth';
 import { isUUID } from '../utils/uuid';
 import type { Env } from '../types';
 import { isActiveMember } from './org-authz';
@@ -30,8 +31,9 @@ export function grantsFromRows(rows: GrantRows): SmGrants {
 export function projectAccess(actor: SmActor, grants: SmGrants, id: string): SmAccess {
   return actor.kind === 'admin' ? 'write' : grants.projects.get(id) ?? 'none';
 }
-export async function resolveSmActor(env: Env, userId: string, orgId: string): Promise<SmActor | null> {
-  const member = await getMembershipByUserAndOrg(env.DB, userId, orgId);
+export async function resolveSmActor(env: Env, principal: Principal, orgId: string): Promise<SmActor | null> {
+  if (principal.kind === 'serviceAccount') return principal.orgId === orgId ? { kind: 'serviceAccount', serviceAccountId: principal.serviceAccountId } : null;
+  const member = await getMembershipByUserAndOrg(env.DB, principal.user.id, orgId);
   if (!isActiveMember(member)) return null;
   return { kind: member.type <= MembershipType.Admin ? 'admin' : 'user', membershipId: member.id };
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { MembershipStatus, MembershipType } from '../../src/services/org-types';
+import { AuthService, type Principal } from '../../src/services/auth';
 import * as orgRepo from '../../src/services/storage-org-repo';
 import type { Env, User } from '../../src/types';
 import { authedFetch, seedUser } from './env';
@@ -14,6 +15,14 @@ export const TOKEN_FIELDS = { name: ENCRYPTED_FIELD, encryptedPayload: ENCRYPTED
 
 export function smLogin(env: Env, tokenId: string, secret: string): Promise<Response> {
   return authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'api.secrets', client_id: tokenId, client_secret: secret }) });
+}
+
+export async function smUser(env: Env, user: User): Promise<Principal> {
+  const auth = new AuthService(env);
+  const principal = await auth.verifyPrincipal(`Bearer ${await auth.generateAccessToken(user)}`);
+  assert.ok(principal);
+  assert.equal(principal.kind, 'user');
+  return principal;
 }
 
 // Official web creates an org through POST /organizations, or self-hosted through the license

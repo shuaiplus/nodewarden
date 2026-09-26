@@ -75,3 +75,5 @@ Project links never cross organizations. Creating or updating a secret, and crea
 Secrets Manager project authorization uses `sm-authz.ts` with org-bound member and group grants. Owners and admins can write every project; other confirmed members see only granted projects. Creating a project grants its creator write access.
 
 Secrets Manager people policies grant confirmed members access directly or through organization groups. A member allowed to manage groups can add themselves to a group and inherit its grants. Write access to a machine account permits issuing tokens for everything that account can read. Removing a member does not invalidate tokens they issued; revoke those machine-account tokens separately.
+
+Machine JWTs are separate principals, accepted only by the project/secret CRUD and sync route allowlist. Each request joins the access token to its machine account, so token revocation or account deletion invalidates existing JWTs immediately.

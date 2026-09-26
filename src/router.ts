@@ -1,3 +1,4 @@
+import { handleSmMachineRoute, handleSmRoute } from './router-sm';
 import { Env } from './types';
 import { AuthService } from './services/auth';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
@@ -168,9 +169,14 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     const auth = new AuthService(env);
     const authHeader = request.headers.get('Authorization');
-    const verified = await auth.verifyAccessTokenWithUser(authHeader);
+    const verified = await auth.verifyPrincipal(authHeader);
     if (!verified) {
       return errorResponse('Unauthorized', 401);
+    }
+    if (verified.kind === 'serviceAccount') {
+      const rateLimit = await new RateLimitService(env.DB).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+      if (!rateLimit.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(rateLimit.retryAfterSeconds || 60) });
+      return await handleSmMachineRoute(request, env, verified, path, method);
     }
     const { payload, user: currentUser } = verified;
 
@@ -206,6 +212,9 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         );
       }
     }
+
+    const smResponse = await handleSmRoute(request, env, verified, path, method);
+    if (smResponse) return smResponse;
 
     const authenticatedResponse = await handleAuthenticatedRoute(request, env, userId, currentUser, path, method);
     if (authenticatedResponse) return authenticatedResponse;

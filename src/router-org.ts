@@ -47,7 +47,6 @@ import {
   handleSyncSelfHostedOrganizationLicense,
   handleUpdateSelfHostedOrganizationLicense,
 } from './handlers/licenses';
-import { handleSmRoute } from './router-sm';
 
 export async function handleOrganizationRoute(
   request: Request,
@@ -72,9 +71,6 @@ export async function handleOrganizationRoute(
     if (licenseUpdate[2]) return handleSyncSelfHostedOrganizationLicense(env, currentUser, licenseUpdate[1]);
     return handleUpdateSelfHostedOrganizationLicense(request, env, currentUser, licenseUpdate[1]);
   }
-  const sm = await handleSmRoute(request, env, userId, path, method);
-  if (sm) return sm;
-
   const orgMatch = path.match(/^\/api\/organizations\/([a-f0-9-]+)(\/.*)?$/i);
   if (!orgMatch) return null;
   const orgId = orgMatch[1];

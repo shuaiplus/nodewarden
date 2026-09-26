@@ -280,7 +280,13 @@ export async function revokeAccessToken(db: D1Database, id: string, _revokedAt?:
 
 export async function loadSmGrants(db: D1Database, actor: SmActor, orgId: string): Promise<SmGrants> {
   if (actor.kind === 'admin') return grantsFromRows({ projects: [], secrets: [], serviceAccounts: [] });
-  if (actor.kind === 'serviceAccount') return grantsFromRows({ projects: [], secrets: [], serviceAccounts: [] });
+  if (actor.kind === 'serviceAccount') {
+    const rows = await db.batch<{ id: string; write_access: number }>([
+      db.prepare('SELECT sp.project_id AS id, sp.write_access FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1').bind(orgId, actor.serviceAccountId),
+      db.prepare('SELECT sp.secret_id AS id, sp.write_access FROM sm_secret_service_accounts sp JOIN sm_secrets s ON s.id = sp.secret_id AND s.org_id = ? WHERE sp.service_account_id = ?').bind(orgId, actor.serviceAccountId),
+    ]);
+    return grantsFromRows({ projects: rows[0].results, secrets: rows[1].results, serviceAccounts: [] });
+  }
   const statements = [
     ['sm_project_members', 'sm_project_groups', 'sm_projects', 'project_id'],
     ['sm_secret_members', 'sm_secret_groups', 'sm_secrets', 'secret_id'],
