@@ -106,6 +106,21 @@ export async function verifyTwoFactorUserVerificationToken(
     && payload.sst === await sha256Base64Url(user.securityStamp);
 }
 
+const SSO_EMAIL_TWO_FACTOR_ISSUER = 'nodewarden|sso_email_2fa';
+
+export async function createSsoEmail2faSessionToken(env: Env, user: User): Promise<string> {
+  return signHs256Jwt({
+    iss: SSO_EMAIL_TWO_FACTOR_ISSUER, sub: user.id, email: user.email,
+    exp: Math.floor(Date.now() / 1000) + LIMITS.auth.ssoEmail2faSessionTtlSeconds,
+  }, env.JWT_SECRET);
+}
+
+export async function verifySsoEmail2faSessionToken(env: Env, user: User, token: string): Promise<boolean> {
+  const payload = await verifyHs256Jwt(token, env.JWT_SECRET);
+  return !!payload && payload.iss === SSO_EMAIL_TWO_FACTOR_ISSUER && payload.sub === user.id && payload.email === user.email
+    && typeof payload.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > Math.floor(Date.now() / 1000);
+}
+
 export const REGISTER_VERIFY_ISSUER = 'nodewarden|register_verify';
 
 export async function createRegisterVerifyToken(

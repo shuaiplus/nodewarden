@@ -28,7 +28,7 @@ import {
 } from '@/lib/offline-auth';
 import { probeNodeWardenService } from '@/lib/network-status';
 import { setWebsiteIconsEnabled } from '@/lib/website-icon-settings';
-import type { AccountPasskeyPrfOption, AppPhase, Profile, SessionState, TokenSuccess, WebBootstrapResponse } from '@/lib/types';
+import type { AccountPasskeyPrfOption, AppPhase, Profile, SessionState, TokenError, TokenSuccess, WebBootstrapResponse } from '@/lib/types';
 
 export interface PendingTotp {
   email: string;
@@ -39,6 +39,7 @@ export interface PendingTotp {
   providerData?: unknown;
   availableProviders: number[];
   providerDataByType: Record<number, unknown>;
+  ssoEmail2faSessionToken?: string;
 }
 
 export interface PendingPasskeyPassword {
@@ -78,34 +79,25 @@ export interface CompletedLogin {
 }
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const SUPPORTED_TWO_FACTOR_PROVIDERS = [
   TWO_FACTOR_PROVIDER_WEBAUTHN,
   TWO_FACTOR_PROVIDER_YUBIKEY,
   TWO_FACTOR_PROVIDER_AUTHENTICATOR,
+  TWO_FACTOR_PROVIDER_EMAIL,
 ] as const;
 
 function readTokenUserVerificationToken(token: TokenSuccess): string | null {
   return String(token.UserVerificationToken || token.userVerificationToken || '').trim() || null;
 }
 
-type TwoFactorTokenError = {
-  TwoFactorProviders?: unknown;
-  TwoFactorProviders2?: unknown;
-  CustomResponse?: {
-    TwoFactorProviders?: unknown;
-    TwoFactorProviders2?: unknown;
-  };
-  error_description?: string;
-  error?: string;
-};
-
-function readTwoFactorProviders(error: TwoFactorTokenError): unknown {
+function readTwoFactorProviders(error: TokenError): unknown {
   return error.TwoFactorProviders ?? error.CustomResponse?.TwoFactorProviders ?? error.TwoFactorProviders2 ?? error.CustomResponse?.TwoFactorProviders2;
 }
 
-function readTwoFactorProviderData(error: TwoFactorTokenError, providerType: number): unknown {
+function readTwoFactorProviderData(error: TokenError, providerType: number): unknown {
   const providers2 = error.TwoFactorProviders2 ?? error.CustomResponse?.TwoFactorProviders2;
   if (!providers2 || typeof providers2 !== 'object') return undefined;
   const record = providers2 as Record<string, unknown>;
@@ -126,9 +118,11 @@ function twoFactorProviderTypeFromValue(value: unknown): number | null {
       ? TWO_FACTOR_PROVIDER_WEBAUTHN
       : normalized === 'yubikey' || normalized === 'yubikeyotp'
         ? TWO_FACTOR_PROVIDER_YUBIKEY
-        : normalized === 'authenticator' || normalized === 'totp'
-          ? TWO_FACTOR_PROVIDER_AUTHENTICATOR
-          : Number.NaN;
+        : normalized === 'email'
+          ? TWO_FACTOR_PROVIDER_EMAIL
+          : normalized === 'authenticator' || normalized === 'totp'
+            ? TWO_FACTOR_PROVIDER_AUTHENTICATOR
+            : Number.NaN;
   return SUPPORTED_TWO_FACTOR_PROVIDERS.includes(provider as any) ? provider : null;
 }
 
@@ -154,7 +148,7 @@ function readTwoFactorProviderTypes(providers: unknown): number[] {
   return sortTwoFactorProviders(providerTypes);
 }
 
-function readTwoFactorProviderDataMap(error: TwoFactorTokenError): Record<number, unknown> {
+function readTwoFactorProviderDataMap(error: TokenError): Record<number, unknown> {
   const providers2 = error.TwoFactorProviders2 ?? error.CustomResponse?.TwoFactorProviders2;
   if (!providers2 || typeof providers2 !== 'object') return {};
   const out: Record<number, unknown> = {};
@@ -556,7 +550,7 @@ export async function performPasswordLogin(
     };
   }
 
-  const tokenError = token as TwoFactorTokenError;
+  const tokenError = token as TokenError;
   const providers = readTwoFactorProviders(tokenError);
   if (providers) {
     const providerType = resolvePendingTwoFactorProvider(providers);
@@ -573,6 +567,7 @@ export async function performPasswordLogin(
         providerData: providerDataByType[providerType] ?? readTwoFactorProviderData(tokenError, providerType),
         availableProviders: availableProviders.length ? availableProviders : [providerType],
         providerDataByType,
+        ssoEmail2faSessionToken: tokenError.SsoEmail2faSessionToken ?? tokenError.CustomResponse?.SsoEmail2faSessionToken ?? undefined,
       },
     };
   }
@@ -655,7 +650,9 @@ export async function performTotpLogin(
   const tokenError = token as { error_description?: string; error?: string };
   const fallback = pendingTotp.providerType === TWO_FACTOR_PROVIDER_WEBAUTHN
     ? t('txt_passkey_verification_failed')
-    : t('txt_totp_verify_failed');
+    : pendingTotp.providerType === TWO_FACTOR_PROVIDER_EMAIL
+      ? t('txt_email_code_verify_failed')
+      : t('txt_totp_verify_failed');
   throw new Error(translateServerError(tokenError.error_description || tokenError.error, fallback));
 }
 
@@ -736,7 +733,7 @@ export async function performUnlock(
     return unlockOffline();
   }
 
-  let token: TokenSuccess | TwoFactorTokenError;
+  let token: TokenSuccess | TokenError;
   try {
     token = await loginWithPassword(normalizedEmail, derived.hash, {
       useRememberToken: true,
@@ -758,7 +755,7 @@ export async function performUnlock(
     };
   }
 
-  const tokenError = token as TwoFactorTokenError;
+  const tokenError = token as TokenError;
   const providers = readTwoFactorProviders(tokenError);
   if (providers) {
     const providerType = resolvePendingTwoFactorProvider(providers);
@@ -775,6 +772,7 @@ export async function performUnlock(
         providerData: providerDataByType[providerType] ?? readTwoFactorProviderData(tokenError, providerType),
         availableProviders: availableProviders.length ? availableProviders : [providerType],
         providerDataByType,
+        ssoEmail2faSessionToken: tokenError.SsoEmail2faSessionToken ?? tokenError.CustomResponse?.SsoEmail2faSessionToken ?? undefined,
       },
     };
   }
@@ -784,4 +782,3 @@ export async function performUnlock(
     message: translateServerError(tokenError.error_description || tokenError.error, t('txt_unlock_failed')),
   };
 }
-

@@ -4,6 +4,18 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  signInCode: {
+    throttle: 'exempt',
+    render: (model: { code: string; reason: 'two-factor' | 'new-device'; ip: string; deviceTypeName: string; utc: string }): MailContent => ({
+      subject: 'Your NodeWarden sign-in code',
+      paragraphs: [
+        `Your sign-in code is: ${model.code}`,
+        `Device: ${sanitizeForEmail(model.deviceTypeName)}. Time (UTC): ${sanitizeForEmail(model.utc)}. IP address: ${sanitizeForEmail(model.ip)}.`,
+        'The code expires in five minutes. If you did not request it, change your master password.',
+        ...(model.reason === 'new-device' ? ['Consider enabling two-step login for additional account protection.'] : []),
+      ],
+    }),
+  },
   verificationCode: {
     throttle: 'user',
     render: (model: { code: string; reason: 'two-factor-setup' }): MailContent => ({

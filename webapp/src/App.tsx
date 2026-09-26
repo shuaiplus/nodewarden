@@ -23,6 +23,7 @@ import {
   getTwoFactorProviderStatus,
   getVaultRevisionDate,
   saveSession,
+  sendEmailTwoFactorCode,
   stripProfileSecrets,
 } from '@/lib/api/auth';
 import {
@@ -156,6 +157,7 @@ const SIGNALR_UPDATE_TYPE_AUTH_REQUEST = 15;
 const SIGNALR_UPDATE_TYPE_AUTH_REQUEST_RESPONSE = 16;
 const SIGNALR_UPDATE_TYPE_DEVICE_STATUS = 101;
 const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 102;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 
@@ -240,6 +242,8 @@ export default function App() {
   const [totpCode, setTotpCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(true);
   const [totpSubmitting, setTotpSubmitting] = useState(false);
+  const [emailCodeSending, setEmailCodeSending] = useState(false);
+  const [emailCodeSendAttempt, setEmailCodeSendAttempt] = useState(0);
 
   const [disableTotpOpen, setDisableTotpOpen] = useState(false);
   const [disableTotpPassword, setDisableTotpPassword] = useState('');
@@ -289,6 +293,23 @@ export default function App() {
   const loginEmailRef = useRef(loginValues.email);
   const loginHintRequestSeqRef = useRef(0);
   const { toasts, pushToast, removeToast } = useToastManager();
+
+  useEffect(() => {
+    if (pendingTotp?.providerType !== TWO_FACTOR_PROVIDER_EMAIL) {
+      setEmailCodeSending(false);
+      return;
+    }
+    const controller = new AbortController();
+    setEmailCodeSending(true);
+    void sendEmailTwoFactorCode(pendingTotp, controller.signal)
+      .catch(error => {
+        if (!controller.signal.aborted) pushToast('error', error instanceof Error ? error.message : t('txt_send_code_failed'));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setEmailCodeSending(false);
+      });
+    return () => controller.abort();
+  }, [pendingTotp, emailCodeSendAttempt]);
 
   useEffect(() => {
     const handleAppNotify = (event: Event) => {
@@ -724,7 +745,7 @@ export default function App() {
     if (!pendingTotp) return;
     const isPasskeyTwoFactor = pendingTotp.providerType === TWO_FACTOR_PROVIDER_WEBAUTHN;
     if (!isPasskeyTwoFactor && !totpCode.trim()) {
-      pushToast('error', pendingTotp.providerType === TWO_FACTOR_PROVIDER_YUBIKEY ? t('txt_please_input_yubikey_otp') : t('txt_please_input_totp_code'));
+      pushToast('error', pendingTotp.providerType === TWO_FACTOR_PROVIDER_YUBIKEY ? t('txt_please_input_yubikey_otp') : pendingTotp.providerType === TWO_FACTOR_PROVIDER_EMAIL ? t('txt_please_input_verification_code') : t('txt_please_input_totp_code'));
       return;
     }
     setTotpSubmitting(true);
@@ -735,7 +756,7 @@ export default function App() {
       const login = await performTotpLogin(pendingTotp, token, rememberDevice);
       await finalizeLogin(login);
     } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : pendingTotp.providerType === 3 ? t('txt_yubikey_verify_failed') : isPasskeyTwoFactor ? t('txt_passkey_verification_failed') : t('txt_totp_verify_failed'));
+      pushToast('error', error instanceof Error ? error.message : pendingTotp.providerType === 3 ? t('txt_yubikey_verify_failed') : isPasskeyTwoFactor ? t('txt_passkey_verification_failed') : pendingTotp.providerType === TWO_FACTOR_PROVIDER_EMAIL ? t('txt_email_code_verify_failed') : t('txt_totp_verify_failed'));
     } finally {
       setTotpSubmitting(false);
     }
@@ -2326,6 +2347,9 @@ export default function App() {
           pendingTotpOpen={!!pendingTotp}
           pendingTotpProviderType={pendingTotp?.providerType ?? 0}
           pendingTotpAvailableProviders={pendingTotp?.availableProviders ?? []}
+          pendingTotpEmail={String((pendingTotp?.providerData as { Email?: string } | undefined)?.Email || pendingTotp?.email || '')}
+          emailCodeSending={emailCodeSending}
+          onResendEmailCode={() => setEmailCodeSendAttempt(attempt => attempt + 1)}
           totpCode={totpCode}
           rememberDevice={rememberDevice}
           onTotpCodeChange={setTotpCode}

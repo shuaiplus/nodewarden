@@ -154,14 +154,6 @@ export async function handleAuthenticatedRoute(
     return unsupportedResponse('Email delivery is not supported by this server.');
   }
 
-  const emailTwoFactorPaths = new Set([
-    '/api/two-factor/send-email-login',
-    '/two-factor/send-email-login',
-  ]);
-  if (emailTwoFactorPaths.has(path) && (method === 'POST' || method === 'PUT' || method === 'DELETE')) {
-    return unsupportedResponse('Email two-step login is not supported by this server.');
-  }
-
   if ((path === '/api/two-factor/get-email' || path === '/two-factor/get-email') && method === 'POST') {
     return handleGetTwoFactorEmail(request, env, userId);
   }

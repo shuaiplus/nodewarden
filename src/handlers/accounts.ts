@@ -2,6 +2,8 @@ import { runInBackground, notifyMail, notifyFailedTwoFactor } from '../services/
 import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
+import { isAuthRequestLoginApproved } from '../services/storage-auth-request-repo';
+import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
 import { syncVaultAdminRoles } from '../services/vault-admin-role';
 import { deleteUserAccount } from '../services/account-deletion';
 import { notifyUserLogout } from '../durable/notifications-hub';
@@ -18,7 +20,7 @@ import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
-import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken } from '../utils/jwt';
+import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken, verifySsoEmail2faSessionToken } from '../utils/jwt';
 import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
 import {
   mailStatusCheck,
@@ -1017,6 +1019,36 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
     ...await yubiKeySettingsResponse(storage, env, user),
     UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY),
   });
+}
+
+export async function handleSendTwoFactorEmailLogin(request: Request, env: Env): Promise<Response> {
+  const rejected = () => errorResponse('Cannot send two-factor email.', 400);
+  let raw: Record<string, unknown>;
+  try { raw = await readRequestBody(request); } catch { return rejected(); }
+  const body = Object.fromEntries(Object.entries(raw).map(([name, value]) => [name.toLowerCase(), value]));
+  if (['email', 'authrequestid', 'authrequestaccesscode', 'ssoemail2fasessiontoken', 'masterpasswordhash'].some(name => body[name] != null && typeof body[name] !== 'string')) return rejected();
+  const email = readBodyString(body, ['email']).trim().toLowerCase();
+  const storage = new StorageService(env.DB);
+  const user = email ? await storage.getUser(email) : null;
+  if (!user || user.status !== 'active' || !user.twoFactorEmail) return rejected();
+  const accessCode = readBodyString(body, ['authrequestaccesscode']).trim();
+  const sessionToken = readBodyString(body, ['ssoemail2fasessiontoken']).trim();
+  let verified: boolean;
+  if (accessCode) {
+    const authRequest = await storage.getAuthRequestByIdForUser(readBodyString(body, ['authrequestid']), user.id);
+    verified = isAuthRequestLoginApproved(authRequest, user.id, accessCode);
+  } else if (sessionToken) {
+    verified = await verifySsoEmail2faSessionToken(env, user, sessionToken);
+  } else {
+    verified = await verifyUserSecret(new AuthService(env), user, readBodyString(body, ['masterpasswordhash']));
+  }
+  if (!verified) return rejected();
+  if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
+  const device = readAuthRequestDeviceInfo({ deviceType: readBodyString(body, ['devicetype']) }, request);
+  const outcome = await issueEmailOtp(env, { purpose: 'two-factor-login', subject: user.id, binding: user.securityStamp },
+    code => sendMail(env, user.twoFactorEmail!, 'signInCode', { code, reason: 'two-factor', ip: getClientIdentifier(request) ?? 'Unknown', deviceTypeName: deviceTypeName(device.deviceType), utc: new Date().toISOString() }));
+  const check = mailStatusCheck(outcome);
+  return check.ok ? new Response(null, { status: 200 }) : errorResponse(check.message, check.status, check.headers);
 }
 
 function twoFactorEmailResponse(email: string | null, userVerificationToken?: string): Record<string, unknown> {

@@ -29,6 +29,7 @@
     // Email one-time code lifetime in seconds.
     // 邮件一次性验证码有效期（秒）。
     emailOtpTtlSeconds: 300,
+    ssoEmail2faSessionTtlSeconds: 300,
     // Refresh sessions use a reusable opaque token with a sliding idle lifetime.
     // 刷新会话使用可复用的随机令牌，并按客户端采用滑动空闲期限。
     refreshTokenWebSlidingTtlMs: 30 * 24 * 60 * 60 * 1000,

@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { authRequests } from '../db/schema';
 import type { AuthRequestRecord, AuthRequestType } from '../types';
+import { constantTimeEquals } from '../utils/api-key';
 
 const AUTH_REQUEST_EXPIRATION_MS = 15 * 60 * 1000;
 
@@ -52,6 +53,12 @@ function authRequestValues(request: AuthRequestRecord) {
 
 export function isAuthRequestExpired(request: AuthRequestRecord, nowMs: number = Date.now()): boolean {
   return new Date(request.creationDate).getTime() + AUTH_REQUEST_EXPIRATION_MS <= nowMs;
+}
+
+export function isAuthRequestLoginApproved(request: AuthRequestRecord | null, userId: string, accessCode: string): boolean {
+  return !!(request && request.userId === userId && request.type === 0 && request.approved === true
+    && request.responseDate && !request.authenticationDate && !isAuthRequestExpired(request) && request.key
+    && constantTimeEquals(request.accessCode, accessCode));
 }
 
 export async function createAuthRequest(db: D1Database, request: AuthRequestRecord): Promise<void> {

@@ -22,6 +22,7 @@ import {
   handleRegisterSendVerificationEmail,
   handleGetPasswordHint,
   handleRecoverTwoFactor,
+  handleSendTwoFactorEmailLogin,
 } from './handlers/accounts';
 import {
   handleCreateAuthRequest,
@@ -468,6 +469,12 @@ export async function handlePublicRoute(
     return handleRecoverTwoFactor(request, env);
   }
 
+  if ((path === '/api/two-factor/send-email-login' || path === '/two-factor/send-email-login') && method === 'POST') {
+    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
+    if (blocked) return blocked;
+    return handleSendTwoFactorEmailLogin(request, env);
+  }
+
   const publicMailBackedPaths = new Set([
     '/api/accounts/resend-new-device-otp',
     '/accounts/resend-new-device-otp',
@@ -476,8 +483,6 @@ export async function handlePublicRoute(
     '/identity/accounts/register/verification-email-clicked',
     '/api/accounts/verify-email-token',
     '/accounts/verify-email-token',
-    '/api/two-factor/send-email-login',
-    '/two-factor/send-email-login',
   ]);
   if (publicMailBackedPaths.has(path) && method === 'POST') {
     const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);

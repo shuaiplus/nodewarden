@@ -308,6 +308,29 @@ export async function loginWithPassword(
   return json;
 }
 
+export async function sendEmailTwoFactorCode(
+  pending: { email: string; passwordHash: string; ssoEmail2faSessionToken?: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch('/api/two-factor/send-email-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: pending.email,
+      masterPasswordHash: pending.passwordHash,
+      ssoEmail2FaSessionToken: pending.ssoEmail2faSessionToken ?? '',
+      deviceIdentifier: getOrCreateDeviceIdentifier(),
+      authRequestId: '',
+      authRequestAccessCode: '',
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    const error = await parseJson<TokenError>(response);
+    throw new Error(translateServerError(error?.error_description || error?.error, t('txt_send_code_failed')));
+  }
+}
+
 export async function getAccountPasskeyAssertionOptions(): Promise<{ options: unknown; token: string }> {
   const resp = await fetch('/identity/accounts/webauthn/assertion-options');
   if (!resp.ok) {

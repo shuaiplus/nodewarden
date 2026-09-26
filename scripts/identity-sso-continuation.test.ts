@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
+import type { User } from '../src/types';
 import { StorageService } from '../src/services/storage';
 import { verifyJWT } from '../src/utils/jwt';
-import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN } from './support/env';
+import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
 
 const TOTP_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const VERIFIER = 'verified-pkce-context-'.repeat(3);
@@ -19,9 +20,10 @@ function totp(): string {
   return String((mac.readUInt32BE(mac[mac.length - 1] & 15) & 0x7fffffff) % 1_000_000).padStart(6, '0');
 }
 
-async function setup(t: TestContext) {
-  const env = await createTestEnv({ ...captureEmail().overrides, SSO_ENABLED: '1', SSO_ONLY: '1', SSO_AUTHORITY: `https://${crypto.randomUUID()}.idp.example.test`, SSO_CLIENT_ID: 'nodewarden' });
-  const user = await seedUser(env, { totpSecret: TOTP_SECRET, totpRecoveryCode: RECOVERY });
+async function setup(t: TestContext, userOverrides: Partial<User> = {}) {
+  const mail = captureEmail();
+  const env = await createTestEnv({ ...mail.overrides, SSO_ENABLED: '1', SSO_ONLY: '1', SSO_AUTHORITY: `https://${crypto.randomUUID()}.idp.example.test`, SSO_CLIENT_ID: 'nodewarden' });
+  const user = await seedUser(env, { totpSecret: TOTP_SECRET, totpRecoveryCode: RECOVERY, ...userOverrides });
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'continuation-test' })).toString('base64url');
   const claims = Buffer.from(JSON.stringify({ iss: env.SSO_AUTHORITY, aud: env.SSO_CLIENT_ID, sub: `provider-${user.id}`, email: user.email, email_verified: true, exp: Math.floor(Date.now() / 1000) + 600 })).toString('base64url');
@@ -58,7 +60,7 @@ async function setup(t: TestContext) {
     const [result] = await env.DB.batch([env.DB.prepare('SELECT (SELECT COUNT(*) FROM session) AS sessions, (SELECT COUNT(*) FROM trusted_two_factor_device_tokens) AS remembered, (SELECT COUNT(*) FROM devices) AS devices')]);
     return result.results[0];
   };
-  return { env, user, login, challenge, state, counts, exchanges: () => exchanges, idToken };
+  return { env, user, mail, login, challenge, state, counts, exchanges: () => exchanges, idToken };
 }
 
 test('SSO exchanges its PKCE code once across challenge, invalid/context retries, successful TOTP and replay', async t => {
@@ -171,4 +173,17 @@ test('the final SSO claim checks fresh account state before creating remembered 
   assert.equal((await f.login({ twoFactorProvider: '0', twoFactorToken: totp(), twoFactorRemember: '1' })).status, 400);
   assert.deepEqual(await f.counts(), { sessions: 0, remembered: 0, devices: 0 });
   assert.equal(f.exchanges(), 1);
+});
+
+test('SSO email two-factor completes the same single-use authorization-code request', async t => {
+  const f = await setup(t, { totpSecret: null, twoFactorEmail: `sso-factor@${MAILABLE_DOMAIN}` });
+  const challenge = await f.login().then(response => response.json() as Promise<{ SsoEmail2faSessionToken: string }>);
+  const sent = await authedFetch(f.env, { method: 'POST', path: '/api/two-factor/send-email-login', body: { email: f.user.email, ssoEmail2FaSessionToken: challenge.SsoEmail2faSessionToken } });
+  assert.equal(sent.status, 200);
+  assert.equal(f.mail.sent.length, 1);
+  const code = String(f.mail.sent[0].text).match(/\b\d{6}\b/)![0];
+  const accepted = await f.login({ twoFactorProvider: '1', twoFactorToken: code });
+  assert.equal(accepted.status, 200);
+  assert.equal(f.exchanges(), 1);
+  assert.equal((await f.login({ twoFactorProvider: '1', twoFactorToken: code })).status, 400);
 });

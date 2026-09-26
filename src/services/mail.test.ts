@@ -150,6 +150,7 @@ test('every mail template escapes and sanitizes untrusted text without tokens in
   const token = 'UNIQUE-SECRET-TOKEN';
   const models = {
     verificationCode: { code: '123456', reason: 'two-factor-setup' },
+    signInCode: { code: '123456', reason: 'two-factor', ip: hostile, deviceTypeName: hostile, utc: hostile },
     passwordHint: { hint: hostile }, noPasswordHint: {},
     twoFactorRecovered: { time: hostile, ip: hostile },
     failedTwoFactor: { provider: 8, time: hostile, ip: hostile },
@@ -184,4 +185,14 @@ test('administrator two-factor recovery notice omits IP and administrator identi
   assert.match(rendered.text, /An administrator removed two-step login/);
   assert.doesNotMatch(rendered.text, /IP address|recovery code|@/i);
   assert.doesNotMatch(rendered.html, /IP address|recovery code|@/i);
+});
+
+test('sign-in codes stay out of subjects and new-device notices suggest two-step login', async () => {
+  const { MAIL_TEMPLATES, renderMail } = await import('./mail-templates');
+  for (const reason of ['two-factor', 'new-device'] as const) {
+    const rendered = renderMail(MAIL_TEMPLATES.signInCode.render({ code: '000123', reason, ip: '203.0.113.1', deviceTypeName: 'Browser', utc: '2026-09-27T00:00:00Z' }));
+    assert.ok(rendered.text.includes('000123'));
+    assert.ok(!rendered.subject.includes('000123'));
+    assert.equal(rendered.text.includes('Consider enabling two-step login'), reason === 'new-device');
+  }
 });

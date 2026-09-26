@@ -1,3 +1,4 @@
+import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
 import { readMailConfig } from '../services/mail';
 import { notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
@@ -9,7 +10,7 @@ import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse, identityErrorResponse } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
-import { signHs256Jwt, createRefreshToken } from '../utils/jwt';
+import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
 import { getSafeJwtSecret } from '../utils/direct-upload';
 import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
@@ -27,9 +28,9 @@ import {
   buildAccountPasskeyTokenUserDecryptionOption,
   buildTwoFactorPasskeyAssertionOptions,
 } from './account-passkeys';
-import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
+import { isAuthRequestLoginApproved } from '../services/storage-auth-request-repo';
 import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
-import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
+import { verifyApiKey } from '../utils/api-key';
 import { userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
@@ -38,6 +39,7 @@ import * as orgRepo from '../services/storage-org-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_REMEMBER = 5;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
@@ -254,6 +256,12 @@ function masterPasswordPolicyResponse(): TokenResponse['MasterPasswordPolicy'] {
   };
 }
 
+function redactEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  const visible = local.length <= 2 ? 0 : local.length <= 4 ? 1 : 2;
+  return `${local.slice(0, visible)}${'*'.repeat(local.length - visible)}@${domain}`;
+}
+
 async function twoFactorRequiredResponse(
   request: Request,
   env: Env,
@@ -273,14 +281,17 @@ async function twoFactorRequiredResponse(
   for (const provider of providers) {
     providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
       ? { Nfc: user?.yubikeyNfc ?? false }
-      : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
-        ? webAuthnOptions
-        : null;
+      : provider === String(TWO_FACTOR_PROVIDER_EMAIL) && user?.twoFactorEmail
+        ? { Email: redactEmail(user.twoFactorEmail) }
+        : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
+          ? webAuthnOptions
+          : null;
   }
   const customResponse = {
     TwoFactorProviders: providers,
     TwoFactorProviders2: providers2,
-    SsoEmail2faSessionToken: null,
+    SsoEmail2faSessionToken: user?.twoFactorEmail ? await createSsoEmail2faSessionToken(env, user) : null,
+    ...(user?.twoFactorEmail ? { Email: user.email } : {}),
     MasterPasswordPolicy: masterPasswordPolicyResponse(),
   };
 
@@ -296,6 +307,7 @@ async function twoFactorRequiredResponse(
       TwoFactorProviders2: customResponse.TwoFactorProviders2,
       // Required by current Android parser (nullable value is acceptable).
       SsoEmail2faSessionToken: customResponse.SsoEmail2faSessionToken,
+      ...(user?.twoFactorEmail ? { Email: user.email } : {}),
       MasterPasswordPolicy: customResponse.MasterPasswordPolicy,
       CustomResponse: customResponse,
       ErrorModel: {
@@ -487,17 +499,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const normalizedAuthRequestId = String(authRequestId || '').trim();
     if (normalizedAuthRequestId) {
       const authRequest = await storage.getAuthRequestByIdForUser(normalizedAuthRequestId, user.id);
-      valid = !!(
-        authRequest &&
-        authRequest.userId === user.id &&
-        authRequest.type === 0 &&
-        authRequest.approved === true &&
-        authRequest.responseDate &&
-        !authRequest.authenticationDate &&
-        !isAuthRequestExpired(authRequest) &&
-        !!authRequest.key &&
-        constantTimeEquals(authRequest.accessCode, passwordHash)
-      );
+      valid = isAuthRequestLoginApproved(authRequest, user.id, passwordHash);
       if (valid) {
         validatedAuthRequestId = authRequest!.id;
         authRequestLoginKey = authRequest!.key;
@@ -570,6 +572,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         const consumed = await storage.consumeTotpLoginCounter(user.id, matchedCounter);
         if (!consumed) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
+        }
+      } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_EMAIL)) {
+        if (!user.twoFactorEmail || !await redeemEmailOtp(env, { purpose: 'two-factor-login', subject: user.id, binding: user.securityStamp }, normalizedTwoFactorToken)) {
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, TWO_FACTOR_PROVIDER_EMAIL);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_YUBIKEY)) {
         const publicId = yubiKeyPublicIdFromOtp(normalizedTwoFactorToken);

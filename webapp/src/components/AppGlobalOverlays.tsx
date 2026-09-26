@@ -26,6 +26,9 @@ interface AppGlobalOverlaysProps {
   pendingTotpOpen: boolean;
   pendingTotpProviderType?: number;
   pendingTotpAvailableProviders?: number[];
+  pendingTotpEmail?: string;
+  emailCodeSending?: boolean;
+  onResendEmailCode?: () => void;
   totpCode: string;
   rememberDevice: boolean;
   onTotpCodeChange: (value: string) => void;
@@ -44,12 +47,14 @@ interface AppGlobalOverlaysProps {
 }
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const TWO_FACTOR_PROVIDER_ORDER = [
   TWO_FACTOR_PROVIDER_WEBAUTHN,
   TWO_FACTOR_PROVIDER_YUBIKEY,
   TWO_FACTOR_PROVIDER_AUTHENTICATOR,
+  TWO_FACTOR_PROVIDER_EMAIL,
 ] as const;
 
 function uniqueSupportedProviders(providerTypes: number[] | undefined): number[] {
@@ -60,6 +65,7 @@ function uniqueSupportedProviders(providerTypes: number[] | undefined): number[]
 function twoFactorProviderLabel(providerType: number): string {
   if (providerType === TWO_FACTOR_PROVIDER_WEBAUTHN) return t('txt_passkey');
   if (providerType === TWO_FACTOR_PROVIDER_YUBIKEY) return t('txt_otp_from_yubikey');
+  if (providerType === TWO_FACTOR_PROVIDER_EMAIL) return t('txt_email');
   return t('txt_authenticator_app');
 }
 
@@ -73,6 +79,7 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
   const alternateProviders = availableProviders.filter((provider) => provider !== props.pendingTotpProviderType);
   const isYubiKeyOtp = props.pendingTotpProviderType === TWO_FACTOR_PROVIDER_YUBIKEY;
   const isWebAuthn = props.pendingTotpProviderType === TWO_FACTOR_PROVIDER_WEBAUTHN;
+  const isEmail = props.pendingTotpProviderType === TWO_FACTOR_PROVIDER_EMAIL;
   const requireMasterPassword = !!props.confirm?.requireMasterPassword;
 
   useEffect(() => {
@@ -127,7 +134,7 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
             <span>{t('txt_passkey')}</span>
           </span>
         ) : t('txt_two_step_verification')}
-        message={isYubiKeyOtp ? t('txt_press_yubikey_to_authenticate') : isWebAuthn ? t('txt_use_passkey_to_complete_two_step_verification') : t('txt_password_is_already_verified')}
+        message={isYubiKeyOtp ? t('txt_press_yubikey_to_authenticate') : isWebAuthn ? t('txt_use_passkey_to_complete_two_step_verification') : isEmail ? t('txt_check_email_for_code', { email: props.pendingTotpEmail ?? '' }) : t('txt_password_is_already_verified')}
         confirmText={t('txt_verify')}
         hideCancel
         closeButton
@@ -139,6 +146,11 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
         afterActions={(
           <div className="dialog-extra">
             <div className="dialog-divider" />
+            {isEmail && (
+              <button type="button" className="btn btn-secondary dialog-btn" disabled={props.emailCodeSending || props.totpSubmitting} onClick={props.onResendEmailCode}>
+                {props.emailCodeSending ? t('txt_sending_code') : t('txt_resend_code')}
+              </button>
+            )}
             {alternateProviders.length > 0 && (
               <div className="two-factor-method-switcher">
                 <button
@@ -181,8 +193,8 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
           <p className="muted-inline settings-field-note">{t('txt_touch_your_passkey_when_prompted')}</p>
         ) : (
           <label className="field">
-            <span>{isYubiKeyOtp ? t('txt_otp_from_yubikey') : t('txt_totp_code')}</span>
-            <input className="input" type={isYubiKeyOtp ? 'password' : 'text'} value={props.totpCode} autoComplete="one-time-code" onInput={(e) => props.onTotpCodeChange((e.currentTarget as HTMLInputElement).value)} />
+            <span>{isYubiKeyOtp ? t('txt_otp_from_yubikey') : isEmail ? t('txt_email_verification_code') : t('txt_totp_code')}</span>
+            <input className="input" type={isYubiKeyOtp ? 'password' : 'text'} inputMode={isEmail ? 'numeric' : undefined} value={props.totpCode} autoComplete="one-time-code" onInput={(e) => props.onTotpCodeChange((e.currentTarget as HTMLInputElement).value)} />
           </label>
         )}
         <label className="check-line check-line-compact">

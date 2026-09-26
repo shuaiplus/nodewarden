@@ -460,9 +460,13 @@ export interface TokenSuccess {
 export interface TokenError {
   error?: string;
   error_description?: string;
+  Email?: string;
+  SsoEmail2faSessionToken?: string | null;
   TwoFactorProviders?: unknown;
   TwoFactorProviders2?: unknown;
   CustomResponse?: {
+    Email?: string;
+    SsoEmail2faSessionToken?: string | null;
     TwoFactorProviders?: unknown;
     TwoFactorProviders2?: unknown;
   };
