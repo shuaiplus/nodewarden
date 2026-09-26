@@ -1,4 +1,12 @@
 ﻿export const LIMITS = {
+  mail: {
+    // Shared delivery budgets and minimum age for new-device notices.
+    // 邮件配额与新设备通知的最短账户注册时间。
+    instanceSendsPerHour: 100,
+    perRecipientPerHour: 5,
+    newDeviceMinAccountAgeSeconds: 600,
+    emergencyAccessInvitesPerGrantorPerHour: 10,
+  },
   admin: {
     // Administrator login, session, destructive-action and listing limits.
     // 管理员登录、会话、敏感操作和列表限制。

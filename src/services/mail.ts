@@ -1,3 +1,6 @@
+import { LIMITS } from '../config/limits';
+import { RateLimitService } from './ratelimit';
+import { sha256Base64Url } from '../utils/account-passkeys';
 import type { Env } from '../types';
 import { MAIL_TEMPLATES, renderMail, type TemplateName, type TemplateModel, type MailContent } from './mail-templates';
 import {
@@ -16,19 +19,20 @@ export interface SendEmailBinding {
 }
 export const EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@,;<>"()\[\]\\]+\.\p{L}+$/u;
 export type MailConfig = { kind: 'disabled' } | { kind: 'misconfigured' }
-  | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string } };
+  | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string }; sendsPerHour: number };
 export type MailOutcome = { kind: 'sent' } | { kind: 'disabled' } | { kind: 'misconfigured' }
   | { kind: 'throttled'; retryAfterSeconds: number } | { kind: 'failed'; code: string };
 export type StatusCheck = { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
 
-export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME'>): MailConfig {
+export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME' | 'EMAIL_SENDS_PER_HOUR'>): MailConfig {
   if (!env.EMAIL) return { kind: 'disabled' };
   const email = (env.EMAIL_FROM ?? '').trim();
   const name = env.EMAIL_FROM_NAME?.trim() || 'NodeWarden';
+  const sendsPerHour = env.EMAIL_SENDS_PER_HOUR === undefined ? LIMITS.mail.instanceSendsPerHour : Number(env.EMAIL_SENDS_PER_HOUR);
   const field = !EMAIL_PATTERN.test(email) || email.length > 256 ? 'EMAIL_FROM'
-    : /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(env.EMAIL_FROM_NAME ?? '') ? 'EMAIL_FROM_NAME' : null;
+    : /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(env.EMAIL_FROM_NAME ?? '') ? 'EMAIL_FROM_NAME' : env.EMAIL_SENDS_PER_HOUR !== undefined && (!/^[1-9][0-9]*$/.test(env.EMAIL_SENDS_PER_HOUR) || !Number.isSafeInteger(sendsPerHour)) ? 'EMAIL_SENDS_PER_HOUR' : null;
   if (field) { console.error('mail', { field }); return { kind: 'misconfigured' }; }
-  return { kind: 'enabled', binding: env.EMAIL, from: { email, name } };
+  return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour };
 }
 
 export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): Promise<MailOutcome> {
@@ -41,6 +45,13 @@ export async function sendMail<N extends TemplateName>(env: Env, to: string, nam
   if (!EMAIL_PATTERN.test(to) || to.length > 256) return log({ kind: 'failed', code: 'E_NODEWARDEN_RECIPIENT' });
   if (isReservedDocumentationEmail(to)) { log({ kind: 'sent' }); return { kind: 'sent' }; }
   try {
+    if (MAIL_TEMPLATES[name].throttle === 'user') {
+      const limiter = new RateLimitService(env.DB);
+      const instance = await limiter.consumeStrictBudgetWithWindow('mail-instance', config.sendsPerHour, 3600);
+      if (!instance.allowed) return log({ kind: 'throttled', retryAfterSeconds: instance.retryAfterSeconds ?? 3600 });
+      const recipient = await limiter.consumeStrictBudgetWithWindow(`mail-rcpt:${await sha256Base64Url(to.toLowerCase())}`, LIMITS.mail.perRecipientPerHour, 3600);
+      if (!recipient.allowed) return log({ kind: 'throttled', retryAfterSeconds: recipient.retryAfterSeconds ?? 3600 });
+    }
     const render = MAIL_TEMPLATES[name].render as (model: TemplateModel<N>) => MailContent;
     await config.binding.send({ to, from: config.from, ...renderMail(render(model)), headers: { 'Auto-Submitted': 'auto-generated' } });
     return { kind: 'sent' };

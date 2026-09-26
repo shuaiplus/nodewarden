@@ -466,7 +466,7 @@ test('invite mail is budgeted per inviter per hour, and a batch that overruns it
 // owner's. Identity providers pace their retries by Retry-After, so the SCIM 429 carries it.
 test('SCIM invite mail over its org budget gets a 429 SCIM error with Retry-After and saves no row', async (context) => {
   const capture = captureEmail();
-  const env = await createTestEnv(capture.overrides);
+  const env = await createTestEnv({ ...capture.overrides, EMAIL_SENDS_PER_HOUR: '1000' });
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const budget = LIMITS.rateLimit.orgInviteEmailsPerHour;

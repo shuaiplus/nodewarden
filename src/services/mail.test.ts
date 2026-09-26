@@ -34,7 +34,7 @@ test('reads EMAIL_FROM from env', () => {
   assert.deepEqual(readMailConfig({}), { kind: 'disabled' });
   assert.deepEqual(
     readMailConfig({ EMAIL: binding, EMAIL_FROM: 'noreply@stevefan1999.tech', EMAIL_FROM_NAME: 'NW' }),
-    { kind: 'enabled', binding, from: { email: 'noreply@stevefan1999.tech', name: 'NW' } }
+    { kind: 'enabled', binding, sendsPerHour: 100, from: { email: 'noreply@stevefan1999.tech', name: 'NW' } }
   );
 });
 
@@ -103,7 +103,7 @@ test('mail config and delivery failures do not expose addresses or exception tex
   const model = { vaultOrigin: 'https://vault.io', email: 'private@x.io', token: 'secret-token' };
   for (const to of ['a@x.io, b@y.io', 'a@x.io\r\nbcc: b@y.io']) assert.equal((await sendMail(env, to, 'registerVerification', model)).kind, 'failed');
   assert.equal(sends, 0);
-  const outcome = await sendMail(env, 'private@x.io', 'registerVerification', model);
+  const outcome = await sendMail(env, 'private@x.io', 'adminSignIn', { url: toSafeUrl(new URL('https://vault.io')) });
   assert.equal(outcome.kind, 'failed');
   assert.deepEqual(mailStatusCheck(outcome), { ok: false, status: 502, message: 'Unable to send email', headers: {} });
   assert.doesNotMatch(JSON.stringify(warnings.mock.calls), /private@|secret-token/);

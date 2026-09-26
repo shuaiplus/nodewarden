@@ -5,6 +5,7 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
   adminSignIn: {
+    throttle: 'exempt',
     render: (model: { url: SafeUrl }): MailContent => ({
       subject: 'Sign in to NodeWarden administration',
       paragraphs: ['Use this link in the browser where you requested it to sign in to administration.', 'This single-use link expires in 15 minutes. Ignore this email if you did not request it.'],
@@ -12,6 +13,7 @@ export const MAIL_TEMPLATES = {
     }),
   },
   registerVerification: {
+    throttle: 'user',
     render: (model: { vaultOrigin: string; email: string; token: string }): MailContent => ({
       subject: 'Verify your NodeWarden email',
       paragraphs: ['Verify your email to finish creating your NodeWarden account.', 'This link expires in 30 minutes. If you did not request an account, ignore this email.'],
@@ -19,13 +21,14 @@ export const MAIL_TEMPLATES = {
     }),
   },
   organizationInvite: {
+    throttle: 'user',
     render: (model: OrganizationInvite): MailContent => ({
       subject: `Join ${sanitizeForEmail(model.organizationName)}`,
       paragraphs: [`You have been invited to join the ${sanitizeForEmail(model.organizationName)} organization.`, `This link expires in ${ORG_INVITE_TTL_DAYS} days.`],
       action: { label: 'Accept invitation', url: toSafeUrl(new URL(buildOrganizationInviteUrl(model))) },
     }),
   },
-} satisfies Record<string, { render: (model: never) => MailContent }>;
+} satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
 
