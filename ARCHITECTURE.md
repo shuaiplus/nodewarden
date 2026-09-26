@@ -24,7 +24,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 
 ## Data
 
-Schema lives in `src/db/schema.ts` and `src/db/relations.ts` (relations v2). `npm run db:generate` emits nested `migrations/<id>/migration.sql` and embeds SQL into `src/db/baseline.ts` for Worker bootstrap. Bump `STORAGE_SCHEMA_VERSION` when the schema changes.
+Schema lives in `src/db/schema.ts` and `src/db/relations.ts` (relations v2). `npm run db:generate` emits nested `migrations/<id>/migration.sql` and embeds SQL into `src/db/baseline.ts` for Worker bootstrap. Bump `STORAGE_SCHEMA_VERSION` when the schema changes. Data-only fixes are `drizzle-kit generate --custom` migrations and bump it too; each bump replays every migration, so every statement must be safe to rerun forever.
 
 Use `db.batch()` for multi-statement work. `db.transaction()` is broken on D1. D1 caps one statement at 100 bound parameters.
 

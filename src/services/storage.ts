@@ -166,9 +166,10 @@ import {
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // IMPORTANT:
-// Bump this whenever src/db/schema.ts changes. Existing D1 installs only
+// Bump this whenever src/db/schema.ts changes or a migration is added (including
+// data-only --custom ones). Existing D1 installs only
 // rerun ensureStorageSchema() when this value differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-09-26-pending-collection-users';
+const STORAGE_SCHEMA_VERSION = '2026-09-26-group-members-same-org';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',

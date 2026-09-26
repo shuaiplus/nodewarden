@@ -1,0 +1,1 @@
+DELETE FROM `org_group_members` WHERE EXISTS (SELECT 1 FROM `org_groups` g JOIN `organization_memberships` m ON m.`id` = `org_group_members`.`membership_id` WHERE g.`id` = `org_group_members`.`group_id` AND g.`org_id` <> m.`org_id`);

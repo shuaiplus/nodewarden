@@ -1035,6 +1035,13 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   const now = new Date().toISOString();
   const existing = groupId ? await orgRepo.getGroup(env.DB, groupId) : null;
   if (groupId && (!existing || existing.orgId !== orgId)) return errorResponse('Group not found', 404);
+  const users = ((readBody(body, ['users', 'Users']) as string[]) || []).map((id) => String(id));
+  // Upstream ValidateMemberAccessAsync: missing and foreign membership ids fail alike, before any
+  // write, so the response cannot probe other organizations. Like upstream, skip it without users.
+  if (users.length) {
+    const orgMembershipIds = new Set((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((membership) => membership.id));
+    if (users.some((id) => !orgMembershipIds.has(id))) return errorResponse('Resource not found.', 404);
+  }
   const group = {
     id: existing?.id || generateUUID(),
     orgId,
@@ -1045,7 +1052,6 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
     updatedAt: now,
   };
   await orgRepo.saveGroup(env.DB, group);
-  const users = ((readBody(body, ['users', 'Users']) as string[]) || []).map((id) => String(id));
   if (users.length || !existing) await orgRepo.replaceGroupMembers(env.DB, group.id, users);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({
