@@ -46,3 +46,27 @@ test('API-key grants notify a new device', async () => {
   assert.equal(capture.sent.length, 1);
   assert.match(capture.sent[0].subject, /New device/);
 });
+
+test('failed two-factor notices deduplicate per account, skip Remember and identify recovery failures', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const capture = captureEmail();
+  const env = await createTestEnv(capture.overrides);
+  const attempt = async (suffix: string, provider: string, repeats = 1) => {
+    const user = await seedUser(env, { email: `${suffix}@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(password), totpSecret: 'JBSWY3DPEHPK3PXP', totpRecoveryCode: 'recovery-code' });
+    for (let i = 0; i < repeats; i++) {
+      const response = await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password, twoFactorProvider: provider, twoFactorToken: 'invalid', deviceIdentifier: 'known' } });
+      assert.equal(response.status, 400);
+      await drainWaitUntil();
+    }
+  };
+  await attempt('totp', '0', 2);
+  assert.equal(capture.sent.length, 1);
+  await attempt('remember', '5');
+  assert.equal(capture.sent.length, 1);
+  await attempt('recovery', '8');
+  assert.equal(capture.sent.length, 2);
+  assert.match(capture.sent[1].text, /Recovery code/);
+  assert.match(capture.sent[0].text, /203\[dot\]0\[dot\]113\[dot\]10/);
+  env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
+  await attempt('failure', '0');
+});

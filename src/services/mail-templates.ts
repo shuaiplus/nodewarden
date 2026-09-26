@@ -4,6 +4,13 @@ import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
 export type MailContent = { subject: string; paragraphs: string[]; action?: { label: string; url: SafeUrl } };
 export const MAIL_TEMPLATES = {
+  failedTwoFactor: {
+    throttle: 'exempt',
+    render: (model: { provider: number; time: string; ip: string }): MailContent => ({
+      subject: 'Unsuccessful two-step sign-in to NodeWarden',
+      paragraphs: [`A sign-in with your password failed its two-step check (${({ 0: 'Authenticator', 3: 'YubiKey', 7: 'Passkey', 8: 'Recovery code' } as Record<number, string>)[model.provider] ?? 'Unknown provider'}).`, `Time (UTC): ${sanitizeForEmail(model.time)}. IP address: ${sanitizeForEmail(model.ip)}.`, 'If this was not you, change your master password.'],
+    }),
+  },
   newDeviceLogin: {
     throttle: 'exempt',
     render: (model: { device: string; time: string; ip: string }): MailContent => ({

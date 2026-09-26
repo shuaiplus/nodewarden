@@ -1,5 +1,5 @@
 import { readMailConfig } from '../services/mail';
-import { notifyMail } from '../services/mail-notify';
+import { notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
@@ -324,26 +324,30 @@ async function recordFailedLoginAndBuildResponse(
   return identityErrorResponse(message, 'invalid_grant', 400);
 }
 
-async function recordFailedTwoFactorAndBuildResponse(
-  rateLimit: RateLimitService,
-  loginIdentifier: string
-): Promise<Response> {
-  const failed = await rateLimit.recordFailedLogin(loginIdentifier);
-  if (failed.locked) {
-    return identityErrorResponse(
-      `Too many failed login attempts. Account locked for ${Math.ceil(failed.retryAfterSeconds! / 60)} minutes.`,
-      'TooManyRequests',
-      429
-    );
-  }
-  return identityErrorResponse('Two-step token is invalid. Try again.', 'invalid_grant', 400);
-}
-
 // POST /identity/connect/token
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const rateLimit = new RateLimitService(env.DB);
+
+  async function recordFailedTwoFactorAndBuildResponse(
+    rateLimit: RateLimitService,
+    loginIdentifier: string,
+    user: User,
+    providerType: number
+  ): Promise<Response> {
+    notifyFailedTwoFactor(env, request, user, providerType);
+    const failed = await rateLimit.recordFailedLogin(loginIdentifier);
+    if (failed.locked) {
+      return identityErrorResponse(
+        `Too many failed login attempts. Account locked for ${Math.ceil(failed.retryAfterSeconds! / 60)} minutes.`,
+        'TooManyRequests',
+        429
+      );
+    }
+    return identityErrorResponse('Two-step token is invalid. Try again.', 'invalid_grant', 400);
+  }
+
 
   let body: Record<string, string>;
   const contentType = request.headers.get('content-type') || '';
@@ -542,48 +546,48 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         const matchedCounter = await findMatchingTotpCounter(effectiveTotpSecret, normalizedTwoFactorToken);
         if (matchedCounter == null) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         const consumed = await storage.consumeTotpLoginCounter(user.id, matchedCounter);
         if (!consumed) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_YUBIKEY)) {
         const publicId = yubiKeyPublicIdFromOtp(normalizedTwoFactorToken);
         if (!publicId || !effectiveYubiKeyPublicIds.includes(publicId)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         let credentials = await getYubicoCredentials(env.DB);
         let initializedWithCurrentOtp = false;
         if (!credentials) {
           const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken);
           if (!initialized) {
-            return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+            return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
           }
           credentials = initialized.credentials;
           initializedWithCurrentOtp = initialized.created;
         }
         if (!initializedWithCurrentOtp && !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {
         if (!effectiveWebAuthnCredentials.length) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         let deviceResponse: unknown;
         try {
           deviceResponse = JSON.parse(normalizedTwoFactorToken);
         } catch {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         try {
           await assertTwoFactorPasskeyCredential(request, env, storage, user, deviceResponse);
         } catch {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
       } else if (
         normalizedTwoFactorProvider === TWO_FACTOR_PROVIDER_RECOVERY_CODE_RESPONSE ||
@@ -591,7 +595,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_RECOVERY_CODE_ANDROID_REQUEST)
       ) {
         if (!recoveryCodeEquals(normalizedTwoFactorToken, user.totpRecoveryCode)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         user.totpSecret = null;
         user.yubikeyKey1 = null;
@@ -612,7 +616,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         rememberRequested = false;
       } else {
         // Unsupported provider for this server profile behaves as an invalid 2FA attempt.
-        return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
       }
 
       // Upstream behavior: do not issue a new remember token when auth itself used remember provider.
