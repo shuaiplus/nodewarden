@@ -18,6 +18,14 @@ test('Better Auth signs in, reads and renews its stored session, updates the use
   assert.equal(signedIn.status, 200);
   const login = await signedIn.json() as { token: string; user: { id: string } };
   assert.equal(login.user.id, user.id);
+  const nativeBearer = { Authorization: `Bearer ${login.token}` };
+  assert.equal((await authedFetch(env, { path: '/api/sync', headers: nativeBearer })).status, 401);
+  const nativeRefresh = await authedFetch(env, {
+    method: 'POST', path: '/identity/connect/token',
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: login.token, client_id: 'web' }),
+  });
+  assert.equal(nativeRefresh.status, 400);
+  assert.equal((await nativeRefresh.json() as { access_token?: string }).access_token, undefined);
   const cookie = signedIn.headers.getSetCookie().find(value => value.includes('better-auth.session_token='))?.split(';')[0];
   assert.ok(cookie);
   const headers = { Cookie: cookie, Origin: origin };
