@@ -88,9 +88,9 @@ async function mailEmergencyAccessInvite(request: Request, env: Env, grantor: Us
 }
 
 type EmergencyAccessNotice = 'emergencyAccessAccepted' | 'emergencyAccessConfirmed' | 'emergencyAccessRecoveryInitiated'
-  | 'emergencyAccessApproved' | 'emergencyAccessRejected' | 'emergencyAccessTimedOut';
+  | 'emergencyAccessApproved' | 'emergencyAccessRejected' | 'emergencyAccessTimedOut' | 'emergencyAccessReminder';
 
-async function sendEmergencyAccessNotice(env: Env, record: emergencyRepo.EmergencyAccessRecord, name: EmergencyAccessNotice, recipient: 'grantor' | 'grantee'): Promise<void> {
+async function sendEmergencyAccessNotice(env: Env, record: emergencyRepo.EmergencyAccessRecord, name: EmergencyAccessNotice, recipient: 'grantor' | 'grantee', daysLeft = record.waitTimeDays): Promise<void> {
   const storage = new StorageService(env.DB);
   const [grantor, grantee] = await Promise.all([
     storage.getUserById(record.grantorId), record.granteeId ? storage.getUserById(record.granteeId) : null,
@@ -100,7 +100,7 @@ async function sendEmergencyAccessNotice(env: Env, record: emergencyRepo.Emergen
   await sendMail(env, to.email, name, {
     name: other.name || other.email,
     accessType: record.type === EmergencyAccessType.Takeover ? 'take over your account' : 'view your vault',
-    daysLeft: record.waitTimeDays,
+    daysLeft,
   });
 }
 
@@ -345,5 +345,14 @@ export async function approveExpiredEmergencyAccess(env: Env): Promise<void> {
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
     await sendEmergencyAccessNotice(env, record, 'emergencyAccessTimedOut', 'grantor');
     await sendEmergencyAccessNotice(env, record, 'emergencyAccessApproved', 'grantee');
+  }
+}
+
+export async function remindPendingEmergencyAccess(env: Env): Promise<void> {
+  const now = new Date().toISOString();
+  for (const record of await emergencyRepo.listRecoveryToNotify(env.DB, now)) {
+    if (!await emergencyRepo.claimRecoveryNotification(env.DB, record, now)) continue;
+    const daysLeft = Math.ceil((Date.parse(record.recoveryInitiatedAt!) + record.waitTimeDays * 86_400_000 - Date.parse(now)) / 86_400_000);
+    await sendEmergencyAccessNotice(env, record, 'emergencyAccessReminder', 'grantor', daysLeft);
   }
 }

@@ -9,7 +9,7 @@ import type { Env, User } from '../src/types';
 import { createEmergencyAccessInviteToken, createRegisterVerifyToken, signHs256Jwt } from '../src/utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser, type SentEmail } from './support/env';
 
-const { approveExpiredEmergencyAccess } = await import('../src/handlers/emergency-access');
+const { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } = await import('../src/handlers/emergency-access');
 
 const ENCRYPTED = '2.YQ==|Yg==|Yw==';
 const DAY = 86_400_000;
@@ -208,4 +208,43 @@ test('EA notice delivery failure does not roll back a valid transition', async (
   f.env.EMAIL = failingEmail('E_RECIPIENT_SUPPRESSED');
   assert.equal((await action(f.env, f.grantee, record.id, 'initiate')).status, 200);
   assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.RecoveryInitiated);
+});
+
+test('EA reminder sends once on the final day, even with overlapping cron runs', async (t) => {
+  const f = await setup();
+  const record = await confirmed(f);
+  const started = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: started });
+  await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+    ...record, status: Status.RecoveryInitiated, recoveryInitiatedAt: new Date(started).toISOString(), lastNotificationAt: new Date(started).toISOString(),
+  });
+  for (let day = 1; day <= 5; day++) {
+    t.mock.timers.tick(DAY);
+    await remindPendingEmergencyAccess(f.env);
+    assert.equal(f.sent.length, 0, `no reminder on day ${day}`);
+  }
+  t.mock.timers.tick(DAY);
+  await Promise.all([remindPendingEmergencyAccess(f.env), remindPendingEmergencyAccess(f.env)]);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].to, f.grantor.email);
+  assert.match(f.sent[0].text, /in 1 day/);
+  await remindPendingEmergencyAccess(f.env);
+  assert.equal(f.sent.length, 1);
+  t.mock.timers.tick(DAY);
+  await remindPendingEmergencyAccess(f.env);
+  assert.equal(f.sent.length, 1, 'expired recovery is handled by timeout approval, not another reminder');
+});
+
+test('EA reminders skip other statuses, missing notification dates and newly notified requests', async () => {
+  const f = await setup();
+  const record = await confirmed(f);
+  const started = new Date(Date.now() - 6 * DAY).toISOString();
+  for (const [status, lastNotificationAt] of [
+    [Status.Confirmed, started], [Status.RecoveryApproved, started],
+    [Status.RecoveryInitiated, null], [Status.RecoveryInitiated, new Date().toISOString()],
+  ] as const) {
+    await emergencyRepo.saveEmergencyAccess(f.env.DB, { ...record, status, recoveryInitiatedAt: started, lastNotificationAt });
+    await remindPendingEmergencyAccess(f.env);
+  }
+  assert.equal(f.sent.length, 0);
 });

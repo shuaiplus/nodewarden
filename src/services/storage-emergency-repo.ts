@@ -123,3 +123,26 @@ export async function listRecoveryReady(db: D1Database, nowIso: string): Promise
     return Date.parse(nowIso) - started >= record.waitTimeDays * 24 * 60 * 60 * 1000;
   });
 }
+
+export async function listRecoveryToNotify(db: D1Database, nowIso: string): Promise<EmergencyAccessRecord[]> {
+  const rows = await getOrm(db).select().from(emergencyAccess)
+    .where(eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated));
+  const now = Date.parse(nowIso);
+  const day = 86_400_000;
+  return rows.map(mapRow).filter((record) => {
+    if (!record.recoveryInitiatedAt || !record.lastNotificationAt) return false;
+    const deadline = Date.parse(record.recoveryInitiatedAt) + record.waitTimeDays * day;
+    return now >= deadline - day && now < deadline && now >= Date.parse(record.lastNotificationAt) + day;
+  });
+}
+
+export async function claimRecoveryNotification(db: D1Database, record: EmergencyAccessRecord, nowIso: string): Promise<boolean> {
+  const rows = await getOrm(db).update(emergencyAccess).set({ lastNotificationAt: nowIso })
+    .where(and(
+      eq(emergencyAccess.id, record.id), eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
+      sql`${emergencyAccess.lastNotificationAt} = ${record.lastNotificationAt}`,
+      sql`${emergencyAccess.recoveryInitiatedAt} = ${record.recoveryInitiatedAt}`,
+      eq(emergencyAccess.waitTimeDays, record.waitTimeDays),
+    )).returning({ id: emergencyAccess.id });
+  return rows.length > 0;
+}

@@ -27,3 +27,5 @@ With mail and a configured vault origin, every invitation starts Invited and sen
 After Confirm, the grantee can Initiate; wait-time 0 approves immediately. The Worker cron also auto-approves recoveries whose wait has elapsed.
 
 Successful accept, confirm, recovery initiation, approval and rejection send background notices to the affected party. Initiation and timeout notices go to the grantor; acceptance also tells the grantor to confirm. Confirmation, approval and rejection notify the grantee. Immediate approval sends both initiation and approval notices; elapsed recoveries send timeout and approval notices. A delivery failure does not undo the transition.
+
+The cron sends one reminder during the final day of a pending recovery, only after at least a day since its last notification. It claims the notification timestamp before sending, so overlapping runs do not duplicate it. A failed delivery is not retried.

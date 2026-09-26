@@ -9,7 +9,7 @@ import { handleRequest } from './router';
 import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
-import { approveExpiredEmergencyAccess } from './handlers/emergency-access';
+import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import {
   isBackendRequestPath,
   isWebVaultHidden,
@@ -133,6 +133,9 @@ export default {
       }),
       approveExpiredEmergencyAccess(env).catch((error) => {
         console.error('Emergency access timeout job failed:', error);
+      }),
+      remindPendingEmergencyAccess(env).catch((error) => {
+        console.error('Emergency access reminder job failed:', error);
       }),
     ]));
   },

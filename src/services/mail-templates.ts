@@ -107,6 +107,13 @@ export const MAIL_TEMPLATES = {
       paragraphs: [`The waiting period for ${sanitizeForEmail(model.name)} has ended. Their emergency access to your account is now approved.`],
     }),
   },
+  emergencyAccessReminder: {
+    throttle: 'exempt',
+    render: (model: { name: string; daysLeft: number }): MailContent => ({
+      subject: 'Emergency access waiting period ends soon',
+      paragraphs: [`${sanitizeForEmail(model.name)} will receive emergency access to your account in ${model.daysLeft} day(s). Open your vault to review or reject the request.`],
+    }),
+  },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
