@@ -233,10 +233,31 @@ test('the last confirmed owner cannot be revoked or removed', async () => {
   const secondOwner = await addMember(env, orgId, MembershipType.Owner);
 
   assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'revoke')).status, 200);
-  await expectRejected(setMemberRevoked(env, owner, orgId, ownerMemberId, 'revoke'), 400, LAST_OWNER);
-  await expectRejected(removeMember(env, owner, orgId, ownerMemberId), 400, LAST_OWNER);
+  await expectRejected(setMemberRevoked(env, owner, orgId, ownerMemberId, 'revoke'), 400, 'You cannot revoke yourself.');
+  await expectRejected(removeMember(env, owner, orgId, ownerMemberId), 400, 'You cannot remove yourself.');
   assert.equal((await details(env, owner, orgId, ownerMemberId)).status, MembershipStatus.Confirmed);
   assert.equal((await removeMember(env, owner, orgId, secondOwner.memberId)).status, 200);
+});
+
+test('member actions reject self-management and repeated revoke or restore without changing status', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const admin = await addMember(env, orgId, MembershipType.Admin);
+  const member = await addMember(env, orgId, MembershipType.User);
+
+  await expectRejected(removeMember(env, admin.user, orgId, admin.memberId), 400, 'You cannot remove yourself.');
+  for (const action of ['revoke', 'restore'] as const) {
+    await expectRejected(setMemberRevoked(env, admin.user, orgId, admin.memberId, action), 400, `You cannot ${action} yourself.`);
+  }
+  assert.equal((await details(env, owner, orgId, admin.memberId)).status, MembershipStatus.Confirmed);
+  await expectRejected(setMemberRevoked(env, admin.user, orgId, member.memberId, 'restore'), 400, 'Already active.');
+  assert.equal((await setMemberRevoked(env, admin.user, orgId, member.memberId, 'revoke')).status, 200);
+  const revoked = await orgRepo.getMembership(env.DB, member.memberId);
+  await expectRejected(setMemberRevoked(env, admin.user, orgId, member.memberId, 'revoke'), 400, 'Already revoked.');
+  assert.deepEqual(await orgRepo.getMembership(env.DB, member.memberId), revoked);
+  assert.equal((await setMemberRevoked(env, admin.user, orgId, member.memberId, 'restore')).status, 200);
+  assert.equal((await details(env, owner, orgId, member.memberId)).status, MembershipStatus.Confirmed);
 });
 
 // The org creator is stored with accessAll, which official web's update request never sends, so

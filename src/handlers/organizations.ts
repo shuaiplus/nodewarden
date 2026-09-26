@@ -962,7 +962,7 @@ export async function handleDeleteMember(env: Env, userId: string, orgId: string
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'remove');
+  const removalCheck = memberRemovalCheck(actor, membership, 'remove');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
@@ -978,7 +978,7 @@ export async function handleRevokeMember(env: Env, userId: string, orgId: string
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'revoke');
+  const removalCheck = memberRemovalCheck(actor, membership, 'revoke');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   // Only an Owner can restore an Owner, so revoking the last confirmed one would leave nobody able to undo it.
   if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
@@ -997,7 +997,7 @@ export async function handleRestoreMember(env: Env, userId: string, orgId: strin
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, clientMembershipType(membership.type), 'restore');
+  const removalCheck = memberRemovalCheck(actor, membership, 'restore');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   membership.status = restoreStatus(membership.status);
   membership.updatedAt = new Date().toISOString();

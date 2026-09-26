@@ -1,5 +1,6 @@
 import {
   EMPTY_PERMISSIONS,
+  clientMembershipType,
   MembershipStatus,
   MembershipType,
   type CollectionAccess,
@@ -110,12 +111,19 @@ export function memberRoleChangeCheck(
 
 // Upstream RemoveOrganizationUserCommand and the v1 Revoke/RestoreOrganizationUserCommand: the same
 // role guard as a role change, applied to the member's current type and worded per action.
-export function memberRemovalCheck(actor: MembershipRecord, targetType: number, action: 'remove' | 'revoke' | 'restore'): RoleChangeCheck {
-  if (canManageMemberType(actor, targetType)) return { ok: true };
-  return {
-    ok: false,
-    message: targetType === MembershipType.Owner ? `Only owners can ${action} other owners.` : `Custom users can not ${action} admins.`,
-  };
+export function memberRemovalCheck(actor: MembershipRecord, target: MembershipRecord, action: 'remove' | 'revoke' | 'restore'): RoleChangeCheck {
+  if (actor.userId && actor.userId === target.userId) return { ok: false, message: `You cannot ${action} yourself.` };
+  const targetType = clientMembershipType(target.type);
+  if (!canManageMemberType(actor, targetType)) {
+    return {
+      ok: false,
+      message: targetType === MembershipType.Owner ? `Only owners can ${action} other owners.` : `Custom users can not ${action} admins.`,
+    };
+  }
+  const revoked = publicMembershipStatus(target.status) === MembershipStatus.Revoked;
+  if (action === 'revoke' && revoked) return { ok: false, message: 'Already revoked.' };
+  if (action === 'restore' && !revoked) return { ok: false, message: 'Already active.' };
+  return { ok: true };
 }
 
 // Upstream restricts self-edits unless admins may access all collection items. NodeWarden applies
