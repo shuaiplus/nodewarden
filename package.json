@@ -38,7 +38,8 @@
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo",
-    "deploy:official-web": "npm run build:official-web && wrangler pages deploy dist --project-name nodewarden-official-web --config official-web/wrangler.toml"
+    "deploy:official-web": "npm run build:official-web && wrangler pages deploy dist --project-name nodewarden-official-web --config official-web/wrangler.toml",
+    "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs"
   },
   "keywords": [
     "bitwarden",

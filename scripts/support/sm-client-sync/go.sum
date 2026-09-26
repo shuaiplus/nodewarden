@@ -1,0 +1,4 @@
+github.com/bitwarden/sdk-go/v2 v2.1.0 h1:DtgklUXNA3GcP5t1eXEEefd0UY6Gv5041/+gZHD2174=
+github.com/bitwarden/sdk-go/v2 v2.1.0/go.mod h1:6Sfb4IdZ9tnggeFj8Ty4MLkWUyC2pNlFUoAZE0Dapfw=
+github.com/gofrs/uuid v4.4.0+incompatible h1:3qXRTX8/NbyulANqlc0lchS1gqAVxRgsuW1YrTJupqA=
+github.com/gofrs/uuid v4.4.0+incompatible/go.mod h1:b2aQJv3Z4Fp6yNu3cdSllBxTCLRxnplIgP/c0N/04lM=
