@@ -123,6 +123,7 @@ test('emergency and organization mail templates sanitize untrusted text and pres
     ].map((template) => template.render({ name: unsafe, accessType: unsafe, daysLeft: 1 })),
     MAIL_TEMPLATES.organizationUserAccepted.render({ organizationName: unsafe, memberName: unsafe }),
     MAIL_TEMPLATES.organizationUserConfirmed.render({ organizationName: unsafe, vaultOrigin: 'https://vault.io' }),
+    MAIL_TEMPLATES.welcome.render({ name: unsafe, vaultOrigin: 'https://vault.io' }),
   ];
   for (const item of content) {
     const rendered = renderMail(item);

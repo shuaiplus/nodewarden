@@ -133,6 +133,14 @@ export const MAIL_TEMPLATES = {
       ...(model.vaultOrigin ? { action: { label: 'Open vault', url: toSafeUrl(new URL(model.vaultOrigin)) } } : {}),
     }),
   },
+  welcome: {
+    throttle: 'user',
+    render: (model: { name: string; vaultOrigin: string | null }): MailContent => ({
+      subject: 'Welcome to NodeWarden',
+      paragraphs: [`Welcome, ${sanitizeForEmail(model.name)}. Your NodeWarden account is ready.`],
+      ...(model.vaultOrigin ? { action: { label: 'Open vault', url: toSafeUrl(new URL(model.vaultOrigin)) } } : {}),
+    }),
+  },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
 export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];

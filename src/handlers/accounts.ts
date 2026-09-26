@@ -20,8 +20,10 @@ import {
   EMAIL_PATTERN,
   isReservedDocumentationEmail,
   registerVerifyVaultOrigin,
+  configuredVaultOrigin,
   sendMail,
 } from '../services/mail';
+import { notifyMail } from '../services/mail-notify';
 import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import {
   getYubicoCredentials,
@@ -447,6 +449,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
       level: 'security',
       metadata: { email: user.email, ...auditRequestMetadata(request) },
     });
+    notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
     return registerSuccessResponse(user.role);
   }
 
@@ -466,7 +469,9 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
   } catch (error) {
     if (inviteCode) await storage.revertInviteUsed(inviteCode, user.id);
-    const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    let cause = error;
+    while (cause instanceof Error && cause.cause) cause = cause.cause;
+    const msg = (cause instanceof Error ? cause.message : String(cause)).toLowerCase();
     if (msg.includes('unique') || msg.includes('constraint')) {
       return errorResponse('Email already registered', 409);
     }
@@ -495,6 +500,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     metadata: { email: user.email, inviteCode, ...auditRequestMetadata(request) },
   });
 
+  notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
   return registerSuccessResponse(user.role);
 }
 
