@@ -1,3 +1,4 @@
+import { purgeSecretsTrash } from './services/storage-secret-repo';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
@@ -126,6 +127,9 @@ export default {
     ctx.waitUntil(Promise.all([
       runScheduledBackupIfDue(env).catch((error) => {
         console.error('Scheduled backup failed:', error);
+      }),
+      purgeSecretsTrash(env.DB).catch((error) => {
+        console.error('Secrets Manager trash purge failed:', error);
       }),
       approveExpiredEmergencyAccess(env).catch((error) => {
         console.error('Emergency access timeout job failed:', error);

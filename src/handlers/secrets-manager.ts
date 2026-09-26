@@ -324,3 +324,17 @@ export async function handleSecretsSync(request: Request, env: Env, principal: P
   const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(secret => secretAccess(context.actor, context.grants, secret) !== 'none');
   return jsonResponse({ hasChanges, secrets: listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))), object: 'secretsSync' });
 }
+
+export async function handleSecretsTrash(request: Request, env: Env, principal: Principal, orgId: string, action?: 'empty' | 'restore'): Promise<Response> {
+  const context = await smContext(env, principal, orgId);
+  if (!context || context.actor.kind !== 'admin') return errorResponse('Not found', 404);
+  if (!action) return jsonResponse(await secretsListResponse(env, orgId, (await smRepo.listSecrets(env.DB, orgId, true)).filter(secret => !!secret.deletedAt), context));
+  const ids = await readIds(request);
+  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
+  const secrets = await smRepo.getSecretsByIds(env.DB, ids);
+  if (secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || !secret.deletedAt)) return errorResponse('Not found', 404);
+  await smRepo.changeSecretsTrash(env.DB, orgId, ids, action === 'restore');
+  await Promise.all(ids.map(id => publishSecretChanged(env, orgId, id)));
+  return new Response(null, { status: 200 });
+}

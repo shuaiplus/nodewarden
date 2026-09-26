@@ -1,5 +1,5 @@
 import { diffPolicies, grantsFromRows, type GrantRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
-import { and, asc, desc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, isNotNull, lt, type SQL } from 'drizzle-orm';
 
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import {
@@ -517,4 +517,20 @@ export async function getAccessTokenWithAccount(db: D1Database, id: string): Pro
   const [row] = await getOrm(db).select({ token: smAccessTokens, orgId: smServiceAccounts.orgId }).from(smAccessTokens)
     .innerJoin(smServiceAccounts, eq(smServiceAccounts.id, smAccessTokens.serviceAccountId)).where(eq(smAccessTokens.id, id)).limit(1);
   return row ? { ...mapAccessToken(row.token), orgId: row.orgId } : null;
+}
+
+export async function changeSecretsTrash(db: D1Database, orgId: string, ids: string[], restore: boolean): Promise<void> {
+  const orm = getOrm(db);
+  const now = new Date().toISOString();
+  const statements = chunkRows(ids, 1, restore ? 3 : 1).map(chunk => {
+    const where = and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNotNull(smSecrets.deletedAt));
+    return restore ? orm.update(smSecrets).set({ deletedAt: null, updatedAt: now }).where(where) : orm.delete(smSecrets).where(where);
+  });
+  await orm.batch([bumpServiceAccounts(db, orgId, now), ...statements]);
+}
+
+export async function purgeSecretsTrash(db: D1Database, now = Date.now()): Promise<void> {
+  // ponytail: unindexed scan every 5 min; add a deleted_at index if sm_secrets grows large.
+  const orm = getOrm(db);
+  await orm.batch([orm.delete(smSecrets).where(lt(smSecrets.deletedAt, new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()))]);
 }
