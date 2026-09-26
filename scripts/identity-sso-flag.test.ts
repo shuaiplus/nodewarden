@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createOwnedOrganization } from '../src/handlers/organizations';
+import { hashPassword } from '../src/services/auth-password';
+import { PolicyType } from '../src/services/org-types';
+import { StorageService } from '../src/services/storage';
+import * as orgRepo from '../src/services/storage-org-repo';
+import { verifyJWT } from '../src/utils/jwt';
+import { authedFetch, createTestEnv, seedUser } from './support/env';
+
+const SSO_CONFIG = {
+  SSO_ENABLED: '1',
+  SSO_AUTHORITY: 'https://idp.example.test',
+  SSO_CLIENT_ID: 'nodewarden',
+};
+const PASSWORD = 'client-derived-password-hash';
+const TOKEN_PATH = '/identity/connect/token';
+
+test('a client-sent sso flag cannot bypass an organization SSO policy', async () => {
+  const env = await createTestEnv(SSO_CONFIG);
+  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
+  const org = await createOwnedOrganization(env, user, { name: 'SSO org', key: '4.dGVzdA==' });
+  await orgRepo.savePolicy(env.DB, {
+    id: crypto.randomUUID(), orgId: org.id, type: PolicyType.RequireSso,
+    enabled: true, data: {}, updatedAt: new Date().toISOString(),
+  });
+  const credentials = { grant_type: 'password', username: user.email, password: PASSWORD };
+
+  for (const body of [credentials, { ...credentials, sso: '1' }, new URLSearchParams({ ...credentials, sso: '1' })]) {
+    const response = await authedFetch(env, { method: 'POST', path: TOKEN_PATH, body });
+    assert.equal(response.status, 400);
+    const result = await response.json() as Record<string, unknown>;
+    assert.equal(result.error_description, 'SSO sign-in is required');
+    assert.equal(result.access_token, undefined);
+  }
+});
+
+test('a client-sent sso flag does not replace password verification', async () => {
+  const env = await createTestEnv(SSO_CONFIG);
+  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
+  for (const [password, expectedStatus] of [['incorrect', 400], [PASSWORD, 200]] as const) {
+    const response = await authedFetch(env, {
+      method: 'POST', path: TOKEN_PATH,
+      body: new URLSearchParams({ grant_type: 'password', username: user.email, password, sso: '1' }),
+    });
+    assert.equal(response.status, expectedStatus);
+  }
+});
+
+test('verified SSO signs in an SSO-only account with a server-hashed password and still requires 2FA', async (t) => {
+  const env = await createTestEnv({ ...SSO_CONFIG, SSO_ONLY: '1' });
+  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
+  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'test-idp' })).toString('base64url');
+  const claims = Buffer.from(JSON.stringify({
+    iss: SSO_CONFIG.SSO_AUTHORITY, aud: SSO_CONFIG.SSO_CLIENT_ID,
+    sub: 'provider-user', email: user.email, email_verified: true,
+    exp: Math.floor(Date.now() / 1000) + 300,
+  })).toString('base64url');
+  const signed = `${header}.${claims}`;
+  const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, new TextEncoder().encode(signed));
+  const idToken = `${signed}.${Buffer.from(signature).toString('base64url')}`;
+  const jwk = { ...await crypto.subtle.exportKey('jwk', keys.publicKey), kid: 'test-idp' };
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    switch (request.url) {
+      case `${SSO_CONFIG.SSO_AUTHORITY}/.well-known/openid-configuration`:
+        return Response.json({ token_endpoint: `${SSO_CONFIG.SSO_AUTHORITY}/token`, jwks_uri: `${SSO_CONFIG.SSO_AUTHORITY}/jwks` });
+      case `${SSO_CONFIG.SSO_AUTHORITY}/jwks`:
+        return Response.json({ keys: [jwk] });
+      case `${SSO_CONFIG.SSO_AUTHORITY}/token`:
+        assert.equal(request.method, 'POST');
+        return (await request.formData()).get('code') === 'valid-code'
+          ? Response.json({ id_token: idToken })
+          : new Response(null, { status: 400 });
+      default:
+        throw new Error(`Unexpected outbound fetch: ${request.url}`);
+    }
+  });
+
+  const exchange = (code: string) => authedFetch(env, {
+    method: 'POST', path: TOKEN_PATH,
+    body: new URLSearchParams({ grant_type: 'authorization_code', code }),
+  });
+  const rejected = await exchange('invalid-code');
+  assert.equal(rejected.status, 400);
+  assert.equal((await rejected.json() as Record<string, unknown>).access_token, undefined);
+
+  const accepted = await exchange('valid-code');
+  assert.equal(accepted.status, 200);
+  const result = await accepted.json() as { access_token: string };
+  assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
+
+  await new StorageService(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' });
+  const challenged = await exchange('valid-code');
+  assert.equal(challenged.status, 400);
+  const challenge = await challenged.json() as Record<string, unknown>;
+  assert.deepEqual(challenge.TwoFactorProviders, ['0']);
+  assert.equal(challenge.access_token, undefined);
+});

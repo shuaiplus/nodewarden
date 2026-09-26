@@ -351,6 +351,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   }
 
   let grantType = body.grant_type;
+  let viaSsoShim = false;
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier && grantType !== 'refresh_token') {
     await safeWriteAuditEvent(env, {
@@ -395,7 +396,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
     body.username = user.email;
     body.password = user.masterPasswordHash;
-    body.sso = '1';
+    viaSsoShim = true;
     grantType = 'password';
   }
 
@@ -448,7 +449,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
     }
     if (await userRequiresSso(env, user.id)) {
-      if (String(body.sso || '') !== '1' && isSsoEnabled(env)) {
+      if (!viaSsoShim && isSsoEnabled(env)) {
         return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
       }
     }
@@ -475,7 +476,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         authRequestLoginKey = authRequest!.key;
       }
     } else {
-      valid = await auth.verifyPassword(passwordHash, user.masterPasswordHash, user.email);
+      valid = viaSsoShim || await auth.verifyPassword(passwordHash, user.masterPasswordHash, user.email);
     }
     if (!valid) {
       await safeWriteAuditEvent(env, {
