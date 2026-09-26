@@ -1,3 +1,4 @@
+import { markEmailVerified } from '../services/vault-admin-role';
 import * as orgRepo from '../services/storage-org-repo';
 import { canAccessSecretsManager } from '../services/org-authz';
 import { MembershipStatus, MembershipType, publicMembershipStatus } from '../services/org-types';
@@ -26,7 +27,7 @@ import { StorageService } from '../services/storage';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
 import { html } from '../utils/html';
-import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm } from '../views/admin-portal';
+import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm, verifyEmailForm } from '../views/admin-portal';
 
 const forbidden = () => portalPage('Forbidden', html`<p>This request is not allowed.</p>`, 403);
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
@@ -102,10 +103,10 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     const requestedPage = Number(url.searchParams.get('page'));
     const page = Number.isFinite(requestedPage) ? Math.max(1, Math.floor(requestedPage)) : 1;
     const count = Math.min(LIMITS.admin.pageSizeMax, Math.max(1, Math.floor(Number(url.searchParams.get('count')) || LIMITS.admin.pageSizeDefault)));
-    const deletionCheck = async (confirmation: string, expected: string, viewPath: string): Promise<Response | null> => {
+    const sensitiveActionCheck = async (confirmation: string, expected: string, viewPath: string): Promise<Response | null> => {
       if (Date.now() - session.authTime > LIMITS.admin.destructiveReauthSeconds * 1000) return portalRedirect(`/admin/login?returnUrl=${encodeURIComponent(viewPath)}&m=reauth`);
       if (confirmation !== expected) return portalPage('Confirmation does not match', html`${portalNavigation(session.csrf)}<p>The typed confirmation does not match.</p><a href="${viewPath}">Return</a>`, 400);
-      const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-portal-delete:${await sha256Base64Url(session.email)}`, LIMITS.admin.deletesPerAdminPerHour, 3600);
+      const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-portal-sensitive:${await sha256Base64Url(session.email)}`, LIMITS.admin.sensitiveActionsPerAdminPerHour, 3600);
       return budget.allowed ? null : portalPage('Too many requests', html`<p>Try again later.</p>`, 429, { 'Retry-After': String(budget.retryAfterSeconds) });
     };
     if (path === '/admin/users') {
@@ -114,7 +115,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const rows = await searchUsersByEmailPrefix(env.DB, email, (page - 1) * count, count);
       return portalPage('Users', html`${portalNavigation(session.csrf)}<form method="get" action="/admin/users"><label>Email prefix <input name="email" value="${email}"></label><input type="hidden" name="count" value="${count}"><button type="submit">Search</button></form><table><thead><tr><th>Email</th><th>Name</th><th>Created</th><th>Status</th><th>Vault role</th><th>Two-factor</th></tr></thead><tbody>${rows.slice(0, count).map((user) => html`<tr><td><a href="${'/admin/users/view/' + encodeURIComponent(user.id)}">${user.email}</a></td><td>${user.name ?? ''}</td><td>${user.createdAt}</td><td>${user.status}</td><td>${user.role}</td><td>${user.twoFactor ? 'Yes' : 'No'}</td></tr>`)}</tbody></table>${portalPagination(url, page, rows.length > count)}`);
     }
-    const userActionPath = path.match(/^\/admin\/users\/([^/]+)\/(disable|enable)$/);
+    const userActionPath = path.match(/^\/admin\/users\/([^/]+)\/(disable|enable|verify-email)$/);
     const userPath = path.match(/^\/admin\/users\/(view|delete)\/([^/]+)$/)
       ?? (userActionPath ? [userActionPath[0], userActionPath[2], userActionPath[1]] : null);
     if (userPath) {
@@ -126,7 +127,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const viewPath = '/admin/users/view/' + encodeURIComponent(user.id);
       let refusal = '';
       if (deleting) {
-        const check = await deletionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
         if (check) return check;
         const outcome = await deleteUserAccount(env, user.id, { action: 'admin.portal.user.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
         if (outcome.kind === 'deleted') return portalRedirect('/admin/users?m=deleted');
@@ -143,14 +144,24 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         if (outcome.kind === 'not-found') return portalPage('Not found', html`<p>User not found.</p>`, 404);
         refusal = 'Cannot disable the last active instance administrator.';
       }
+      if (userPath[1] === 'verify-email') {
+        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        if (check) return check;
+        await markEmailVerified(env, user.id);
+        await writeAuditEvent(storage, {
+          action: 'admin.portal.user.email_verified', category: 'security', level: 'security', actorUserId: null,
+          targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
+        });
+        return portalRedirect(viewPath + '?m=verified');
+      }
       const [personalItems, memberships, passkeys] = await Promise.all([
         countPersonalCiphers(env.DB, user.id),
         env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
         storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'),
       ]);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
-        ['Id', user.id], ['Email', user.email], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
-      ])}${userStatusForm(user.id, session.csrf, user.status)}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
+        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', user.totpSecret || isYubiKeyEnabled(user) || passkeys ? 'Yes' : 'No'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
+      ])}${user.emailVerified ? html`` : verifyEmailForm(user.id, session.csrf, user.email, directory.admins.has(user.email))}${userStatusForm(user.id, session.csrf, user.status)}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin/organizations') {
       if (request.method !== 'GET') return methodNotAllowed();
@@ -166,7 +177,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const org = await orgRepo.getOrganization(env.DB, decodeURIComponent(orgPath[2]));
       if (!org) return portalPage('Not found', html`<p>Organization not found.</p>`, 404);
       if (deleting) {
-        const check = await deletionCheck(String(form?.get('confirmation') ?? ''), org.name, '/admin/organizations/view/' + encodeURIComponent(org.id));
+        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? ''), org.name, '/admin/organizations/view/' + encodeURIComponent(org.id));
         if (check) return check;
         await deleteOrganizationAccount(env, org.id, { action: 'admin.portal.org.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'organization', targetId: org.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
         return portalRedirect('/admin/organizations?m=deleted');

@@ -15,7 +15,7 @@
     destructiveReauthSeconds: 900,
     loginRequestsPerIpPerHour: 10,
     loginLinksPerAdminPerWindow: 3,
-    deletesPerAdminPerHour: 20,
+    sensitiveActionsPerAdminPerHour: 20,
     pageSizeDefault: 25,
     pageSizeMax: 100,
     recentAuditEvents: 20,
