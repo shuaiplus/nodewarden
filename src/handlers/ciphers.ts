@@ -29,7 +29,6 @@ import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import * as orgRepo from '../services/storage-org-repo';
-import { canEditCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import {
   checkCollectionAssignment,
   deleteAuthorizedCipher,
@@ -990,13 +989,8 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
     ? (cipherData.collectionIds || cipherData.CollectionIds || body.collectionIds).map((id: unknown) => String(id || '').trim()).filter(Boolean)
     : [];
   if (organizationId) {
-    const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, organizationId);
-    if (!isActiveMember(member)) return errorResponse('Organization not found', 404);
-    const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, organizationId);
-    const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
-    if (!canEditCipher(member, incomingCollectionIds, assignedMap) && !hasFullCollectionAccess(member)) {
-      return errorResponse('Access denied', 403);
-    }
+    const assignment = await checkCollectionAssignment(env, userId, organizationId, incomingCollectionIds);
+    if (!assignment.ok) return errorResponse(assignment.message, assignment.status);
   }
   const cipher: Cipher = {
     ...cipherData,

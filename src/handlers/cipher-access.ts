@@ -7,6 +7,7 @@ import {
   resolvePermissions,
   type CollectionAssignmentPlan,
 } from '../services/org-authz';
+import type { CollectionAccess } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import { StorageService } from '../services/storage';
 import type { Cipher, Env } from '../types';
@@ -44,11 +45,22 @@ export async function loadAccessibleCipher(
   return candidate;
 }
 
-export type CollectionAssignment = { ok: true } | { ok: false; status: 403 | 404; message: string };
+export type CollectionAssignment = { ok: true } | { ok: false; status: 400 | 404; message: string };
+
+const NO_EDIT_PERMISSION = { ok: false, status: 400, message: 'You do not have permissions to edit this.' } as const;
+
+// Upstream Cipher_UpdateCollections' #AvailableCollections for a member without full collection
+// access: its own collections, assigned directly or through a group, minus the readOnly ones.
+function writableCollectionIds(accesses: CollectionAccess[]): string[] {
+  return accesses.filter((access) => !access.readOnly).map((access) => access.collectionId);
+}
 
 // Upstream Cipher_UpdateCollections links only collections of the target org that the member can
-// write. Other ids are rejected here instead of dropped, so a share never lands a cipher in another
-// org's collection or one the caller cannot edit.
+// write. Other ids are rejected here instead of dropped, so a create or share never lands a cipher
+// in another org's collection or one the caller cannot edit. Only full collection access sees an
+// item in no collection, so nobody else may leave one there. The refusal is a 400, not a 403:
+// official clients log out on any authenticated 403, and a stale add-item form (a collection just
+// made read-only or deleted) must not cost the user the session and the draft.
 export async function checkCollectionAssignment(
   env: Env,
   userId: string,
@@ -57,12 +69,12 @@ export async function checkCollectionAssignment(
 ): Promise<CollectionAssignment> {
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
   if (!isActiveMember(member)) return { ok: false, status: 404, message: 'Organization not found' };
-  const writable = new Set(hasFullCollectionAccess(member)
-    ? (await orgRepo.listCollectionsByOrg(env.DB, orgId)).map((collection) => collection.id)
-    : (await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).filter((access) => !access.readOnly).map((access) => access.collectionId));
-  return collectionIds.every((collectionId) => writable.has(collectionId))
-    ? { ok: true }
-    : { ok: false, status: 403, message: 'Access denied' };
+  const fullAccess = hasFullCollectionAccess(member);
+  const writable = new Set(fullAccess
+    ? await listOrgCollectionIds(env, orgId)
+    : writableCollectionIds(await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)));
+  const allowed = collectionIds.length ? collectionIds.every((collectionId) => writable.has(collectionId)) : fullAccess;
+  return allowed ? { ok: true } : NO_EDIT_PERMISSION;
 }
 
 async function listOrgCollectionIds(env: Env, orgId: string): Promise<string[]> {
@@ -112,9 +124,8 @@ export async function planCipherCollectionChange(
   const assigned = new Map(accesses.map((access) => [access.collectionId, access]));
   // Upstream CipherDetails.ViewPassword: some assigned collection holding the item shows passwords.
   if (!current.some((collectionId) => assigned.get(collectionId)?.hidePasswords === false)) return CIPHER_NOT_FOUND;
-  if (!canEditCipher(member, current, assigned)) return { ok: false, status: 400, message: 'You do not have permissions to edit this.' };
-  // The member's own collections, assigned directly or through a group, minus the readOnly ones.
-  return planned(accesses.filter((access) => !access.readOnly).map((access) => access.collectionId));
+  if (!canEditCipher(member, current, assigned)) return NO_EDIT_PERMISSION;
+  return planned(writableCollectionIds(accesses));
 }
 
 export async function deleteAuthorizedCipher(

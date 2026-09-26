@@ -87,13 +87,17 @@ async function addMember(
   return user;
 }
 
-async function createCipher(env: Env, user: User, organizationId: string | null, collectionIds: string[]): Promise<string> {
-  const response = await authedFetch(env, {
+function postCipher(env: Env, user: User, organizationId: string | null, collectionIds: string[]): Promise<Response> {
+  return authedFetch(env, {
     method: 'POST',
     path: '/api/ciphers/create',
     body: { cipher: { type: LOGIN_TYPE, organizationId, name: ORG_ENCRYPTED, login: { username: ORG_ENCRYPTED } }, collectionIds },
     userId: user.id,
   });
+}
+
+async function createCipher(env: Env, user: User, organizationId: string | null, collectionIds: string[]): Promise<string> {
+  const response = await postCipher(env, user, organizationId, collectionIds);
   assert.equal(response.status, 200);
   return ((await response.json()) as CipherBody).id;
 }
@@ -238,6 +242,28 @@ test('collections-admin refuses non-admins, another org\'s collections and perso
   assert.equal((await putCollections(env, outsider, cipherId, 'collections-admin', { collectionIds: [otherOrgCollectionId] })).status, 404);
   assert.equal((await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: [collectionB, otherOrgCollectionId] })).status, 404);
   assert.equal((await putCollections(env, owner, personalCipherId, 'collections-admin', { collectionIds: [collectionB] })).status, 404);
+  assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
+});
+
+test('creating an org cipher refuses it whole unless the member can write every posted collection', async () => {
+  const { env, owner, orgId, collectionA, collectionB } = await setup();
+  const member = await addMember(env, orgId, [access(collectionA), access(collectionB, { readOnly: true })]);
+  const outsider = await seedUser(env);
+  const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
+  const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
+
+  // One writable id must not carry a read-only or foreign one along; even full access stays in its org.
+  // A 400, not a 403: official clients log out on an authenticated 403.
+  const readOnlyMix = await postCipher(env, member, orgId, [collectionA, collectionB]);
+  assert.equal(readOnlyMix.status, 400);
+  assert.equal(((await readOnlyMix.json()) as { error: string }).error, NO_EDIT);
+  assert.equal((await postCipher(env, member, orgId, [collectionA, otherOrgCollectionId])).status, 400);
+  assert.equal((await postCipher(env, owner, orgId, [collectionA, otherOrgCollectionId])).status, 400);
+  // An item in no collection would be invisible to a member without full access.
+  assert.equal((await postCipher(env, member, orgId, [])).status, 400);
+  assert.equal(await env.DB.prepare('SELECT count(*) AS total FROM ciphers').first('total'), 0);
+
+  const cipherId = await createCipher(env, member, orgId, [collectionA]);
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
 });
 

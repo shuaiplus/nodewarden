@@ -188,8 +188,8 @@ test('share refuses ciphers that are not the caller\'s personal items, orgs it i
 
   assert.equal((await share(env, owner, outsiderCipherId, orgId, [collectionId])).status, 404);
   assert.equal((await share(env, outsider, outsiderCipherId, orgId, [collectionId])).status, 404);
-  assert.equal((await share(env, readOnlyMember, readOnlyCipherId, orgId, [collectionId])).status, 403);
-  assert.equal((await share(env, owner, ownerCipherId, orgId, [otherOrgCollectionId])).status, 403);
+  assert.equal((await share(env, readOnlyMember, readOnlyCipherId, orgId, [collectionId])).status, 400);
+  assert.equal((await share(env, owner, ownerCipherId, orgId, [otherOrgCollectionId])).status, 400);
   const empty = await share(env, owner, ownerCipherId, orgId, []);
   assert.equal(empty.status, 400);
   assert.equal(await errorMessage(empty), NO_COLLECTION);
