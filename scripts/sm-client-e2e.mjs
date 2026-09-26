@@ -1,4 +1,4 @@
-// Opt-in real-client check: npm run test:e2e:sm-clients (Node, Go, tar and unzip required).
+// Opt-in real-client check: npm run test:e2e:sm-clients (Node, Go, OpenSSL, tar and unzip required).
 // Downloads pinned official clients into the OS temp directory; all accounts/data are local fixtures.
 import assert from 'node:assert/strict';
 import { createHash, hkdfSync, pbkdf2Sync, randomBytes, randomUUID } from 'node:crypto';
@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -52,6 +53,20 @@ if (!existsSync(join(sdkDir, 'package/node/bitwarden_wasm_internal.js'))) {
 const { default: { PureCrypto } } = await import(pathToFileURL(join(sdkDir, 'package/node/bitwarden_wasm_internal.js')));
 const goSync = join(run, 'sm-client-sync');
 exec('go', ['build', '-o', goSync, '.'], { cwd: join(scriptRoot, 'scripts/support/sm-client-sync') });
+const ca = join(run, 'ca.pem');
+const caKey = join(run, 'ca.key');
+const cert = join(run, 'server.pem');
+const certKey = join(run, 'server.key');
+const csr = join(run, 'server.csr');
+const extensions = join(run, 'server.ext');
+writeFileSync(extensions, 'basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n');
+exec('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', caKey, '-out', ca, '-days', '1', '-subj', '/CN=NodeWarden local E2E CA', '-addext', 'basicConstraints=critical,CA:TRUE']);
+exec('openssl', ['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', certKey, '-out', csr, '-subj', '/CN=127.0.0.1']);
+exec('openssl', ['x509', '-req', '-in', csr, '-CA', ca, '-CAkey', caKey, '-CAcreateserial', '-out', cert, '-days', '1', '-sha256', '-extfile', extensions]);
+const { Agent } = createRequire(join(repo, 'package.json'))('undici');
+const dispatcher = new Agent({ connect: { ca: readFileSync(ca) } });
+env.SSL_CERT_FILE = ca;
+env.NODE_EXTRA_CA_CERTS = ca;
 
 const config = join(run, 'wrangler.json');
 const state = join(run, 'state');
@@ -79,22 +94,23 @@ const port = await new Promise((resolvePort, reject) => {
     probe.close(() => resolvePort(port));
   });
 });
-const origin = `http://127.0.0.1:${port}`;
+const origin = `https://127.0.0.1:${port}`;
 const worker = spawn(wrangler, ['dev', '--local', '--config', config, '--persist-to', state,
-  '--ip', '127.0.0.1', '--port', String(port), '--inspector-port', '0'], {
+  '--ip', '127.0.0.1', '--port', String(port), '--inspector-port', '0',
+  '--local-protocol', 'https', '--https-key-path', certKey, '--https-cert-path', cert], {
   cwd: repo, env, stdio: ['ignore', openSync(log, 'a'), openSync(log, 'a')],
 });
 try {
   let ready = false;
   for (let i = 0; i < 120 && worker.exitCode === null; i++) {
-    ready = await fetch(`${origin}/api/alive`, { signal: AbortSignal.timeout(5000) }).then(r => r.ok).catch(() => false);
+    ready = await fetch(`${origin}/api/alive`, { dispatcher, signal: AbortSignal.timeout(5000) }).then(r => r.ok).catch(() => false);
     if (ready) break;
     await delay(500);
   }
   assert(ready, `Worker failed to start: ${readFileSync(log, 'utf8')}`);
   const request = async (path, body, bearer, method = body === undefined ? 'GET' : 'POST', expected = 200) => {
     const response = await fetch(origin + path, {
-      method, signal: AbortSignal.timeout(30000), headers: { ...(bearer && { Authorization: `Bearer ${bearer}` }),
+      method, dispatcher, signal: AbortSignal.timeout(30000), headers: { ...(bearer && { Authorization: `Bearer ${bearer}` }),
         ...(body !== undefined && !(body instanceof URLSearchParams) && { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : body instanceof URLSearchParams ? body : JSON.stringify(body),
     });
@@ -158,7 +174,6 @@ try {
   assert.equal(cli('project', 'list').length, 1);
   assert.equal(cli('secret', 'list')[0].value, 'synthetic-value-雪');
   assert.equal(cli('secret', 'get', secret.id).note, 'SDK note');
-  assert.equal(sync().secrets[0].value, 'synthetic-value-雪');
   const envCheck = join(run, 'check-env.cjs');
   writeFileSync(envCheck, "require('node:assert/strict').equal(process.env.SDK_SECRET, 'synthetic-value-雪');");
   exec(bws, ['run', '--', process.execPath, envCheck], { env: clientEnv });
@@ -170,6 +185,7 @@ try {
   assert.equal(cli('secret', 'edit', created.id, '--value', 'synthetic-edited').value, 'synthetic-edited');
   exec(bws, ['secret', 'delete', created.id], { env: clientEnv });
   assert.equal(cli('secret', 'list').length, 1);
+  assert.equal(sync().secrets[0].value, 'synthetic-value-雪');
   await delay(10);
   const lastSync = new Date().toISOString();
   assert.equal(sync(lastSync).hasChanges, false);
@@ -187,5 +203,6 @@ try {
   console.log('PASS: real bws 2.1.0 encrypted project/secret CRUD and run; official operator Go SDK v2.1.0 login/sync; policy removal; immediate token revocation.');
 } finally {
   worker.kill('SIGTERM');
+  await dispatcher.close();
   console.log(`Local artifacts: ${run}`);
 }
