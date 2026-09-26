@@ -1,3 +1,4 @@
+import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
 import { readMailConfig } from '../services/mail';
 import { notifyMail, notifyFailedTwoFactor } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
@@ -363,6 +364,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   if (!body || typeof body !== 'object' || Array.isArray(body)) return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
   let grantType = body.grant_type;
   let viaSsoShim = false;
+  let ssoContinuation: SsoContinuation | null = null;
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier && grantType !== 'refresh_token') {
     await safeWriteAuditEvent(env, {
@@ -383,28 +385,41 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   if (grantType === 'authorization_code' && isSsoEnabled(env)) {
     const code = String(body.code || '').trim();
     if (!code) return identityErrorResponse('code is required', 'invalid_request', 400);
-    const claims = await exchangeOidcCode(env, code, new URL(request.url).origin);
-    if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
-    const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
-    let user = linked ? await storage.getUserById(linked.userId) : null;
-    // Adopting an existing local account by email address is only safe when the
-    // provider vouches for the address; otherwise anyone who can claim that email
-    // at the IdP inherits the local vault.
-    if (!user && !claims.emailVerified) {
-      return identityErrorResponse(
-        'SSO linking requires an email address verified by your identity provider',
-        'invalid_grant',
-        400
-      );
-    }
-    if (!user) user = await storage.getUser(claims.email);
-    if (!user) {
-      if (String(env.SSO_SIGNUPS || '1') === '0') {
-        return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
+    const context = await ssoContinuationContext(env, request, body, code);
+    const continuation = await getSsoContinuation(env, context);
+    if (continuation === null) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
+    let user: User | null;
+    if (continuation) {
+      user = await storage.getUserById(continuation.userId);
+      if (!user || user.status !== 'active' || user.securityStamp !== continuation.securityStamp || user.email !== continuation.email) return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
+      ssoContinuation = continuation;
+    } else {
+      const claims = await exchangeOidcCode(env, code, new URL(request.url).origin, body.code_verifier);
+      if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
+      const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
+      user = linked ? await storage.getUserById(linked.userId) : null;
+      // Adopting an existing local account by email address is only safe when the
+      // provider vouches for the address; otherwise anyone who can claim that email
+      // at the IdP inherits the local vault.
+      if (!user && !claims.emailVerified) {
+        return identityErrorResponse(
+          'SSO linking requires an email address verified by your identity provider',
+          'invalid_grant',
+          400
+        );
       }
-      return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
+      if (!user) user = await storage.getUser(claims.email);
+      if (!user) {
+        if (String(env.SSO_SIGNUPS || '1') === '0') {
+          return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
+        }
+        return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
+      }
+      await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
+      if (user.status !== 'active') return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
+      ssoContinuation = await saveSsoContinuation(env, context, user);
+      if (!ssoContinuation) return identityErrorResponse('SSO sign-in is already in progress', 'invalid_grant', 400);
     }
-    await orgRepo.saveSsoUser(env.DB, user.id, claims.identifier, new Date().toISOString());
     body.username = user.email;
     body.password = user.masterPasswordHash;
     viaSsoShim = true;
@@ -459,6 +474,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       });
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
     }
+    if (ssoContinuation && (user.id !== ssoContinuation.userId || user.securityStamp !== ssoContinuation.securityStamp || user.email !== ssoContinuation.email)) return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
     if (await userRequiresSso(env, user.id)) {
       if (!viaSsoShim && isSsoEnabled(env)) {
         return identityErrorResponse('SSO sign-in is required', 'invalid_grant', 400);
@@ -512,6 +528,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     // Optional 2FA: enabled by any supported per-user provider.
     let trustedTwoFactorTokenToReturn: string | undefined;
+    let recoveredTwoFactor = false;
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
@@ -595,13 +612,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!recoveryCodeEquals(normalizedTwoFactorToken, user.totpRecoveryCode)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
-        user.securityStamp = generateUUID();
-        await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
-          recoveryCode: createRecoveryCode(),
-          securityStamp: user.securityStamp,
-        }));
-        AuthService.invalidateUserCache(user.id);
-        notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
+        recoveredTwoFactor = true;
         rememberRequested = false;
       } else {
         // Unsupported provider for this server profile behaves as an invalid 2FA attempt.
@@ -611,13 +622,23 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream behavior: do not issue a new remember token when auth itself used remember provider.
       if (rememberRequested && !passedByRememberToken && deviceInfo.deviceIdentifier) {
         trustedTwoFactorTokenToReturn = createRefreshToken();
-        await storage.saveTrustedTwoFactorDeviceToken(
-          trustedTwoFactorTokenToReturn,
-          user.id,
-          deviceInfo.deviceIdentifier,
-          Date.now() + TWO_FACTOR_REMEMBER_TTL_MS
-        );
       }
+    }
+
+    // Claim the verified SSO proof once, after every factor check and before creating credentials.
+    const recovery = recoveredTwoFactor ? { recoveryCode: createRecoveryCode(), securityStamp: generateUUID() } : undefined;
+    if (ssoContinuation) {
+      if (!await consumeSsoContinuation(env, ssoContinuation, user, recovery)) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
+    } else if (recovery) {
+      await env.DB.batch(twoFactorClearStatements(env.DB, user.id, recovery));
+    }
+    if (recovery) {
+      user.securityStamp = recovery.securityStamp;
+      AuthService.invalidateUserCache(user.id);
+      notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
+    }
+    if (trustedTwoFactorTokenToReturn && deviceInfo.deviceIdentifier) {
+      await storage.saveTrustedTwoFactorDeviceToken(trustedTwoFactorTokenToReturn, user.id, deviceInfo.deviceIdentifier, Date.now() + TWO_FACTOR_REMEMBER_TTL_MS);
     }
 
     // Persist device only after successful password + (optional) 2FA verification.

@@ -99,7 +99,7 @@ export interface OidcIdentity {
   emailVerified: boolean;
 }
 
-export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: string): Promise<OidcIdentity | null> {
+export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: string, codeVerifier?: string): Promise<OidcIdentity | null> {
   const authority = String(env.SSO_AUTHORITY || '').replace(/\/+$/, '');
   const tokenUrl = await discoverTokenEndpoint(authority);
   const body = new URLSearchParams({
@@ -109,6 +109,7 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
     redirect_uri: `${redirectOrigin}/identity/oidc-signin`,
   });
   if (env.SSO_CLIENT_SECRET) body.set('client_secret', env.SSO_CLIENT_SECRET);
+  if (codeVerifier) body.set('code_verifier', codeVerifier);
   const response = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

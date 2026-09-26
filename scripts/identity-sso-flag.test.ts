@@ -73,7 +73,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
         return Response.json({ keys: [jwk] });
       case `${SSO_CONFIG.SSO_AUTHORITY}/token`:
         assert.equal(request.method, 'POST');
-        return (await request.formData()).get('code') === 'valid-code'
+        return ['valid-code', 'valid-code-2fa'].includes(String((await request.formData()).get('code')))
           ? Response.json({ id_token: idToken })
           : new Response(null, { status: 400 });
       default:
@@ -98,12 +98,12 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
 
   await new StorageService(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' });
-  const challenged = await exchange('valid-code');
+  const challenged = await exchange('valid-code-2fa');
   assert.equal(challenged.status, 400);
   const challenge = await challenged.json() as Record<string, unknown>;
   assert.deepEqual(challenge.TwoFactorProviders, ['0']);
   assert.equal(challenge.access_token, undefined);
-  assert.equal((await exchange('valid-code', { twoFactorProvider: '0', twoFactorToken: 'invalid' })).status, 400);
+  assert.equal((await exchange('valid-code-2fa', { twoFactorProvider: '0', twoFactorToken: 'invalid' })).status, 400);
   await drainWaitUntil();
   assert.equal(capture.sent.length, 2);
   assert.match(capture.sent[1].subject, /Unsuccessful/);
