@@ -141,10 +141,20 @@ export function jsonResponse(data: any, status: number = 200, headers: Record<st
   });
 }
 
-// Error response helper
-export function errorResponse(message: string, status: number = 400, headers: Record<string, string> = {}): Response {
+// Error response helper. The top-level fields mirror upstream ErrorResponseModel,
+// which official clients read for non-identity calls; error/error_description and
+// ErrorModel stay for identity-style readers and the NodeWarden webapp.
+export function errorResponse(
+  message: string,
+  status: number = 400,
+  headers: Record<string, string> = {},
+  validationErrors: Record<string, string[]> | null = null
+): Response {
   return jsonResponse(
     {
+      message,
+      validationErrors,
+      object: 'error',
       error: message,
       error_description: message,
       ErrorModel: {
