@@ -400,15 +400,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   ): Promise<Response> {
     await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn2fa);
     notifyFailedTwoFactor(env, request, user, providerType);
-    const failed = await rateLimit.recordFailedLogin(loginIdentifier);
-    if (failed.locked) {
-      return identityErrorResponse(
-        `Too many failed login attempts. Account locked for ${Math.ceil(failed.retryAfterSeconds! / 60)} minutes.`,
-        'TooManyRequests',
-        429
-      );
-    }
-    return identityErrorResponse('Two-step token is invalid. Try again.', 'invalid_grant', 400);
+    return recordFailedLoginAndBuildResponse(rateLimit, loginIdentifier, 'Two-step token is invalid. Try again.');
   }
 
 
