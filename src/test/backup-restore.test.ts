@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq, getColumns, getTableName } from 'drizzle-orm';
+import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core';
 import { unzipSync, zipSync } from 'fflate';
 
+import { getOrm } from '../db/client';
+import { attachments, ciphers, config, domainSettings, folders, userRevisions, users, webauthnCredentials } from '../db/schema';
+import { unmapped } from '../db/sql';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
 import { createTestEnv, memoryKv, seedUser } from './support/env';
@@ -9,18 +14,19 @@ import { createTestEnv, memoryKv, seedUser } from './support/env';
 type Row = Record<string, unknown>;
 
 // Restored tables with the key that orders their rows, for a stable row-by-row comparison.
-const RESTORED_TABLES = {
-  users: 'id',
-  domain_settings: 'user_id',
-  user_revisions: 'user_id',
-  webauthn_credentials: 'id',
-  folders: 'id',
-  ciphers: 'id',
-  attachments: 'id',
-} as const;
+const RESTORED_TABLES = [
+  [users, users.id],
+  [domainSettings, domainSettings.userId],
+  [userRevisions, userRevisions.userId],
+  [webauthnCredentials, webauthnCredentials.id],
+  [folders, folders.id],
+  [ciphers, ciphers.id],
+  [attachments, attachments.id],
+] as const;
 
-const rowsOf = async (db: D1Database, table: string, orderBy: string) =>
-  (await db.prepare(`SELECT * FROM ${table} ORDER BY ${orderBy}`).all<Row>()).results;
+// Stored values keyed by SQL column name, the shape of the archive's rows.
+const rowsOf = (db: D1Database, table: SQLiteTable, orderBy: SQLiteColumn) =>
+  getOrm(db).select(Object.fromEntries(Object.values(getColumns(table)).map((column) => [column.name, unmapped(column)]))).from(table).orderBy(orderBy);
 // Code-unit order, as SQLite's default BINARY collation sorts.
 const byKey = (key: string) => (left: Row, right: Row) => (String(left[key]) < String(right[key]) ? -1 : 1);
 
@@ -28,17 +34,26 @@ test('backup restore brings back every archived value, fills legacy defaults and
   const source = await createTestEnv();
   const owner = await seedUser(source, { apiKey: 'runtime-api-key', kdfMemory: 64, kdfParallelism: 4, totpSecret: 'totp', yubikeyKey1: 'yubikey', privateKey: 'private', publicKey: 'public' });
   const other = await seedUser(source, { emailVerified: false, verifyDevices: true, name: null, masterPasswordHint: 'hint' });
-  const run = (query: string, ...values: unknown[]) => source.DB.prepare(query).bind(...values).run();
-  await run('UPDATE users SET user_key_id = ? WHERE id = ?', 'runtime-key-id', owner.id);
-  await run("INSERT INTO config (key, value) VALUES ('custom.setting', 'kept')");
-  await run("INSERT INTO folders (id, user_id, name, created_at, updated_at) VALUES ('folder-1', ?, 'enc-folder', 'c1', 'u1')", owner.id);
-  await run("INSERT INTO ciphers (id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) VALUES ('cipher-1', ?, 1, 'folder-1', 'enc-name', NULL, 1, '{\"login\":{}}', 1, 'cipher-key', 'c2', 'u2', 'a2', NULL)", owner.id);
-  await run("INSERT INTO ciphers (id, user_id, type, data, created_at, updated_at, deleted_at, organization_id) VALUES ('cipher-2', ?, 2, '{}', 'c3', 'u3', 'd3', 'org-1')", other.id);
-  await run("INSERT INTO attachments (id, cipher_id, file_name, size, size_name, key) VALUES ('att-1', 'cipher-1', 'enc-file', 10, '10 Bytes', 'file-key'), ('att-2', 'cipher-1', 'enc-lost', 20, '20 Bytes', NULL)");
-  await run("INSERT INTO domain_settings (user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at) VALUES (?, '[[\"a.com\",\"b.com\"]]', '[[\"c.com\"]]', '[1,2]', 'u4'), (?, '[]', '[]', '[]', 'u5')", owner.id, other.id);
-  await run("INSERT INTO user_revisions (user_id, revision_date) VALUES (?, 'r1'), (?, 'r2')", owner.id, other.id);
-  await run("INSERT INTO webauthn_credentials (id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at) VALUES ('passkey-1', ?, 'twoFactor', 'Key', 'pk', 'credential-1', 5, 'public-key', 'guid', '[\"usb\"]', 'euk', 'epk', 'eprk', 1, 'c6', 'u6')", owner.id);
-  await run("INSERT INTO webauthn_credentials (id, user_id, name, public_key, credential_id, created_at, updated_at) VALUES ('passkey-2', ?, 'Login', 'pk2', 'credential-2', 'c7', 'u7')", other.id);
+  const orm = getOrm(source.DB);
+  await orm.update(users).set({ userKeyId: 'runtime-key-id' }).where(eq(users.id, owner.id));
+  await orm.insert(config).values({ key: 'custom.setting', value: 'kept' });
+  await orm.insert(folders).values({ id: 'folder-1', userId: owner.id, name: 'enc-folder', createdAt: 'c1', updatedAt: 'u1' });
+  await orm.insert(ciphers).values({ id: 'cipher-1', userId: owner.id, type: 1, folderId: 'folder-1', name: 'enc-name', notes: null, favorite: 1, data: '{"login":{}}', reprompt: 1, key: 'cipher-key', createdAt: 'c2', updatedAt: 'u2', archivedAt: 'a2', deletedAt: null });
+  await orm.insert(ciphers).values({ id: 'cipher-2', userId: other.id, type: 2, data: '{}', createdAt: 'c3', updatedAt: 'u3', deletedAt: 'd3', organizationId: 'org-1' });
+  await orm.insert(attachments).values([
+    { id: 'att-1', cipherId: 'cipher-1', fileName: 'enc-file', size: 10, sizeName: '10 Bytes', key: 'file-key' },
+    { id: 'att-2', cipherId: 'cipher-1', fileName: 'enc-lost', size: 20, sizeName: '20 Bytes', key: null },
+  ]);
+  await orm.insert(domainSettings).values([
+    { userId: owner.id, equivalentDomains: '[["a.com","b.com"]]', customEquivalentDomains: '[["c.com"]]', excludedGlobalEquivalentDomains: '[1,2]', updatedAt: 'u4' },
+    { userId: other.id, equivalentDomains: '[]', customEquivalentDomains: '[]', excludedGlobalEquivalentDomains: '[]', updatedAt: 'u5' },
+  ]);
+  await orm.insert(userRevisions).values([{ userId: owner.id, revisionDate: 'r1' }, { userId: other.id, revisionDate: 'r2' }]);
+  await orm.insert(webauthnCredentials).values({
+    id: 'passkey-1', userId: owner.id, purpose: 'twoFactor', name: 'Key', publicKey: 'pk', credentialId: 'credential-1', counter: 5, type: 'public-key', aaGuid: 'guid',
+    transports: '["usb"]', encryptedUserKey: 'euk', encryptedPublicKey: 'epk', encryptedPrivateKey: 'eprk', supportsPrf: 1, createdAt: 'c6', updatedAt: 'u6',
+  });
+  await orm.insert(webauthnCredentials).values({ id: 'passkey-2', userId: other.id, name: 'Login', publicKey: 'pk2', credentialId: 'credential-2', createdAt: 'c7', updatedAt: 'u7' });
 
   const archive = await buildBackupArchive(source, new Date(), { includeAttachments: true });
   const files = unzipSync(archive.bytes);
@@ -66,23 +81,24 @@ test('backup restore brings back every archived value, fills legacy defaults and
     domain_settings: archived.domain_settings.map((row) => (row.user_id === owner.id ? { ...row, custom_equivalent_domains: '[]' } : row)),
     attachments: archived.attachments.filter((row) => row.id === 'att-1'),
   };
-  for (const [table, orderBy] of Object.entries(RESTORED_TABLES)) {
+  for (const [table, orderBy] of RESTORED_TABLES) {
+    const name = getTableName(table);
     const rows = await rowsOf(restored.DB, table, orderBy);
-    const wanted = expected[table].toSorted(byKey(orderBy));
-    assert.deepEqual(rows.map((row, index) => Object.fromEntries(Object.keys(wanted[index] ?? row).map((column) => [column, row[column]]))), wanted, table);
+    const wanted = expected[name].toSorted(byKey(orderBy.name));
+    assert.deepEqual(rows.map((row, index) => Object.fromEntries(Object.keys(wanted[index] ?? row).map((column) => [column, row[column]]))), wanted, name);
   }
-  const users = await rowsOf(restored.DB, 'users', 'id');
-  assert.ok(users.every((row) => row.api_key === null && row.user_key_id === null));
-  assert.ok((await rowsOf(restored.DB, 'ciphers', 'id')).every((row) => row.organization_id === null));
-  const config = new Map((await rowsOf(restored.DB, 'config', 'key')).map((row) => [row.key, row.value]));
-  assert.equal(config.get('custom.setting'), 'kept');
-  assert.equal(config.get('registered'), 'true');
+  const userRows = await rowsOf(restored.DB, users, users.id);
+  assert.ok(userRows.every((row) => row.api_key === null && row.user_key_id === null));
+  assert.ok((await rowsOf(restored.DB, ciphers, ciphers.id)).every((row) => row.organization_id === null));
+  const settings = new Map((await rowsOf(restored.DB, config, config.key)).map((row) => [row.key, row.value]));
+  assert.equal(settings.get('custom.setting'), 'kept');
+  assert.equal(settings.get('registered'), 'true');
 });
 
 test('backup restore rejects a row missing a required value outside the replace tables instead of defaulting it', async () => {
   const source = await createTestEnv();
   const owner = await seedUser(source);
-  await source.DB.prepare("INSERT INTO ciphers (id, user_id, type, favorite, data, created_at, updated_at) VALUES ('cipher-1', ?, 1, 1, '{}', 'c', 'u')").bind(owner.id).run();
+  await getOrm(source.DB).insert(ciphers).values({ id: 'cipher-1', userId: owner.id, type: 1, favorite: 1, data: '{}', createdAt: 'c', updatedAt: 'u' });
   const files = unzipSync((await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes);
   const archived = JSON.parse(new TextDecoder().decode(files['db.json'])) as Record<string, Row[]>;
   delete archived.ciphers[0].favorite;
@@ -90,5 +106,5 @@ test('backup restore rejects a row missing a required value outside the replace 
 
   const restored = await createTestEnv();
   await assert.rejects(importBackupArchiveBytes(zipSync(files), restored, owner.id, false), /NOT NULL constraint failed: ciphers__restore\.favorite/);
-  assert.deepEqual(await rowsOf(restored.DB, 'users', 'id'), []);
+  assert.deepEqual(await rowsOf(restored.DB, users, users.id), []);
 });
