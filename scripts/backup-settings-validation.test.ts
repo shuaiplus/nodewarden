@@ -6,7 +6,7 @@ import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const PASSWORD = 'client-derived-password-hash';
 
-test('backup settings saves answer the first rule broken with every issue under its path', async () => {
+test('backup settings saves keep omitted destinations and report every broken rule under its path', async () => {
   const env = await createTestEnv();
   const admin = await seedUser(env, { role: 'admin', masterPasswordHash: await hashPassword(PASSWORD) });
   const save = (body: unknown) => authedFetch(env, { method: 'PUT', path: '/api/admin/backup/settings', userId: admin.id, body });
@@ -14,6 +14,10 @@ test('backup settings saves answer the first rule broken with every issue under 
   const notAnObject = await save([]);
   assert.equal(notAnObject.status, 400);
   assert.equal((await notAnObject.json() as { message: string }).message, 'Backup settings payload is invalid');
+
+  const unchanged = await save({ masterPasswordHash: PASSWORD });
+  assert.equal(unchanged.status, 200);
+  assert.equal((await unchanged.json() as { destinations: unknown[] }).destinations.length, 1);
 
   const invalid = await save({
     masterPasswordHash: PASSWORD,

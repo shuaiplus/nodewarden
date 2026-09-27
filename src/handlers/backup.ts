@@ -702,7 +702,7 @@ async function normalizeBackupSettingsBody(env: Env, destinations: unknown): Pro
 export async function handleUpdateAdminBackupSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(request, { destinations: z.unknown(), masterPasswordHash: optionalString }, 'Backup settings payload is invalid');
+  const body = await parseBackupBody(request, { destinations: z.unknown().optional(), masterPasswordHash: optionalString }, 'Backup settings payload is invalid');
   if (body instanceof Response) return body;
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
@@ -739,7 +739,7 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
   const body = await parseBackupBody(request, {
-    destinations: z.unknown(),
+    destinations: z.unknown().optional(),
     masterPasswordHash: optionalString,
     userVerificationToken: optionalString,
   }, 'Backup settings repair payload is invalid');
