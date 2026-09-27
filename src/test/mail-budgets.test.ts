@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, eq } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { organizationMemberships } from '../db/schema';
 import { captureEmail, createTestEnv, MAILABLE_DOMAIN } from './support/env';
 import { sendMail, readMailConfig, mailStatusCheck } from '../services/mail';
 import { toSafeUrl } from '../utils/html';
@@ -41,7 +44,7 @@ test('the sixth organization invite to a recipient is refused before saving its 
     assert.equal(response.status, i < 5 ? 200 : 429, await response.clone().text());
     if (i === 5) {
       assert.ok(Number(response.headers.get('Retry-After')) > 0);
-      assert.equal(await env.DB.prepare('SELECT id FROM organization_memberships WHERE org_id=? AND email=?').bind(org.id, recipient).first(), null);
+      assert.equal(await getOrm(env.DB).$count(organizationMemberships, and(eq(organizationMemberships.orgId, org.id), eq(organizationMemberships.email, recipient))), 0);
     }
   }
   assert.equal(capture.sent.length, 5);
