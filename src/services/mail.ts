@@ -1,5 +1,5 @@
 import { LIMITS } from '../config/limits';
-import { EMAIL_PATTERN } from '../config/env';
+import { EMAIL_PATTERN, MailSettings } from '../config/env';
 import { RateLimitService } from './ratelimit';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import type { Env } from '../types';
@@ -27,20 +27,11 @@ export type StatusCheck = { ok: true } | { ok: false; status: number; message: s
 
 export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME' | 'EMAIL_SENDS_PER_HOUR' | 'DISABLE_EMAIL_NEW_DEVICE' | 'ENABLE_NEW_DEVICE_VERIFICATION'>): MailConfig {
   if (!env.EMAIL) return { kind: 'disabled' };
-  const email = (env.EMAIL_FROM ?? '').trim();
-  const name = env.EMAIL_FROM_NAME?.trim() || 'NodeWarden';
-  const sendsPerHour = env.EMAIL_SENDS_PER_HOUR === undefined ? LIMITS.mail.instanceSendsPerHour : Number(env.EMAIL_SENDS_PER_HOUR);
-  const field = !EMAIL_PATTERN.test(email) || email.length > 256 ? 'EMAIL_FROM'
-    : /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(env.EMAIL_FROM_NAME ?? '') ? 'EMAIL_FROM_NAME' : env.EMAIL_SENDS_PER_HOUR !== undefined && (!/^[1-9][0-9]*$/.test(env.EMAIL_SENDS_PER_HOUR) || !Number.isSafeInteger(sendsPerHour)) ? 'EMAIL_SENDS_PER_HOUR' : null;
-  if (field) { console.error('mail', { field }); return { kind: 'misconfigured' }; }
-  const disableNewDevice = env.DISABLE_EMAIL_NEW_DEVICE?.toLowerCase() ?? 'false';
-  const validNewDevice = ['0', '1', 'true', 'false'].includes(disableNewDevice);
-  if (!validNewDevice) { console.error('mail', { field: 'DISABLE_EMAIL_NEW_DEVICE' }); return { kind: 'misconfigured' }; }
-  const verifyNewDevice = env.ENABLE_NEW_DEVICE_VERIFICATION?.toLowerCase() ?? 'false';
-  const validVerification = ['0', '1', 'true', 'false'].includes(verifyNewDevice);
-  if (!validVerification) console.error('mail', { field: 'ENABLE_NEW_DEVICE_VERIFICATION' });
+  const settings = MailSettings.safeParse(env);
+  if (!settings.success) { console.error('mail', { field: settings.error.issues[0].path[0] }); return { kind: 'misconfigured' }; }
+  const { EMAIL_FROM: email, EMAIL_FROM_NAME: name, EMAIL_SENDS_PER_HOUR: sendsPerHour, DISABLE_EMAIL_NEW_DEVICE, ENABLE_NEW_DEVICE_VERIFICATION } = settings.data;
   return { kind: 'enabled', binding: env.EMAIL, from: { email, name }, sendsPerHour,
-    newDeviceNotices: ['0', 'false'].includes(disableNewDevice), newDeviceVerification: validVerification && ['1', 'true'].includes(verifyNewDevice) };
+    newDeviceNotices: !DISABLE_EMAIL_NEW_DEVICE, newDeviceVerification: ENABLE_NEW_DEVICE_VERIFICATION };
 }
 
 export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): Promise<MailOutcome> {

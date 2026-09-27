@@ -6,7 +6,7 @@ import { sendMail } from './mail';
 import { sha256 } from '@noble/hashes/sha2.js';
 import type { Env } from '../types';
 import { bytesToBase64Url } from '../utils/passkey';
-import { EMAIL_PATTERN } from './mail';
+import { EMAIL_PATTERN, readEnvConfig } from '../config/env';
 import { isAdminPortalPath } from '../web-vault-visibility';
 import { parse, serialize } from 'hono/utils/cookie';
 
@@ -14,7 +14,7 @@ export type AdminDirectory = { kind: 'disabled' } | { kind: 'invalid'; entryInde
   | { kind: 'enabled'; admins: ReadonlyMap<string, string> };
 
 export function parseAdminDirectory(env: Pick<Env, 'ADMIN_EMAILS'>): AdminDirectory {
-  const entries = (env.ADMIN_EMAILS ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  const entries = readEnvConfig(env).ADMIN_EMAILS;
   if (!entries.length) return { kind: 'disabled' };
   const admins = new Map<string, string>();
   for (const [entryIndex, entry] of entries.entries()) {

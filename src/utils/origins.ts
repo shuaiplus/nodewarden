@@ -1,4 +1,4 @@
-import { normalizeOrigin } from '../config/env';
+import { normalizeOrigin, readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 
 export { normalizeOrigin };
@@ -46,12 +46,7 @@ export function isOfficialBitwardenDesktopOrigin(origin: unknown): boolean {
 export function getConfiguredWebVaultOrigins(
   env: Pick<Env, 'WEB_VAULT_ORIGINS'>
 ): string[] {
-  const seen = new Set<string>();
-  for (const item of String(env.WEB_VAULT_ORIGINS || '').split(',')) {
-    const origin = normalizeOrigin(item);
-    if (origin) seen.add(origin);
-  }
-  return Array.from(seen);
+  return readEnvConfig(env).WEB_VAULT_ORIGINS;
 }
 
 export function isConfiguredWebVaultOrigin(
@@ -65,16 +60,13 @@ export function isConfiguredWebVaultOrigin(
 export function getConfiguredWebAuthnAllowedOrigins(
   env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>
 ): string[] {
-  const seen = new Set<string>([
+  const config = readEnvConfig(env);
+  return [...new Set([
     ...OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS,
     ...OFFICIAL_BITWARDEN_DESKTOP_ORIGINS,
-    ...getConfiguredWebVaultOrigins(env),
-  ]);
-  for (const item of String(env.WEBAUTHN_ALLOWED_ORIGINS || '').split(',')) {
-    const origin = normalizeOrigin(item);
-    if (origin) seen.add(origin);
-  }
-  return Array.from(seen);
+    ...config.WEB_VAULT_ORIGINS,
+    ...config.WEBAUTHN_ALLOWED_ORIGINS,
+  ])];
 }
 
 export function isConfiguredWebAuthnAllowedOrigin(

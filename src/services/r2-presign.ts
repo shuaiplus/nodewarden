@@ -1,4 +1,5 @@
 import { AwsClient } from 'aws4fetch';
+import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { LIMITS } from '../config/limits';
 
@@ -10,12 +11,8 @@ export function shouldPresignUpload(size: number, env: Env): boolean {
 }
 
 export function canPresign(env: Env): boolean {
-  return !!(
-    env.R2_ACCOUNT_ID
-    && env.R2_ACCESS_KEY_ID
-    && env.R2_SECRET_ACCESS_KEY
-    && (env.R2_BUCKET || 'nodewarden-attachments')
-  );
+  const config = readEnvConfig(env);
+  return !!(config.R2_ACCOUNT_ID && config.R2_ACCESS_KEY_ID && config.R2_SECRET_ACCESS_KEY);
 }
 
 export async function createR2PresignedPutUrl(
@@ -23,10 +20,7 @@ export async function createR2PresignedPutUrl(
   objectKey: string,
   expiresSeconds: number = DEFAULT_EXPIRES_SECONDS
 ): Promise<string> {
-  const accountId = String(env.R2_ACCOUNT_ID || '').trim();
-  const accessKeyId = String(env.R2_ACCESS_KEY_ID || '').trim();
-  const secretAccessKey = String(env.R2_SECRET_ACCESS_KEY || '').trim();
-  const bucket = String(env.R2_BUCKET || 'nodewarden-attachments').trim();
+  const { R2_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey, R2_BUCKET: bucket } = readEnvConfig(env);
   if (!accountId || !accessKeyId || !secretAccessKey) {
     throw new Error('R2 S3 credentials are not configured');
   }
