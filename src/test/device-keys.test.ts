@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
 import { devices } from '../db/schema';
 import * as deviceRepo from '../services/storage-device-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
@@ -47,4 +47,15 @@ test('re-registering a device keeps its session stamp and the keys it leaves out
     await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, next);
     assert.equal((await stored()).sessionStamp, next);
   }
+});
+
+test('untrusting more devices than one D1 statement can bind clears the keys of every listed device', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-1', { encryptedUserKey: '4.user', encryptedPublicKey: '2.public', encryptedPrivateKey: '2.private' });
+  const identifiers = [...Array.from({ length: D1_MAX_BOUND_PARAMETERS }, (_, index) => `unknown-${index}`), 'device-1'];
+  const response = await authedFetch(env, { method: 'POST', path: '/api/devices/untrust', userId: user.id, body: { devices: identifiers } });
+  assert.deepEqual(await response.json(), { success: true, removed: 1 });
+  const device = await deviceRepo.getDevice(env.DB, user.id, 'device-1');
+  assert.deepEqual([device?.encryptedUserKey, device?.encryptedPublicKey, device?.encryptedPrivateKey], [null, null, null]);
 });

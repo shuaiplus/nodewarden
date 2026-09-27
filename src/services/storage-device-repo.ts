@@ -1,6 +1,6 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, ne, or } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, getOrm } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
 import { caseWhen, coalesce, excluded } from '../db/sql';
 import type { Device, TrustedDeviceTokenSummary } from '../types';
@@ -146,17 +146,16 @@ export async function clearDeviceKeys(
   );
   if (!uniqueIds.length) return 0;
 
-  const result = await getOrm(db)
+  const orm = getOrm(db);
+  const updatedAt = new Date().toISOString();
+  const clear = (chunk: string[]) => orm
     .update(devices)
-    .set({
-      encryptedUserKey: null,
-      encryptedPublicKey: null,
-      encryptedPrivateKey: null,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(and(eq(devices.userId, userId), inArray(devices.deviceIdentifier, uniqueIds)))
-    .run();
-  return Number(result.meta.changes ?? 0);
+    .set({ encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, updatedAt })
+    .where(and(eq(devices.userId, userId), inArray(devices.deviceIdentifier, chunk)));
+  // Each chunk binds its ids plus the fixed values a one-id probe counts (an empty list renders as `false`).
+  const statements = chunkRows(uniqueIds, 1, clear(['']).toSQL().params.length - 1).map(clear);
+  const results = await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+  return results.reduce((total, result) => total + Number(result.meta.changes ?? 0), 0);
 }
 
 export async function isKnownDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<boolean> {
