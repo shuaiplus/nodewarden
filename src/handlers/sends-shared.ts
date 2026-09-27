@@ -1,6 +1,8 @@
+import { decodeBase64Url } from 'hono/utils/encode';
 import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
 import { errorResponse, jsonResponse, prop } from '../utils/response';
 import { LIMITS } from '../config/limits';
+import { bytesToBase64Url } from '../utils/passkey';
 import * as sendRepo from '../services/storage-send-repo';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -8,19 +10,9 @@ export const SEND_INACCESSIBLE_MSG = 'Send does not exist or is no longer availa
 const SEND_PASSWORD_ITERATIONS = 100_000;
 export const SEND_PASSWORD_LIMIT_SCOPE = 'send-password';
 
-export function base64UrlEncode(data: Uint8Array): string {
-  const base64 = btoa(String.fromCharCode(...data));
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export function base64UrlDecode(input: string): Uint8Array | null {
+function base64UrlDecode(input: string): Uint8Array | null {
   try {
-    let normalized = input.replace(/-/g, '+').replace(/_/g, '/');
-    while (normalized.length % 4) normalized += '=';
-    const raw = atob(normalized);
-    const out = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-    return out;
+    return decodeBase64Url(input);
   } catch {
     return null;
   }
@@ -51,7 +43,7 @@ function bytesToUuid(bytes: Uint8Array): string | null {
 function toAccessId(sendId: string): string {
   const bytes = uuidToBytes(sendId);
   if (!bytes) return '';
-  return base64UrlEncode(bytes);
+  return bytesToBase64Url(bytes);
 }
 
 export function fromAccessId(accessId: string): string | null {
@@ -179,15 +171,6 @@ async function deriveSendPasswordHash(password: string, salt: Uint8Array, iterat
   return new Uint8Array(bits);
 }
 
-function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a[i] ^ b[i];
-  }
-  return diff === 0;
-}
-
 function isLikelyHashB64(value: string): boolean {
   const raw = String(value || '').trim();
   if (!raw) return false;
@@ -218,8 +201,8 @@ export async function setSendPassword(send: Send, password: string | null): Prom
   const salt = crypto.getRandomValues(new Uint8Array(64));
   const hash = await deriveSendPasswordHash(password, salt, SEND_PASSWORD_ITERATIONS);
 
-  send.passwordSalt = base64UrlEncode(salt);
-  send.passwordHash = base64UrlEncode(hash);
+  send.passwordSalt = bytesToBase64Url(salt);
+  send.passwordHash = bytesToBase64Url(hash);
   send.passwordIterations = SEND_PASSWORD_ITERATIONS;
   send.authType = SendAuthType.Password;
 }
@@ -238,7 +221,7 @@ export async function verifySendPassword(send: Send, password: string): Promise<
   if (!salt || !expected) return false;
 
   const actual = await deriveSendPasswordHash(password, salt, send.passwordIterations);
-  return constantTimeEqual(actual, expected);
+  return actual.length === expected.length && crypto.subtle.timingSafeEqual(actual, expected);
 }
 
 export function verifySendPasswordHashB64(send: Send, passwordHashB64: string): boolean {
@@ -246,7 +229,7 @@ export function verifySendPasswordHashB64(send: Send, passwordHashB64: string): 
   const expected = base64UrlDecode(send.passwordHash);
   const provided = base64UrlDecode(passwordHashB64);
   if (!expected || !provided) return false;
-  return constantTimeEqual(expected, provided);
+  return expected.length === provided.length && crypto.subtle.timingSafeEqual(expected, provided);
 }
 
 export function validateDeletionDate(date: Date): Response | null {

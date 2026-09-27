@@ -4,6 +4,7 @@ import { LIMITS } from '../../src/config/limits';
 import { AuthService } from '../../src/services/auth';
 import type { Env, User } from '../../src/types';
 import { waitUntil } from './cloudflare-workers';
+import './workers-crypto';
 import { createSqliteD1 } from './d1-sqlite';
 import { initializeDatabase } from '../../src/db/migrate';
 import * as userRepo from '../../src/services/storage-user-repo';

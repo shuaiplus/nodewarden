@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { sha256 } from 'hono/utils/crypto';
 import { LIMITS } from './config/limits';
 import {
   handleAccessSend,
@@ -159,11 +160,6 @@ async function fetchIconSource(source: { url: string; headers?: HeadersInit }): 
   }
 }
 
-async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function getPositiveContentLength(headers: Headers): number | null {
   const raw = headers.get('Content-Length');
   if (!raw) return null;
@@ -261,7 +257,7 @@ async function handleWebsiteIcon(host: string, fallbackMode: 'default' | 'not-fo
       if (
         source.rejectImage &&
         bytes.byteLength === source.rejectImage.byteLength &&
-        (await sha256Hex(bytes)) === source.rejectImage.sha256
+        (await sha256(bytes)) === source.rejectImage.sha256
       ) {
         continue;
       }

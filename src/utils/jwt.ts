@@ -12,7 +12,7 @@ function hmacKey(secret: string): Promise<CryptoKey> {
 }
 
 export async function hmacSha256Base64Url(secret: string, data: string): Promise<string> {
-  return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(data))));
+  return bytesToBase64Url(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(data)));
 }
 
 export async function signHs256Jwt(payload: Record<string, unknown>, secret: string): Promise<string> {

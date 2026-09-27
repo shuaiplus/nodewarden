@@ -1,3 +1,4 @@
+import { decodeBase64, encodeBase64 } from 'hono/utils/encode';
 import type { Env, User } from '../types';
 
 // CONTRACT:
@@ -40,24 +41,6 @@ export interface BackupSettingsEnvelopeV2 {
   version: 2;
   runtime: BackupSettingsRuntimeEnvelope;
   portable: BackupSettingsPortableEnvelope;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let text = '';
-  for (let index = 0; index < bytes.length; index += 1) {
-    text += String.fromCharCode(bytes[index]);
-  }
-  return btoa(text);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const normalized = String(value || '').trim();
-  const binary = atob(normalized);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -111,7 +94,7 @@ async function decryptAesGcm(ciphertext: Uint8Array, iv: Uint8Array, key: Crypto
 async function importPortablePublicKey(publicKeyBase64: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     'spki',
-    base64ToBytes(publicKeyBase64),
+    decodeBase64(publicKeyBase64),
     { name: PORTABLE_ALGORITHM, hash: PORTABLE_HASH },
     false,
     ['encrypt']
@@ -206,31 +189,30 @@ export async function encryptBackupSettingsEnvelope(
   for (const user of eligibleUsers) {
     try {
       const publicKey = await importPortablePublicKey(user.publicKey!);
-      const wrappedKey = new Uint8Array(
-        await crypto.subtle.encrypt(
-          { name: PORTABLE_ALGORITHM },
-          publicKey,
-          portableDek
-        )
+      const wrappedKey = await crypto.subtle.encrypt(
+        { name: PORTABLE_ALGORITHM },
+        publicKey,
+        portableDek
       );
       wraps.push({
         userId: user.id,
-        wrappedKey: bytesToBase64(wrappedKey),
+        wrappedKey: encodeBase64(wrappedKey),
       });
     } catch {
       // Keep runtime settings usable even if an imported admin key is malformed.
     }
   }
 
+  // encryptAesGcm's arrays each own their whole buffer, so .buffer is exactly their bytes.
   const envelope: BackupSettingsEnvelopeV2 = {
     version: 2,
     runtime: {
-      iv: bytesToBase64(runtime.iv),
-      ciphertext: bytesToBase64(runtime.ciphertext),
+      iv: encodeBase64(runtime.iv.buffer),
+      ciphertext: encodeBase64(runtime.ciphertext.buffer),
     },
     portable: {
-      iv: bytesToBase64(portableCipher.iv),
-      ciphertext: bytesToBase64(portableCipher.ciphertext),
+      iv: encodeBase64(portableCipher.iv.buffer),
+      ciphertext: encodeBase64(portableCipher.ciphertext.buffer),
       wraps,
     },
   };
@@ -245,8 +227,8 @@ export async function decryptBackupSettingsRuntime(raw: string, env: Env): Promi
   }
   const runtimeKey = await deriveRuntimeKey(env.JWT_SECRET);
   const plaintext = await decryptAesGcm(
-    base64ToBytes(envelope.runtime.ciphertext),
-    base64ToBytes(envelope.runtime.iv),
+    decodeBase64(envelope.runtime.ciphertext),
+    decodeBase64(envelope.runtime.iv),
     runtimeKey
   );
   return new TextDecoder().decode(plaintext);

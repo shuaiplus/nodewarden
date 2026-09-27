@@ -1,4 +1,6 @@
+import { decodeBase64, encodeBase64 } from 'hono/utils/encode';
 import type { Env, User } from '../types';
+import { constantTimeEquals } from './api-key';
 
 const YUBIKEY_PUBLIC_ID_LENGTH = 12;
 const YUBIKEY_MIN_OTP_LENGTH = 32;
@@ -48,11 +50,6 @@ export function isYubiKeyEnabled(user: User): boolean {
   return userYubiKeyPublicIds(user).length > 0;
 }
 
-function randomNonce(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function parseYubicoResponse(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
@@ -63,38 +60,15 @@ function parseYubicoResponse(text: string): Record<string, string> {
   return out;
 }
 
-function base64ToBytes(input: string): Uint8Array {
-  const binary = atob(input);
-  const out = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) out[index] = binary.charCodeAt(index);
-  return out;
-}
-
-function bytesToBase64(input: Uint8Array): string {
-  let binary = '';
-  for (const byte of input) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 async function hmacSha1Base64(base64Key: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
-    base64ToBytes(base64Key),
+    decodeBase64(base64Key),
     { name: 'HMAC', hash: 'SHA-1' },
     false,
     ['sign']
   );
-  return bytesToBase64(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))));
-}
-
-function constantTimeStringEquals(a: string, b: string): boolean {
-  const aBytes = new TextEncoder().encode(a);
-  const bBytes = new TextEncoder().encode(b);
-  let diff = aBytes.length ^ bBytes.length;
-  for (let index = 0; index < aBytes.length && index < bBytes.length; index += 1) {
-    diff |= aBytes[index] ^ bBytes[index];
-  }
-  return diff === 0;
+  return encodeBase64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)));
 }
 
 function canonicalQuery(params: URLSearchParams): string {
@@ -138,7 +112,8 @@ export async function verifyYubicoOtp(
   const secretKey = String(credentials?.secretKey || '').trim();
   if (!clientId || !secretKey) return false;
 
-  const nonce = randomNonce();
+  // Yubico accepts a 16-40 character alphanumeric nonce; a dashless UUID is 32 hex characters.
+  const nonce = crypto.randomUUID().replaceAll('-', '');
   const params = new URLSearchParams({
     id: clientId,
     nonce,
@@ -161,7 +136,7 @@ export async function verifyYubicoOtp(
       for (const [key, value] of Object.entries(parsed)) {
         if (key !== 'h') signedParams.set(key, value);
       }
-      if (!constantTimeStringEquals(await hmacSha1Base64(secretKey, canonicalQuery(signedParams)), parsed.h)) continue;
+      if (!constantTimeEquals(await hmacSha1Base64(secretKey, canonicalQuery(signedParams)), parsed.h)) continue;
       return true;
     } catch {
       continue;

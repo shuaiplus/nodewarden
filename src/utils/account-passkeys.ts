@@ -1,3 +1,4 @@
+import { decodeBase64Url } from 'hono/utils/encode';
 import type {
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
@@ -12,7 +13,7 @@ import type {
   WebAuthnPrfDecryptionOption,
 } from '../types';
 import { signHs256Jwt, verifyHs256Jwt } from './jwt';
-import { base64UrlToBytes, bytesToBase64Url } from './passkey';
+import { bytesToBase64Url } from './passkey';
 import { getConfiguredWebAuthnAllowedOrigins } from './origins';
 
 const ACCOUNT_PASSKEY_TOKEN_TYPE = 'nodewarden.account-passkey.challenge.v1';
@@ -73,8 +74,7 @@ function normalizeWebAuthnBase64(value: unknown): string {
 }
 
 export async function sha256Base64Url(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', textBytes(value));
-  return bytesToBase64Url(new Uint8Array(digest));
+  return bytesToBase64Url(await crypto.subtle.digest('SHA-256', textBytes(value)));
 }
 
 export function accountPasskeyTokenTtlMs(scope: AccountPasskeyChallengeScope): number {
@@ -129,7 +129,7 @@ export function userIdToWebAuthnUserId(userId: string): Uint8Array {
 export function userHandleToUserId(userHandle: string | undefined): string | null {
   if (!userHandle) return null;
   try {
-    const bytes = base64UrlToBytes(userHandle);
+    const bytes = decodeBase64Url(userHandle);
     const officialGuid = dotNetGuidBytesToUuid(bytes);
     if (officialGuid) return officialGuid;
     const decoded = new TextDecoder().decode(bytes);
@@ -181,7 +181,7 @@ export function accountPasskeyCredentialToResponse(credential: AccountPasskeyCre
 export function toSimpleWebAuthnCredential(credential: AccountPasskeyCredential): WebAuthnCredential {
   return {
     id: credential.credentialId,
-    publicKey: Uint8Array.from(base64UrlToBytes(credential.publicKey)),
+    publicKey: decodeBase64Url(credential.publicKey),
     counter: credential.counter,
     transports: (credential.transports || undefined) as AuthenticatorTransportFuture[] | undefined,
   };

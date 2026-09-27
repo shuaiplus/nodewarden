@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import '../../scripts/support/workers-crypto';
 import { hashPassword, verifyBetterAuthPassword, verifyPassword } from './auth-password';
 
 test('hashPassword produces a random-salt $s2$ digest that verifies', async () => {

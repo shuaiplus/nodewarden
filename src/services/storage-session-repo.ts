@@ -1,4 +1,5 @@
 import { and, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { sha256 } from 'hono/utils/crypto';
 
 import { getOrm } from '../db/client';
 import { session } from '../db/schema';
@@ -17,8 +18,7 @@ async function maybeCleanupExpiredRefreshTokens(db: D1Database, nowMs: number): 
 
 // Tokens are stored as their SHA-256, so a database read never yields a usable credential.
 export async function hashedTokenKey(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  return `sha256:${await sha256(token)}`;
 }
 
 export async function saveRefreshToken(

@@ -1,4 +1,5 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
+import { sha256 } from 'hono/utils/crypto';
 
 import { getOrm } from '../db/client';
 import type { Env } from '../types';
@@ -128,11 +129,6 @@ function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
   return sanitized;
 }
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function getDateParts(date: Date, timeZone: string): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -170,8 +166,7 @@ export async function inspectBackupArchiveFileNameChecksum(
   fileName: string
 ): Promise<BackupFileIntegrityCheckResult> {
   const expectedPrefix = extractBackupFileChecksumPrefix(fileName);
-  const actualHash = await sha256Hex(bytes);
-  const actualPrefix = actualHash.slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
+  const actualPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
   return {
     hasChecksumPrefix: !!expectedPrefix,
     expectedPrefix,
@@ -565,7 +560,7 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const bytes = zipSync(createZipEntries(files));
-  const fileHashPrefix = (await sha256Hex(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
+  const fileHashPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
   const backupTimeZone = options.timeZone || 'UTC';
   const fileName = buildBackupFileNameInTimeZone(date, fileHashPrefix, backupTimeZone);
   await options.progress?.({

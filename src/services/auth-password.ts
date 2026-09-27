@@ -1,32 +1,9 @@
+import { encodeBase64, decodeBase64 } from 'hono/utils/encode';
+import { constantTimeEquals } from '../utils/api-key';
+
 const SERVER_HASH_ITERATIONS = 100_000;
 const LEGACY_PREFIX = '$s$';
 const S2_PREFIX = '$s2$';
-
-function bytesToB64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-function b64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  if (leftBytes.length !== rightBytes.length) return false;
-  let diff = 0;
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    diff |= leftBytes[index] ^ rightBytes[index];
-  }
-  return diff === 0;
-}
 
 async function pbkdf2Hex(password: string, salt: Uint8Array, iterations: number): Promise<string> {
   const keyMaterial = await crypto.subtle.importKey(
@@ -41,13 +18,13 @@ async function pbkdf2Hex(password: string, salt: Uint8Array, iterations: number)
     keyMaterial,
     256
   );
-  return bytesToB64(new Uint8Array(bits));
+  return encodeBase64(bits);
 }
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const digest = await pbkdf2Hex(password, salt, SERVER_HASH_ITERATIONS);
-  return `${S2_PREFIX}${SERVER_HASH_ITERATIONS}$${bytesToB64(salt)}$${digest}`;
+  return `${S2_PREFIX}${SERVER_HASH_ITERATIONS}$${encodeBase64(salt.buffer)}$${digest}`;
 }
 
 async function verifyS2(password: string, stored: string): Promise<boolean> {
@@ -55,7 +32,7 @@ async function verifyS2(password: string, stored: string): Promise<boolean> {
   if (parts.length !== 5 || parts[1] !== 's2') return false;
   const iterations = Number(parts[2]);
   if (!Number.isFinite(iterations) || iterations < 1) return false;
-  const digest = await pbkdf2Hex(password, b64ToBytes(parts[3]), iterations);
+  const digest = await pbkdf2Hex(password, decodeBase64(parts[3]), iterations);
   return constantTimeEquals(digest, parts[4]);
 }
 
