@@ -70,22 +70,7 @@ const MAX_INVITE_EMAIL_LENGTH = 256;
 // Upstream EmailValidation.IsValidEmail: a local part of printable ASCII other than "@", one "@",
 // and a dotted host that ends in a letter.
 
-type MessageCheck = { ok: true } | { ok: false; message: string };
 // Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
-
-function inviteEmailsCheck(emails: string[]): MessageCheck {
-  if (!emails.length) return { ok: false, message: 'An email is required.' };
-  if (emails.length > MAX_INVITE_EMAILS) {
-    return { ok: false, message: `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.` };
-  }
-  // Upstream reports the first failing address, checking its format before its length.
-  const [message] = emails.flatMap((email, index) => {
-    if (!EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
-    if (email.length > MAX_INVITE_EMAIL_LENGTH) return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
-    return [];
-  });
-  return message ? { ok: false, message } : { ok: true };
-}
 
 // Clients post null or '' for unset text, so a blank value falls back to the stored one.
 const optionalText = z.string().trim().nullish();
@@ -123,13 +108,6 @@ async function requireMember(
   if (!isActiveMember(member)) return errorResponse('Organization not found', 404);
   return member;
 }
-
-// Upstream HasConfirmedOwnersExceptAsync: whether a confirmed Owner other than this member remains.
-async function hasOtherConfirmedOwner(db: D1Database, membership: MembershipRecord): Promise<boolean> {
-  const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
-  return (await orgRepo.countConfirmedOwners(db, membership.orgId)) > (isConfirmedOwner ? 1 : 0);
-}
-
 
 export async function createOwnedOrganization(
   env: Env,
@@ -550,8 +528,17 @@ const MemberInviteRequest = z.object({
   emails: z.array(z.string()).nullish()
     .transform((emails) => (emails ?? []).map((email) => email.trim().toLowerCase()).filter(Boolean))
     .superRefine((emails, context) => {
-      const check = inviteEmailsCheck(emails);
-      if (!check.ok) context.addIssue({ code: 'custom', message: check.message });
+      const message = !emails.length
+        ? 'An email is required.'
+        : emails.length > MAX_INVITE_EMAILS
+          ? `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.`
+          // Upstream reports the first failing address, checking its format before its length.
+          : emails.flatMap((email, index) => {
+            if (!EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
+            if (email.length > MAX_INVITE_EMAIL_LENGTH) return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
+            return [];
+          })[0];
+      if (message) context.addIssue({ code: 'custom', message });
     }),
   ...memberChangeFields,
 });
@@ -974,8 +961,10 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (collections instanceof Response) return collections;
   const roleCheck = memberRoleChangeCheck(actor, clientMembershipType(membership.type), change.type, change.permissions, 'update');
   if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
-  // Leaving Owner must leave another confirmed owner behind.
-  if (change.type !== MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
+  // Leaving Owner must leave another confirmed owner behind. Upstream HasConfirmedOwnersExceptAsync
+  // does not count this member when it is a confirmed Owner itself.
+  const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
+  if (change.type !== MembershipType.Owner && !((await orgRepo.countConfirmedOwners(env.DB, membership.orgId)) > (isConfirmedOwner ? 1 : 0))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   const previousType = membership.type;
@@ -1201,22 +1190,18 @@ export async function handleGetPlans(): Promise<Response> {
 const SecretVerificationRequest = z.object({ masterPasswordHash: z.string().nullish(), secret: z.string().nullish() })
   .transform((body) => ('masterPasswordHash' in body ? body.masterPasswordHash : body.secret)?.trim() ?? '');
 
-async function verifyMasterPassword(env: Env, userId: string, secret: string): Promise<Response | null> {
-  if (!secret) return errorResponse('masterPasswordHash is required', 400);
-  const user = await userRepo.getUserById(env.DB, userId);
-  if (!user) return errorResponse('User not found', 404);
-  const valid = await new AuthService(env).verifyPassword(secret, user.masterPasswordHash, user.email);
-  return valid ? null : errorResponse('Invalid password', 400);
-}
-
 export async function handleOrgApiKey(request: Request, env: Env, userId: string, orgId: string, rotate: boolean): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
   const secret = await parseBody(request, SecretVerificationRequest);
   if (secret instanceof Response) return secret;
-  const unverified = await verifyMasterPassword(env, userId, secret);
-  if (unverified) return unverified;
+  if (!secret) return errorResponse('masterPasswordHash is required', 400);
+  const user = await userRepo.getUserById(env.DB, userId);
+  if (!user) return errorResponse('User not found', 404);
+  if (!(await new AuthService(env).verifyPassword(secret, user.masterPasswordHash, user.email))) {
+    return errorResponse('Invalid password', 400);
+  }
 
   // Only the hash is persisted, so an existing key can never be displayed again:
   // a non-rotating read has nothing to hand back and must be rotated instead.
