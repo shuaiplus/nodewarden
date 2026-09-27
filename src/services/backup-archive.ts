@@ -1,8 +1,11 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import { sha256 } from 'hono/utils/crypto';
 import { z } from 'zod';
+import { asc, getColumns, getTableName, sql } from 'drizzle-orm';
+import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
+import { attachments, ciphers, config, domainSettings, folders, userRevisions, users, webauthnCredentials } from '../db/schema';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
@@ -119,9 +122,20 @@ export interface BackupArchiveBuildProgressEvent {
 
 export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgressEvent) => Promise<void>;
 
-async function queryRows(db: D1Database, query: string): Promise<SqlRow[]> {
-  const rows = await getOrm(db).all(query) as SqlRow[];
-  return rows.map((row) => ({ ...row }));
+// Archive rows keep database column names, their order and the raw stored values: each listed column
+// is selected through a bare sql`${column}`, so no drizzle value mapping runs. A name the schema lacks
+// throws instead of exporting undefined.
+async function queryRows(db: D1Database, table: SQLiteTable, columnNames: string[], orderBy: string[]): Promise<SqlRow[]> {
+  const columns = new Map(Object.values(getColumns(table)).map((column) => [column.name, column]));
+  const schemaColumn = (name: string) => {
+    const column = columns.get(name);
+    if (!column) throw new Error(`Backup export column ${getTableName(table)}.${name} is not in the schema`);
+    return column;
+  };
+  return getOrm(db)
+    .select(Object.fromEntries(columnNames.map((name) => [name, sql<string | number | null>`${schemaColumn(name)}`])))
+    .from(table)
+    .orderBy(...orderBy.map((name) => asc(schemaColumn(name))));
 }
 
 function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
@@ -473,14 +487,14 @@ export async function buildBackupArchive(
   });
   const encoder = new TextEncoder();
   const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows] = await Promise.all([
-    queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
-    queryRows(env.DB, 'SELECT id, email, email_verified, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, two_factor_email, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
-    queryRows(env.DB, 'SELECT user_id, revision_date FROM user_revisions ORDER BY user_id ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
-    queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
+    queryRows(env.DB, config, ['key', 'value'], ['key']),
+    queryRows(env.DB, users, ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'], ['created_at']),
+    queryRows(env.DB, domainSettings, ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'], ['user_id']),
+    queryRows(env.DB, userRevisions, ['user_id', 'revision_date'], ['user_id']),
+    queryRows(env.DB, folders, ['id', 'user_id', 'name', 'created_at', 'updated_at'], ['created_at']),
+    queryRows(env.DB, ciphers, ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'], ['created_at']),
+    queryRows(env.DB, attachments, ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], ['cipher_id', 'id']),
+    queryRows(env.DB, webauthnCredentials, ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'], ['created_at']),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
