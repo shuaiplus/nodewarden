@@ -41,6 +41,8 @@ test('S3 destinations send SigV4-signed requests to path-style and virtual-hoste
       'HEAD https://s3.example.com/backups/nightly/missing.zip',
     ]);
     assert.equal(requests[0].headers.get('Content-Type'), 'application/zip');
+    // sha256 of the three-byte archive, signed so the body cannot be swapped in transit.
+    assert.equal(requests[0].headers.get('X-Amz-Content-Sha256'), '039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81');
     for (const request of requests) {
       assert.match(request.headers.get('Authorization') ?? '', /^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/eu-west-1\/s3\/aws4_request, SignedHeaders=\S*host;x-amz-content-sha256;x-amz-date, Signature=[0-9a-f]{64}$/);
       assert.match(request.headers.get('X-Amz-Date') ?? '', /^\d{8}T\d{6}Z$/);

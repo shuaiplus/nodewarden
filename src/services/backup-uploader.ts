@@ -1,4 +1,5 @@
 import { AwsClient } from 'aws4fetch';
+import { sha256 } from 'hono/utils/crypto';
 import {
   BackupDestinationRecord,
   BackupDestinationType,
@@ -445,11 +446,12 @@ async function signedS3Request(
     region: config.region || 'auto',
     retries: 0,
   });
-  return client.fetch(url, {
-    method,
-    headers: method === 'PUT' ? { 'Content-Type': contentType || 'application/octet-stream' } : {},
-    body,
-  });
+  // Upload bodies are signed by hash, as before aws4fetch, so a plain-http endpoint cannot swap the archive
+  // in transit; reads keep aws4fetch's UNSIGNED-PAYLOAD default.
+  const headers: Record<string, string> = method === 'PUT' && body
+    ? { 'Content-Type': contentType || 'application/octet-stream', 'X-Amz-Content-Sha256': (await sha256(body)) ?? 'UNSIGNED-PAYLOAD' }
+    : {};
+  return client.fetch(url, { method, headers, body });
 }
 
 async function putToS3(
