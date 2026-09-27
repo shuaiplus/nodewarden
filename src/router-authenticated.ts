@@ -110,7 +110,7 @@ import {
   handleListPendingAuthRequests,
   handleUpdateAuthRequest,
 } from './handlers/auth-requests';
-import { handleOrganizationRoute } from './router-org';
+import { organizationRoutes } from './router-org';
 import { handleEmergencyAccessRoute } from './handlers/emergency-access';
 import { handleAccountLicenseUpload } from './handlers/licenses';
 import { handleListAllCollections } from './handlers/organizations';
@@ -222,11 +222,7 @@ authenticatedRoutes.on('POST', ['/api/webauthn/:credentialId/delete', '/webauthn
 authenticatedRoutes.get('/api/sync', (c) => handleSync(c.req.raw, c.env, c.get('userId')));
 authenticatedRoutes.get('/api/collections', (c) => handleListAllCollections(c.env, c.get('userId')));
 
-authenticatedRoutes.use(async (c, next) => {
-  const orgRoute = await handleOrganizationRoute(c.req.raw, c.env, c.get('userId'), c.get('currentUser'), c.req.path, c.req.method);
-  if (orgRoute) return orgRoute;
-  await next();
-});
+authenticatedRoutes.route('/', organizationRoutes);
 
 authenticatedRoutes.on('POST', ['/api/accounts/license', '/accounts/license'], () => handleAccountLicenseUpload());
 

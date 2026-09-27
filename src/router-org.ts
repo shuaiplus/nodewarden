@@ -1,4 +1,4 @@
-import type { Env, User } from './types';
+import { Hono } from 'hono';
 import { errorResponse, jsonResponse } from './utils/response';
 import {
   handleAcceptInvite,
@@ -48,116 +48,76 @@ import {
   handleSyncSelfHostedOrganizationLicense,
   handleUpdateSelfHostedOrganizationLicense,
 } from './handlers/licenses';
+import type { AppEnv } from './router';
 
-export async function handleOrganizationRoute(
-  request: Request,
-  env: Env,
-  userId: string,
-  currentUser: User,
-  path: string,
-  method: string
-): Promise<Response | null> {
-  if ((path === '/api/organizations' || path === '/organizations') && method === 'POST') {
-    return handleCreateOrganization(request, env, currentUser);
-  }
-  if ((path === '/api/plans' || path === '/plans') && method === 'GET') return handleGetPlans();
-  if ((path === '/api/licenses/nodewarden-enterprise.json' || path === '/licenses/nodewarden-enterprise.json') && method === 'GET') {
-    return enterpriseLicenseFileResponse(currentUser);
-  }
-  if ((path === '/api/organizations/licenses/self-hosted' || path === '/organizations/licenses/self-hosted') && method === 'POST') {
-    return handleCreateSelfHostedOrganizationLicense(request, env, currentUser);
-  }
-  const licenseUpdate = path.match(/^\/(?:api\/)?organizations\/licenses\/self-hosted\/([a-f0-9-]+)(\/sync)?\/?$/i);
-  if (licenseUpdate && method === 'POST') {
-    if (licenseUpdate[2]) return handleSyncSelfHostedOrganizationLicense(env, currentUser, licenseUpdate[1]);
-    return handleUpdateSelfHostedOrganizationLicense(request, env, currentUser, licenseUpdate[1]);
-  }
-  const orgMatch = path.match(/^\/api\/organizations\/([a-f0-9-]+)(\/.*)?$/i);
-  if (!orgMatch) return null;
-  const orgId = orgMatch[1];
-  const sub = orgMatch[2] || '';
+export const organizationRoutes = new Hono<AppEnv>();
 
-  if (sub === '' || sub === '/') {
-    if (method === 'GET') return handleGetOrganization(request, env, userId, orgId);
-    if (method === 'PUT' || method === 'POST') return handleUpdateOrganization(request, env, userId, orgId);
-    if (method === 'DELETE') return handleDeleteOrganization(env, userId, orgId);
-  }
-  if (sub === '/delete' && method === 'POST') return handleDeleteOrganization(env, userId, orgId);
-  if (sub === '/leave' && method === 'POST') return handleLeaveOrganization(request, env, userId, orgId);
-  if (sub === '/keys' && method === 'POST') return handlePostOrganizationKeys(request, env, userId, orgId);
-  if ((sub === '/keys' || sub === '/public-key') && method === 'GET') return handleGetOrganizationKeys(env, userId, orgId);
-  if (sub === '/auto-enroll-status' && method === 'GET') return handleGetAutoEnrollStatus(env, userId, orgId);
-  if (sub === '/billing/metadata' && method === 'GET') {
-    return jsonResponse({ object: 'list', data: [], continuationToken: null });
-  }
-  if (sub === '/billing/vnext/warnings' && method === 'GET') {
-    return jsonResponse({ freeTrial: null, inactiveSubscription: null, resellerRenewal: null, taxId: null });
-  }
-  if (sub === '/billing/vnext/self-host/metadata' && method === 'GET') {
-    return jsonResponse({ isOnSecretsManagerStandalone: true, organizationOccupiedSeats: 0 });
-  }
+organizationRoutes.on('POST', ['/api/organizations', '/organizations'], (c) => handleCreateOrganization(c.req.raw, c.env, c.get('currentUser')));
+organizationRoutes.on('GET', ['/api/plans', '/plans'], () => handleGetPlans());
+organizationRoutes.on('GET', ['/api/licenses/nodewarden-enterprise.json', '/licenses/nodewarden-enterprise.json'], (c) => enterpriseLicenseFileResponse(c.get('currentUser')));
+organizationRoutes.on('POST', ['/api/organizations/licenses/self-hosted', '/organizations/licenses/self-hosted'], (c) => handleCreateSelfHostedOrganizationLicense(c.req.raw, c.env, c.get('currentUser')));
+const license = '/organizations/licenses/self-hosted/:orgId{[a-f0-9-]+}';
+organizationRoutes.on('POST', [`/api${license}/sync`, `${license}/sync`], (c) => handleSyncSelfHostedOrganizationLicense(c.env, c.get('currentUser'), c.req.param('orgId')));
+organizationRoutes.on('POST', [`/api${license}`, license], (c) => handleUpdateSelfHostedOrganizationLicense(c.req.raw, c.env, c.get('currentUser'), c.req.param('orgId')));
 
-  if (sub === '/collections' || sub === '/collections/details') {
-    if (method === 'GET' && sub.endsWith('/details')) return handleListOrgCollectionDetails(env, userId, orgId);
-    if (method === 'GET') return handleListOrgCollections(env, userId, orgId);
-    if (method === 'POST') return handleCreateOrgCollection(request, env, userId, orgId);
-  }
-  const colMatch = sub.match(/^\/collections\/([a-f0-9-]+)(?:\/(delete|details|users))?$/i);
-  if (colMatch) {
-    if ((method === 'PUT' || method === 'POST') && !colMatch[2]) return handleUpdateOrgCollection(request, env, userId, orgId, colMatch[1]);
-    if ((method === 'DELETE' || (method === 'POST' && colMatch[2] === 'delete'))) return handleDeleteOrgCollection(request, env, userId, orgId, colMatch[1]);
-    if (method === 'GET' && colMatch[2] === 'details') return handleGetOrgCollectionDetails(env, userId, orgId, colMatch[1]);
-    if (method === 'GET' && colMatch[2] === 'users') return handleListOrgCollectionUsers(env, userId, orgId, colMatch[1]);
-  }
+const org = '/api/organizations/:orgId{[a-f0-9-]+}';
+organizationRoutes.get(org, (c) => handleGetOrganization(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.on(['PUT', 'POST'], org, (c) => handleUpdateOrganization(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.delete(org, (c) => handleDeleteOrganization(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/delete`, (c) => handleDeleteOrganization(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/leave`, (c) => handleLeaveOrganization(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/keys`, (c) => handlePostOrganizationKeys(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.on('GET', [`${org}/keys`, `${org}/public-key`], (c) => handleGetOrganizationKeys(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.get(`${org}/auto-enroll-status`, (c) => handleGetAutoEnrollStatus(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.get(`${org}/billing/metadata`, () => jsonResponse({ object: 'list', data: [], continuationToken: null }));
+organizationRoutes.get(`${org}/billing/vnext/warnings`, () => jsonResponse({ freeTrial: null, inactiveSubscription: null, resellerRenewal: null, taxId: null }));
+organizationRoutes.get(`${org}/billing/vnext/self-host/metadata`, () => jsonResponse({ isOnSecretsManagerStandalone: true, organizationOccupiedSeats: 0 }));
 
-  if (sub === '/users/enable-secrets-manager' && method === 'PUT') return handleEnableSecretsManager(env, userId, orgId);
-  if (sub === '/users' && method === 'GET') return handleListMembers(env, userId, orgId, new URL(request.url).searchParams.get('includeGroups') === 'true');
-  if (sub === '/users/mini-details' && method === 'GET') return handleListMemberMiniDetails(env, userId, orgId);
-  if (sub === '/users/invite' && method === 'POST') return handleInviteMembers(request, env, currentUser, orgId);
-  if (sub === '/users/public-keys' && method === 'POST') return handleListMemberPublicKeys(request, env, userId, orgId);
-  if (sub === '/users/confirm' && method === 'POST') return handleBulkConfirmMembers(request, env, userId, orgId);
-  if (sub === '/users/reinvite' && method === 'POST') return handleBulkReinviteMembers(request, env, userId, orgId);
-  if ((sub === '/users' && method === 'DELETE') || (sub === '/users/remove' && method === 'POST')) {
-    return handleBulkMemberAction(request, env, userId, orgId, 'remove');
-  }
-  if ((sub === '/users/revoke' || sub === '/users/restore') && (method === 'PUT' || method === 'PATCH')) {
-    return handleBulkMemberAction(request, env, userId, orgId, sub === '/users/revoke' ? 'revoke' : 'restore');
-  }
-  const userMatch = sub.match(/^\/users\/([a-f0-9-]+)(?:\/(accept|confirm|reinvite|revoke|restore|restore\/vnext))?$/i);
-  if (userMatch) {
-    const memberId = userMatch[1];
-    const action = userMatch[2] || '';
-    if (action === 'accept' && method === 'POST') return handleAcceptInvite(request, env, currentUser, orgId, memberId);
-    if (action === 'confirm' && method === 'POST') return handleConfirmMember(request, env, userId, orgId, memberId);
-    if (action === 'reinvite' && method === 'POST') return handleReinviteMember(request, env, userId, orgId, memberId);
-    if (action === 'revoke' && (method === 'PUT' || method === 'PATCH')) return handleRevokeMember(request, env, userId, orgId, memberId);
-    if ((action === 'restore' || action === 'restore/vnext') && (method === 'PUT' || method === 'PATCH')) return handleRestoreMember(request, env, userId, orgId, memberId);
-    if (method === 'GET' && !action) return handleGetMember(request, env, userId, orgId, memberId);
-    if ((method === 'PUT' || method === 'POST') && !action) return handleEditMember(request, env, userId, orgId, memberId);
-    if (method === 'DELETE') return handleDeleteMember(request, env, userId, orgId, memberId);
-  }
+organizationRoutes.get(`${org}/collections/details`, (c) => handleListOrgCollectionDetails(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.get(`${org}/collections`, (c) => handleListOrgCollections(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.on('POST', [`${org}/collections`, `${org}/collections/details`], (c) => handleCreateOrgCollection(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+const collection = `${org}/collections/:collectionId{[a-f0-9-]+}`;
+organizationRoutes.on(['PUT', 'POST'], collection, (c) => handleUpdateOrgCollection(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('collectionId')));
+organizationRoutes.on('DELETE', [collection, `${collection}/delete`, `${collection}/details`, `${collection}/users`], (c) => handleDeleteOrgCollection(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('collectionId')));
+organizationRoutes.post(`${collection}/delete`, (c) => handleDeleteOrgCollection(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('collectionId')));
+organizationRoutes.get(`${collection}/details`, (c) => handleGetOrgCollectionDetails(c.env, c.get('userId'), c.req.param('orgId'), c.req.param('collectionId')));
+organizationRoutes.get(`${collection}/users`, (c) => handleListOrgCollectionUsers(c.env, c.get('userId'), c.req.param('orgId'), c.req.param('collectionId')));
 
-  if ((sub === '/groups' || sub === '/groups/details') && method === 'GET') return handleListGroups(env, userId, orgId);
-  if (sub === '/groups' && method === 'POST') return handleSaveGroup(request, env, userId, orgId);
-  const groupMatch = sub.match(/^\/groups\/([a-f0-9-]+)(?:\/delete)?$/i);
-  if (groupMatch) {
-    if (method === 'POST' || method === 'PUT') return handleSaveGroup(request, env, userId, orgId, groupMatch[1]);
-    if (method === 'DELETE') return handleDeleteGroup(request, env, userId, orgId, groupMatch[1]);
-  }
+organizationRoutes.put(`${org}/users/enable-secrets-manager`, (c) => handleEnableSecretsManager(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.get(`${org}/users`, (c) => handleListMembers(c.env, c.get('userId'), c.req.param('orgId'), c.req.query('includeGroups') === 'true'));
+organizationRoutes.get(`${org}/users/mini-details`, (c) => handleListMemberMiniDetails(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/users/invite`, (c) => handleInviteMembers(c.req.raw, c.env, c.get('currentUser'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/users/public-keys`, (c) => handleListMemberPublicKeys(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/users/confirm`, (c) => handleBulkConfirmMembers(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/users/reinvite`, (c) => handleBulkReinviteMembers(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.delete(`${org}/users`, (c) => handleBulkMemberAction(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), 'remove'));
+organizationRoutes.post(`${org}/users/remove`, (c) => handleBulkMemberAction(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), 'remove'));
+organizationRoutes.on(['PUT', 'PATCH'], `${org}/users/revoke`, (c) => handleBulkMemberAction(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), 'revoke'));
+organizationRoutes.on(['PUT', 'PATCH'], `${org}/users/restore`, (c) => handleBulkMemberAction(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), 'restore'));
+const member = `${org}/users/:memberId{[a-f0-9-]+}`;
+organizationRoutes.post(`${member}/accept`, (c) => handleAcceptInvite(c.req.raw, c.env, c.get('currentUser'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.post(`${member}/confirm`, (c) => handleConfirmMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.post(`${member}/reinvite`, (c) => handleReinviteMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.on(['PUT', 'PATCH'], `${member}/revoke`, (c) => handleRevokeMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.on(['PUT', 'PATCH'], [`${member}/restore`, `${member}/restore/vnext`], (c) => handleRestoreMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.get(member, (c) => handleGetMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.on(['PUT', 'POST'], member, (c) => handleEditMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
+organizationRoutes.on('DELETE', [member, `${member}/accept`, `${member}/confirm`, `${member}/reinvite`, `${member}/revoke`, `${member}/restore`, `${member}/restore/vnext`], (c) => handleDeleteMember(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('memberId')));
 
-  if (sub === '/policies' && method === 'GET') return handleListPolicies(env, userId, orgId);
-  const policyMatch = sub.match(/^\/policies\/(\d+)(?:\/vnext)?$/i);
-  if (policyMatch && (method === 'PUT' || method === 'GET')) {
-    if (method === 'PUT') return handlePutPolicy(request, env, userId, orgId, Number(policyMatch[1]));
-    return handleGetPolicy(env, userId, orgId, Number(policyMatch[1]));
-  }
+organizationRoutes.on('GET', [`${org}/groups`, `${org}/groups/details`], (c) => handleListGroups(c.env, c.get('userId'), c.req.param('orgId')));
+organizationRoutes.post(`${org}/groups`, (c) => handleSaveGroup(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));
+const group = [`${org}/groups/:groupId{[a-f0-9-]+}`, `${org}/groups/:groupId{[a-f0-9-]+}/delete`] as const;
+organizationRoutes.on(['POST', 'PUT'], [...group], (c) => handleSaveGroup(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('groupId')));
+organizationRoutes.on('DELETE', [...group], (c) => handleDeleteGroup(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), c.req.param('groupId')));
 
-  if ((sub === '/api-key' || sub === '/rotate-api-key') && method === 'POST') {
-    return handleOrgApiKey(request, env, userId, orgId, sub.includes('rotate'));
-  }
-  if ((sub === '/scim-key' || sub === '/rotate-scim-key') && method === 'POST') {
-    return handleRotateScimKey(env, userId, orgId);
-  }
+organizationRoutes.get(`${org}/policies`, (c) => handleListPolicies(c.env, c.get('userId'), c.req.param('orgId')));
+const policy = [`${org}/policies/:type{[0-9]+}`, `${org}/policies/:type{[0-9]+}/vnext`] as const;
+organizationRoutes.on('PUT', [...policy], (c) => handlePutPolicy(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), Number(c.req.param('type'))));
+organizationRoutes.on('GET', [...policy], (c) => handleGetPolicy(c.env, c.get('userId'), c.req.param('orgId'), Number(c.req.param('type'))));
 
-  return errorResponse('Not found', 404);
-}
+organizationRoutes.post(`${org}/api-key`, (c) => handleOrgApiKey(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), false));
+organizationRoutes.post(`${org}/rotate-api-key`, (c) => handleOrgApiKey(c.req.raw, c.env, c.get('userId'), c.req.param('orgId'), true));
+organizationRoutes.on('POST', [`${org}/scim-key`, `${org}/rotate-scim-key`], (c) => handleRotateScimKey(c.env, c.get('userId'), c.req.param('orgId')));
+
+// Anything else under a well-formed organization id is unknown rather than an empty list.
+organizationRoutes.on('ALL', [org, `${org}/*`], () => errorResponse('Not found', 404));
