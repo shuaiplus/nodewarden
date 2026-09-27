@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pbkdf2Sync } from 'node:crypto';
+import { and, eq, like } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { account, auditLogs, users, verification } from '../db/schema';
 import { AuthService } from '../services/auth';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword, verifyPassword } from '../services/auth-password';
@@ -33,13 +36,19 @@ async function setup(overrides: Partial<User> = {}, envOverrides: Partial<Env> =
   return { env, user, mail, requestCode, code, change };
 }
 
+async function credentialPassword(env: Env, userId: string) {
+  const row = await getOrm(env.DB).select({ password: account.password }).from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, 'credential'))).get();
+  return row?.password;
+}
+
 async function assertOriginal(f: Awaited<ReturnType<typeof setup>>) {
   const user = (await userRepo.getUserById(f.env.DB, f.user.id))!;
   assert.equal(user.email, f.user.email);
   assert.equal(user.masterPasswordHash, f.user.masterPasswordHash);
   assert.equal(user.key, f.user.key);
   assert.equal(user.securityStamp, f.user.securityStamp);
-  assert.equal(await f.env.DB.prepare("SELECT password FROM account WHERE user_id=? AND provider_id='credential'").bind(user.id).first('password'), f.user.masterPasswordHash);
+  assert.equal(await credentialPassword(f.env, user.id), f.user.masterPasswordHash);
 }
 
 test('email-token verifies the old password, conceals taken addresses, and uses one shared subject budget', async () => {
@@ -55,7 +64,7 @@ test('email-token verifies the old password, conceals taken addresses, and uses 
   assert.equal(f.mail.sent.length, 1);
   assert.equal(f.mail.sent[0].to, OLD_EMAIL);
   assert.match(String(f.mail.sent[0].text), /already used/);
-  assert.equal(await f.env.DB.prepare("SELECT COUNT(*) AS n FROM verification WHERE identifier LIKE 'otp:email-change:%'").first('n'), 0);
+  assert.equal(await getOrm(f.env.DB).$count(verification, like(verification.identifier, 'otp:email-change:%')), 0);
   for (let index = 0; index < 4; index++) {
     const free = await f.requestCode(`free${index}@${MAILABLE_DOMAIN}`);
     assert.equal(free.status, 200);
@@ -74,7 +83,7 @@ test('malformed key/KDF changes do not burn the code, which is bound to the norm
   assert.match(String(f.mail.sent[0].text), /confirm your new email/);
   for (const extra of [{ key: 'bad' }, { kdf: 1 }, { kdfIterations: '600000' }, { kdfMemory: 64 }]) {
     assert.equal((await f.change(extra)).status, 400);
-    assert.equal(await f.env.DB.prepare("SELECT COUNT(*) AS n FROM verification WHERE identifier LIKE 'otp:email-change:%'").first('n'), 1);
+    assert.equal(await getOrm(f.env.DB).$count(verification, like(verification.identifier, 'otp:email-change:%')), 1);
   }
   const wrongAddress = await f.change({ newEmail: `other@${MAILABLE_DOMAIN}` });
   assert.equal(wrongAddress.status, 400);
@@ -88,7 +97,7 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   const legacy = '$s$' + pbkdf2Sync(OLD_HASH, OLD_EMAIL, 100000, 32, 'sha256').toString('base64');
   const f = await setup({ masterPasswordHash: legacy, emailVerified: false });
   // Restored users may have no Better Auth credential row; the same batch must create it.
-  await f.env.DB.prepare('DELETE FROM account WHERE user_id=?').bind(f.user.id).run();
+  await getOrm(f.env.DB).delete(account).where(eq(account.userId, f.user.id));
   await sessionRepo.saveRefreshToken(f.env.DB, 'old-refresh', f.user.id);
   const oldJwt = await new AuthService(f.env).generateAccessToken(f.user);
   assert.equal((await f.requestCode()).status, 200);
@@ -102,7 +111,7 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   assert.ok(updated.masterPasswordHash.startsWith('$s2$'));
   assert.notEqual(updated.securityStamp, f.user.securityStamp);
   assert.equal(await verifyPassword(NEW_HASH, updated.masterPasswordHash, NEW_EMAIL), true);
-  assert.equal(await f.env.DB.prepare("SELECT password FROM account WHERE user_id=? AND provider_id='credential'").bind(f.user.id).first('password'), updated.masterPasswordHash);
+  assert.equal(await credentialPassword(f.env, f.user.id), updated.masterPasswordHash);
   assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'old-refresh'), null);
   assert.equal((await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } })).status, 401);
   for (const [username, password, status] of [[OLD_EMAIL, OLD_HASH, 400], [NEW_EMAIL, NEW_HASH, 200]] as const) {
@@ -118,7 +127,7 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   assert.equal(notice.length, 1);
   assert.equal(notice[0].to, OLD_EMAIL);
   assert.match(String(notice[0].text), /Time \(UTC\).*IP address/);
-  assert.equal(await f.env.DB.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action='user.email.change'").first('n'), 1);
+  assert.equal(await getOrm(f.env.DB).$count(auditLogs, eq(auditLogs.action, 'user.email.change')), 1);
 
   const separate = await setup({ twoFactorEmail: `factor@${MAILABLE_DOMAIN}`, apiKey: 'same-api-key', privateKey: 'same-private-key', publicKey: 'same-public-key' });
   await separate.requestCode();
@@ -150,11 +159,12 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     await f.requestCode();
     await sessionRepo.saveRefreshToken(f.env.DB, 'existing-session', f.user.id);
     const revision = await revisionRepo.getRevisionDate(f.env.DB, f.user.id);
+    // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the email-change batch
     if (kind === 'audit') await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT,'forced email audit failure'); END").run();
     const batch = f.env.DB.batch.bind(f.env.DB);
     f.env.DB.batch = async statements => {
       if (kind === 'duplicate') await seedUser(f.env, { email: NEW_EMAIL });
-      if (kind === 'stamp') await f.env.DB.prepare('UPDATE users SET security_stamp=? WHERE id=?').bind('newer-stamp', f.user.id).run();
+      if (kind === 'stamp') await getOrm(f.env.DB).update(users).set({ securityStamp: 'newer-stamp' }).where(eq(users.id, f.user.id));
       return batch(statements);
     };
     const response = await f.change();
@@ -168,7 +178,7 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     } else await assertOriginal(f);
     assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'existing-session'));
     assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.user.id), revision);
-    assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS n FROM audit_logs').first('n'), 0);
+    assert.equal(await getOrm(f.env.DB).$count(auditLogs), 0);
     await drainWaitUntil();
     assert.equal(f.mail.sent.filter(message => String(message.subject).includes('email address changed')).length, 0);
   }
@@ -220,7 +230,7 @@ test('an old password-change mirror cannot overwrite a later atomic email change
   const updated = (await userRepo.getUserById(f.env.DB, f.user.id))!;
   assert.equal(updated.email, NEW_EMAIL);
   assert.equal(await verifyPassword(NEW_HASH, updated.masterPasswordHash), true);
-  assert.equal(await f.env.DB.prepare("SELECT password FROM account WHERE user_id=? AND provider_id='credential'").bind(f.user.id).first('password'), updated.masterPasswordHash);
+  assert.equal(await credentialPassword(f.env, f.user.id), updated.masterPasswordHash);
   assert.ok(newRefresh);
   assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, newRefresh));
   await drainWaitUntil();
