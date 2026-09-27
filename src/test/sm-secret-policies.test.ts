@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { and, eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { orgGroupMembers, orgGroups, smSecretMembers, smSecrets, smSecretServiceAccounts, smServiceAccounts } from '../db/schema';
 import { handleUpdateSecret } from '../handlers/secrets-manager';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -29,9 +33,10 @@ test('projectless secrets are visible through direct member or group policies, a
   const { env, orgId, owner, a, b, aMember, bMember, account, request } = await setup();
   const groupId = crypto.randomUUID();
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(groupId, orgId, 'Readers', now, now),
-    env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(groupId, bMember.id),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Readers', createdAt: now, updatedAt: now }),
+    orm.insert(orgGroupMembers).values({ groupId, membershipId: bMember.id }),
   ]);
   const machine = await account();
   const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, { ...FIELDS, projectIds: [], accessPoliciesRequests: policies([policy(aMember.id)], [policy(groupId)], [policy(machine.id, true)]) });
@@ -49,7 +54,7 @@ test('projectless secrets are visible through direct member or group policies, a
   assert.deepEqual(body.userAccessPolicies.map((item: any) => [item.organizationUserId, item.read, item.write]), [[aMember.id, true, false]]);
   assert.deepEqual(body.groupAccessPolicies.map((item: any) => [item.groupId, item.read, item.write]), [[groupId, true, false]]);
   assert.deepEqual(body.serviceAccountAccessPolicies, [{ serviceAccountId: machine.id, serviceAccountName: ENCRYPTED_FIELD, read: true, write: true, object: 'serviceAccountProjectAccessPolicy' }]);
-  assert.equal((await env.DB.prepare('SELECT write_access FROM sm_secret_service_accounts WHERE secret_id = ? AND service_account_id = ?').bind(secret.id, machine.id).first<{ write_access: number }>())!.write_access, 1);
+  assert.equal((await orm.select({ writeAccess: smSecretServiceAccounts.writeAccess }).from(smSecretServiceAccounts).where(and(eq(smSecretServiceAccounts.secretId, secret.id), eq(smSecretServiceAccounts.serviceAccountId, machine.id))).get())!.writeAccess, 1);
 });
 
 test('secret policy omission preserves grants, all three present lists are required, and existing SA grants need only secret write', async () => {
@@ -78,8 +83,9 @@ test('secret policy omission preserves grants, all three present lists are requi
   assert.equal(changed.status, 200);
   const removed = await request(a.id, detailPath, 'PUT', { ...FIELDS, projectIds: [p.id], accessPoliciesRequests: policies([policy(bMember.id)]) });
   assert.equal(removed.status, 200);
-  assert.equal(await env.DB.prepare('SELECT 1 FROM sm_secret_service_accounts WHERE secret_id = ?').bind(secret.id).first(), null);
-  assert.ok(await env.DB.prepare('SELECT 1 FROM sm_secret_members WHERE secret_id = ? AND membership_id = ?').bind(secret.id, bMember.id).first());
+  const orm = getOrm(env.DB);
+  assert.equal(await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(), undefined);
+  assert.ok(await orm.select().from(smSecretMembers).where(and(eq(smSecretMembers.secretId, secret.id), eq(smSecretMembers.membershipId, bMember.id))).get());
 });
 
 test('secret-policy conflicts roll back the secret edit, project move, people changes, and SA revision', async () => {
@@ -90,13 +96,14 @@ test('secret-policy conflicts roll back the secret edit, project move, people ch
   const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, { ...FIELDS, projectIds: [p.id], accessPoliciesRequests: policies([policy(bMember.id)]) });
   const original = await smRepo.getSecret(env.DB, secret.id);
   const before = '2020-01-01T00:00:00.000Z';
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind(before, machine.id).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, machine.id));
   const batch = env.DB.batch.bind(env.DB);
   let raced = false;
   env.DB.batch = (async (statements: D1PreparedStatement[]) => {
     if (!raced && statements.some(statement => /INSERT\s+INTO\s+["`]?sm_secret_service_accounts/i.test((statement as unknown as { query: string }).query))) {
       raced = true;
-      await env.DB.prepare('INSERT INTO sm_secret_service_accounts (secret_id, service_account_id, write_access) VALUES (?, ?, 0)').bind(secret.id, machine.id).run();
+      await orm.insert(smSecretServiceAccounts).values({ secretId: secret.id, serviceAccountId: machine.id, writeAccess: 0 });
     }
     return batch(statements);
   }) as D1Database['batch'];
@@ -105,9 +112,9 @@ test('secret-policy conflicts roll back the secret edit, project move, people ch
   assert.equal(raced, true);
   assert.equal(response.status, 409);
   assert.deepEqual(await smRepo.getSecret(env.DB, secret.id), original);
-  const users = await env.DB.prepare('SELECT membership_id FROM sm_secret_members WHERE secret_id = ?').bind(secret.id).all<{ membership_id: string }>();
-  assert.deepEqual(users.results.map(row => row.membership_id), [bMember.id]);
-  assert.equal((await env.DB.prepare('SELECT write_access FROM sm_secret_service_accounts WHERE secret_id = ? AND service_account_id = ?').bind(secret.id, machine.id).first<{ write_access: number }>())!.write_access, 0);
+  const users = await orm.select({ membershipId: smSecretMembers.membershipId }).from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id));
+  assert.deepEqual(users.map(row => row.membershipId), [bMember.id]);
+  assert.equal((await orm.select({ writeAccess: smSecretServiceAccounts.writeAccess }).from(smSecretServiceAccounts).where(and(eq(smSecretServiceAccounts.secretId, secret.id), eq(smSecretServiceAccounts.serviceAccountId, machine.id))).get())!.writeAccess, 0);
   assert.equal((await smRepo.getServiceAccount(env.DB, machine.id))!.updatedAt, before);
 });
 
@@ -116,19 +123,20 @@ test('a stale secret snapshot aborts new and removed policies together with its 
   const machine = await account();
   const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, { ...FIELDS, accessPoliciesRequests: policies([policy(aMember.id)]) });
   const before = '2020-01-01T00:00:00.000Z';
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind(before, machine.id).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, machine.id));
   const put = new Request('https://vault.example.test', { method: 'PUT' });
   put.json = async () => {
-    await env.DB.prepare('UPDATE sm_secrets SET deleted_at = ? WHERE id = ?').bind(before, secret.id).run();
+    await orm.update(smSecrets).set({ deletedAt: before }).where(eq(smSecrets.id, secret.id));
     return { ...FIELDS, value: CHANGED, projectIds: [], accessPoliciesRequests: policies([policy(bMember.id, true)], [], [policy(machine.id)]) };
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), secret.id)).status, 404);
   const persisted = (await smRepo.getSecret(env.DB, secret.id))!;
   assert.equal(persisted.deletedAt, before);
   assert.equal(persisted.value, ENCRYPTED_FIELD);
-  const users = await env.DB.prepare('SELECT membership_id FROM sm_secret_members WHERE secret_id = ?').bind(secret.id).all<{ membership_id: string }>();
-  assert.deepEqual(users.results.map(row => row.membership_id), [aMember.id]);
-  assert.equal(await env.DB.prepare('SELECT 1 FROM sm_secret_service_accounts WHERE secret_id = ?').bind(secret.id).first(), null);
+  const users = await orm.select({ membershipId: smSecretMembers.membershipId }).from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id));
+  assert.deepEqual(users.map(row => row.membershipId), [aMember.id]);
+  assert.equal(await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(), undefined);
   assert.equal((await smRepo.getServiceAccount(env.DB, machine.id))!.updatedAt, before);
   assert.equal((await request(owner.id, `/api/secrets/${secret.id}/access-policies`)).status, 404);
 });
