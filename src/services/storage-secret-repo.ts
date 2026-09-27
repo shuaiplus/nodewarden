@@ -1,5 +1,5 @@
 import { diffPolicies, grantsFromRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
-import { and, asc, count, desc, eq, exists, inArray, isNull, isNotNull, lt, notExists, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, exists, inArray, isNull, isNotNull, lt, notExists, notInArray, or, type SQL } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
 
 import { abortUnlessChanged, chunkRows, columnCount, getOrm } from '../db/client';
@@ -20,6 +20,7 @@ import {
   smServiceAccounts,
   smServiceAccountMembers,
 } from '../db/schema';
+import { bound, jsonValues } from '../db/sql';
 
 export type SmProject = typeof smProjects.$inferSelect;
 
@@ -348,12 +349,12 @@ export async function updateSecret(db: D1Database, secret: SmSecret, previousPro
   const linkInOrg = and(eq(smProjects.id, smSecretProjects.projectId), eq(smProjects.orgId, smSecrets.orgId));
   const snapshotLinks = orm.select({ links: count() }).from(smSecretProjects).innerJoin(smProjects, linkInOrg).where(eq(smSecretProjects.secretId, smSecrets.id));
   const unexpectedLinks = orm.select({ projectId: smSecretProjects.projectId }).from(smSecretProjects).innerJoin(smProjects, linkInOrg)
-    .where(and(eq(smSecretProjects.secretId, smSecrets.id), notInArray(smSecretProjects.projectId, sql`(SELECT value FROM json_each(${JSON.stringify(previousProjectIds)}))`)));
+    .where(and(eq(smSecretProjects.secretId, smSecrets.id), notInArray(smSecretProjects.projectId, jsonValues(previousProjectIds))));
   const live = and(eq(smSecrets.id, secret.id), isNull(smSecrets.deletedAt));
   const relink = previousProjectIds.length !== secret.projectIds.length || previousProjectIds[0] !== secret.projectIds[0] ? [
     orm.delete(smSecretProjects).where(and(eq(smSecretProjects.secretId, secret.id), exists(orm.select({ id: smSecrets.id }).from(smSecrets).where(live)))),
     ...secret.projectIds.map(projectId => orm.insert(smSecretProjects)
-      .select(orm.select({ secretId: smSecrets.id, projectId: sql<string>`${projectId}`.as(smSecretProjects.projectId.name) }).from(smSecrets).where(live))),
+      .select(orm.select({ secretId: smSecrets.id, projectId: bound(projectId).as(smSecretProjects.projectId.name) }).from(smSecrets).where(live))),
   ] : [];
   try {
     await orm.batch([
@@ -459,7 +460,7 @@ export async function serviceAccountCounts(db: D1Database, account: SmServiceAcc
 // Upstream requires write on a machine account's people policies, so their tables have no permission
 // column and reads select a constant. D1 batch rows are objects, so the constant needs a column name:
 // a numeric one would enumerate first and shift the positional mapping.
-const MACHINE_ACCOUNT_PEOPLE_WRITE = sql<number>`1`.as('write_access');
+const MACHINE_ACCOUNT_PEOPLE_WRITE = bound(1).as('write_access');
 
 // People policy grant tables per target kind, with the columns statements filter on and the insert
 // row, since drizzle keys rows by property. `targets` scopes a member's grants to the org.
