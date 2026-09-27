@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { inspect } from 'node:util';
-import { DrizzleQueryError, eq } from 'drizzle-orm';
+import { DrizzleQueryError, eq, type SQL } from 'drizzle-orm';
 
 import { createTestEnv, seedUser } from '../test/support/env';
-import { abortUnlessChanged, getOrm, withoutQueryParams } from './client';
+import { abortUnlessChanged, getOrm, userRowMatches, withoutQueryParams } from './client';
 import { users } from './schema';
+import { SINGLE_ROW } from './sql';
 
 test('abortUnlessChanged rolls a batch back only when the guarded write matched no rows', async () => {
   const env = await createTestEnv();
@@ -16,6 +17,18 @@ test('abortUnlessChanged rolls a batch back only when the guarded write matched 
   assert.equal((await orm.select({ name: users.name }).from(users).where(eq(users.id, user.id)).get())?.name, user.name);
   await orm.batch([rename(user.id, 'Kept'), abortUnlessChanged(orm, 'stale')]);
   assert.equal((await orm.select({ name: users.name }).from(users).where(eq(users.id, user.id)).get())?.name, 'Kept');
+});
+
+test('userRowMatches holds only while the user row exists and meets every given condition', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const orm = getOrm(env.DB);
+  const holds = async (userId: string, ...conditions: (SQL | undefined)[]) =>
+    (await orm.select({ holds: userRowMatches(orm, userId, ...conditions).mapWith(Boolean) }).from(SINGLE_ROW).get())?.holds;
+  assert.equal(await holds(user.id), true);
+  assert.equal(await holds(user.id, eq(users.securityStamp, user.securityStamp), undefined), true);
+  assert.equal(await holds(user.id, eq(users.securityStamp, 'rotated-elsewhere')), false);
+  assert.equal(await holds('missing-user'), false);
 });
 
 test('withoutQueryParams keeps the statement and driver error but never the bound values', async () => {

@@ -1,7 +1,8 @@
-import { DrizzleQueryError, eq, getColumns, type Table } from 'drizzle-orm';
+import { DrizzleQueryError, and, eq, exists, getColumns, type SQL, type Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 
 import { relations } from './relations';
+import { users } from './schema';
 import { SINGLE_ROW, caseWhen, changes, json } from './sql';
 
 export type Orm = ReturnType<typeof drizzle<typeof relations, D1Database>>;
@@ -37,6 +38,12 @@ export function getOrm(d1: D1Database): Orm {
 // batch when that write matched no rows: json() of a non-JSON string raises, and D1 rolls the batch back.
 export function abortUnlessChanged(orm: Orm, reason: string) {
   return orm.select({ abort: caseWhen(eq(changes(), 0), json(reason)) }).from(SINGLE_ROW);
+}
+
+// EXISTS the user's row, narrowed by conditions (undefined ones are skipped). In a WHERE clause it guards a
+// write to another table against a concurrent change to that user, such as a rotated security stamp.
+export function userRowMatches(orm: Orm, userId: string, ...conditions: (SQL | undefined)[]) {
+  return exists(orm.select({ id: users.id }).from(users).where(and(eq(users.id, userId), ...conditions)));
 }
 
 // A failed drizzle query's message lists every bound value (password hashes, keys, one-time codes), so

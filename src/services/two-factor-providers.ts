@@ -1,6 +1,7 @@
-import { and, eq, sql } from 'drizzle-orm';
-import { getOrm } from '../db/client';
+import { and, eq, exists } from 'drizzle-orm';
+import { getOrm, userRowMatches, type Orm } from '../db/client';
 import { session, trustedTwoFactorDeviceTokens, users, webauthnCredentials } from '../db/schema';
+import { bound, coalesce, nullIf } from '../db/sql';
 import type { User } from '../types';
 import { isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode } from '../utils/recovery-code';
@@ -18,9 +19,15 @@ export function twoFactorProviders(user: ProviderUser, hasTwoFactorPasskey: bool
   return providers;
 }
 
+// Per users row of the enclosing query: whether that user enrolled a passkey as a second factor.
+export function hasTwoFactorPasskey(orm: Orm) {
+  return exists(orm.select({ id: webauthnCredentials.id }).from(webauthnCredentials)
+    .where(and(eq(webauthnCredentials.userId, users.id), eq(webauthnCredentials.purpose, 'twoFactor')))).mapWith(Boolean);
+}
+
 // Enrolment fills a missing recovery code but never replaces one the user may already have written down.
 export function existingOrNewRecoveryCode() {
-  return sql<string>`COALESCE(NULLIF(${users.totpRecoveryCode}, ''), ${createRecoveryCode()})`;
+  return coalesce<string>(nullIf(users.totpRecoveryCode, ''), createRecoveryCode());
 }
 
 export async function ensureTwoFactorRecoveryCode(db: D1Database, userId: string, securityStamp: string): Promise<string | null> {
@@ -38,7 +45,7 @@ export function twoFactorClearStatements(
 ) {
   const orm = getOrm(db);
   // Each dependent delete runs only if this batch installed its fresh stamp.
-  const cleared = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND security_stamp = ${securityStamp})`;
+  const cleared = userRowMatches(orm, userId, eq(users.securityStamp, securityStamp));
   return [
     orm.update(users).set({
       totpSecret: null, twoFactorEmail: null, totpRecoveryCode: recoveryCode,
@@ -47,7 +54,7 @@ export function twoFactorClearStatements(
     }).where(and(eq(users.id, userId), expected && and(
       eq(users.status, 'active'), eq(users.securityStamp, expected.securityStamp),
       // A snapshot without a recovery code binds NULL and so never matches, as the equality always has.
-      sql`${users.totpRecoveryCode} = ${expected.totpRecoveryCode}`,
+      eq(users.totpRecoveryCode, bound(expected.totpRecoveryCode)),
     ))),
     orm.delete(webauthnCredentials).where(and(eq(webauthnCredentials.userId, userId), eq(webauthnCredentials.purpose, 'twoFactor'), cleared)),
     orm.delete(trustedTwoFactorDeviceTokens).where(and(eq(trustedTwoFactorDeviceTokens.userId, userId), cleared)),

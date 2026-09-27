@@ -1,9 +1,10 @@
-import { and, asc, count, eq, isNull, notExists, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, notExists, type SQL } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
+import { SINGLE_ROW, bound, likeEscaped } from '../db/sql';
 import type { User } from '../types';
-import { twoFactorProviders } from './two-factor-providers';
+import { hasTwoFactorPasskey, twoFactorProviders } from './two-factor-providers';
 
 function mapUserRow(row: typeof users.$inferSelect): User {
   return {
@@ -95,10 +96,8 @@ export async function getAllUsers(db: D1Database): Promise<User[]> {
 }
 
 export async function getAllUsersWithTwoFactor(db: D1Database): Promise<Array<User & { hasTwoFactorPasskey: boolean }>> {
-  const rows = await getOrm(db).select({
-    user: users,
-    hasTwoFactorPasskey: sql<number>`EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id = users.id AND w.purpose = 'twoFactor')`.mapWith(Boolean),
-  }).from(users).orderBy(asc(users.createdAt));
+  const orm = getOrm(db);
+  const rows = await orm.select({ user: users, hasTwoFactorPasskey: hasTwoFactorPasskey(orm) }).from(users).orderBy(asc(users.createdAt));
   return rows.map(({ user, hasTwoFactorPasskey }) => ({ ...mapUserRow(user), hasTwoFactorPasskey }));
 }
 
@@ -123,9 +122,9 @@ export async function createUser(db: D1Database, user: User): Promise<void> {
 export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
   const orm = getOrm(db);
   const values = userValues(user);
-  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, sql`${value}`.as(key)])) as { [K in keyof typeof values]: SQL.Aliased };
+  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, bound(value).as(key)])) as { [K in keyof typeof values]: SQL.Aliased };
   const result = await orm.insert(users)
-    .select(orm.select(literals).from(sql`(SELECT 1)`).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
+    .select(orm.select(literals).from(SINGLE_ROW).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
@@ -148,13 +147,14 @@ export async function deleteUserById(db: D1Database, id: string): Promise<boolea
 
 export async function searchUsersByEmailPrefix(db: D1Database, prefix: string, offset: number, limit: number) {
   const pattern = prefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
-  const rows = await getOrm(db).select({
+  const orm = getOrm(db);
+  const rows = await orm.select({
     user: { id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role },
     providers: {
       totpSecret: users.totpSecret, twoFactorEmail: users.twoFactorEmail, yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2,
       yubikeyKey3: users.yubikeyKey3, yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
     },
-    hasTwoFactorPasskey: sql<number>`EXISTS (SELECT 1 FROM webauthn_credentials w WHERE w.user_id=users.id AND w.purpose='twoFactor')`.mapWith(Boolean),
-  }).from(users).where(sql`${users.email} LIKE ${pattern} ESCAPE '\\'`).orderBy(asc(users.email)).limit(limit + 1).offset(offset);
+    hasTwoFactorPasskey: hasTwoFactorPasskey(orm),
+  }).from(users).where(likeEscaped(users.email, pattern)).orderBy(asc(users.email)).limit(limit + 1).offset(offset);
   return rows.map(({ user, providers, hasTwoFactorPasskey }) => ({ ...user, twoFactor: twoFactorProviders(providers, hasTwoFactorPasskey).length > 0 }));
 }
