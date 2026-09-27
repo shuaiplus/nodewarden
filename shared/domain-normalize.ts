@@ -96,8 +96,9 @@ const MULTI_LABEL_PUBLIC_SUFFIXES = new Set([
   'onrender.com',
 ]);
 
-function extractHost(input: string): string {
-  let raw = input.trim().toLowerCase();
+export function normalizeEquivalentDomain(value: unknown): string {
+  // Reduce a URL or bare host (with optional credentials, port or wildcard) to its lowercase hostname.
+  let raw = String(value || '').trim().toLowerCase();
   if (!raw) return '';
   raw = raw.replace(/\\/g, '/');
 
@@ -114,28 +115,22 @@ function extractHost(input: string): string {
     if (colonIndex > -1 && raw.indexOf(':') === colonIndex) raw = raw.slice(0, colonIndex);
   }
 
-  return raw
+  // Only a dotted DNS name qualifies: no IPv4 literal, and every label a valid letter-digit-hyphen label.
+  const host = raw
     .replace(/^\*+\./, '')
     .replace(/^\.+/, '')
     .replace(/\.+$/, '');
-}
+  if (!host || host.length > 253 || !host.includes('.')) return '';
+  if (host.includes('..') || /[:/\s]/.test(host)) return '';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return '';
 
-function isValidHost(host: string): boolean {
-  if (!host || host.length > 253 || !host.includes('.')) return false;
-  if (host.includes('..') || /[:/\s]/.test(host)) return false;
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return false;
-  return host.split('.').every((label) => (
+  const labels = host.split('.');
+  if (!labels.every((label) => (
     label.length > 0
     && label.length <= 63
     && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
-  ));
-}
+  ))) return '';
 
-export function normalizeEquivalentDomain(value: unknown): string {
-  const host = extractHost(String(value || ''));
-  if (!isValidHost(host)) return '';
-
-  const labels = host.split('.');
   for (let index = 0; index < labels.length; index += 1) {
     const suffix = labels.slice(index).join('.');
     if (!MULTI_LABEL_PUBLIC_SUFFIXES.has(suffix)) continue;
