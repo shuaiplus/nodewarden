@@ -1,3 +1,4 @@
+import { verifyWithJwks } from 'hono/jwt';
 import type { Env } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -156,28 +157,11 @@ interface OidcDiscovery {
   jwks_uri?: string;
 }
 
-interface JsonWebKeyEntry extends JsonWebKey {
-  kid?: string;
-}
-
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
 const discoveryCache = new Map<string, { expiresAt: number; document: OidcDiscovery }>();
-const jwksCache = new Map<string, { expiresAt: number; keys: JsonWebKeyEntry[] }>();
 
-// Signature algorithms we accept on an id_token, with the WebCrypto parameters and
-// the JWK key type each one requires. `alg: none` and HMAC are excluded by omission.
-const ID_TOKEN_ALGORITHMS = {
-  RS256: {
-    kty: 'RSA',
-    importParams: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' } as SubtleCryptoImportKeyAlgorithm,
-    verifyParams: { name: 'RSASSA-PKCS1-v1_5' } as SubtleCryptoSignAlgorithm,
-  },
-  ES256: {
-    kty: 'EC',
-    importParams: { name: 'ECDSA', namedCurve: 'P-256' } as SubtleCryptoImportKeyAlgorithm,
-    verifyParams: { name: 'ECDSA', hash: 'SHA-256' } as SubtleCryptoSignAlgorithm,
-  },
-} as const;
+// Signature algorithms we accept on an id_token. `alg: none` and HMAC are excluded by omission.
+const ID_TOKEN_ALGORITHMS = ['RS256', 'ES256'] as const;
 
 const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
 
@@ -205,80 +189,21 @@ async function discoverTokenEndpoint(authority: string): Promise<string> {
   return endpoint || `${authority}/token`;
 }
 
-async function fetchJwks(authority: string): Promise<JsonWebKeyEntry[]> {
-  const cached = jwksCache.get(authority);
-  if (cached && cached.expiresAt > Date.now()) return cached.keys;
-  const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
-  try {
-    const response = await fetch(jwksUri || `${authority}/.well-known/jwks.json`);
-    if (!response.ok) return [];
-    const body = await response.json() as { keys?: JsonWebKeyEntry[] };
-    const keys = Array.isArray(body.keys) ? body.keys : [];
-    jwksCache.set(authority, { expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS, keys });
-    return keys;
-  } catch {
-    return [];
-  }
-}
-
-function selectJwk(keys: JsonWebKeyEntry[], kid: string, kty: string, alg: string): JsonWebKeyEntry | null {
-  const candidates = keys.filter((key) =>
-    key.kty === kty && (!key.use || key.use === 'sig') && (!key.alg || key.alg === alg));
-  return candidates.find((key) => !!kid && key.kid === kid) || candidates[0] || null;
-}
-
-// JWKS entries carry metadata (`use`, `key_ops`, `x5c`, …) that a verify-only
-// WebCrypto import rejects or ignores, so hand importKey just the key material.
-function toVerificationKey(jwk: JsonWebKeyEntry): JsonWebKey {
-  return jwk.kty === 'RSA'
-    ? { kty: 'RSA', n: jwk.n, e: jwk.e }
-    : { kty: 'EC', crv: jwk.crv, x: jwk.x, y: jwk.y };
-}
-
-function decodeJwtSegment(segment: string): Record<string, unknown> | null {
-  try {
-    const json = new TextDecoder().decode(base64UrlDecode(segment));
-    const parsed = JSON.parse(json) as unknown;
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-function base64UrlDecode(segment: string): Uint8Array {
-  const padded = segment.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(segment.length / 4) * 4, '=');
-  const binary = atob(padded);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
-}
-
 /** Verifies an id_token against the provider's JWKS and returns its claims, or null. */
 async function verifyIdToken(env: Env, authority: string, token: string): Promise<Record<string, unknown> | null> {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const [headerSegment, payloadSegment, signatureSegment] = parts;
-  const header = decodeJwtSegment(headerSegment);
-  const claims = decodeJwtSegment(payloadSegment);
-  if (!header || !claims) return null;
-
-  const alg = String(header.alg || '');
-  const algorithm = ID_TOKEN_ALGORITHMS[alg as keyof typeof ID_TOKEN_ALGORITHMS];
-  if (!algorithm) return null;
-  const jwk = selectJwk(await fetchJwks(authority), String(header.kid || ''), algorithm.kty, alg);
-  if (!jwk) return null;
-
+  const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
   try {
-    const key = await crypto.subtle.importKey('jwk', toVerificationKey(jwk), algorithm.importParams, false, ['verify']);
-    const signed = await crypto.subtle.verify(
-      algorithm.verifyParams,
-      key,
-      base64UrlDecode(signatureSegment),
-      new TextEncoder().encode(`${headerSegment}.${payloadSegment}`)
-    );
-    if (!signed) return null;
+    // hono checks the header alg against the allowlist before fetching the JWKS. Its
+    // time checks allow no clock skew, so hasValidIdTokenClaims owns exp/nbf instead.
+    const claims = await verifyWithJwks(token, {
+      jwks_uri: jwksUri || `${authority}/.well-known/jwks.json`,
+      allowedAlgorithms: ID_TOKEN_ALGORITHMS,
+      verification: { exp: false, nbf: false, iat: false },
+    });
+    return hasValidIdTokenClaims(env, authority, claims) ? claims : null;
   } catch {
     return null;
   }
-  return hasValidIdTokenClaims(env, authority, claims) ? claims : null;
 }
 
 function hasValidIdTokenClaims(env: Env, authority: string, claims: Record<string, unknown>): boolean {
