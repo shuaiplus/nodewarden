@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { smServiceAccounts } from '../db/schema';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -85,12 +89,13 @@ test('a newly enabled member starts empty, sees their created project, and canno
   assert.equal(counts.status, 200);
   assert.deepEqual(await counts.json(), { projects: 0, secrets: 0, serviceAccounts: 0, object: 'organizationCounts' });
   const revision = '2020-01-01T00:00:00.000Z';
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind(revision, account.id).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smServiceAccounts).set({ updatedAt: revision }).where(eq(smServiceAccounts.id, account.id));
   for (const [kind, id] of [['projects', hidden.id], ['secrets', hiddenSecret.id]]) {
     const denied = await authedFetch(env, { userId: a.id, path: `/api/${kind}/delete`, method: 'POST', body: [id] });
     assert.equal(denied.status, 200);
     assert.deepEqual((await denied.json() as any).data, [{ id, error: 'access denied', object: 'BulkDeleteResponseModel' }]);
-    assert.equal(await env.DB.prepare('SELECT updated_at FROM sm_service_accounts WHERE id = ?').bind(account.id).first('updated_at'), revision);
+    assert.equal((await orm.select({ updatedAt: smServiceAccounts.updatedAt }).from(smServiceAccounts).where(eq(smServiceAccounts.id, account.id)).get())?.updatedAt, revision);
   }
   const created = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   assert.equal((await authedFetch(env, { userId: a.id, path: `/api/projects/${created.id}`.toUpperCase() })).status, 200);
