@@ -99,12 +99,10 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
   const ownProject = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const deniedProject = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   assert.equal((await request(a.id, path, 'POST', { name: 'plaintext' })).status, 400);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the creator grant inside SQLite
   await env.DB.exec("CREATE TRIGGER fail_machine_grant BEFORE INSERT ON sm_service_account_members BEGIN SELECT RAISE(ABORT, 'test machine rollback'); END;");
   await assert.rejects(async () => handleCreateServiceAccount(new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }) }), env, await smUser(env, a), orgId), /test machine rollback/);
   assert.equal((await smRepo.listServiceAccounts(env.DB, orgId)).length, 0);
   assert.equal(await getOrm(env.DB).$count(smServiceAccountMembers), 0);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- dropping the fault-injection trigger is DDL with no drizzle builder
   await env.DB.exec('DROP TRIGGER fail_machine_grant;');
   const own = await account(a, [ownProject.id, deniedProject.id, crypto.randomUUID()]);
   const denied = await account(owner);

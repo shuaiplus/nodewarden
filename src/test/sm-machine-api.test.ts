@@ -146,7 +146,6 @@ test('machine authentication rejects signed tokens with malformed or mismatched 
 
 test('machine mutation failures use the API error response and roll back creator grants', async () => {
   const { env, orgId, request } = await setup();
-  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the creator grant inside SQLite
   await env.DB.exec("CREATE TRIGGER fail_machine_project BEFORE INSERT ON sm_service_account_projects BEGIN SELECT RAISE(ABORT, 'test machine project failure'); END;");
   const response = await request(`/api/organizations/${orgId}/projects`, 'POST', { name: ENCRYPTED_FIELD });
   assert.equal(response.status, 500);

@@ -189,13 +189,11 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   const get = await request(owner.id, '/api/secrets/get-by-ids', 'POST', { ids });
   assert.equal(get.status, 200);
   assert.equal((await get.json() as any).data.length, ids.length);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the last chunk inside SQLite
   await env.DB.exec(`CREATE TRIGGER fail_last_secret BEFORE UPDATE OF deleted_at ON sm_secrets WHEN NEW.id = '${ids.at(-1)}' BEGIN SELECT RAISE(ABORT, 'test bulk rollback'); END;`);
   const deleteRequest = () => new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify(ids) });
   await assert.rejects(async () => handleDeleteSecrets(deleteRequest(), env, await smUser(env, owner)), /test bulk rollback/);
   assert.equal(await orm.$count(smSecrets, isNotNull(smSecrets.deletedAt)), 0);
   assert.equal((await smRepo.getServiceAccount(env.DB, accountId))!.updatedAt, before);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- dropping the fault-injection trigger is DDL with no drizzle builder
   await env.DB.exec('DROP TRIGGER fail_last_secret;');
   const deleted = await request(owner.id, '/api/secrets/delete', 'POST', ids);
   assert.equal(deleted.status, 200);

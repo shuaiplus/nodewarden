@@ -104,7 +104,6 @@ test('SM records completed lifecycle actions and partial bulk successes without 
   assert.deepEqual(deleted.map(r => r.resourceId), [allowed.id]);
   const serialized = JSON.stringify(await orm.select().from(eventLog).where(eq(eventLog.organizationId, orgId)));
   assert.ok(!serialized.includes(ENCRYPTED_FIELD) && !serialized.includes(CHANGED));
-  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the delete inside SQLite
   await env.DB.exec(`CREATE TRIGGER fail_event_delete BEFORE UPDATE OF deleted_at ON sm_secrets WHEN OLD.id = '${secret.id}' BEGIN SELECT RAISE(ABORT, 'audit rollback check'); END;`);
   const beforeFailure = await count();
   assert.equal((await request('/api/secrets/delete', 'POST', [secret.id])).status, 500);

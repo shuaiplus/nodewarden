@@ -80,12 +80,10 @@ test('emptying 150 trash rows stays under the D1 cap and rolls back every chunk 
     orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, account.id)),
     ...ids.map(id => orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: now, updatedAt: now, deletedAt: now })),
   ]);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the last chunk inside SQLite
   await env.DB.exec(`CREATE TRIGGER fail_last_trash BEFORE DELETE ON sm_secrets WHEN OLD.id = '${ids.at(-1)}' BEGIN SELECT RAISE(ABORT, 'test trash rollback'); END;`);
   assert.equal((await request(owner.id, `${trashPath}/empty`, 'POST', ids)).status, 500);
   assert.equal(await orm.$count(smSecrets, eq(smSecrets.orgId, orgId)), ids.length);
   assert.equal((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt, before);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- dropping the fault-injection trigger is DDL with no drizzle builder
   await env.DB.exec('DROP TRIGGER fail_last_trash;');
   const response = await request(owner.id, `${trashPath}/empty`, 'POST', ids);
   assert.equal(response.status, 200);
