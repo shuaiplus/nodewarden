@@ -27,7 +27,7 @@ import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../services/audit-events';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
-import { html } from '../utils/html';
+import { html } from 'hono/html';
 import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm, verifyEmailForm, removeTwoFactorForm } from '../views/admin-portal';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as configRepo from '../services/storage-config-repo';

@@ -76,13 +76,14 @@ test('defuses addresses, domains and links in text that another user chose', () 
   assert.equal(sanitizeForEmail('https:x:////evil.éxample'), 'evil[dot]éxample');
 });
 
-import { html, toSafeUrl } from '../utils/html';
+import { html } from 'hono/html';
+import { toSafeUrl } from '../utils/html';
 import { sendMail, mailStatusCheck } from './mail';
 import { MAIL_TEMPLATES, renderMail, type MailContent, type TemplateName, type TemplateModel } from './mail-templates';
 import type { Env } from '../types';
 
 test('shared HTML escapes nested content and links reject unsafe protocols', () => {
-  assert.equal(html`<p>${'<>&"\''}${[html`<b>${'<x>'}</b>`]}</p>`.safeHtml, '<p>&lt;&gt;&amp;&quot;&#39;<b>&lt;x&gt;</b></p>');
+  assert.equal(String(html`<p>${'<>&"\''}${[html`<b>${'<x>'}</b>`]}</p>`), '<p>&lt;&gt;&amp;&quot;&#39;<b>&lt;x&gt;</b></p>');
   assert.throws(() => toSafeUrl(new URL('javascript:alert(1)')));
   assert.throws(() => toSafeUrl(new URL('http://external.io')));
   assert.equal(toSafeUrl(new URL('http://localhost:8787/admin')), 'http://localhost:8787/admin');

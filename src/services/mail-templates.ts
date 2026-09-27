@@ -1,4 +1,5 @@
-import { html, toSafeUrl, type SafeUrl } from '../utils/html';
+import { html } from 'hono/html';
+import { toSafeUrl, type SafeUrl } from '../utils/html';
 import { buildRegisterVerifyUrl, buildOrganizationInviteUrl, sanitizeForEmail, type OrganizationInvite } from './mail';
 import { ORG_INVITE_TTL_DAYS } from '../utils/jwt';
 
@@ -194,6 +195,7 @@ export function renderMail(content: MailContent): { subject: string; text: strin
   return {
     subject,
     text: [...content.paragraphs, ...(content.action ? [content.action.url] : []), footer].join('\n\n'),
-    html: html`<!doctype html><html><body>${content.paragraphs.map((paragraph) => html`<p>${paragraph}</p>`)}${content.action ? html`<p><a href="${content.action.url}">${content.action.label}</a></p>` : html``}<hr><p>${footer}</p></body></html>`.safeHtml,
+    // html only returns a Promise when a child is one, and mail markup interpolates none.
+    html: String(html`<!doctype html><html><body>${content.paragraphs.map((paragraph) => html`<p>${paragraph}</p>`)}${content.action ? html`<p><a href="${content.action.url}">${content.action.label}</a></p>` : html``}<hr><p>${footer}</p></body></html>`),
   };
 }
