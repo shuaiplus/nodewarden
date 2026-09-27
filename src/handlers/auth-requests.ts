@@ -1,8 +1,9 @@
-import { deviceTypeName } from '../utils/device';
 import type { AuthRequestRecord, AuthRequestType, Env } from '../types';
 import { generateUUID } from '../utils/uuid';
-import { readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
-import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
+import { z } from 'zod';
+import { deviceTypeName, readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
+import { isSerializedEncString } from '../utils/account-passkeys';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -15,22 +16,21 @@ const AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK = 0;
 const AUTH_REQUEST_TYPE_UNLOCK = 1;
 const AUTH_REQUEST_TYPE_ADMIN_APPROVAL = 2;
 
-function normalizeText(value: unknown, maxLength: number): string {
-  return String(value ?? '').trim().slice(0, maxLength);
-}
+// Fields are clipped to their column widths; a value of the wrong type reads as empty.
+const clippedText = (maxLength: number) => z.string().trim().transform((text) => text.slice(0, maxLength)).catch('');
 
-function isSerializedEncString(value: unknown): value is string {
-  const text = String(value || '').trim();
-  if (!text) return false;
-  const parts = text.split('.');
-  if (parts.length !== 2) return false;
-  const type = Number(parts[0]);
-  const bodyParts = parts[1].split('|');
-  if (type === 2) return bodyParts.length === 3 && bodyParts.every(Boolean);
-  if (type === 3 || type === 4) return bodyParts.length === 1 && !!bodyParts[0];
-  if (type === 5 || type === 6) return bodyParts.length === 2 && bodyParts.every(Boolean);
-  return false;
-}
+const AuthRequestCreateSchema = z.looseObject({
+  email: clippedText(320).transform((email) => email.toLowerCase()),
+  publicKey: clippedText(8192),
+  accessCode: clippedText(25),
+  type: z.coerce.number().catch(AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK),
+});
+
+const AuthRequestUpdateSchema = z.object({
+  requestApproved: z.coerce.boolean(),
+  key: clippedText(20000),
+  deviceIdentifier: clippedText(128),
+});
 
 function getClientIp(request: Request): string | null {
   return (
@@ -94,15 +94,6 @@ function listResponse<T>(data: T[]) {
   };
 }
 
-async function readJsonBody(request: Request): Promise<Record<string, any> | null> {
-  try {
-    const body = normalizeJsonKeys(await request.json());
-    return body && typeof body === 'object' ? body as Record<string, any> : null;
-  } catch {
-    return null;
-  }
-}
-
 async function enforceAuthRequestCreateRateLimit(
   request: Request,
   env: Env,
@@ -133,22 +124,10 @@ function isSupportedAuthRequestType(value: number): value is AuthRequestType {
 }
 
 export async function handleCreateAuthRequest(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
-
-  const email = normalizeText(body.email, 320).toLowerCase();
-  const publicKey = normalizeText(body.publicKey, 8192);
-  const accessCode = normalizeText(body.accessCode, 25);
-  const requestedType = Number(body.type);
-  const type = Number.isFinite(requestedType) ? requestedType : AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK;
-  const deviceInfo = readAuthRequestDeviceInfo(
-    {
-      deviceIdentifier: normalizeText(body.deviceIdentifier, 128),
-      deviceName: normalizeText(body.deviceName, 128),
-      deviceType: String(body.deviceType ?? ''),
-    },
-    request
-  );
+  const body = await parseBody(request, AuthRequestCreateSchema, 'Invalid request payload');
+  if (body instanceof Response) return body;
+  const { email, publicKey, accessCode, type } = body;
+  const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
   if (!email || !publicKey || !accessCode || !deviceInfo.deviceIdentifier) {
     return errorResponse('Email, public key, device identifier, and access code are required.', 400);
@@ -196,21 +175,11 @@ export async function handleCreateAdminAuthRequest(
   userId: string,
   userEmail: string
 ): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
-
-  const email = normalizeText(body.email, 320).toLowerCase() || userEmail.toLowerCase();
-  const publicKey = normalizeText(body.publicKey, 8192);
-  const accessCode = normalizeText(body.accessCode, 25);
-  const requestedType = Number(body.type);
-  const deviceInfo = readAuthRequestDeviceInfo(
-    {
-      deviceIdentifier: normalizeText(body.deviceIdentifier, 128),
-      deviceName: normalizeText(body.deviceName, 128),
-      deviceType: String(body.deviceType ?? ''),
-    },
-    request
-  );
+  const body = await parseBody(request, AuthRequestCreateSchema, 'Invalid request payload');
+  if (body instanceof Response) return body;
+  const { publicKey, accessCode, type: requestedType } = body;
+  const email = body.email || userEmail.toLowerCase();
+  const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
   if (requestedType !== AUTH_REQUEST_TYPE_ADMIN_APPROVAL) {
     return errorResponse('Invalid AuthRequestType. Expected AdminApproval.', 400);
@@ -263,7 +232,7 @@ export async function handleGetAuthRequest(request: Request, env: Env, userId: s
 
 export async function handleGetAuthRequestResponse(request: Request, env: Env, id: string): Promise<Response> {
   const url = new URL(request.url);
-  const accessCode = normalizeText(url.searchParams.get('code'), 25);
+  const accessCode = clippedText(25).parse(url.searchParams.get('code'));
   const authRequest = await authRequestRepo.getAuthRequestById(env.DB, id);
   if (!authRequest || authRequest.accessCode !== accessCode || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
@@ -287,8 +256,8 @@ export async function handleListPendingAuthRequests(request: Request, env: Env, 
 }
 
 export async function handleUpdateAuthRequest(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  const body = await parseBody(request, AuthRequestUpdateSchema, 'Invalid request payload');
+  if (body instanceof Response) return body;
 
   const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, id, userId);
   if (!authRequest || authRequest.userId !== userId || isAuthRequestExpired(authRequest)) {
@@ -304,10 +273,9 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
     return errorResponse('This request is no longer valid. Make sure to approve the most recent request.', 400);
   }
 
-  const approved = Boolean(body.requestApproved);
-  const key = normalizeText(body.key, 20000);
+  const { requestApproved: approved, key } = body;
   const responseDeviceIdentifier =
-    normalizeText(body.deviceIdentifier, 128) ||
+    body.deviceIdentifier ||
     readActingDeviceIdentifier(request) ||
     'web';
 
