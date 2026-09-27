@@ -1,8 +1,9 @@
 import { and, desc, eq, gte, isNull, lt, lte, or } from 'drizzle-orm';
+import { z } from 'zod';
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { events, organizationMemberships } from '../db/schema';
 import { SendAuthType, SendType, type Env, type Send } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { bodyIssues, errorResponse, jsonResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
 import { MembershipStatus } from './org-types';
 
@@ -152,24 +153,19 @@ function cursor(date: string, id: string): string {
   return btoa(JSON.stringify([date, id])).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+const queryDate = z.string().transform(date => Date.parse(date)).pipe(z.number({ error: 'Invalid date range.' })).optional();
+const DateRange = z.object({ start: queryDate, end: queryDate });
+// A cursor is the last row's canonical ISO date and id, exactly as cursor() wrote them.
+const Cursor = z.tuple([z.iso.datetime({ precision: 3 }), z.string().regex(/^[a-f0-9-]{36}$/i)]);
+
 export async function listEventsResponse(request: Request, env: Env, filter: EventFilter): Promise<Response> {
   const params = new URL(request.url).searchParams;
-  for (const name of ['start', 'end']) {
-    if (params.has(name) && !Number.isFinite(Date.parse(params.get(name)!))) return errorResponse('Invalid date range.', 400);
-  }
-  let start: number;
-  let end: number;
-  if (!params.has('start') || !params.has('end')) {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    start = today.getTime() - 30 * 86_400_000;
-    end = today.getTime() + 86_400_000 - 1;
-  } else {
-    start = Date.parse(params.get('start')!);
-    end = Date.parse(params.get('end')!);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return errorResponse('Invalid date range.', 400);
-    if (start > end) [start, end] = [end, start];
-  }
+  const range = DateRange.safeParse({ start: params.get('start') ?? undefined, end: params.get('end') ?? undefined });
+  if (!range.success) return errorResponse(range.error.issues[0].message, 400, {}, bodyIssues(range.error));
+  const today = new Date().setUTCHours(0, 0, 0, 0);
+  const [start, end] = range.data.start === undefined || range.data.end === undefined
+    ? [today - 30 * 86_400_000, today + 86_400_000 - 1]
+    : [Math.min(range.data.start, range.data.end), Math.max(range.data.start, range.data.end)];
   if (end - start > 367 * 86_400_000) return errorResponse('Range too large.', 400);
   const conditions = [gte(events.date, new Date(start).toISOString()), lte(events.date, new Date(end).toISOString())];
   if (filter.personalUserId) conditions.push(isNull(events.organizationId), eq(events.actingUserId, filter.personalUserId));
@@ -183,10 +179,8 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
   if (token) {
     try {
       if (token.length > 256 || !/^[A-Za-z0-9_-]+$/.test(token)) throw new Error();
-      const value: unknown = JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/')));
-      if (!Array.isArray(value) || value.length !== 2 || typeof value[0] !== 'string' || typeof value[1] !== 'string'
-        || !Number.isFinite(Date.parse(value[0])) || new Date(value[0]).toISOString() !== value[0] || !/^[a-f0-9-]{36}$/i.test(value[1])) throw new Error();
-      conditions.push(or(lt(events.date, value[0]), and(eq(events.date, value[0]), lt(events.id, value[1])))!);
+      const [date, id] = Cursor.parse(JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/'))));
+      conditions.push(or(lt(events.date, date), and(eq(events.date, date), lt(events.id, id)))!);
     } catch { return errorResponse('Invalid continuation token.', 400); }
   }
   const rows = await getOrm(env.DB).select().from(events).where(and(...conditions)).orderBy(desc(events.date), desc(events.id)).limit(51);

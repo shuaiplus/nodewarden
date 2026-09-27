@@ -1,8 +1,9 @@
 import { inArray } from 'drizzle-orm';
+import { z } from 'zod';
 import { chunkRows, getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
 import type { Env, User } from '../types';
-import { errorResponse, parseJsonBody } from '../utils/response';
+import { errorResponse, parseBody } from '../utils/response';
 import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import * as orgRepo from '../services/storage-org-repo';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
@@ -23,25 +24,18 @@ const CLIENT_ORGANIZATION_TYPES = new Set([1602, 1522, 1618, 1619]);
 const CLIENT_EVENT_UPLOAD_BATCH = 100;
 const EVENT_BATCHES_PER_MINUTE = LIMITS.rateLimit.apiRequestsPerMinute;
 const MAX_COLLECTED_EVENTS = CLIENT_EVENT_UPLOAD_BATCH * EVENT_BATCHES_PER_MINUTE;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-interface ClientEvent { type: number; date: string; cipherId: string | null; organizationId: string | null }
+const INVALID_EVENTS = { error: 'Invalid events.' };
+const optionalGuid = z.guid(INVALID_EVENTS).nullish().transform(id => id ?? null);
+const ClientEvents = z.array(z.object({
+  type: z.int(INVALID_EVENTS),
+  date: z.string(INVALID_EVENTS).refine(date => Number.isFinite(Date.parse(date)), INVALID_EVENTS).transform(date => new Date(date).toISOString()),
+  cipherId: optionalGuid,
+  organizationId: optionalGuid,
+}, INVALID_EVENTS), INVALID_EVENTS).min(1, INVALID_EVENTS).max(MAX_COLLECTED_EVENTS, INVALID_EVENTS);
 
 async function collectEvents(request: Request, env: Env, user: User): Promise<Response> {
-  const body = await parseJsonBody(request, 'Invalid events.');
-  if (body instanceof Response) return body;
-  if (!Array.isArray(body) || !body.length || body.length > MAX_COLLECTED_EVENTS) return errorResponse('Invalid events.', 400);
-  const input: ClientEvent[] = [];
-  for (const event of body) {
-    if (!event || typeof event !== 'object' || Array.isArray(event)) return errorResponse('Invalid events.', 400);
-    const type = event.type;
-    const date = event.date;
-    const cipherId = event.cipherId ?? null;
-    const organizationId = event.organizationId ?? null;
-    if (!Number.isInteger(type) || typeof date !== 'string' || !Number.isFinite(Date.parse(date))
-      || (cipherId !== null && (typeof cipherId !== 'string' || !UUID.test(cipherId)))
-      || (organizationId !== null && (typeof organizationId !== 'string' || !UUID.test(organizationId)))) return errorResponse('Invalid events.', 400);
-    input.push({ type, date: new Date(date).toISOString(), cipherId, organizationId });
-  }
+  const input = await parseBody(request, ClientEvents, INVALID_EVENTS.error);
+  if (input instanceof Response) return input;
   const memberships = (await orgRepo.listMembershipsByUser(env.DB, user.id)).filter(isActiveMember);
   // Charge before any lookup, counting the organization copies an export fans out to.
   const exportCopies = input.filter(event => event.type === EventType.UserClientExportedVault).length * memberships.length;
