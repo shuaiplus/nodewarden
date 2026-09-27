@@ -40,10 +40,6 @@ interface AccessDetails {
 
 const sorted = (selections: SelectionReadOnly[] | null) => [...(selections ?? [])].sort(byId);
 
-async function ownerMemberId(env: Env, owner: User, orgId: string): Promise<string> {
-  return (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-}
-
 function collectionsPath(orgId: string, suffix = ''): string {
   return `/api/organizations/${orgId}/collections${suffix}`;
 }
@@ -179,7 +175,7 @@ test('create and update answer with the saved collection access details', async 
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const ownerId = await ownerMemberId(env, owner, orgId);
+  const ownerId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
 
   const created = await postCollection(env, owner, orgId, { users: [manageAccess(ownerId)], groups: [] });
   assert.equal(created.status, 200);

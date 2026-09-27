@@ -11,13 +11,6 @@ import { ENCRYPTED_FIELD, seedSmOrg } from './support/sm';
 // One link more than a single INSERT holds for the narrower link table, so every writer chunks.
 const MANY_PROJECT_COUNT = Math.floor(D1_MAX_BOUND_PARAMETERS / columnCount(smSecretProjects)) + 1;
 
-async function seedProjects(env: Env, orgId: string, count: number): Promise<string[]> {
-  const now = new Date().toISOString();
-  const projects = Array.from({ length: count }, () => ({ id: crypto.randomUUID(), orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }));
-  await Promise.all(projects.map((project) => smRepo.saveProject(env.DB, project)));
-  return projects.map(({ id }) => id);
-}
-
 // Each writer replaces a target's project links. A secret save also rewrites the secret, and
 // clears its note, so a save that fails must leave the row as well as the links untouched.
 const LINK_WRITERS = [
@@ -48,7 +41,10 @@ const LINK_WRITERS = [
 async function seedLinkedTarget(seedTarget: typeof LINK_WRITERS[number][1]) {
   const env = await createTestEnv();
   const { orgId } = await seedSmOrg(env);
-  const [firstProjectId, ...manyProjectIds] = await seedProjects(env, orgId, MANY_PROJECT_COUNT + 1);
+  const now = new Date().toISOString();
+  const projects = Array.from({ length: MANY_PROJECT_COUNT + 1 }, () => ({ id: crypto.randomUUID(), orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }));
+  await Promise.all(projects.map((project) => smRepo.saveProject(env.DB, project)));
+  const [firstProjectId, ...manyProjectIds] = projects.map(({ id }) => id);
   return { target: await seedTarget(env, orgId, [firstProjectId]), manyProjectIds };
 }
 

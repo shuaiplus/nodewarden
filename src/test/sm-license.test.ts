@@ -51,21 +51,6 @@ async function assertNoSecretsManagerLimits(env: Env, orgId: string, owner: User
   }
 }
 
-// Where official web reads a member's Secrets Manager access: the member's own sync profile, and
-// the member list and edit-member dialog an owner opens.
-async function secretsManagerAccess(env: Env, orgId: string, owner: User, member: User) {
-  const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
-  const { profile } = await synced.json() as { profile: { organizations: ProfileOrganization[] } };
-  const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
-  const listEntry = (await listed.json() as { data: MemberAccess[] }).data.find((entry) => entry.userId === member.id);
-  const detail = await authedFetch(env, { path: `/api/organizations/${orgId}/users/${listEntry?.id}`, userId: owner.id });
-  return {
-    profile: profile.organizations.find((org) => org.id === orgId)?.accessSecretsManager,
-    list: listEntry?.accessSecretsManager,
-    detail: (await detail.json() as MemberAccess).accessSecretsManager,
-  };
-}
-
 // Official web's license dialogs post the file as the multipart `license` field; the self-hosted
 // create uploader adds the org key and encrypted default collection name.
 function smOffLicenseForm(fields: Record<string, string> = {}): FormData {
@@ -105,6 +90,17 @@ for (const { role, type, status, access } of MEMBER_ACCESS_CASES) {
     const env = await createTestEnv();
     const { orgId, owner } = await seedSmOrg(env);
     const { user: member } = await seedMember(env, orgId, { type, status });
-    assert.deepEqual(await secretsManagerAccess(env, orgId, owner, member), { profile: access, list: access, detail: access });
+    // Where official web reads a member's Secrets Manager access: the member's own sync profile, and
+    // the member list and edit-member dialog an owner opens.
+    const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
+    const { profile } = await synced.json() as { profile: { organizations: ProfileOrganization[] } };
+    const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
+    const listEntry = (await listed.json() as { data: MemberAccess[] }).data.find((entry) => entry.userId === member.id);
+    const detail = await authedFetch(env, { path: `/api/organizations/${orgId}/users/${listEntry?.id}`, userId: owner.id });
+    assert.deepEqual({
+      profile: profile.organizations.find((org) => org.id === orgId)?.accessSecretsManager,
+      list: listEntry?.accessSecretsManager,
+      detail: (await detail.json() as MemberAccess).accessSecretsManager,
+    }, { profile: access, list: access, detail: access });
   });
 }

@@ -81,12 +81,6 @@ function passwordLogin(env: Env, email: string, masterPasswordHash: string): Pro
   });
 }
 
-async function credentialPassword(env: Env, userId: string): Promise<unknown> {
-  return env.DB.prepare("SELECT password FROM account WHERE user_id = ? AND provider_id = 'credential'")
-    .bind(userId)
-    .first('password');
-}
-
 test('the web 2026.9 nested takeover body lets the grantor log in with the new password', async () => {
   const { env, grantor, grantee, takeoverPath, passwordPath } = await approvedTakeover();
 
@@ -101,7 +95,10 @@ test('the web 2026.9 nested takeover body lets the grantor log in with the new p
   assert.equal(login.status, 200);
   assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
   const stored = await userRepo.getUserById(env.DB, grantor.id);
-  assert.equal(await credentialPassword(env, grantor.id), stored?.masterPasswordHash);
+  const credentialPassword = await env.DB.prepare("SELECT password FROM account WHERE user_id = ? AND provider_id = 'credential'")
+    .bind(grantor.id)
+    .first('password');
+  assert.equal(credentialPassword, stored?.masterPasswordHash);
 });
 
 test('the legacy newMasterPasswordHash and key takeover body still works', async () => {
