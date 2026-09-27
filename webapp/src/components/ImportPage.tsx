@@ -15,11 +15,7 @@ import {
   parseImportPayloadBySource,
 } from '@/lib/import-formats';
 import { getFileAcceptBySource, IMPORT_SOURCES, type ImportSourceId } from '@/lib/import-format-sources';
-import {
-  type BitwardenJsonInput,
-  normalizeBitwardenEncryptedAccountImport,
-  normalizeBitwardenImport,
-} from '@/lib/import-formats-bitwarden';
+import { normalizeBitwardenEncryptedAccountImport, normalizeBitwardenImport } from '@/lib/import-formats-bitwarden';
 import { base64ToBytes, decryptStr, hkdfExpand, pbkdf2 } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
 import type { Folder } from '@/lib/types';
@@ -57,8 +53,9 @@ export interface ImportResultSummary {
   failedAttachments: Array<{ fileName: string; reason: string }>;
 }
 
-interface BitwardenPasswordProtectedInput extends BitwardenJsonInput {
+interface BitwardenPasswordProtectedInput {
   encrypted: true;
+  encKeyValidation_DO_NOT_EDIT?: string;
   passwordProtected: true;
   salt?: string;
   kdfIterations?: number;
@@ -404,11 +401,10 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
 
   async function runBitwardenJsonImport(parsed: unknown, attachments: ImportAttachmentFile[] = []): Promise<ImportResultSummary> {
     if (isRecord(parsed) && parsed.encrypted === true) {
-      const accountEncrypted = parsed as BitwardenJsonInput;
       if (!accountKeys?.encB64 || !accountKeys?.macB64) {
         throw new Error(t('txt_vault_key_unavailable'));
       }
-      const validation = String(accountEncrypted.encKeyValidation_DO_NOT_EDIT || '').trim();
+      const validation = String(parsed.encKeyValidation_DO_NOT_EDIT || '').trim();
       if (!validation) throw new Error(t('txt_invalid_encrypted_export'));
       const accountEncKey = base64ToBytes(accountKeys.encB64);
       const accountMacKey = base64ToBytes(accountKeys.macB64);
@@ -418,7 +414,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         throw new Error(t('txt_export_belongs_to_another_account'));
       }
       return onImportEncryptedRaw(
-        normalizeBitwardenEncryptedAccountImport(accountEncrypted),
+        normalizeBitwardenEncryptedAccountImport(parsed),
         {
           folderMode,
           targetFolderId: folderMode === 'target' ? targetFolderId || null : null,
