@@ -1,8 +1,9 @@
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 
 import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
 import { verification } from '../db/schema';
+import { jsonExtract } from '../db/sql';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { toSafeUrl } from '../utils/html';
 import { RateLimitService } from './ratelimit';
@@ -106,7 +107,7 @@ export async function redeemAdminLogin(env: Env, token: string, browser: string)
     .where(and(
       eq(verification.id, `admin-login:${await sha256Base64Url(token)}`),
       gt(verification.expiresAt, Date.now()),
-      sql`json_extract(${verification.value}, '$.browser') = ${await sha256Base64Url(browser)}`,
+      eq(jsonExtract(verification.value, '$.browser'), await sha256Base64Url(browser)),
     ))
     .returning({ value: verification.value }).get();
   return row ? JSON.parse(row.value) : null;
