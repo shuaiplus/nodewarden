@@ -67,11 +67,6 @@ const MEMBER_ORG_KEY_PATTERN = /^[3-6]\./;
 // any row is written.
 const MAX_INVITE_EMAILS = 20;
 const MAX_INVITE_EMAIL_LENGTH = 256;
-// Upstream EmailValidation.IsValidEmail: a local part of printable ASCII other than "@", one "@",
-// and a dotted host that ends in a letter.
-
-// Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
-
 // Clients post null or '' for unset text, so a blank value falls back to the stored one.
 const optionalText = z.string().trim().nullish();
 const requiredText = (message: string) => z.string({ error: message }).trim().min(1, { error: message });

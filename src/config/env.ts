@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { LIMITS } from './limits';
 import type { Env } from '../types';
 
+// Upstream EmailValidation.IsValidEmail: a local part of printable ASCII other than "@", one "@",
+// and a dotted host that ends in a letter.
 export const EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@,;<>"()\[\]\\]+\.\p{L}+$/u;
 
 export function normalizeOrigin(value: unknown): string | null {

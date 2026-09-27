@@ -23,6 +23,7 @@ export type MailConfig = { kind: 'disabled' } | { kind: 'misconfigured' }
   | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string }; sendsPerHour: number; newDeviceNotices: boolean; newDeviceVerification: boolean };
 export type MailOutcome = { kind: 'sent' } | { kind: 'disabled' } | { kind: 'misconfigured' }
   | { kind: 'throttled'; retryAfterSeconds: number } | { kind: 'failed'; code: string };
+// Failures carry the status and headers every caller answers with, such as Retry-After on a 429.
 export type StatusCheck = { ok: true } | { ok: false; status: number; message: string; headers: Record<string, string> };
 
 export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FROM_NAME' | 'EMAIL_SENDS_PER_HOUR' | 'DISABLE_EMAIL_NEW_DEVICE' | 'ENABLE_NEW_DEVICE_VERIFICATION'>): MailConfig {
