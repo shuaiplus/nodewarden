@@ -21,20 +21,6 @@ export async function hashedTokenKey(token: string): Promise<string> {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function mapSession(row: typeof session.$inferSelect): RefreshTokenRecord {
-  return {
-    userId: row.userId,
-    expiresAt: row.expiresAt,
-    deviceIdentifier: row.deviceIdentifier ?? null,
-    deviceSessionStamp: row.deviceSessionStamp ?? null,
-    securityStamp: row.securityStamp ?? null,
-    createdAt: row.createdAt ?? null,
-    lastUsedAt: row.lastUsedAt ?? null,
-    absoluteExpiresAt: row.absoluteExpiresAt ?? null,
-    clientType: row.clientType ?? null,
-  };
-}
-
 export async function saveRefreshToken(
   db: D1Database,
   token: string,
@@ -93,7 +79,7 @@ export async function getRefreshTokenRecord(db: D1Database, token: string): Prom
     await deleteRefreshToken(db, token);
     return null;
   }
-  return mapSession(row);
+  return row;
 }
 
 export async function getRefreshTokenUserId(db: D1Database, token: string): Promise<string | null> {

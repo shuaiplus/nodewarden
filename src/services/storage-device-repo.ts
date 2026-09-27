@@ -9,23 +9,9 @@ import { getUser } from './storage-user-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Rows predating device session stamps carry null; callers compare the stamp as a string.
 function mapDeviceRow(row: typeof devices.$inferSelect): Device {
-  return {
-    userId: row.userId,
-    deviceIdentifier: row.deviceIdentifier,
-    name: row.name,
-    deviceNote: row.deviceNote ?? null,
-    type: row.type,
-    sessionStamp: row.sessionStamp || '',
-    encryptedUserKey: row.encryptedUserKey ?? null,
-    encryptedPublicKey: row.encryptedPublicKey ?? null,
-    encryptedPrivateKey: row.encryptedPrivateKey ?? null,
-    pushUuid: row.pushUuid ?? null,
-    pushToken: row.pushToken ?? null,
-    lastSeenAt: row.lastSeenAt ?? null,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
+  return { ...row, sessionStamp: row.sessionStamp ?? '' };
 }
 
 function deviceKey(userId: string, deviceIdentifier: string) {

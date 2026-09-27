@@ -5,23 +5,13 @@ import { ciphers, folders } from '../db/schema';
 import type { Folder } from '../types';
 import { updateRevisionDate } from './storage-revision-repo';
 
-function mapFolderRow(row: typeof folders.$inferSelect): Folder {
-  return {
-    id: row.id,
-    userId: row.userId,
-    name: row.name,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 function folderClearedData() {
   return sql`json_remove(${ciphers.data}, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')`;
 }
 
 export async function getFolder(db: D1Database, id: string): Promise<Folder | null> {
   const [row] = await getOrm(db).select().from(folders).where(eq(folders.id, id)).limit(1);
-  return row ? mapFolderRow(row) : null;
+  return row ?? null;
 }
 
 export async function getFolderForUser(db: D1Database, id: string, userId: string): Promise<Folder | null> {
@@ -30,7 +20,7 @@ export async function getFolderForUser(db: D1Database, id: string, userId: strin
     .from(folders)
     .where(and(eq(folders.id, id), eq(folders.userId, userId)))
     .limit(1);
-  return row ? mapFolderRow(row) : null;
+  return row ?? null;
 }
 
 export async function saveFolder(db: D1Database, folder: Folder): Promise<void> {
@@ -111,7 +101,7 @@ export async function getAllFolders(db: D1Database, userId: string): Promise<Fol
     .from(folders)
     .where(eq(folders.userId, userId))
     .orderBy(desc(folders.updatedAt));
-  return rows.map(mapFolderRow);
+  return rows;
 }
 
 export async function getFoldersPage(db: D1Database, userId: string, limit: number, offset: number): Promise<Folder[]> {
@@ -122,5 +112,5 @@ export async function getFoldersPage(db: D1Database, userId: string, limit: numb
     .orderBy(desc(folders.updatedAt))
     .limit(limit)
     .offset(offset);
-  return rows.map(mapFolderRow);
+  return rows;
 }

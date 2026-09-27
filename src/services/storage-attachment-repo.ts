@@ -7,20 +7,9 @@ import { getCipher, saveCipher } from './storage-cipher-repo';
 import { updateRevisionDate } from './storage-revision-repo';
 
 
-function mapAttachment(row: typeof attachments.$inferSelect): Attachment {
-  return {
-    id: row.id,
-    cipherId: row.cipherId,
-    fileName: row.fileName,
-    size: row.size,
-    sizeName: row.sizeName,
-    key: row.key,
-  };
-}
-
 export async function getAttachment(db: D1Database, id: string): Promise<Attachment | null> {
   const [row] = await getOrm(db).select().from(attachments).where(eq(attachments.id, id)).limit(1);
-  return row ? mapAttachment(row) : null;
+  return row ?? null;
 }
 
 export async function getAttachmentForUser(db: D1Database, id: string, userId: string): Promise<Attachment | null> {
@@ -37,7 +26,7 @@ export async function getAttachmentForUser(db: D1Database, id: string, userId: s
     .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
     .where(and(eq(attachments.id, id), eq(ciphers.userId, userId), isNull(ciphers.organizationId)))
     .limit(1);
-  return row ? mapAttachment(row) : null;
+  return row ?? null;
 }
 
 // The upsert as an unexecuted statement, so callers can batch it with related writes.
@@ -101,7 +90,7 @@ export async function bulkDeleteAttachmentsByIds(db: D1Database, attachmentIds: 
 
 export async function getAttachmentsByCipher(db: D1Database, cipherId: string): Promise<Attachment[]> {
   const rows = await getOrm(db).select().from(attachments).where(eq(attachments.cipherId, cipherId));
-  return rows.map(mapAttachment);
+  return rows;
 }
 
 export async function getAttachmentsByCipherIds(db: D1Database, cipherIds: string[]): Promise<Map<string, Attachment[]>> {
@@ -111,7 +100,7 @@ export async function getAttachmentsByCipherIds(db: D1Database, cipherIds: strin
   const orm = getOrm(db);
   for (const chunk of chunkRows(uniqueCipherIds, 1)) {
     const rows = await orm.select().from(attachments).where(inArray(attachments.cipherId, chunk));
-    for (const item of rows.map(mapAttachment)) {
+    for (const item of rows) {
       const list = grouped.get(item.cipherId);
       if (list) list.push(item);
       else grouped.set(item.cipherId, [item]);
@@ -136,7 +125,7 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
     .innerJoin(ciphers, eq(ciphers.id, attachments.cipherId))
     .where(and(eq(ciphers.userId, userId), isNull(ciphers.organizationId)));
 
-  for (const item of rows.map(mapAttachment)) {
+  for (const item of rows) {
     const list = grouped.get(item.cipherId);
     if (list) list.push(item);
     else grouped.set(item.cipherId, [item]);

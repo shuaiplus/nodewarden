@@ -1,3 +1,4 @@
+import type { collections, organizations } from '../db/schema';
 export const MembershipStatus = {
   Revoked: -1,
   Invited: 0,
@@ -58,16 +59,7 @@ export const EMPTY_PERMISSIONS: OrgPermissions = {
   manageScim: false,
 };
 
-export interface OrganizationRecord {
-  id: string;
-  name: string;
-  billingEmail: string;
-  identifier: string | null;
-  privateKey: string | null;
-  publicKey: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+export type OrganizationRecord = typeof organizations.$inferSelect;
 
 export interface MembershipRecord {
   id: string;
@@ -86,14 +78,7 @@ export interface MembershipRecord {
   updatedAt: string;
 }
 
-export interface CollectionRecord {
-  id: string;
-  orgId: string;
-  name: string;
-  externalId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
+export type CollectionRecord = typeof collections.$inferSelect;
 
 export interface CollectionAccess {
   collectionId: string;

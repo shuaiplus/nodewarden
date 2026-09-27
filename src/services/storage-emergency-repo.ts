@@ -16,37 +16,7 @@ export const EmergencyAccessStatus = {
   RecoveryApproved: 4,
 } as const;
 
-export interface EmergencyAccessRecord {
-  id: string;
-  grantorId: string;
-  granteeId: string | null;
-  email: string | null;
-  keyEncrypted: string | null;
-  type: number;
-  status: number;
-  waitTimeDays: number;
-  recoveryInitiatedAt: string | null;
-  lastNotificationAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-function mapRow(row: typeof emergencyAccess.$inferSelect): EmergencyAccessRecord {
-  return {
-    id: row.id,
-    grantorId: row.grantorId,
-    granteeId: row.granteeId,
-    email: row.email,
-    keyEncrypted: row.keyEncrypted,
-    type: row.type,
-    status: row.status,
-    waitTimeDays: row.waitTimeDays,
-    recoveryInitiatedAt: row.recoveryInitiatedAt,
-    lastNotificationAt: row.lastNotificationAt,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
+export type EmergencyAccessRecord = typeof emergencyAccess.$inferSelect;
 
 export async function saveEmergencyAccess(db: D1Database, record: EmergencyAccessRecord): Promise<void> {
   await getOrm(db)
@@ -71,7 +41,7 @@ export async function saveEmergencyAccess(db: D1Database, record: EmergencyAcces
 
 export async function getEmergencyAccess(db: D1Database, id: string): Promise<EmergencyAccessRecord | null> {
   const [row] = await getOrm(db).select().from(emergencyAccess).where(eq(emergencyAccess.id, id)).limit(1);
-  return row ? mapRow(row) : null;
+  return row ?? null;
 }
 
 export async function listByGrantor(db: D1Database, grantorId: string): Promise<EmergencyAccessRecord[]> {
@@ -80,7 +50,7 @@ export async function listByGrantor(db: D1Database, grantorId: string): Promise<
     .from(emergencyAccess)
     .where(eq(emergencyAccess.grantorId, grantorId))
     .orderBy(desc(emergencyAccess.createdAt));
-  return rows.map(mapRow);
+  return rows;
 }
 
 export async function listByGrantee(db: D1Database, granteeId: string): Promise<EmergencyAccessRecord[]> {
@@ -89,7 +59,7 @@ export async function listByGrantee(db: D1Database, granteeId: string): Promise<
     .from(emergencyAccess)
     .where(eq(emergencyAccess.granteeId, granteeId))
     .orderBy(desc(emergencyAccess.createdAt));
-  return rows.map(mapRow);
+  return rows;
 }
 
 export async function findInvite(db: D1Database, grantorId: string, email: string): Promise<EmergencyAccessRecord | null> {
@@ -101,7 +71,7 @@ export async function findInvite(db: D1Database, grantorId: string, email: strin
       sql`lower(${emergencyAccess.email}) = lower(${email})`,
     ))
     .limit(1);
-  return row ? mapRow(row) : null;
+  return row ?? null;
 }
 
 export async function deleteEmergencyAccess(db: D1Database, id: string): Promise<void> {
@@ -116,7 +86,7 @@ export async function listRecoveryReady(db: D1Database, nowIso: string): Promise
       eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
       sql`${emergencyAccess.recoveryInitiatedAt} is not null`,
     ));
-  return rows.map(mapRow).filter((record) => {
+  return rows.filter((record) => {
     if (!record.recoveryInitiatedAt) return false;
     const started = Date.parse(record.recoveryInitiatedAt);
     if (!Number.isFinite(started)) return false;
@@ -129,7 +99,7 @@ export async function listRecoveryToNotify(db: D1Database, nowIso: string): Prom
     .where(eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated));
   const now = Date.parse(nowIso);
   const day = 86_400_000;
-  return rows.map(mapRow).filter((record) => {
+  return rows.filter((record) => {
     if (!record.recoveryInitiatedAt || !record.lastNotificationAt) return false;
     const deadline = Date.parse(record.recoveryInitiatedAt) + record.waitTimeDays * day;
     return now >= deadline - day && now < deadline && now >= Date.parse(record.lastNotificationAt) + day;

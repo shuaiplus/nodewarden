@@ -1,3 +1,5 @@
+import type { attachments, folders } from '../db/schema';
+
 // Environment bindings
 export interface Env {
   DB: D1Database;
@@ -46,14 +48,7 @@ export type UserRole = 'admin' | 'user';
 export type UserStatus = 'active' | 'banned';
 
 // Attachment model
-export interface Attachment {
-  id: string;
-  cipherId: string;
-  fileName: string;  // encrypted
-  size: number;
-  sizeName: string;
-  key: string | null;  // encrypted attachment key
-}
+export type Attachment = typeof attachments.$inferSelect;
 
 // User model
 export interface User {
@@ -300,13 +295,7 @@ export interface Cipher {
 }
 
 // Folder model
-export interface Folder {
-  id: string;
-  userId: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type Folder = typeof folders.$inferSelect;
 
 export interface Device {
   userId: string;

@@ -37,19 +37,6 @@ import {
   parsePermissions,
 } from './org-types';
 
-function mapOrganization(row: typeof organizations.$inferSelect): OrganizationRecord {
-  return {
-    id: row.id,
-    name: row.name,
-    billingEmail: row.billingEmail,
-    identifier: row.identifier,
-    privateKey: row.privateKey,
-    publicKey: row.publicKey,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 function mapMembership(row: typeof organizationMemberships.$inferSelect): MembershipRecord {
   return {
     id: row.id,
@@ -63,17 +50,6 @@ function mapMembership(row: typeof organizationMemberships.$inferSelect): Member
     type: Number(row.type),
     permissions: parsePermissions(row.permissions),
     resetPasswordKey: row.resetPasswordKey,
-    externalId: row.externalId,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function mapCollection(row: typeof collections.$inferSelect): CollectionRecord {
-  return {
-    id: row.id,
-    orgId: row.orgId,
-    name: row.name,
     externalId: row.externalId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -151,7 +127,7 @@ export async function updateOrganization(db: D1Database, org: OrganizationRecord
 
 export async function getOrganization(db: D1Database, id: string): Promise<OrganizationRecord | null> {
   const [row] = await getOrm(db).select().from(organizations).where(eq(organizations.id, id)).limit(1);
-  return row ? mapOrganization(row) : null;
+  return row ?? null;
 }
 
 export function deleteOrganization(db: D1Database, id: string) {
@@ -351,7 +327,7 @@ export async function saveCollection(db: D1Database, collection: CollectionRecor
 
 export async function getCollection(db: D1Database, id: string): Promise<CollectionRecord | null> {
   const [row] = await getOrm(db).select().from(collections).where(eq(collections.id, id)).limit(1);
-  return row ? mapCollection(row) : null;
+  return row ?? null;
 }
 
 export async function listCollectionsByOrg(db: D1Database, orgId: string): Promise<CollectionRecord[]> {
@@ -360,7 +336,7 @@ export async function listCollectionsByOrg(db: D1Database, orgId: string): Promi
     .from(collections)
     .where(eq(collections.orgId, orgId))
     .orderBy(asc(collections.createdAt));
-  return rows.map(mapCollection);
+  return rows;
 }
 
 export async function deleteCollection(db: D1Database, id: string): Promise<void> {
@@ -1135,7 +1111,7 @@ export async function searchOrganizations(db: D1Database, options: { nameContain
     sql`${organizations.name} LIKE ${pattern} ESCAPE '\\'`,
     options.memberEmail ? sql`EXISTS (SELECT 1 FROM organization_memberships m LEFT JOIN users u ON u.id=m.user_id WHERE m.org_id=${organizations.id} AND (lower(m.email)=lower(${options.memberEmail}) OR lower(u.email)=lower(${options.memberEmail})))` : undefined,
   )).orderBy(asc(organizations.createdAt), asc(organizations.id)).limit(options.limit + 1).offset(options.offset);
-  return rows.map(mapOrganization);
+  return rows;
 }
 
 export async function getOrganizationPortalStats(db: D1Database, orgId: string): Promise<Array<[string, number]>> {

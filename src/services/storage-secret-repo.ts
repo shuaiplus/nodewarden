@@ -13,13 +13,7 @@ import {
   smServiceAccountMembers,
 } from '../db/schema';
 
-export interface SmProject {
-  id: string;
-  orgId: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type SmProject = typeof smProjects.$inferSelect;
 
 export interface SmSecret {
   id: string;
@@ -33,13 +27,7 @@ export interface SmSecret {
   deletedAt: string | null;
 }
 
-export interface SmServiceAccount {
-  id: string;
-  orgId: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type SmServiceAccount = typeof smServiceAccounts.$inferSelect;
 
 export interface SmAccessToken {
   id: string;
@@ -53,16 +41,6 @@ export interface SmAccessToken {
   createdAt: string;
 }
 
-function mapProject(row: typeof smProjects.$inferSelect): SmProject {
-  return {
-    id: row.id,
-    orgId: row.orgId,
-    name: row.name,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
 function mapSecret(row: typeof smSecrets.$inferSelect, projectIds: string[]): SmSecret {
   return {
     id: row.id,
@@ -74,16 +52,6 @@ function mapSecret(row: typeof smSecrets.$inferSelect, projectIds: string[]): Sm
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
-  };
-}
-
-function mapServiceAccount(row: typeof smServiceAccounts.$inferSelect): SmServiceAccount {
-  return {
-    id: row.id,
-    orgId: row.orgId,
-    name: row.name,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
   };
 }
 
@@ -137,12 +105,12 @@ export async function listProjects(db: D1Database, orgId: string): Promise<SmPro
     .from(smProjects)
     .where(eq(smProjects.orgId, orgId))
     .orderBy(asc(smProjects.name));
-  return rows.map(mapProject);
+  return rows;
 }
 
 export async function getProject(db: D1Database, id: string): Promise<SmProject | null> {
   const [row] = await getOrm(db).select().from(smProjects).where(eq(smProjects.id, id)).limit(1);
-  return row ? mapProject(row) : null;
+  return row ?? null;
 }
 
 // The subset of `ids` that are projects of `orgId`. Each chunk also binds the org id.
@@ -224,12 +192,12 @@ export async function listServiceAccounts(db: D1Database, orgId: string): Promis
     .from(smServiceAccounts)
     .where(eq(smServiceAccounts.orgId, orgId))
     .orderBy(asc(smServiceAccounts.name));
-  return rows.map(mapServiceAccount);
+  return rows;
 }
 
 export async function getServiceAccount(db: D1Database, id: string): Promise<SmServiceAccount | null> {
   const [row] = await getOrm(db).select().from(smServiceAccounts).where(eq(smServiceAccounts.id, id)).limit(1);
-  return row ? mapServiceAccount(row) : null;
+  return row ?? null;
 }
 
 // One batch with chunked inserts, so a grant that fails leaves the previous grants in place.
@@ -340,7 +308,7 @@ export async function projectCounts(db: D1Database, project: SmProject, access: 
 
 export async function getProjectsByIds(db: D1Database, ids: string[]): Promise<SmProject[]> {
   const orm = getOrm(db);
-  return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smProjects).where(inArray(smProjects.id, chunk))))).flat().map(mapProject);
+  return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smProjects).where(inArray(smProjects.id, chunk))))).flat();
 }
 
 export async function updateProject(db: D1Database, project: SmProject): Promise<boolean> {
@@ -417,7 +385,7 @@ export async function updateServiceAccount(db: D1Database, account: SmServiceAcc
 
 export async function getServiceAccountsByIds(db: D1Database, ids: string[]): Promise<SmServiceAccount[]> {
   const orm = getOrm(db);
-  return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smServiceAccounts).where(inArray(smServiceAccounts.id, chunk))))).flat().map(mapServiceAccount);
+  return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smServiceAccounts).where(inArray(smServiceAccounts.id, chunk))))).flat();
 }
 
 export async function deleteServiceAccounts(db: D1Database, orgId: string, ids: string[]): Promise<string[]> {
