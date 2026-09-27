@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
+import { rateLimitBuckets } from '../db/schema';
 import { getClientIdentifier } from '../services/ratelimit';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
@@ -37,5 +39,5 @@ test('the authenticated API budget is spent on its rate limiting binding, never 
   const limited = await profile();
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get('Retry-After'), String(LIMITS.rateLimit.apiWindowSeconds));
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS buckets FROM rate_limit_buckets').first('buckets'), 0);
+  assert.equal(await getOrm(env.DB).$count(rateLimitBuckets), 0);
 });
