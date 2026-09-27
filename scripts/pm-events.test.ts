@@ -170,7 +170,7 @@ test('membership events cover actual transitions and preserve the affected accou
   const departing = await seedMember(env, org.id);
   assert.equal((await call('POST', `${base}/leave`, undefined, departing.user)).status, 200);
   const saved = await rows(env, org.id);
-  assert.deepEqual(saved.filter(row => row.resourceId === target.member.id).map(row => row.type).sort(), [1501, 1502, 1504, 1504, 1511, 1512, 1503].sort());
+  assert.deepEqual(saved.filter(row => row.resourceId === target.member.id).map(row => row.type).sort(), [1501, 1502, 1502, 1504, 1511, 1512, 1503].sort());
   assert.ok(saved.filter(row => row.resourceId === target.member.id).every(row => row.userId === target.user.id && row.actingUserId === owner.id));
   assert.deepEqual(saved.filter(row => row.resourceId === invite.id).map(row => row.type), [1500]);
   assert.equal(saved.find(row => row.type === 1516)?.userId, departing.user.id);

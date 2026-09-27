@@ -1018,10 +1018,11 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   const memberChanged = previousType !== membership.type || previousPermissions !== JSON.stringify(membership.permissions)
     || previousAccessAll !== membership.accessAll || (collections !== undefined && accessEventState(previousCollections) !== accessEventState(collections));
   const groupsChanged = groupIds !== undefined && JSON.stringify([...new Set(previousGroups)].sort()) !== JSON.stringify([...new Set(groupIds)].sort());
-  await recordEvents(env, request, { userId }, [
-    ...(memberChanged ? [EventType.OrganizationUserUpdated] : []),
-    ...(groupsChanged ? [EventType.OrganizationUserUpdatedGroups] : []),
-  ].map(type => ({ type, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId })));
+  // Upstream's member update logs OrganizationUser_Updated even when only groups change; it reserves
+  // OrganizationUser_UpdatedGroups for the group endpoints.
+  if (memberChanged || groupsChanged) {
+    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserUpdated, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
+  }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
