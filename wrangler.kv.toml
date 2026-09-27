@@ -38,14 +38,6 @@ class_name = "NotificationsHub"
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
 
-[[durable_objects.bindings]]
-name = "ORGANIZATION_HUB"
-class_name = "OrganizationHub"
-
-[[durable_objects.bindings]]
-name = "DIRECTORY_SYNC"
-class_name = "DirectorySyncActor"
-
 [[kv_namespaces]]
 binding = "ATTACHMENTS_KV"
 
@@ -60,3 +52,37 @@ new_sqlite_classes = [ "BackupTransferRunner" ]
 [[migrations]]
 tag = "v3-organization-directory"
 new_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]
+
+[[migrations]]
+tag = "v4-drop-organization-directory"
+deleted_classes = [ "OrganizationHub", "DirectorySyncActor" ]
+
+[[ratelimits]]
+name = "RATE_LIMIT_30_PER_MINUTE"
+namespace_id = "7301"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "RATE_LIMIT_60_PER_MINUTE"
+namespace_id = "7302"
+simple = { limit = 60, period = 60 }
+
+[[ratelimits]]
+name = "RATE_LIMIT_120_PER_MINUTE"
+namespace_id = "7303"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "RATE_LIMIT_200_PER_MINUTE"
+namespace_id = "7304"
+simple = { limit = 200, period = 60 }
+
+[[ratelimits]]
+name = "RATE_LIMIT_300_PER_MINUTE"
+namespace_id = "7305"
+simple = { limit = 300, period = 60 }
+
+[[ratelimits]]
+name = "RATE_LIMIT_500_PER_MINUTE"
+namespace_id = "7306"
+simple = { limit = 500, period = 60 }
