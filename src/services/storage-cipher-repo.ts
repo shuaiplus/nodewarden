@@ -389,6 +389,5 @@ export async function bulkUnarchiveCiphers(
 }
 
 export async function countPersonalCiphers(db: D1Database, userId: string): Promise<number> {
-  const row = await db.prepare('SELECT count(*) AS total FROM ciphers WHERE user_id=? AND organization_id IS NULL').bind(userId).first<{ total: number }>();
-  return row?.total ?? 0;
+  return getOrm(db).$count(ciphers, and(eq(ciphers.userId, userId), isNull(ciphers.organizationId)));
 }
