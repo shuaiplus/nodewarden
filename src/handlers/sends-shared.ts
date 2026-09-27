@@ -2,7 +2,7 @@ import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
 import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { LIMITS } from '../config/limits';
+import { readEnvConfig } from '../config/env';
 import { bytesToBase64Url } from '../utils/passkey';
 import * as sendRepo from '../services/storage-send-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -218,11 +218,8 @@ export function hasEmailAuth(send: Send): boolean {
 }
 
 export function getSafeJwtSecret(env: Env): { ok: true; secret: string } | { ok: false; response: Response } {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength) {
-    return { ok: false, response: errorResponse('Server configuration error', 500) };
-  }
-  return { ok: true, secret };
+  const jwtSecret = readEnvConfig(env).JWT_SECRET;
+  return jwtSecret.kind === 'safe' ? { ok: true, secret: jwtSecret.secret } : { ok: false, response: errorResponse('Server configuration error', 500) };
 }
 
 export function extractBearerToken(request: Request): string | null {

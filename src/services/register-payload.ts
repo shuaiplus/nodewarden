@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { readEnvConfig } from '../config/env';
+import type { Env } from '../types';
 
 // Registration reads each value from its first usable alias: anything but a non-blank string or a
 // number reads as absent, and a nested section that is not an object falls back to the flat fields.
@@ -72,6 +74,6 @@ export const RegisterSchema = z.object({
   .refine(({ kdf, kdfMemory }) => kdf !== 1 || !below(kdfMemory, 16), 'Argon2id memory must be at least 16 MiB')
   .refine(({ kdf, kdfParallelism }) => kdf !== 1 || !below(kdfParallelism, 1), 'Argon2id parallelism must be at least 1');
 
-export function isOpenRegistrationEnabled(env: { ALLOW_OPEN_REGISTRATION?: string }): boolean {
-  return String(env.ALLOW_OPEN_REGISTRATION || '').trim() === '1';
+export function isOpenRegistrationEnabled(env: Partial<Env>): boolean {
+  return readEnvConfig(env).ALLOW_OPEN_REGISTRATION;
 }

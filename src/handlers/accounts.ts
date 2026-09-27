@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { bodyIssues, errorResponse, jsonResponse, parseBody, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
+import { jwtSecretUnsafeReason } from '../router-public';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
 import { Secret } from 'otpauth';
 import { findMatchingTotpCounter, isTotpEnabled, normalizeTotpSecret } from '../utils/totp';
@@ -69,13 +70,6 @@ function looksLikeEncString(value: string): boolean {
   const parts = payload.split('|');
   // Bitwarden encrypted payloads should have at least IV + ciphertext.
   return parts.length >= 2;
-}
-
-function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret) return 'missing';
-  if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
-  return null;
 }
 
 async function verifyUserSecret(

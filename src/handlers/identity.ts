@@ -1,5 +1,6 @@
 import { EventType, recordUserEvent } from '../services/events';
 import { z } from 'zod';
+import { readEnvConfig } from '../config/env';
 import { markEmailVerified } from '../services/vault-admin-role';
 import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
@@ -533,7 +534,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       }
       if (!user) user = await userRepo.getUser(env.DB, claims.email);
       if (!user) {
-        if (String(env.SSO_SIGNUPS || '1') === '0') {
+        if (!readEnvConfig(env).SSO_SIGNUPS) {
           return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
         }
         return identityErrorResponse('Create a local account first, then link SSO', 'invalid_grant', 400);
