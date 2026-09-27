@@ -1,5 +1,5 @@
 import { readMailConfig } from '../services/mail';
-import type { Env, ProfileResponse, User } from '../types';
+import type { Env, ProfileOrganizationResponse, ProfileResponse, User } from '../types';
 import { buildAccountKeys } from './user-decryption';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { isYubiKeyEnabled } from './yubico-otp';
@@ -10,7 +10,7 @@ import { profileOrganizationResponse } from './org-response';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 
 export async function buildProfileResponse(user: User, env?: Env): Promise<ProfileResponse> {
-  const organizations: any[] = [];
+  const organizations: ProfileOrganizationResponse[] = [];
   if (env?.DB) {
     const memberships = await orgRepo.listMembershipsByUser(env.DB, user.id);
     for (const member of memberships) {

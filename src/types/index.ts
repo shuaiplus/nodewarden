@@ -1,5 +1,8 @@
 import type { attachments, folders } from '../db/schema';
 import type { BackupTransferRunner } from '../durable/backup-transfer-runner';
+import type { parseStoredSendData } from '../handlers/sends-shared';
+import type { policyResponse, profileOrganizationResponse } from '../utils/org-response';
+import type { buildAccountKeys } from '../utils/user-decryption';
 
 // Environment bindings
 export interface Env {
@@ -473,8 +476,8 @@ export interface SendResponse {
   type: number;
   name: string;
   notes: string | null;
-  text: any | null;
-  file: any | null;
+  text: ReturnType<typeof parseStoredSendData> | null;
+  file: ReturnType<typeof parseStoredSendData> | null;
   key: string;
   maxAccessCount: number | null;
   accessCount: number;
@@ -571,8 +574,8 @@ export interface TokenResponse {
     object?: string;
   } | null;
   ApiUseKeyConnector?: boolean;
-  AccountKeys?: any | null;
-  accountKeys?: any | null;
+  AccountKeys?: ReturnType<typeof buildAccountKeys>;
+  accountKeys?: ReturnType<typeof buildAccountKeys>;
   UserDecryptionOptions: UserDecryptionOptions;
   userDecryptionOptions?: UserDecryptionOptions;
   VaultKeys?: {
@@ -595,18 +598,34 @@ export interface ProfileResponse {
   yubikeyEnabled?: boolean;
   key: string;
   privateKey: string | null;
-  accountKeys: any | null;
+  accountKeys: ReturnType<typeof buildAccountKeys>;
   securityStamp: string;
-  organizations: any[];
-  organizationsNew?: any[];
-  providers: any[];
-  providerOrganizations: any[];
+  organizations: ProfileOrganizationResponse[];
+  organizationsNew?: ProfileOrganizationResponse[];
+  // NodeWarden hosts no Bitwarden providers, so both lists are always empty.
+  providers: never[];
+  providerOrganizations: never[];
   forcePasswordReset: boolean;
   avatarColor: string | null;
   creationDate: string;
   verifyDevices: boolean;
   role?: UserRole;
   status?: UserStatus;
+  object: string;
+}
+
+export type ProfileOrganizationResponse = ReturnType<typeof profileOrganizationResponse>;
+
+// A collection the syncing member can see, carrying that member's access flags.
+export interface CollectionDetailsResponse {
+  id: string;
+  organizationId: string;
+  name: string;
+  externalId: string | null;
+  type: number;
+  readOnly: boolean;
+  hidePasswords: boolean;
+  manage: boolean;
   object: string;
 }
 
@@ -662,11 +681,11 @@ export interface FolderResponse {
 export interface SyncResponse {
   profile: ProfileResponse;
   folders: FolderResponse[];
-  collections: any[];
+  collections: CollectionDetailsResponse[];
   ciphers: CipherResponse[];
-  domains: any;
-  policies: any[];
-  policiesNew?: any[];
+  domains: DomainRulesResponse | null;
+  policies: ReturnType<typeof policyResponse>[];
+  policiesNew?: ReturnType<typeof policyResponse>[];
   sends: SendResponse[];
   UserDecryption?: {
     MasterPasswordUnlock: MasterPasswordUnlock | null;
