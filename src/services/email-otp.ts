@@ -1,4 +1,8 @@
+import { and, eq, gt, gte, lt } from 'drizzle-orm';
+
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
+import { verification } from '../db/schema';
 import type { Env } from '../types';
 import { hmacSha256Base64Url } from '../utils/jwt';
 import type { MailOutcome } from './mail';
@@ -47,10 +51,10 @@ export async function issueEmailOtp(
   const id = await emailOtpId(env, target);
   const value = await hmacSha256Base64Url(env.JWT_SECRET, `${id}\n${target.binding}\n${code}`);
   const now = Date.now();
-  await env.DB.prepare(`INSERT INTO verification (id, identifier, value, expires_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at, updated_at = excluded.updated_at`)
-    .bind(id, id, value, now + LIMITS.auth.emailOtpTtlSeconds * 1000, now, now).run();
+  const expiresAt = now + LIMITS.auth.emailOtpTtlSeconds * 1000;
+  await getOrm(env.DB).insert(verification)
+    .values({ id, identifier: id, value, expiresAt, createdAt: now, updatedAt: now })
+    .onConflictDoUpdate({ target: verification.id, set: { value, expiresAt, updatedAt: now } });
   return outcome;
 }
 
@@ -63,11 +67,13 @@ export async function redeemEmailOtp(env: Env, target: EmailOtpTarget, input: st
   );
   if (!budget.allowed) return false;
   const value = await hmacSha256Base64Url(env.JWT_SECRET, `${id}\n${target.binding}\n${code}`);
-  return !!await env.DB.prepare('DELETE FROM verification WHERE id = ? AND expires_at > ? AND value = ? RETURNING id')
-    .bind(id, Date.now(), value).first();
+  return !!await getOrm(env.DB).delete(verification)
+    .where(and(eq(verification.id, id), gt(verification.expiresAt, Date.now()), eq(verification.value, value)))
+    .returning({ id: verification.id }).get();
 }
 
 export async function purgeExpiredEmailOtps(env: Env): Promise<void> {
-  await env.DB.prepare("DELETE FROM verification WHERE identifier >= 'otp:' AND identifier < 'otp;' AND expires_at < ?")
-    .bind(Date.now()).run();
+  // ';' follows ':' in byte order, so the range is exactly the 'otp:' prefix and stays on the identifier index.
+  await getOrm(env.DB).delete(verification)
+    .where(and(gte(verification.identifier, 'otp:'), lt(verification.identifier, 'otp;'), lt(verification.expiresAt, Date.now())));
 }
