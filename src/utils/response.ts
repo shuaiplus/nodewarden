@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { isAdminPortalPath } from '../web-vault-visibility';
 import type { Env } from '../types';
 import {
@@ -190,6 +191,25 @@ export async function parseJsonBody<T extends object = Record<string, unknown>>(
   } catch {
     return errorResponse(message, 400);
   }
+}
+
+// Zod request bodies. parseBody reads JSON through parseJsonBody, so the schema sees camelCase keys even
+// when official clients send PascalCase, and resolves to the schema output or to a 400 Response callers
+// return as is: `message` (default 'Invalid JSON') for unparseable JSON, otherwise the first issue's
+// message with validationErrors from bodyIssues, every issue message grouped under its dotted path ('' for
+// the body itself) as in upstream ErrorResponseModel.
+export function bodyIssues(error: z.ZodError): Record<string, string[]> {
+  return Object.fromEntries(error.issues.reduce((byPath, { path, message }) => {
+    const field = path.join('.');
+    return byPath.set(field, [...(byPath.get(field) ?? []), message]);
+  }, new Map<string, string[]>()));
+}
+
+export async function parseBody<S extends z.ZodType>(request: Request, schema: S, message?: string): Promise<z.output<S> | Response> {
+  const body = await parseJsonBody(request, message);
+  if (body instanceof Response) return body;
+  const result = schema.safeParse(body);
+  return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
 }
 
 // Reads the first present key from a normalized body, telling absent apart from null.
