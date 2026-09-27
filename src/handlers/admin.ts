@@ -210,7 +210,7 @@ export async function handleAdminCreateInvite(
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInHours * 60 * 60 * 1000);
   const invite: Invite = {
-    code: Array.from(crypto.getRandomValues(new Uint8Array(20))).map(byte => byte.toString(16).padStart(2, '0')).join(''),
+    code: crypto.getRandomValues(new Uint8Array(20)).toHex(),
     createdBy: actorUser.id,
     usedBy: null,
     expiresAt: expiresAt.toISOString(),

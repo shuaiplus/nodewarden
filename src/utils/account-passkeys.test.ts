@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { normalizeAuthenticationResponse, normalizeRegistrationResponse, normalizeTransports } from './account-passkeys';
+import {
+  normalizeAuthenticationResponse, normalizeRegistrationResponse, normalizeTransports, userHandleToUserId, userIdToWebAuthnUserId,
+} from './account-passkeys';
 import { normalizeJsonKeys } from './response';
 
 // Mirrors the deviceResponse built by putTwoFactorWebAuthn in the official web vault
@@ -49,4 +51,15 @@ test('reads padded base64 assertions as base64url, requires client data and keep
   });
   assert.deepEqual(normalizeTransports(['usb', 'carrier-pigeon', 'hybrid']), ['usb', 'hybrid']);
   assert.equal(normalizeTransports('usb'), null);
+});
+
+test('GUID user ids round-trip through the .NET Guid byte layout; other ids stay text', () => {
+  const userId = '00112233-4455-6677-8899-aabbccddeeff';
+  const handle = userIdToWebAuthnUserId(userId.toUpperCase());
+  // .NET writes the first three groups little-endian.
+  assert.equal(handle.toHex(), '33221100554477668899aabbccddeeff');
+  assert.equal(userHandleToUserId(handle.toBase64({ alphabet: 'base64url', omitPadding: true })), userId);
+  const legacy = userIdToWebAuthnUserId('legacy-user');
+  assert.equal(userHandleToUserId(legacy.toBase64({ alphabet: 'base64url', omitPadding: true })), 'legacy-user');
+  assert.equal(userHandleToUserId(undefined), null);
 });

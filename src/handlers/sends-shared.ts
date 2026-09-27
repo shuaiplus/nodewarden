@@ -21,7 +21,7 @@ function base64UrlDecode(input: string): Uint8Array | null {
 export function fromAccessId(accessId: string): string | null {
   const bytes = base64UrlDecode(accessId);
   if (!bytes || bytes.length !== 16) return null;
-  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const hex = bytes.toHex();
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),

@@ -38,10 +38,6 @@ function textBytes(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-function hexByte(value: number): string {
-  return value.toString(16).padStart(2, '0');
-}
-
 // Official clients send WebAuthn buffers as base64 or base64url, padded or not; @simplewebauthn reads
 // unpadded base64url.
 const webAuthnBase64 = z.string().min(1).transform((value) => value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''));
@@ -152,18 +148,9 @@ export function userIdToWebAuthnUserId(userId: string): Uint8Array {
     /^([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12})$/i
   );
   if (!match) return textBytes(userId);
-  const hex = match.slice(1).join('');
-  const bytes = new Uint8Array(16);
-  for (let byteIndex = 0; byteIndex < 16; byteIndex += 1) {
-    bytes[byteIndex] = Number.parseInt(hex.slice(byteIndex * 2, byteIndex * 2 + 2), 16);
-  }
-  return new Uint8Array([
-    bytes[3], bytes[2], bytes[1], bytes[0],
-    bytes[5], bytes[4],
-    bytes[7], bytes[6],
-    bytes[8], bytes[9],
-    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-  ]);
+  // .NET Guid bytes: the first three groups little-endian.
+  const [first, second, third, fourth, fifth] = match.slice(1).map((group) => Uint8Array.fromHex(group));
+  return Uint8Array.from([...first.reverse(), ...second.reverse(), ...third.reverse(), ...fourth, ...fifth]);
 }
 
 export function userHandleToUserId(userHandle: string | undefined): string | null {
@@ -172,13 +159,8 @@ export function userHandleToUserId(userHandle: string | undefined): string | nul
     const bytes = decodeBase64Url(userHandle);
     // Sixteen bytes are a .NET Guid (first three groups little-endian); anything else is the id as text.
     if (bytes.length === 16) {
-      return [
-        [bytes[3], bytes[2], bytes[1], bytes[0]].map(hexByte).join(''),
-        [bytes[5], bytes[4]].map(hexByte).join(''),
-        [bytes[7], bytes[6]].map(hexByte).join(''),
-        [bytes[8], bytes[9]].map(hexByte).join(''),
-        Array.from(bytes.slice(10, 16)).map(hexByte).join(''),
-      ].join('-');
+      return [bytes.slice(0, 4).reverse(), bytes.slice(4, 6).reverse(), bytes.slice(6, 8).reverse(), bytes.slice(8, 10), bytes.slice(10)]
+        .map((group) => group.toHex()).join('-');
     }
     const decoded = new TextDecoder().decode(bytes);
     return decoded.trim() || null;
