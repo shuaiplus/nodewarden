@@ -1,7 +1,8 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { config } from '../db/schema';
+import { castInteger } from '../db/sql';
 import {
   requestYubicoApiCredentials,
   type YubicoApiCredentials,
@@ -59,7 +60,7 @@ export async function initializeYubicoCredentialsOnce(
   const orm = getOrm(db);
   await orm
     .delete(config)
-    .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), sql`cast(${config.value} as integer) < ${now}`));
+    .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), lt(castInteger(config.value), now)));
   const claim = `${now + YUBICO_BOOTSTRAP_CLAIM_TTL_MS}:${crypto.randomUUID()}`;
   const claimInsert = await orm
     .insert(config)
