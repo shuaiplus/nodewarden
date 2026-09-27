@@ -12,23 +12,22 @@ export function schemaStatements(sql: string = BASELINE_MIGRATION_SQL): string[]
     .split('--> statement-breakpoint')
     .map((statement) => statement.trim())
     .filter(Boolean)
-    .map(makeIdempotent);
-}
-
-function makeIdempotent(statement: string): string {
-  if (/^CREATE TABLE IF NOT EXISTS /i.test(statement)) return statement;
-  if (/^CREATE UNIQUE INDEX IF NOT EXISTS /i.test(statement)) return statement;
-  if (/^CREATE INDEX IF NOT EXISTS /i.test(statement)) return statement;
-  if (/^CREATE TABLE /i.test(statement)) {
-    return statement.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ');
-  }
-  if (/^CREATE UNIQUE INDEX /i.test(statement)) {
-    return statement.replace(/^CREATE UNIQUE INDEX /i, 'CREATE UNIQUE INDEX IF NOT EXISTS ');
-  }
-  if (/^CREATE INDEX /i.test(statement)) {
-    return statement.replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
-  }
-  return statement;
+    // Idempotent CREATEs let every schema version bump replay the whole baseline.
+    .map((statement) => {
+      if (/^CREATE TABLE IF NOT EXISTS /i.test(statement)) return statement;
+      if (/^CREATE UNIQUE INDEX IF NOT EXISTS /i.test(statement)) return statement;
+      if (/^CREATE INDEX IF NOT EXISTS /i.test(statement)) return statement;
+      if (/^CREATE TABLE /i.test(statement)) {
+        return statement.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ');
+      }
+      if (/^CREATE UNIQUE INDEX /i.test(statement)) {
+        return statement.replace(/^CREATE UNIQUE INDEX /i, 'CREATE UNIQUE INDEX IF NOT EXISTS ');
+      }
+      if (/^CREATE INDEX /i.test(statement)) {
+        return statement.replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
+      }
+      return statement;
+    });
 }
 
 // Every raw statement of the bootstrap runs here: migration DDL and PRAGMAs are SQL text by nature.
@@ -45,7 +44,16 @@ async function executeSchemaStatement(db: D1Database, statement: string): Promis
   }
 }
 
-async function ensureAdminUserExists(db: D1Database): Promise<void> {
+// The config table records the schema version, so it has to exist before the first version check.
+const CONFIG_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
+
+export async function ensureStorageSchema(db: D1Database): Promise<void> {
+  await executeSchemaStatement(db, 'PRAGMA foreign_keys = ON');
+  await executeSchemaStatement(db, CONFIG_TABLE_SQL);
+  for (const statement of schemaStatements()) {
+    await executeSchemaStatement(db, statement);
+  }
+  // Bootstrap admin: while no account is an admin, the oldest account becomes one.
   const orm = getOrm(db);
   const [admin] = await orm.select({ id: users.id }).from(users).where(eq(users.role, 'admin')).limit(1);
   if (admin) return;
@@ -61,18 +69,6 @@ async function ensureAdminUserExists(db: D1Database): Promise<void> {
     .update(users)
     .set({ role: 'admin', updatedAt: new Date().toISOString() })
     .where(eq(users.id, firstUser.id));
-}
-
-// The config table records the schema version, so it has to exist before the first version check.
-const CONFIG_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
-
-export async function ensureStorageSchema(db: D1Database): Promise<void> {
-  await executeSchemaStatement(db, 'PRAGMA foreign_keys = ON');
-  await executeSchemaStatement(db, CONFIG_TABLE_SQL);
-  for (const statement of schemaStatements()) {
-    await executeSchemaStatement(db, statement);
-  }
-  await ensureAdminUserExists(db);
 }
 
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
@@ -100,20 +96,22 @@ export const sqliteMaster = sqliteTable('sqlite_master', {
   sql: text('sql'),
 });
 
-async function hasRequiredSchemaTables(db: D1Database): Promise<boolean> {
-  const rows = await getOrm(db).select({ name: sqliteMaster.name }).from(sqliteMaster)
-    .where(and(eq(sqliteMaster.type, 'table'), inArray(sqliteMaster.name, REQUIRED_SCHEMA_TABLES)));
-  const found = new Set(rows.map((row) => row.name));
-  return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
-}
-
 // Runs once per isolate: replays the idempotent schema when the recorded version differs or a
 // required table is missing, then makes sure push credentials exist.
 export async function initializeDatabase(db: D1Database): Promise<void> {
   if (schemaVerified) return;
   await executeSchemaStatement(db, CONFIG_TABLE_SQL);
   const schemaVersion = await getConfigValue(db, STORAGE_SCHEMA_VERSION_KEY);
-  if (schemaVersion !== STORAGE_SCHEMA_VERSION || !(await hasRequiredSchemaTables(db))) {
+  // The catalog is only read when the recorded version already matches.
+  const schemaCurrent = schemaVersion === STORAGE_SCHEMA_VERSION && (await getOrm(db)
+    .select({ name: sqliteMaster.name })
+    .from(sqliteMaster)
+    .where(and(eq(sqliteMaster.type, 'table'), inArray(sqliteMaster.name, REQUIRED_SCHEMA_TABLES)))
+    .then((rows) => {
+      const found = new Set(rows.map((row) => row.name));
+      return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
+    }));
+  if (!schemaCurrent) {
     await ensureStorageSchema(db);
     await setConfigValue(db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);
   }
