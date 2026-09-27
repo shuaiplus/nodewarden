@@ -1,3 +1,5 @@
+import { PureCrypto, type Kdf } from '@bitwarden/sdk-internal';
+
 export const WEB_CRYPTO_UNAVAILABLE_MESSAGE =
   'Secure browser cryptography is unavailable. Open NodeWarden over HTTPS in a supported browser.';
 
@@ -59,58 +61,6 @@ export async function sha256Base64(value: string): Promise<string> {
   return bytesToBase64(new Uint8Array(hash));
 }
 
-const hmacSha256KeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
-const aesCbcEncryptKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
-const aesCbcDecryptKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
-
-function getCachedCryptoKey(
-  cache: WeakMap<Uint8Array, Promise<CryptoKey>>,
-  keyBytes: Uint8Array,
-  create: () => Promise<CryptoKey>
-): Promise<CryptoKey> {
-  const cached = cache.get(keyBytes);
-  if (cached) return cached;
-  const pending = create().catch((error) => {
-    cache.delete(keyBytes);
-    throw error;
-  });
-  cache.set(keyBytes, pending);
-  return pending;
-}
-
-function getHmacSha256Key(keyBytes: Uint8Array): Promise<CryptoKey> {
-  return getCachedCryptoKey(
-    hmacSha256KeyCache,
-    keyBytes,
-    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  );
-}
-
-function getAesCbcEncryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
-  return getCachedCryptoKey(
-    aesCbcEncryptKeyCache,
-    keyBytes,
-    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['encrypt'])
-  );
-}
-
-function getAesCbcDecryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
-  return getCachedCryptoKey(
-    aesCbcDecryptKeyCache,
-    keyBytes,
-    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['decrypt'])
-  );
-}
-
-function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    diff |= a[i] ^ b[i];
-  }
-  return diff === 0;
-}
-
 export async function pbkdf2(
   passwordOrBytes: string | Uint8Array,
   saltOrBytes: string | Uint8Array,
@@ -127,6 +77,14 @@ export async function pbkdf2(
     keyLen * 8
   );
   return new Uint8Array(bits);
+}
+
+// Master and export keys follow Bitwarden's KDF rules through the SDK: minimum parameters, and
+// Argon2id over the SHA-256 of the salt, exactly as official clients derive them. The PBKDF2 helper
+// above stays for what that KDF refuses: the one-iteration master-password hash and the Send hash.
+export async function deriveKdfMaterial(password: string, salt: string, kdf: Kdf): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  return PureCrypto.derive_kdf_material(encoder.encode(password), encoder.encode(salt), kdf);
 }
 
 export async function hkdfExpand(prk: Uint8Array, info: string, length: number): Promise<Uint8Array> {
@@ -173,92 +131,33 @@ export async function hkdf(
   return new Uint8Array(bits);
 }
 
-async function hmacSha256(keyBytes: Uint8Array, dataBytes: Uint8Array): Promise<Uint8Array> {
-  const key = await getHmacSha256Key(keyBytes);
-  return new Uint8Array(await requireWebCrypto().subtle.sign('HMAC', key, toBufferSource(dataBytes)));
-}
-
-async function encryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await getAesCbcEncryptKey(key);
-  return new Uint8Array(await requireWebCrypto().subtle.encrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
-}
-
-async function decryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await getAesCbcDecryptKey(key);
-  return new Uint8Array(await requireWebCrypto().subtle.decrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
-}
-
+// Bitwarden EncString, EncArrayBuffer and RSA key wrapping come from the official SDK, so ciphertext
+// formats, MAC checks and padding follow the clients exactly. PureCrypto addresses a symmetric key by
+// its 64-byte enc||mac serialisation. The adapters stay async so SDK errors surface as rejections.
 export async function encryptBwFileData(data: Uint8Array, encKey: Uint8Array, macKey: Uint8Array): Promise<Uint8Array> {
-  const iv = requireWebCrypto().getRandomValues(new Uint8Array(16));
-  const cipher = await encryptAesCbc(data, encKey, iv);
-  const mac = await hmacSha256(macKey, concatBytes(iv, cipher));
-  const out = new Uint8Array(1 + iv.length + mac.length + cipher.length);
-  out[0] = 2; // EncryptionType.AesCbc256_HmacSha256_B64
-  out.set(iv, 1);
-  out.set(mac, 1 + iv.length);
-  out.set(cipher, 1 + iv.length + mac.length);
-  return out;
+  return PureCrypto.symmetric_encrypt_filedata(data, concatBytes(encKey, macKey));
 }
 
 export async function decryptBwFileData(encrypted: Uint8Array, encKey: Uint8Array, macKey: Uint8Array): Promise<Uint8Array> {
-  if (!encrypted || encrypted.length < 1 + 16 + 32 + 1) throw new Error('Invalid encrypted file data');
-  const encType = encrypted[0];
-  if (encType !== 2) throw new Error('Unsupported file encryption type');
-  const iv = encrypted.slice(1, 17);
-  const mac = encrypted.slice(17, 49);
-  const cipher = encrypted.slice(49);
-  const expected = await hmacSha256(macKey, concatBytes(iv, cipher));
-  if (!constantTimeEqual(expected, mac)) throw new Error('MAC mismatch');
-  return decryptAesCbc(cipher, encKey, iv);
+  return PureCrypto.symmetric_decrypt_filedata(encrypted, concatBytes(encKey, macKey));
 }
 
 export async function encryptBw(data: Uint8Array, encKey: Uint8Array, macKey: Uint8Array): Promise<string> {
-  const iv = requireWebCrypto().getRandomValues(new Uint8Array(16));
-  const cipher = await encryptAesCbc(data, encKey, iv);
-  const mac = await hmacSha256(macKey, concatBytes(iv, cipher));
-  return `2.${bytesToBase64(iv)}|${bytesToBase64(cipher)}|${bytesToBase64(mac)}`;
+  return PureCrypto.symmetric_encrypt_bytes(data, concatBytes(encKey, macKey));
 }
 
-// EncryptionType.Rsa2048_OaepSha1_B64: official clients hand a symmetric key to another account
-// (auth request approval, org member confirm) by RSA-OAEP SHA-1 wrapping it with that account's
-// SPKI public key, so only its private key can open it.
-const RSA_OAEP_SHA1_ENC_TYPE = 4;
-const RSA_OAEP_SHA1: RsaHashedImportParams = { name: 'RSA-OAEP', hash: 'SHA-1' };
-
-export async function encryptBwRsa(data: Uint8Array, publicKeyB64: string): Promise<string> {
-  const subtle = requireWebCrypto().subtle;
-  const publicKey = await subtle.importKey('spki', toBufferSource(base64ToBytes(publicKeyB64)), RSA_OAEP_SHA1, false, ['encrypt']);
-  const encrypted = await subtle.encrypt(RSA_OAEP_SHA1, publicKey, toBufferSource(data));
-  return `${RSA_OAEP_SHA1_ENC_TYPE}.${bytesToBase64(new Uint8Array(encrypted))}`;
+// Official clients hand a symmetric key to another account (auth request approval, org member confirm)
+// as a type 4 (RSA-OAEP SHA-1) EncString under that account's SPKI public key.
+export async function encryptBwRsa(symmetricKey: Uint8Array, publicKeyB64: string): Promise<string> {
+  return PureCrypto.encapsulate_key_unsigned(symmetricKey, base64ToBytes(publicKeyB64));
 }
 
-function parseCipherString(s: string): { type: number; iv: Uint8Array; ct: Uint8Array; mac: Uint8Array | null } {
-  if (!s || typeof s !== 'string') throw new Error('invalid encrypted string');
-  const p = s.indexOf('.');
-  if (p <= 0) throw new Error('invalid encrypted string');
-  const type = Number(s.slice(0, p));
-  const body = s.slice(p + 1);
-  const parts = body.split('|');
-  if (type === 2 && parts.length === 3) {
-    return { type: 2, iv: base64ToBytes(parts[0]), ct: base64ToBytes(parts[1]), mac: base64ToBytes(parts[2]) };
-  }
-  if ((type === 0 || type === 1 || type === 4) && parts.length >= 2) {
-    return { type, iv: base64ToBytes(parts[0]), ct: base64ToBytes(parts[1]), mac: null };
-  }
-  throw new Error('unsupported enc type');
+export async function decryptBw(cipherString: string, encKey: Uint8Array, macKey: Uint8Array): Promise<Uint8Array> {
+  return PureCrypto.symmetric_decrypt_bytes(cipherString, concatBytes(encKey, macKey));
 }
 
-export async function decryptBw(cipherString: string, encKey: Uint8Array, macKey?: Uint8Array): Promise<Uint8Array> {
-  const parsed = parseCipherString(cipherString);
-  if (parsed.type === 2 && macKey && parsed.mac) {
-    const expected = await hmacSha256(macKey, concatBytes(parsed.iv, parsed.ct));
-    if (!constantTimeEqual(expected, parsed.mac)) throw new Error('MAC mismatch');
-  }
-  return decryptAesCbc(parsed.ct, encKey, parsed.iv);
-}
-
-export async function decryptStr(cipherString: string | null | undefined, encKey: Uint8Array, macKey?: Uint8Array): Promise<string> {
+// Lenient UTF-8 decoding keeps a damaged field readable instead of failing the whole item.
+export async function decryptStr(cipherString: string | null | undefined, encKey: Uint8Array, macKey: Uint8Array): Promise<string> {
   if (!cipherString || typeof cipherString !== 'string') return '';
-  const plain = await decryptBw(cipherString, encKey, macKey);
-  return new TextDecoder().decode(plain);
+  return new TextDecoder().decode(await decryptBw(cipherString, encKey, macKey));
 }

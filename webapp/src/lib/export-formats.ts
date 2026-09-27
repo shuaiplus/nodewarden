@@ -1,7 +1,6 @@
-import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { strToU8, zipSync } from 'fflate';
 import type { PreloginKdfConfig } from './api/auth';
-import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, hkdfExpand, pbkdf2 } from './crypto';
+import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, deriveKdfMaterial, encryptBw, hkdfExpand } from './crypto';
 import type { Cipher, Folder } from './types';
 
 export const EXPORT_FORMATS = [
@@ -575,24 +574,16 @@ export async function buildAccountEncryptedBitwardenJsonString(args: BuildEncryp
 async function derivePasswordProtectedKey(kdf: PreloginKdfConfig, password: string, saltB64: string): Promise<{ enc: Uint8Array; mac: Uint8Array }> {
   const iterations = Math.max(1, normalizeNumber(kdf.kdfIterations, 600000));
   const kdfType = normalizeNumber(kdf.kdfType, 0);
-  const saltTextBytes = new TextEncoder().encode(saltB64);
 
   let keyMaterial: Uint8Array;
   if (kdfType === 1) {
     const memoryMiB = Math.max(16, normalizeNumber(kdf.kdfMemory, 64));
     const parallelism = Math.max(1, normalizeNumber(kdf.kdfParallelism, 4));
-    const memoryKiB = Math.floor(memoryMiB * 1024);
-    const maxmem = memoryKiB * 1024 + 1024 * 1024;
-    keyMaterial = await argon2idAsync(new TextEncoder().encode(password), saltTextBytes, {
-      t: Math.floor(iterations),
-      m: memoryKiB,
-      p: Math.floor(parallelism),
-      dkLen: 32,
-      maxmem,
-      asyncTick: 10,
+    keyMaterial = await deriveKdfMaterial(password, saltB64, {
+      argon2id: { iterations: Math.floor(iterations), memory: Math.floor(memoryMiB), parallelism: Math.floor(parallelism) },
     });
   } else {
-    keyMaterial = await pbkdf2(password, saltTextBytes, iterations, 32);
+    keyMaterial = await deriveKdfMaterial(password, saltB64, { pBKDF2: { iterations } });
   }
 
   const enc = await hkdfExpand(keyMaterial, 'enc', 32);

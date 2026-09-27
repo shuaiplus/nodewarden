@@ -1,5 +1,4 @@
 ﻿import { useState } from 'preact/hooks';
-import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { createPortal } from 'preact/compat';
 import { strFromU8, unzipSync, type UnzipFileInfo } from 'fflate';
 import { Download, FileUp } from 'lucide-preact';
@@ -16,7 +15,7 @@ import {
 } from '@/lib/import-formats';
 import { getFileAcceptBySource, IMPORT_SOURCES, type ImportSourceId } from '@/lib/import-format-sources';
 import { normalizeBitwardenEncryptedAccountImport, normalizeBitwardenImport } from '@/lib/import-formats-bitwarden';
-import { base64ToBytes, decryptStr, hkdfExpand, pbkdf2 } from '@/lib/crypto';
+import { base64ToBytes, decryptStr, deriveKdfMaterial, hkdfExpand } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
 import type { Folder } from '@/lib/types';
 
@@ -117,22 +116,15 @@ async function derivePasswordProtectedFileKey(
 
   let keyMaterial: Uint8Array;
   if (kdfType === 0) {
-    keyMaterial = await pbkdf2(password, salt, iterations, 32);
+    keyMaterial = await deriveKdfMaterial(password, salt, { pBKDF2: { iterations: Math.floor(iterations) } });
   } else if (kdfType === 1) {
     const memoryMiB = Number(parsed.kdfMemory || 0);
     const parallelism = Number(parsed.kdfParallelism || 0);
     if (!Number.isFinite(memoryMiB) || memoryMiB <= 0 || !Number.isFinite(parallelism) || parallelism <= 0) {
       throw new Error(t('txt_invalid_argon2id_params'));
     }
-    const memoryKiB = Math.floor(memoryMiB * 1024);
-    const maxmem = memoryKiB * 1024 + 1024 * 1024;
-    keyMaterial = await argon2idAsync(new TextEncoder().encode(password), new TextEncoder().encode(salt), {
-      t: Math.floor(iterations),
-      m: memoryKiB,
-      p: Math.floor(parallelism),
-      dkLen: 32,
-      maxmem,
-      asyncTick: 10,
+    keyMaterial = await deriveKdfMaterial(password, salt, {
+      argon2id: { iterations: Math.floor(iterations), memory: Math.floor(memoryMiB), parallelism: Math.floor(parallelism) },
     });
   } else {
     throw new Error(t('txt_unsupported_kdf_type', { type: String(kdfType) }));

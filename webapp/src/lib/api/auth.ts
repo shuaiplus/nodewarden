@@ -1,6 +1,7 @@
 import {
   bytesToBase64,
   decryptBw,
+  deriveKdfMaterial,
   encryptBw,
   hkdfExpand,
   pbkdf2,
@@ -223,7 +224,7 @@ export async function deriveLoginHash(email: string, password: string, fallbackI
   if (!pre.ok) throw new Error('prelogin failed');
   const data = (await parseJson<{ kdfIterations?: number }>(pre)) || {};
   const iterations = Number(data.kdfIterations || fallbackIterations);
-  const masterKey = await pbkdf2(password, email.toLowerCase(), iterations, 32);
+  const masterKey = await deriveKdfMaterial(password, email.toLowerCase(), { pBKDF2: { iterations } });
   const hash = await pbkdf2(masterKey, password, 1, 32);
   return { hash: bytesToBase64(hash), masterKey, kdfIterations: iterations };
 }
@@ -235,7 +236,7 @@ export async function deriveLoginHashLocally(
 ): Promise<PreloginResult> {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const iterations = Number(fallbackIterations || 600000);
-  const masterKey = await pbkdf2(password, normalizedEmail, iterations, 32);
+  const masterKey = await deriveKdfMaterial(password, normalizedEmail, { pBKDF2: { iterations } });
   const hash = await pbkdf2(masterKey, password, 1, 32);
   return { hash: bytesToBase64(hash), masterKey, kdfIterations: iterations };
 }
@@ -466,7 +467,7 @@ export async function registerAccount(args: {
   try {
     const { email, name, password, masterPasswordHint, inviteCode, fallbackIterations } = args;
     const webCrypto = requireWebCrypto();
-    const masterKey = await pbkdf2(password, email, fallbackIterations, 32);
+    const masterKey = await deriveKdfMaterial(password, email, { pBKDF2: { iterations: fallbackIterations } });
     const masterHash = await pbkdf2(masterKey, password, 1, 32);
     const encKey = await hkdfExpand(masterKey, 'enc', 32);
     const macKey = await hkdfExpand(masterKey, 'mac', 32);
@@ -660,7 +661,7 @@ export async function changeMasterPassword(
   if (userSym.length !== 64) {
     throw new Error('Invalid profile key');
   }
-  const nextMasterKey = await pbkdf2(args.newPassword, args.email, current.kdfIterations, 32);
+  const nextMasterKey = await deriveKdfMaterial(args.newPassword, args.email, { pBKDF2: { iterations: current.kdfIterations } });
   const nextHash = await pbkdf2(nextMasterKey, args.newPassword, 1, 32);
   const nextEnc = await hkdfExpand(nextMasterKey, 'enc', 32);
   const nextMac = await hkdfExpand(nextMasterKey, 'mac', 32);
