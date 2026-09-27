@@ -1,4 +1,6 @@
 import type { z } from 'zod';
+import type { BatchItem } from 'drizzle-orm/batch';
+import { getOrm } from '../db/client';
 import type { Principal } from '../services/auth';
 import type { Env } from '../types';
 import { MembershipStatus } from '../services/org-types';
@@ -106,7 +108,7 @@ export async function handleMachinePolicies(request: Request, env: Env, principa
     if ([...parsed.value.keys()].some(id => !known.has(id))) return errorResponse('Not found', 404);
     if (kind === 'project' ? created.some(id => serviceAccountAccess(context.actor, context.grants, id) !== 'write') : [...created, ...updated, ...deleted].some(id => projectAccess(context.actor, context.grants, id) !== 'write')) return errorResponse('Not found', 404);
     try {
-      await env.DB.batch([...smRepo.policyDiffStatements(env.DB, kind === 'project' ? 'projectServiceAccounts' : 'serviceAccountProjects', id, current, parsed.value), smRepo.revisionStatement(env.DB, row.orgId)]);
+      await getOrm(env.DB).batch([smRepo.bumpServiceAccounts(env.DB, row.orgId), ...smRepo.policyDiffStatements(env.DB, kind === 'project' ? 'projectServiceAccounts' : 'serviceAccountProjects', id, current, parsed.value)]);
     } catch (error) {
       const conflict = policyConflict(error);
       if (conflict) return conflict;
@@ -121,7 +123,7 @@ export async function handleMachinePolicies(request: Request, env: Env, principa
   });
 }
 
-export async function prepareSecretPolicies(env: Env, context: NonNullable<Awaited<ReturnType<typeof smContext>>>, orgId: string, secretId: string, body: z.output<typeof PolicyRequests> | null | undefined, creating: boolean): Promise<D1PreparedStatement[] | Response> {
+export async function prepareSecretPolicies(env: Env, context: NonNullable<Awaited<ReturnType<typeof smContext>>>, orgId: string, secretId: string, body: z.output<typeof PolicyRequests> | null | undefined, creating: boolean): Promise<BatchItem<'sqlite'>[] | Response> {
   if (body == null) return [];
   const users = parsePolicyRequests(body.userAccessPolicyRequests, 'granteeId', false);
   const groups = parsePolicyRequests(body.groupAccessPolicyRequests, 'granteeId', false);

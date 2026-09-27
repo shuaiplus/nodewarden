@@ -131,7 +131,7 @@ test('machine people policies record only added and removed users/groups', async
   const batch = env.DB.batch.bind(env.DB);
   let replacing = false;
   env.DB.prepare = sql => {
-    if (sql.startsWith('DELETE FROM sm_service_account_members')) replacing = true;
+    if (/^DELETE\s+FROM\s+["`]?sm_service_account_members/i.test(sql)) replacing = true;
     return prepare(sql);
   };
   env.DB.batch = async statements => {

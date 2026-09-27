@@ -1,13 +1,21 @@
-import { diffPolicies, grantsFromRows, type GrantRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
-import { and, asc, desc, eq, inArray, isNull, isNotNull, lt, type SQL } from 'drizzle-orm';
+import { diffPolicies, grantsFromRows, type SmActor, type SmGrants, type SmAccess } from './sm-authz';
+import { and, asc, count, desc, eq, exists, inArray, isNull, isNotNull, lt, notExists, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import type { BatchItem } from 'drizzle-orm/batch';
 
-import { chunkRows, columnCount, getOrm } from '../db/client';
+import { abortUnlessChanged, chunkRows, columnCount, getOrm } from '../db/client';
 import {
+  orgGroupMembers,
+  orgGroups,
   smAccessTokens,
   smProjects,
+  smProjectGroups,
   smProjectMembers,
+  smSecretGroups,
+  smSecretMembers,
   smSecretProjects,
   smSecrets,
+  smSecretServiceAccounts,
+  smServiceAccountGroups,
   smServiceAccountProjects,
   smServiceAccounts,
   smServiceAccountMembers,
@@ -248,28 +256,33 @@ export async function revokeAccessToken(db: D1Database, id: string, _revokedAt?:
 
 export async function loadSmGrants(db: D1Database, actor: SmActor, orgId: string): Promise<SmGrants> {
   if (actor.kind === 'admin') return grantsFromRows({ projects: [], secrets: [], serviceAccounts: [] });
+  const orm = getOrm(db);
   if (actor.kind === 'serviceAccount') {
-    const rows = await db.batch<{ id: string; write_access: number }>([
-      db.prepare('SELECT sp.project_id AS id, sp.write_access FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1').bind(orgId, actor.serviceAccountId),
-      db.prepare('SELECT sp.secret_id AS id, sp.write_access FROM sm_secret_service_accounts sp JOIN sm_secrets s ON s.id = sp.secret_id AND s.org_id = ? WHERE sp.service_account_id = ?').bind(orgId, actor.serviceAccountId),
+    const [projects, secrets] = await orm.batch([
+      orm.select({ id: smServiceAccountProjects.projectId, write_access: smServiceAccountProjects.writeAccess }).from(smServiceAccountProjects)
+        .innerJoin(smProjects, and(eq(smProjects.id, smServiceAccountProjects.projectId), eq(smProjects.orgId, orgId)))
+        .where(and(eq(smServiceAccountProjects.serviceAccountId, actor.serviceAccountId), eq(smServiceAccountProjects.readAccess, 1))),
+      orm.select({ id: smSecretServiceAccounts.secretId, write_access: smSecretServiceAccounts.writeAccess }).from(smSecretServiceAccounts)
+        .innerJoin(smSecrets, and(eq(smSecrets.id, smSecretServiceAccounts.secretId), eq(smSecrets.orgId, orgId)))
+        .where(eq(smSecretServiceAccounts.serviceAccountId, actor.serviceAccountId)),
     ]);
-    return grantsFromRows({ projects: rows[0].results, secrets: rows[1].results, serviceAccounts: [] });
+    return grantsFromRows({ projects, secrets, serviceAccounts: [] });
   }
-  const statements = [
-    ['sm_project_members', 'sm_project_groups', 'sm_projects', 'project_id'],
-    ['sm_secret_members', 'sm_secret_groups', 'sm_secrets', 'secret_id'],
-    ['sm_service_account_members', 'sm_service_account_groups', 'sm_service_accounts', 'service_account_id'],
-  ].map(([members, groups, targets, target]) => {
-    const permission = target === 'service_account_id' ? '' : ', x.write_access';
-    return db.prepare(`SELECT x.${target} AS id${permission} FROM ${members} x
-      JOIN ${targets} t ON t.id = x.${target} AND t.org_id = ? WHERE x.membership_id = ?
-      UNION ALL SELECT x.${target} AS id${permission} FROM ${groups} x
-      JOIN ${targets} t ON t.id = x.${target} AND t.org_id = ?
-      JOIN org_groups g ON g.id = x.group_id AND g.org_id = t.org_id
-      JOIN org_group_members gm ON gm.group_id = g.id WHERE gm.membership_id = ?`).bind(orgId, actor.membershipId, orgId, actor.membershipId);
-  });
-  const rows = await db.batch(statements);
-  return grantsFromRows({ projects: rows[0].results as GrantRows['projects'], secrets: rows[1].results as GrantRows['secrets'], serviceAccounts: rows[2].results as GrantRows['serviceAccounts'] });
+  // A member's grants on one target kind: direct policies plus those of the member's groups, each
+  // counted only for targets and groups of this org.
+  const grantsOn = (kind: SmPeopleTarget) => {
+    const { targets, member, group } = peoplePolicyTables[kind];
+    return orm.select({ id: member.target, write_access: member.writeAccess }).from(member.table)
+      .innerJoin(targets, and(eq(targets.id, member.target), eq(targets.orgId, orgId)))
+      .where(eq(member.grantee, actor.membershipId))
+      .unionAll(orm.select({ id: group.target, write_access: group.writeAccess }).from(group.table)
+        .innerJoin(targets, and(eq(targets.id, group.target), eq(targets.orgId, orgId)))
+        .innerJoin(orgGroups, and(eq(orgGroups.id, group.grantee), eq(orgGroups.orgId, targets.orgId)))
+        .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, orgGroups.id))
+        .where(eq(orgGroupMembers.membershipId, actor.membershipId)));
+  };
+  const [projects, secrets, serviceAccounts] = await orm.batch([grantsOn('project'), grantsOn('secret'), grantsOn('serviceAccount')]);
+  return grantsFromRows({ projects, secrets, serviceAccounts });
 }
 
 export function bumpServiceAccounts(db: D1Database, orgId: string, now = new Date().toISOString()) {
@@ -295,13 +308,18 @@ export async function deleteProjects(db: D1Database, orgId: string, ids: string[
 export async function projectCounts(db: D1Database, project: SmProject, access: SmAccess) {
   const counts = { secrets: 0, people: 0, serviceAccounts: 0, object: 'projectCounts' };
   if (access === 'none') return counts;
-  counts.secrets = Number((await db.prepare('SELECT COUNT(*) AS n FROM sm_secret_projects sp JOIN sm_secrets s ON s.id = sp.secret_id AND s.org_id = ? AND s.deleted_at IS NULL WHERE sp.project_id = ?').bind(project.orgId, project.id).first<{ n: number }>())?.n ?? 0);
+  const orm = getOrm(db);
+  const [secrets] = await orm.select({ n: count() }).from(smSecretProjects)
+    .innerJoin(smSecrets, and(eq(smSecrets.id, smSecretProjects.secretId), eq(smSecrets.orgId, project.orgId), isNull(smSecrets.deletedAt)))
+    .where(eq(smSecretProjects.projectId, project.id));
+  counts.secrets = secrets.n;
   if (access === 'write') {
-    const [people, accounts] = await db.batch<{ n: number }>([
-      db.prepare('SELECT (SELECT COUNT(*) FROM sm_project_members WHERE project_id = ?) + (SELECT COUNT(*) FROM sm_project_groups WHERE project_id = ?) AS n').bind(project.id, project.id),
-      db.prepare('SELECT COUNT(*) AS n FROM sm_service_account_projects WHERE project_id = ? AND read_access = 1').bind(project.id),
+    const [[members], [groups], [accounts]] = await orm.batch([
+      orm.select({ n: count() }).from(smProjectMembers).where(eq(smProjectMembers.projectId, project.id)),
+      orm.select({ n: count() }).from(smProjectGroups).where(eq(smProjectGroups.projectId, project.id)),
+      orm.select({ n: count() }).from(smServiceAccountProjects).where(and(eq(smServiceAccountProjects.projectId, project.id), eq(smServiceAccountProjects.readAccess, 1))),
     ]);
-    counts.people = Number(people.results[0].n); counts.serviceAccounts = Number(accounts.results[0].n);
+    counts.people = members.n + groups.n; counts.serviceAccounts = accounts.n;
   }
   return counts;
 }
@@ -317,33 +335,41 @@ export async function updateProject(db: D1Database, project: SmProject): Promise
   return rows.length > 0;
 }
 
-export function revisionStatement(db: D1Database, orgId: string, now = new Date().toISOString()): D1PreparedStatement {
-  // ponytail: org-wide revision bump trades a smaller write path for extra machine resyncs.
-  return db.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE org_id = ?').bind(now, orgId);
-}
-
-export async function createSecret(db: D1Database, secret: SmSecret, policies: D1PreparedStatement[] = []): Promise<void> {
-  await db.batch([
-    db.prepare('INSERT INTO sm_secrets (id, org_id, key, value, note, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)').bind(secret.id, secret.orgId, secret.key, secret.value, secret.note, secret.createdAt, secret.updatedAt),
-    ...secret.projectIds.map(projectId => db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(secret.id, projectId)),
+export async function createSecret(db: D1Database, secret: SmSecret, policies: BatchItem<'sqlite'>[] = []): Promise<void> {
+  const orm = getOrm(db);
+  await orm.batch([
+    orm.insert(smSecrets).values({ id: secret.id, orgId: secret.orgId, key: secret.key, value: secret.value, note: secret.note, createdAt: secret.createdAt, updatedAt: secret.updatedAt, deletedAt: null }),
+    ...secret.projectIds.map(projectId => orm.insert(smSecretProjects).values({ secretId: secret.id, projectId })),
     ...policies,
-    revisionStatement(db, secret.orgId, secret.updatedAt),
+    bumpServiceAccounts(db, secret.orgId, secret.updatedAt),
   ]);
 }
 
-export async function updateSecret(db: D1Database, secret: SmSecret, previousProjectIds: string[], previousRevision: string, policies: D1PreparedStatement[] = []): Promise<boolean> {
-  const statements = [db.prepare(`UPDATE sm_secrets SET key = ?, value = ?, note = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL AND updated_at = ?
-    AND (SELECT COUNT(*) FROM sm_secret_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sm_secrets.org_id WHERE sp.secret_id = sm_secrets.id) = ?
-    AND NOT EXISTS (SELECT 1 FROM sm_secret_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sm_secrets.org_id WHERE sp.secret_id = sm_secrets.id AND sp.project_id NOT IN (SELECT value FROM json_each(?)))`).bind(secret.key, secret.value, secret.note, secret.updatedAt, secret.id, previousRevision, previousProjectIds.length, JSON.stringify(previousProjectIds)),
-    // Abort the atomic batch before links or policies if the authorized snapshot changed.
-    db.prepare("SELECT CASE WHEN changes() = 0 THEN json('stale secret update') END"),
-  ];
-  if (previousProjectIds.length !== secret.projectIds.length || previousProjectIds[0] !== secret.projectIds[0]) {
-    statements.push(db.prepare('DELETE FROM sm_secret_projects WHERE secret_id = ? AND EXISTS (SELECT 1 FROM sm_secrets WHERE id = ? AND deleted_at IS NULL)').bind(secret.id, secret.id));
-    for (const projectId of secret.projectIds) statements.push(db.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) SELECT id, ? FROM sm_secrets WHERE id = ? AND deleted_at IS NULL').bind(projectId, secret.id));
-  }
+export async function updateSecret(db: D1Database, secret: SmSecret, previousProjectIds: string[], previousRevision: string, policies: BatchItem<'sqlite'>[] = []): Promise<boolean> {
+  const orm = getOrm(db);
+  // The authorized snapshot's links are those whose project is in the secret's org; `sm_secrets` in
+  // these subqueries is the row being updated. The previous ids bind as one JSON array, so a legacy
+  // secret with many links stays within D1's bound-parameter cap.
+  const linkInOrg = and(eq(smProjects.id, smSecretProjects.projectId), eq(smProjects.orgId, smSecrets.orgId));
+  const snapshotLinks = orm.select({ links: count() }).from(smSecretProjects).innerJoin(smProjects, linkInOrg).where(eq(smSecretProjects.secretId, smSecrets.id));
+  const unexpectedLinks = orm.select({ projectId: smSecretProjects.projectId }).from(smSecretProjects).innerJoin(smProjects, linkInOrg)
+    .where(and(eq(smSecretProjects.secretId, smSecrets.id), notInArray(smSecretProjects.projectId, sql`(SELECT value FROM json_each(${JSON.stringify(previousProjectIds)}))`)));
+  const live = and(eq(smSecrets.id, secret.id), isNull(smSecrets.deletedAt));
+  const relink = previousProjectIds.length !== secret.projectIds.length || previousProjectIds[0] !== secret.projectIds[0] ? [
+    orm.delete(smSecretProjects).where(and(eq(smSecretProjects.secretId, secret.id), exists(orm.select({ id: smSecrets.id }).from(smSecrets).where(live)))),
+    ...secret.projectIds.map(projectId => orm.insert(smSecretProjects)
+      .select(orm.select({ secretId: smSecrets.id, projectId: sql<string>`${projectId}`.as(smSecretProjects.projectId.name) }).from(smSecrets).where(live))),
+  ] : [];
   try {
-    await db.batch([...statements, ...policies, revisionStatement(db, secret.orgId, secret.updatedAt)]);
+    await orm.batch([
+      orm.update(smSecrets).set({ key: secret.key, value: secret.value, note: secret.note, updatedAt: secret.updatedAt })
+        .where(and(live, eq(smSecrets.updatedAt, previousRevision), eq(snapshotLinks, previousProjectIds.length), notExists(unexpectedLinks))),
+      // Abort the atomic batch before links or policies if the authorized snapshot changed.
+      abortUnlessChanged(orm, 'stale secret update'),
+      ...relink,
+      ...policies,
+      bumpServiceAccounts(db, secret.orgId, secret.updatedAt),
+    ]);
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes('malformed JSON')) return false;
@@ -404,88 +430,125 @@ export async function revokeAccessTokens(db: D1Database, serviceAccountId: strin
 }
 
 export async function serviceAccountSecretCounts(db: D1Database, orgId: string): Promise<Map<string, number>> {
-  const rows = await db.prepare(`SELECT sa.id, COUNT(s.id) AS n FROM sm_service_accounts sa
-    LEFT JOIN sm_secrets s ON s.org_id = sa.org_id AND s.deleted_at IS NULL AND (
-      EXISTS (SELECT 1 FROM sm_secret_service_accounts sp WHERE sp.secret_id = s.id AND sp.service_account_id = sa.id)
-      OR EXISTS (SELECT 1 FROM sm_secret_projects sp JOIN sm_service_account_projects ap ON ap.project_id = sp.project_id AND ap.service_account_id = sa.id AND ap.read_access = 1
-        JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = sa.org_id WHERE sp.secret_id = s.id))
-    WHERE sa.org_id = ? GROUP BY sa.id`).bind(orgId).all<{ id: string; n: number }>();
-  return new Map(rows.results.map(row => [row.id, row.n]));
+  const orm = getOrm(db);
+  // A machine account reaches a live secret of its org through a direct policy or a readable
+  // project of the same org.
+  const directPolicy = orm.select({ secretId: smSecretServiceAccounts.secretId }).from(smSecretServiceAccounts)
+    .where(and(eq(smSecretServiceAccounts.secretId, smSecrets.id), eq(smSecretServiceAccounts.serviceAccountId, smServiceAccounts.id)));
+  const readableProject = orm.select({ secretId: smSecretProjects.secretId }).from(smSecretProjects)
+    .innerJoin(smServiceAccountProjects, and(eq(smServiceAccountProjects.projectId, smSecretProjects.projectId), eq(smServiceAccountProjects.serviceAccountId, smServiceAccounts.id), eq(smServiceAccountProjects.readAccess, 1)))
+    .innerJoin(smProjects, and(eq(smProjects.id, smSecretProjects.projectId), eq(smProjects.orgId, smServiceAccounts.orgId)))
+    .where(eq(smSecretProjects.secretId, smSecrets.id));
+  const rows = await orm.select({ id: smServiceAccounts.id, n: count(smSecrets.id) }).from(smServiceAccounts)
+    .leftJoin(smSecrets, and(eq(smSecrets.orgId, smServiceAccounts.orgId), isNull(smSecrets.deletedAt), or(exists(directPolicy), exists(readableProject))))
+    .where(eq(smServiceAccounts.orgId, orgId))
+    .groupBy(smServiceAccounts.id);
+  return new Map(rows.map(row => [row.id, row.n]));
 }
 
 export async function serviceAccountCounts(db: D1Database, account: SmServiceAccount, access: SmAccess) {
   const counts = { projects: 0, people: 0, accessTokens: 0, object: 'serviceAccountCounts' };
   if (access === 'none') return counts;
-  const [row] = await db.batch<{ projects: number; people: number; accessTokens: number }>([db.prepare(`SELECT
-    (SELECT COUNT(*) FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1) AS projects,
-    ((SELECT COUNT(*) FROM sm_service_account_members WHERE service_account_id = ?) + (SELECT COUNT(*) FROM sm_service_account_groups WHERE service_account_id = ?)) AS people,
-    (SELECT COUNT(*) FROM sm_access_tokens WHERE service_account_id = ?) AS accessTokens`).bind(account.orgId, account.id, account.id, account.id, account.id)]);
-  return { ...counts, ...row.results[0] };
+  const orm = getOrm(db);
+  const [[projects], [members], [groups], [accessTokens]] = await orm.batch([
+    orm.select({ n: count() }).from(smServiceAccountProjects)
+      .innerJoin(smProjects, and(eq(smProjects.id, smServiceAccountProjects.projectId), eq(smProjects.orgId, account.orgId)))
+      .where(and(eq(smServiceAccountProjects.serviceAccountId, account.id), eq(smServiceAccountProjects.readAccess, 1))),
+    orm.select({ n: count() }).from(smServiceAccountMembers).where(eq(smServiceAccountMembers.serviceAccountId, account.id)),
+    orm.select({ n: count() }).from(smServiceAccountGroups).where(eq(smServiceAccountGroups.serviceAccountId, account.id)),
+    orm.select({ n: count() }).from(smAccessTokens).where(eq(smAccessTokens.serviceAccountId, account.id)),
+  ]);
+  return { ...counts, projects: projects.n, people: members.n + groups.n, accessTokens: accessTokens.n };
 }
 
+// Upstream requires write on a machine account's people policies, so their tables have no permission
+// column and reads select a constant. D1 batch rows are objects, so the constant needs a column name:
+// a numeric one would enumerate first and shift the positional mapping.
+const MACHINE_ACCOUNT_PEOPLE_WRITE = sql<number>`1`.as('write_access');
+
+// People policy grant tables per target kind, with the columns statements filter on and the insert
+// row, since drizzle keys rows by property. `targets` scopes a member's grants to the org.
 export const peoplePolicyTables = {
-  secret: { member: 'sm_secret_members', group: 'sm_secret_groups', target: 'secret_id' },
-  project: { member: 'sm_project_members', group: 'sm_project_groups', target: 'project_id' },
-  serviceAccount: { member: 'sm_service_account_members', group: 'sm_service_account_groups', target: 'service_account_id' },
-} as const;
+  secret: {
+    targets: smSecrets,
+    member: { table: smSecretMembers, target: smSecretMembers.secretId, grantee: smSecretMembers.membershipId, writeAccess: smSecretMembers.writeAccess, row: (secretId: string, membershipId: string, writeAccess: number) => ({ secretId, membershipId, writeAccess }) },
+    group: { table: smSecretGroups, target: smSecretGroups.secretId, grantee: smSecretGroups.groupId, writeAccess: smSecretGroups.writeAccess, row: (secretId: string, groupId: string, writeAccess: number) => ({ secretId, groupId, writeAccess }) },
+  },
+  project: {
+    targets: smProjects,
+    member: { table: smProjectMembers, target: smProjectMembers.projectId, grantee: smProjectMembers.membershipId, writeAccess: smProjectMembers.writeAccess, row: (projectId: string, membershipId: string, writeAccess: number) => ({ projectId, membershipId, writeAccess }) },
+    group: { table: smProjectGroups, target: smProjectGroups.projectId, grantee: smProjectGroups.groupId, writeAccess: smProjectGroups.writeAccess, row: (projectId: string, groupId: string, writeAccess: number) => ({ projectId, groupId, writeAccess }) },
+  },
+  serviceAccount: {
+    targets: smServiceAccounts,
+    member: { table: smServiceAccountMembers, target: smServiceAccountMembers.serviceAccountId, grantee: smServiceAccountMembers.membershipId, writeAccess: MACHINE_ACCOUNT_PEOPLE_WRITE, row: (serviceAccountId: string, membershipId: string) => ({ serviceAccountId, membershipId }) },
+    group: { table: smServiceAccountGroups, target: smServiceAccountGroups.serviceAccountId, grantee: smServiceAccountGroups.groupId, writeAccess: MACHINE_ACCOUNT_PEOPLE_WRITE, row: (serviceAccountId: string, groupId: string) => ({ serviceAccountId, groupId }) },
+  },
+};
 export type SmPeopleTarget = keyof typeof peoplePolicyTables;
 
+function accessByGrantee(rows: { id: string; write_access: number }[]) {
+  return new Map(rows.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const]));
+}
+
 export async function readPeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string) {
-  const tables = peoplePolicyTables[kind];
-  const permission = kind === 'serviceAccount' ? '1 AS write_access' : 'write_access';
-  const rows = await db.batch<{ id: string; write_access: number }>([
-    db.prepare(`SELECT membership_id AS id, ${permission} FROM ${tables.member} WHERE ${tables.target} = ?`).bind(id),
-    db.prepare(`SELECT group_id AS id, ${permission} FROM ${tables.group} WHERE ${tables.target} = ?`).bind(id),
-  ]);
-  return { users: new Map(rows[0].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])), groups: new Map(rows[1].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])) };
+  const orm = getOrm(db);
+  const { member, group } = peoplePolicyTables[kind];
+  const policies = (grant: typeof member | typeof group) => orm.select({ id: grant.grantee, write_access: grant.writeAccess }).from(grant.table).where(eq(grant.target, id));
+  const [users, groups] = await orm.batch([policies(member), policies(group)]);
+  return { users: accessByGrantee(users), groups: accessByGrantee(groups) };
 }
 
 export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string, users: Map<string, SmAccess>, groups: Map<string, SmAccess>): Promise<{ users: Map<string, SmAccess>; groups: Map<string, SmAccess> }> {
-  const tables = peoplePolicyTables[kind];
-  const accessColumn = kind === 'serviceAccount' ? '1 AS write_access' : 'write_access';
-  const statements = [db.prepare(`DELETE FROM ${tables.member} WHERE ${tables.target} = ? RETURNING membership_id AS id, ${accessColumn}`).bind(id), db.prepare(`DELETE FROM ${tables.group} WHERE ${tables.target} = ? RETURNING group_id AS id, ${accessColumn}`).bind(id)];
-  for (const [table, column, policies] of [[tables.member, 'membership_id', users], [tables.group, 'group_id', groups]] as const) {
-    const columns = kind === 'serviceAccount' ? 2 : 3;
-    for (const rows of chunkRows([...policies], columns)) {
-      statements.push(db.prepare(`INSERT INTO ${table} (${tables.target}, ${column}${columns === 3 ? ', write_access' : ''}) VALUES ${rows.map(() => `(${Array(columns).fill('?').join(',')})`).join(',')}`).bind(...rows.flatMap(([granteeId, access]) => columns === 3 ? [id, granteeId, access === 'write' ? 1 : 0] : [id, granteeId])));
-    }
-  }
-  const [previousUsers, previousGroups] = await db.batch<{ id: string; write_access: number }>(statements);
-  return { users: new Map(previousUsers.results.map(row => [row.id, row.write_access ? 'write' : 'read'])), groups: new Map(previousGroups.results.map(row => [row.id, row.write_access ? 'write' : 'read'])) };
+  const orm = getOrm(db);
+  const { member, group } = peoplePolicyTables[kind];
+  const clear = (grant: typeof member | typeof group) => orm.delete(grant.table).where(eq(grant.target, id)).returning({ id: grant.grantee, write_access: grant.writeAccess });
+  const insert = (grant: typeof member | typeof group, policies: Map<string, SmAccess>) => chunkRows([...policies], columnCount(grant.table))
+    .map(chunk => orm.insert(grant.table).values(chunk.map(([granteeId, access]) => grant.row(id, granteeId, access === 'write' ? 1 : 0))));
+  const [previousUsers, previousGroups] = await orm.batch([clear(member), clear(group), ...insert(member, users), ...insert(group, groups)]);
+  return { users: accessByGrantee(previousUsers), groups: accessByGrantee(previousGroups) };
 }
 
+// Grant tables per machine policy kind. Service-account project grants also carry a read bit, which
+// every policy sets.
 export const machinePolicyTables = {
-  secretMembers: { table: 'sm_secret_members', target: 'secret_id', grantee: 'membership_id', read: false },
-  secretGroups: { table: 'sm_secret_groups', target: 'secret_id', grantee: 'group_id', read: false },
-  secretServiceAccounts: { table: 'sm_secret_service_accounts', target: 'secret_id', grantee: 'service_account_id', read: false },
-  projectServiceAccounts: { table: 'sm_service_account_projects', target: 'project_id', grantee: 'service_account_id', read: true },
-  serviceAccountProjects: { table: 'sm_service_account_projects', target: 'service_account_id', grantee: 'project_id', read: true },
-} as const;
+  secretMembers: { ...peoplePolicyTables.secret.member, read: false },
+  secretGroups: { ...peoplePolicyTables.secret.group, read: false },
+  secretServiceAccounts: { table: smSecretServiceAccounts, target: smSecretServiceAccounts.secretId, grantee: smSecretServiceAccounts.serviceAccountId, row: (secretId: string, serviceAccountId: string, writeAccess: number) => ({ secretId, serviceAccountId, writeAccess }), read: false },
+  projectServiceAccounts: { table: smServiceAccountProjects, target: smServiceAccountProjects.projectId, grantee: smServiceAccountProjects.serviceAccountId, row: (projectId: string, serviceAccountId: string, writeAccess: number) => ({ serviceAccountId, projectId, readAccess: 1, writeAccess }), read: true },
+  serviceAccountProjects: { table: smServiceAccountProjects, target: smServiceAccountProjects.serviceAccountId, grantee: smServiceAccountProjects.projectId, row: (serviceAccountId: string, projectId: string, writeAccess: number) => ({ serviceAccountId, projectId, readAccess: 1, writeAccess }), read: true },
+};
 export type SmMachinePolicy = keyof typeof machinePolicyTables;
 
-export function policyDiffStatements(db: D1Database, kind: SmMachinePolicy, id: string, current: ReadonlyMap<string, SmAccess>, requested: ReadonlyMap<string, SmAccess>): D1PreparedStatement[] {
-  const { table, target, grantee, read } = machinePolicyTables[kind];
+export function policyDiffStatements(db: D1Database, kind: SmMachinePolicy, id: string, current: ReadonlyMap<string, SmAccess>, requested: ReadonlyMap<string, SmAccess>): BatchItem<'sqlite'>[] {
+  const orm = getOrm(db);
+  const { table, target, grantee, row, read } = machinePolicyTables[kind];
   const { created, updated, deleted } = diffPolicies(current, requested);
-  const statements = deleted.map(granteeId => db.prepare(`DELETE FROM ${table} WHERE ${target} = ? AND ${grantee} = ?`).bind(id, granteeId));
-  statements.push(...updated.map(granteeId => db.prepare(`UPDATE ${table} SET write_access = ?${read ? ', read_access = 1' : ''} WHERE ${target} = ? AND ${grantee} = ?`).bind(requested.get(granteeId) === 'write' ? 1 : 0, id, granteeId)));
-  const columns = read ? 4 : 3;
-  for (const chunk of chunkRows(created, columns)) statements.push(db.prepare(`INSERT INTO ${table} (${target}, ${grantee}, write_access${read ? ', read_access' : ''}) VALUES ${chunk.map(() => `(${Array(columns).fill('?').join(',')})`).join(',')}`).bind(...chunk.flatMap(granteeId => [id, granteeId, requested.get(granteeId) === 'write' ? 1 : 0, ...(read ? [1] : [])])));
-  return statements;
+  const writeAccess = (granteeId: string) => requested.get(granteeId) === 'write' ? 1 : 0;
+  const policy = (granteeId: string) => and(eq(target, id), eq(grantee, granteeId));
+  return [
+    ...deleted.map(granteeId => orm.delete(table).where(policy(granteeId))),
+    ...updated.map(granteeId => orm.update(table).set({ writeAccess: writeAccess(granteeId), ...(read ? { readAccess: 1 } : {}) }).where(policy(granteeId))),
+    ...chunkRows(created, columnCount(table)).map(chunk => orm.insert(table).values(chunk.map(granteeId => row(id, granteeId, writeAccess(granteeId))))),
+  ];
 }
 
 export async function readProjectMachinePolicies(db: D1Database, orgId: string, id: string) {
-  const rows = await db.prepare('SELECT sa.id, sa.name, sp.write_access FROM sm_service_account_projects sp JOIN sm_service_accounts sa ON sa.id = sp.service_account_id AND sa.org_id = ? WHERE sp.project_id = ? AND sp.read_access = 1').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
-  return rows.results;
+  return getOrm(db).select({ id: smServiceAccounts.id, name: smServiceAccounts.name, write_access: smServiceAccountProjects.writeAccess }).from(smServiceAccountProjects)
+    .innerJoin(smServiceAccounts, and(eq(smServiceAccounts.id, smServiceAccountProjects.serviceAccountId), eq(smServiceAccounts.orgId, orgId)))
+    .where(and(eq(smServiceAccountProjects.projectId, id), eq(smServiceAccountProjects.readAccess, 1)));
 }
 
 export async function readGrantedProjects(db: D1Database, orgId: string, id: string) {
-  const rows = await db.prepare('SELECT p.id, p.name, sp.write_access FROM sm_service_account_projects sp JOIN sm_projects p ON p.id = sp.project_id AND p.org_id = ? WHERE sp.service_account_id = ? AND sp.read_access = 1').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
-  return rows.results;
+  return getOrm(db).select({ id: smProjects.id, name: smProjects.name, write_access: smServiceAccountProjects.writeAccess }).from(smServiceAccountProjects)
+    .innerJoin(smProjects, and(eq(smProjects.id, smServiceAccountProjects.projectId), eq(smProjects.orgId, orgId)))
+    .where(and(eq(smServiceAccountProjects.serviceAccountId, id), eq(smServiceAccountProjects.readAccess, 1)));
 }
 
 export async function readSecretMachinePolicies(db: D1Database, orgId: string, id: string) {
-  const rows = await db.prepare('SELECT sa.id, sa.name, sp.write_access FROM sm_secret_service_accounts sp JOIN sm_service_accounts sa ON sa.id = sp.service_account_id AND sa.org_id = ? WHERE sp.secret_id = ?').bind(orgId, id).all<{ id: string; name: string; write_access: number }>();
-  return rows.results;
+  return getOrm(db).select({ id: smServiceAccounts.id, name: smServiceAccounts.name, write_access: smSecretServiceAccounts.writeAccess }).from(smSecretServiceAccounts)
+    .innerJoin(smServiceAccounts, and(eq(smServiceAccounts.id, smSecretServiceAccounts.serviceAccountId), eq(smServiceAccounts.orgId, orgId)))
+    .where(eq(smSecretServiceAccounts.secretId, id));
 }
 
 export async function getAccessTokenWithAccount(db: D1Database, id: string): Promise<(SmAccessToken & { orgId: string }) | null> {

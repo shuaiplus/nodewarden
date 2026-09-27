@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { getOrm } from '../db/client';
+import { smSecretMembers } from '../db/schema';
 import { handleDeleteSecrets, handleUpdateSecret } from '../handlers/secrets-manager';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -228,7 +230,7 @@ test('a rejected secret snapshot aborts links, policies and machine revision in 
   const previousAccount = await smRepo.getServiceAccount(env.DB, account.id);
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
   await env.DB.prepare('UPDATE sm_secrets SET updated_at = ? WHERE id = ?').bind('2099-01-01T00:00:00.000Z', target.id).run();
-  const policies = [env.DB.prepare('INSERT INTO sm_secret_members (secret_id, membership_id, write_access) VALUES (?, ?, 1)').bind(target.id, member.id)];
+  const policies = [getOrm(env.DB).insert(smSecretMembers).values({ secretId: target.id, membershipId: member.id, writeAccess: 1 })];
   assert.equal(await smRepo.updateSecret(env.DB, { ...before, value: '2.changed|value|mac', projectIds: [q.id], updatedAt: '2099-02-01T00:00:00.000Z' }, before.projectIds, before.updatedAt, policies), false);
   const after = (await smRepo.getSecret(env.DB, target.id))!;
   assert.equal(after.value, before.value);
