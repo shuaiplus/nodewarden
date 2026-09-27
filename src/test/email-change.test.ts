@@ -9,7 +9,7 @@ import { AuthService } from '../services/auth';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword, verifyPassword } from '../services/auth-password';
 import type { Env, User } from '../types';
-import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
+import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, interceptStatement, MAILABLE_DOMAIN, seedUser } from './support/env';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -195,33 +195,17 @@ test('verified changes onto listed addresses promote, while the last listed admi
   await drainWaitUntil();
 });
 
-test('an old password-change mirror cannot overwrite a later atomic email change or delete its new session', async (t) => {
+test('an old password-change mirror cannot overwrite a later atomic email change or delete its new session', async () => {
   const f = await setup();
-  const prepare = f.env.DB.prepare.bind(f.env.DB);
   let interrupted = false;
   let newRefresh = '';
-  t.mock.method(f.env.DB, 'prepare', (query: string) => {
-    const statement = prepare(query);
-    if (query.startsWith('insert into "account" ')) {
-      const bind = statement.bind.bind(statement);
-      statement.bind = (...values) => {
-        const bound = bind(...values);
-        const run = bound.run.bind(bound);
-        bound.run = async () => {
-          if (!interrupted) {
-            interrupted = true;
-            assert.equal((await f.requestCode(NEW_EMAIL, 'interim-hash')).status, 200);
-            assert.equal((await f.change({ masterPasswordHash: 'interim-hash' })).status, 200);
-            const login = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: NEW_EMAIL, password: NEW_HASH } });
-            assert.equal(login.status, 200);
-            newRefresh = (await login.json() as { refresh_token: string }).refresh_token;
-          }
-          return run();
-        };
-        return bound;
-      };
-    }
-    return statement;
+  interceptStatement(f.env, /^insert into "account" /, async () => {
+    interrupted = true;
+    assert.equal((await f.requestCode(NEW_EMAIL, 'interim-hash')).status, 200);
+    assert.equal((await f.change({ masterPasswordHash: 'interim-hash' })).status, 200);
+    const login = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: NEW_EMAIL, password: NEW_HASH } });
+    assert.equal(login.status, 200);
+    newRefresh = (await login.json() as { refresh_token: string }).refresh_token;
   });
   const delayed = await authedFetch(f.env, { method: 'POST', path: '/api/accounts/password', userId: f.user.id, body: { masterPasswordHash: OLD_HASH, newMasterPasswordHash: 'interim-hash', key: f.user.key } });
   assert.equal(interrupted, true);

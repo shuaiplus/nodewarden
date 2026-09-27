@@ -203,15 +203,22 @@ export async function signInToAdminPortal(env: Env, email: string): Promise<{ co
   return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
 }
 
+// The tests' one seam onto the raw binding: every statement drizzle prepares from now on passes through
+// wrap, which may read its SQL text, fail it by throwing, or return a wrapped statement. Returns the undo.
+export function wrapStatements(env: Env, wrap: (query: string, statement: D1PreparedStatement) => D1PreparedStatement): () => void {
+  const prepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (query: string) => wrap(query, prepare(query));
+  return () => { env.DB.prepare = prepare; };
+}
+
 // Runs `before` right before the first statement matching `pattern` executes, so a test can slip a
 // competing request into the window between a handler's read and its guarded write.
 export function interceptStatement(env: Env, pattern: RegExp, before: () => Promise<void>): void {
-  const prepare = env.DB.prepare.bind(env.DB);
   let pending = true;
-  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, {
+  const intercept = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, {
     get(target, property) {
       const value = Reflect.get(target, property);
-      if (property === 'bind') return (...values: unknown[]) => wrap(target.bind(...values));
+      if (property === 'bind') return (...values: unknown[]) => intercept(target.bind(...values));
       if (typeof value !== 'function') return value;
       if (!['run', 'first', 'all', 'raw'].includes(String(property))) return value.bind(target);
       return async (...args: unknown[]) => {
@@ -220,7 +227,7 @@ export function interceptStatement(env: Env, pattern: RegExp, before: () => Prom
       };
     },
   });
-  env.DB.prepare = (query: string) => pattern.test(query) ? wrap(prepare(query)) : prepare(query);
+  wrapStatements(env, (query, statement) => (pattern.test(query) ? intercept(statement) : statement));
 }
 
 export type FailingWrite =

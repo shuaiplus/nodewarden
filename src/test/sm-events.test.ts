@@ -3,7 +3,7 @@ import test from 'node:test';
 import { and, eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { events as eventLog, orgGroups, smSecrets, smServiceAccountMembers, smServiceAccounts } from '../db/schema';
-import { abortWrites, authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, createTestEnv, wrapStatements } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 import { MembershipType } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
@@ -131,13 +131,12 @@ test('machine people policies record only added and removed users/groups', async
   assert.ok(rows.filter(e => e.type === 2302 || e.type === 2303).every(e => e.groupId === group));
   assert.ok(rows.every(e => e.grantedServiceAccountId === account.id && e.actingUserId === owner.id && e.serviceAccountId === null));
 
-  const prepare = env.DB.prepare.bind(env.DB);
   const batch = env.DB.batch.bind(env.DB);
   let replacing = false;
-  env.DB.prepare = sql => {
-    if (/^DELETE\s+FROM\s+["`]?sm_service_account_members/i.test(sql)) replacing = true;
-    return prepare(sql);
-  };
+  const stopWatching = wrapStatements(env, (query, statement) => {
+    if (/^DELETE\s+FROM\s+["`]?sm_service_account_members/i.test(query)) replacing = true;
+    return statement;
+  });
   env.DB.batch = async statements => {
     if (replacing) {
       replacing = false;
@@ -150,7 +149,7 @@ test('machine people policies record only added and removed users/groups', async
     assert.equal((await request(path, 'PUT', { userAccessPolicyRequests: policies.userAccessPolicyRequests })).status, 200);
     assert.equal(await count(), beforeRace, 'a concurrently added, retained policy is not another addition');
   } finally {
-    env.DB.prepare = prepare;
+    stopWatching();
     env.DB.batch = batch;
   }
 });

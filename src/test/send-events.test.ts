@@ -5,7 +5,7 @@ import { getOrm } from '../db/client';
 import { events } from '../db/schema';
 import { EventType } from '../services/events';
 import { MembershipType } from '../services/org-types';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, seedUser, wrapStatements } from './support/env';
 import { seedMember } from './support/sm';
 const { createOwnedOrganization } = await import('../handlers/organizations');
 
@@ -78,16 +78,15 @@ test('an external Send access is attributed to nobody in the organization and th
   assert.equal(count, 1, "a non-member's Send never reaches the organization log");
 });
 
-test('bulk Send deletion records every Send with one membership read and one insert statement', async (t) => {
+test('bulk Send deletion records every Send with one membership read and one insert statement', async () => {
   const { env, org, call, textSend } = await setup();
   const ids: string[] = [];
   for (let created = 0; created < 3; created++) ids.push((await (await call('POST', '/api/sends', textSend)).json() as { id: string }).id);
   await getOrm(env.DB).delete(events);
-  const prepare = env.DB.prepare.bind(env.DB);
   const statements: string[] = [];
-  t.mock.method(env.DB, 'prepare', (query: string) => { statements.push(query); return prepare(query); });
+  const stopRecording = wrapStatements(env, (query, statement) => { statements.push(query); return statement; });
   assert.equal((await call('POST', '/api/sends/delete', { ids })).status, 200);
-  t.mock.restoreAll();
+  stopRecording();
   assert.equal(statements.filter(query => /from "organization_memberships"/i.test(query)).length, 1);
   assert.equal(statements.filter(query => /insert into "events"/i.test(query)).length, 1, 'six rows fit one statement under the parameter cap');
   const rows = await getOrm(env.DB).select({ organizationId: events.organizationId, resourceId: events.resourceId }).from(events)

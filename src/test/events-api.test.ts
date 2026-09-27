@@ -3,7 +3,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { ciphers, events, users } from '../db/schema';
-import { createTestEnv, authedFetch, seedUser } from './support/env';
+import { createTestEnv, authedFetch, seedUser, wrapStatements } from './support/env';
 import { seedMember } from './support/sm';
 import { EventType, recordEvents, pruneEvents } from '../services/events';
 import { saveAuditLogSettings } from '../services/audit-events';
@@ -214,10 +214,9 @@ test('committed server changes survive event-store failure, while client uploads
   t.mock.method(console, 'error', () => {});
   const { env, owner, org } = await setup();
   const id = await cipher(env, owner, org.id);
-  const prepare = env.DB.prepare.bind(env.DB);
-  t.mock.method(env.DB, 'prepare', (query: string) => {
+  wrapStatements(env, (query, statement) => {
     if (/insert into "events"/i.test(query)) throw new Error('Event storage unavailable');
-    return prepare(query);
+    return statement;
   });
   const password = await authedFetch(env, { method: 'POST', path: '/api/accounts/password', userId: owner.id,
     body: { masterPasswordHash: owner.masterPasswordHash, newMasterPasswordHash: 'replacement-password', key: ENC } });
