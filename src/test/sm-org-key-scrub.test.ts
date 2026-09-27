@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
 import { ensureStorageSchema } from '../db/migrate';
+import { smAccessTokens } from '../db/schema';
 import type { Env } from '../types';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, TOKEN_FIELDS } from './support/sm';
@@ -27,8 +31,8 @@ async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token:
   return { env, orgId, token };
 }
 
-function storedOrgKey(env: Env, tokenId: string): Promise<unknown> {
-  return env.DB.prepare('SELECT wrapped_org_key FROM sm_access_tokens WHERE id = ?').bind(tokenId).first('wrapped_org_key');
+async function storedOrgKey(env: Env, tokenId: string): Promise<string | null | undefined> {
+  return (await getOrm(env.DB).select({ wrappedOrgKey: smAccessTokens.wrappedOrgKey }).from(smAccessTokens).where(eq(smAccessTokens.id, tokenId)).get())?.wrappedOrgKey;
 }
 
 // Upstream never holds an org key: the token response carries only `encrypted_payload`, and
@@ -62,7 +66,7 @@ test('a token created with wrappedOrgKey stores NULL and no response carries the
 // Earlier builds stored the posted key, so the schema step clears what is already in D1.
 test('the schema step scrubs a stored org key and replays cleanly', async () => {
   const { env, token } = await issueTokenWithOrgKey();
-  await env.DB.prepare('UPDATE sm_access_tokens SET wrapped_org_key = ? WHERE id = ?').bind(PLAINTEXT_ORG_KEY, token.id).run();
+  await getOrm(env.DB).update(smAccessTokens).set({ wrappedOrgKey: PLAINTEXT_ORG_KEY }).where(eq(smAccessTokens.id, token.id));
 
   await ensureStorageSchema(env.DB);
   assert.equal(await storedOrgKey(env, token.id), null);
