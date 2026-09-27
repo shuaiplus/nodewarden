@@ -109,7 +109,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   assert.match(capture.sent[1].subject, /Unsuccessful/);
 });
 
-test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_tokens but tolerates clock skew', async (t) => {
+test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_tokens but tolerates clock skew and a missing kid', async (t) => {
   const env = await createTestEnv({ ...SSO_CONFIG, SSO_AUTHORITY: 'https://forged.idp.example.test', SSO_ONLY: '1' });
   const user = await seedUser(env, { email: `forged-sso@${MAILABLE_DOMAIN}` });
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
@@ -131,6 +131,8 @@ test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_toke
     audience: await signEs256(`${es256Header}.${claims({ aud: 'another-client' })}`),
     expired: await signEs256(`${es256Header}.${claims({ exp: now - 120 })}`),
     skewed: await signEs256(`${es256Header}.${claims({ exp: now - 30, iat: now + 30 })}`),
+    // OIDC Core lets a provider with a single signing key omit kid.
+    keyless: await signEs256(`${encode({ alg: 'ES256' })}.${claims()}`),
   };
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -147,5 +149,5 @@ test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_toke
     assert.equal(response.status, 400, code);
     assert.equal((await response.json() as Record<string, unknown>).access_token, undefined, code);
   }
-  assert.equal((await exchange('skewed')).status, 200);
+  for (const code of ['skewed', 'keyless']) assert.equal((await exchange(code)).status, 200, code);
 });

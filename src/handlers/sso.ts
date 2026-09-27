@@ -1,4 +1,4 @@
-import { verifyWithJwks } from 'hono/jwt';
+import { decode, verify } from 'hono/jwt';
 import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -192,17 +192,28 @@ async function discoverTokenEndpoint(authority: string): Promise<string> {
   return endpoint || `${authority}/token`;
 }
 
+type ProviderJwk = JsonWebKey & { kid?: string; use?: string };
+
+// OIDC lets a provider with one signing key omit kid, which hono's verifyWithJwks refuses, so the
+// key is chosen here: the kid match, else the only key of the token's type.
+async function idTokenSigningKey(jwksUri: string, alg: string, kid: string | undefined): Promise<ProviderJwk | undefined> {
+  const { keys = [] } = await (await fetch(jwksUri)).json() as { keys?: ProviderJwk[] };
+  const kty = alg.startsWith('ES') ? 'EC' : 'RSA';
+  const candidates = keys.filter((key) => key.kty === kty && (!key.alg || key.alg === alg) && (!key.use || key.use === 'sig'));
+  return candidates.find((key) => kid && key.kid === kid) ?? (candidates.length === 1 ? candidates[0] : undefined);
+}
+
 /** Verifies an id_token against the provider's JWKS and returns its claims, or null. */
 async function verifyIdToken(env: Env, authority: string, token: string): Promise<Record<string, unknown> | null> {
   const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
   try {
-    // hono checks the header alg against the allowlist before fetching the JWKS. Its
-    // time checks allow no clock skew, so hasValidIdTokenClaims owns exp/nbf instead.
-    const claims = await verifyWithJwks(token, {
-      jwks_uri: jwksUri || `${authority}/.well-known/jwks.json`,
-      allowedAlgorithms: ID_TOKEN_ALGORITHMS,
-      verification: { exp: false, nbf: false, iat: false },
-    });
+    const { header } = decode(token);
+    const alg = ID_TOKEN_ALGORITHMS.find((allowed) => allowed === header.alg);
+    if (!alg) return null;
+    const key = await idTokenSigningKey(jwksUri || `${authority}/.well-known/jwks.json`, alg, header.kid);
+    if (!key) return null;
+    // hono's time checks allow no clock skew, so hasValidIdTokenClaims owns exp/nbf instead.
+    const claims = await verify(token, key, { alg, exp: false, nbf: false, iat: false });
     return hasValidIdTokenClaims(env, authority, claims) ? claims : null;
   } catch {
     return null;
