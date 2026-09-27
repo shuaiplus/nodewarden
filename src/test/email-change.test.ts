@@ -9,7 +9,7 @@ import { AuthService } from '../services/auth';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword, verifyPassword } from '../services/auth-password';
 import type { Env, User } from '../types';
-import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
+import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -159,8 +159,7 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     await f.requestCode();
     await sessionRepo.saveRefreshToken(f.env.DB, 'existing-session', f.user.id);
     const revision = await revisionRepo.getRevisionDate(f.env.DB, f.user.id);
-    // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the email-change batch
-    if (kind === 'audit') await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT,'forced email audit failure'); END").run();
+    if (kind === 'audit') await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'forced email audit failure');
     const batch = f.env.DB.batch.bind(f.env.DB);
     f.env.DB.batch = async statements => {
       if (kind === 'duplicate') await seedUser(f.env, { email: NEW_EMAIL });

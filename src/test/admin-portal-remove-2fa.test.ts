@@ -8,7 +8,7 @@ import { jsonSet } from '../db/sql';
 import { AuthService } from '../services/auth';
 import { hashPassword } from '../services/auth-password';
 import type { Env, User } from '../types';
-import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, portalFetch, seedUser, signInToAdminPortal } from './support/env';
+import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, portalFetch, seedUser, signInToAdminPortal } from './support/env';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as deviceRepo from '../services/storage-device-repo';
@@ -116,8 +116,7 @@ test('an audit failure rolls back a reset before any notification', async () => 
   const env = await createTestEnv({ ...mail.overrides, ADMIN_EMAILS: ADMIN });
   const auth = await signInToAdminPortal(env, ADMIN);
   const user = await seedUser(env, { email: `factor@${MAILABLE_DOMAIN}`, totpSecret: TOTP });
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the reset batch
-  await env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT,'audit failure'); END").run();
+  await abortWrites(env, { table: auditLogs, event: 'INSERT' }, 'audit failure');
   const response = await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(response.status, 500);
   const updated = (await userRepo.getUserById(env.DB, user.id))!;

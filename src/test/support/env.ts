@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
+import { getTableName, type Table } from 'drizzle-orm';
+import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 
 import { LIMITS } from '../../config/limits';
 import { AuthService } from '../../services/auth';
@@ -219,4 +221,22 @@ export function interceptStatement(env: Env, pattern: RegExp, before: () => Prom
     },
   });
   env.DB.prepare = (query: string) => pattern.test(query) ? wrap(prepare(query)) : prepare(query);
+}
+
+export type FailingWrite =
+  | { table: Table; event: 'INSERT' | 'DELETE'; rowId?: string }
+  | { table: Table; event: 'UPDATE'; column?: SQLiteColumn; rowId?: string };
+
+// Makes SQLite abort a matching write with `message`, so it fails inside its statement or batch exactly as a
+// failing D1 statement would and the whole batch rolls back; `rowId` narrows it to one row. Returns the undo
+// for tests that retry after the failure. A trigger is DDL, which drizzle cannot build.
+export async function abortWrites(env: Env, write: FailingWrite, message: string): Promise<() => Promise<void>> {
+  const name = `abort_${crypto.randomUUID().replaceAll('-', '')}`;
+  const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const event = write.event === 'UPDATE' && write.column ? `UPDATE OF "${write.column.name}"` : write.event;
+  const onRow = write.rowId === undefined ? '' : ` WHEN ${write.event === 'DELETE' ? 'OLD' : 'NEW'}.id = ${literal(write.rowId)}`;
+  // eslint-disable-next-line nodewarden/no-raw-sql -- test fault injection: drizzle cannot build triggers
+  await env.DB.exec(`CREATE TRIGGER ${name} BEFORE ${event} ON "${getTableName(write.table)}"${onRow} BEGIN SELECT RAISE(ABORT, ${literal(message)}); END`);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- drops the trigger created above
+  return async () => { await env.DB.exec(`DROP TRIGGER ${name}`); };
 }

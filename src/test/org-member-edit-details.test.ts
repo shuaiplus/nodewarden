@@ -3,13 +3,13 @@ import test from 'node:test';
 import { and, eq } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
-import { events, userRevisions } from '../db/schema';
+import { events, organizationMemberships, userRevisions } from '../db/schema';
 import { hasFullCollectionAccess } from '../services/org-authz';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { createOrgInviteToken } from '../utils/jwt';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { abortWrites, authedFetch, createTestEnv, seedUser } from './support/env';
 import { byId, createCollection, createGroup, createOrg, editAccess, errorMessage, manageAccess, seedMember, viewAccess } from './support/sm';
 
 // Official web's edit-member dialog loads GET /organizations/{orgId}/users/{id}?includeGroups=true
@@ -255,17 +255,14 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   const ids: string[] = [];
   for (let i = 0; i < 150; i++) ids.push((await seedMember(env, orgId)).memberId);
   const revisionBefore = await revisionRow(env, owner.id);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the last member update inside the bulk revoke batch
-  await env.DB.prepare(`CREATE TRIGGER fail_last_member BEFORE UPDATE ON organization_memberships
-    WHEN NEW.id = '${ids[149]}' BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
+  const restore = await abortWrites(env, { table: organizationMemberships, event: 'UPDATE', rowId: ids[149] }, 'test failure');
   const request = { method: 'PUT', path: `/api/organizations/${orgId}/users/revoke`, body: { ids }, userId: owner.id };
   const failed = await authedFetch(env, request);
   assert.equal(failed.status, 500);
   assert.equal(await getOrm(env.DB).$count(events, eq(events.organizationId, orgId)), 0);
   assert.ok((await orgRepo.listMembershipsByOrg(env.DB, orgId)).every((member) => member.status === MembershipStatus.Confirmed));
   assert.deepEqual(await revisionRow(env, owner.id), revisionBefore);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no DROP TRIGGER; it removes the fault injected above
-  await env.DB.exec('DROP TRIGGER fail_last_member');
+  await restore();
   const batch = t.mock.method(env.DB, 'batch');
   const response = await authedFetch(env, request);
   assert.equal(response.status, 200);

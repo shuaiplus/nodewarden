@@ -14,7 +14,7 @@ import { type AuditEventInput } from '../services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../services/blob-store';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env } from '../types';
-import { authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
+import { abortWrites, authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
 import { seedMember } from './support/sm';
 import * as attachmentRepo from '../services/storage-attachment-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
@@ -180,8 +180,7 @@ test('a cipher shared after the refusal check keeps its attachment blob', async 
 
 test('an audit write failure rolls back user deletion and leaves every blob in place', async () => {
   const f = await setup();
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the deletion batch
-  await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
+  await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'audit failure');
   await assert.rejects(deleteUserAccount(f.env, f.target.id, audit), /audit failure/);
   await assertIntact(f);
 });
@@ -342,8 +341,7 @@ test('a non-owner cannot delete an organization', async () => {
 test('an org deletion audit failure rolls back revisions, ciphers and the org before touching blobs', async () => {
   const f = await setup();
   await getOrm(f.env.DB).update(userRevisions).set({ revisionDate: PAST });
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the deletion batch
-  await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
+  await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'audit failure');
   await assert.rejects(deleteOrganizationAccount(f.env, f.org.id, audit), /audit failure/);
   assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
   assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.target.id), PAST);
