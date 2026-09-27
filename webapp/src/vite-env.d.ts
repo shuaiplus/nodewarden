@@ -24,3 +24,8 @@ interface BarcodeDetectorConstructor {
 interface Window {
   BarcodeDetector?: BarcodeDetectorConstructor;
 }
+
+// The SDK ships no typings for its wasm-bindgen glue; the loader only links it to the WASM instance.
+declare module '@bitwarden/sdk-internal/bitwarden_wasm_internal_bg.js' {
+  export function __wbg_set_wasm(exports: WebAssembly.Exports): void;
+}
