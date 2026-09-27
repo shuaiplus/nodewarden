@@ -13,14 +13,16 @@ import {
   deleteBlobObject,
 } from '../services/blob-store';
 import { createSendFileUploadToken, verifySendFileUploadToken } from '../utils/jwt';
+import { readActingDeviceIdentifier } from '../utils/device';
+import {
+  notifyUserSendCreate,
+  notifyUserSendDelete,
+  notifyUserSendUpdate,
+  notifyUserVaultSync,
+} from '../durable/notifications-hub';
 import {
   formatSize,
-  getAliasedProp,
   normalizeEmails,
-  notifySendCreateForRequest,
-  notifySendDeleteForRequest,
-  notifySendUpdateForRequest,
-  notifyVaultSyncForRequest,
   parseDate,
   parseFileLength,
   parseInteger,
@@ -29,6 +31,7 @@ import {
   parseSendType,
   parseStoredSendData,
   sanitizeSendData,
+  sendFileIdMatches,
   sendToResponse,
   setSendPassword,
   validateDeletionDate,
@@ -89,8 +92,8 @@ async function processSendFileUpload(
   }
 
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
-  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
+  notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserSendUpdate(env, { userId: send.userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
 
   return new Response(null, { status: 201 });
 }
@@ -129,48 +132,28 @@ export async function handleGetSend(request: Request, env: Env, userId: string, 
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleCreateSend(request: Request, env: Env, userId: string): Promise<Response> {
-
-  const body = await parseJsonBody(request);
-
-  if (body instanceof Response) return body;
-
-  const typeRaw = prop(body, 'type');
-  const sendType = parseSendType(typeRaw.value);
-  if (sendType === null) {
-    return errorResponse('Invalid Send type', 400);
-  }
-  if (sendType === SendType.File) {
-    return errorResponse('File sends should use /api/sends/file/v2', 400);
-  }
-
+// Text and file Sends share every field but the content key; the file handler passes the upload
+// metadata it owns so the stored blob names the object the client is about to upload.
+async function parseNewSend(
+  body: Record<string, unknown>,
+  userId: string,
+  content: 'text' | 'file',
+  dataOverrides: Record<string, unknown> = {}
+): Promise<Send | Response> {
   const nameRaw = prop(body, 'name');
   const keyRaw = prop(body, 'key');
-  const deletionDateRaw = prop(body, 'deletionDate');
-  const textRaw = prop(body, 'text');
+  if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) return errorResponse('Name is required', 400);
+  if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) return errorResponse('Key is required', 400);
 
-  if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
-    return errorResponse('Name is required', 400);
-  }
-  if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) {
-    return errorResponse('Key is required', 400);
-  }
-
-  const deletionDate = parseDate(deletionDateRaw.value);
-  if (!deletionDate) {
-    return errorResponse('Invalid deletionDate', 400);
-  }
-
+  const deletionDate = parseDate(prop(body, 'deletionDate').value);
+  if (!deletionDate) return errorResponse('Invalid deletionDate', 400);
   const deletionValidation = validateDeletionDate(deletionDate);
   if (deletionValidation) return deletionValidation;
 
-  const sendData = sanitizeSendData(textRaw.value);
-  if (!sendData) {
-    return errorResponse('Send data not provided', 400);
-  }
+  const sendData = sanitizeSendData(prop(body, content).value);
+  if (!sendData) return errorResponse('Send data not provided', 400);
 
-  const maxAccessRaw = prop(body, 'maxAccessCount');
-  const maxAccess = parseMaxAccessCount(maxAccessRaw.value);
+  const maxAccess = parseMaxAccessCount(prop(body, 'maxAccessCount').value);
   if (!maxAccess.ok) return maxAccess.response;
 
   const expirationRaw = prop(body, 'expirationDate');
@@ -181,43 +164,34 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
     return errorResponse('Invalid expirationDate', 400);
   }
 
+  const authTypeRaw = prop(body, 'authType');
+  const requestedAuthType = parseSendAuthType(authTypeRaw.value);
+  if (authTypeRaw.present && requestedAuthType === null) return errorResponse('Invalid authType', 400);
+  if (requestedAuthType === SendAuthType.Email) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+
+  const emailsRaw = prop(body, 'emails');
+  const normalizedEmails = normalizeEmails(emailsRaw.value);
+  if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) return errorResponse('Invalid emails', 400);
+  if (normalizedEmails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+
   const disabledRaw = prop(body, 'disabled');
   const hideEmailRaw = prop(body, 'hideEmail');
   const notesRaw = prop(body, 'notes');
-  const passwordRaw = prop(body, 'password');
-  const authTypeRaw = prop(body, 'authType');
-  const emailsRaw = prop(body, 'emails');
-
-  const requestedAuthType = parseSendAuthType(authTypeRaw.value);
-  if (authTypeRaw.present && requestedAuthType === null) {
-    return errorResponse('Invalid authType', 400);
-  }
-  if (requestedAuthType === SendAuthType.Email) {
-    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-  }
-
-  const normalizedEmails = normalizeEmails(emailsRaw.value);
-  if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) {
-    return errorResponse('Invalid emails', 400);
-  }
-  if (normalizedEmails) {
-    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-  }
-
   const now = new Date().toISOString();
   const send: Send = {
     id: generateUUID(),
     userId,
-    type: sendType,
+    type: content === 'text' ? SendType.Text : SendType.File,
     name: nameRaw.value.trim(),
     notes: typeof notesRaw.value === 'string' ? notesRaw.value : null,
-    data: JSON.stringify(sendData),
+    data: JSON.stringify({ ...sendData, ...dataOverrides }),
     key: keyRaw.value,
     passwordHash: null,
     passwordSalt: null,
     passwordIterations: null,
     authType: requestedAuthType ?? SendAuthType.None,
-    emails: normalizedEmails,
+    // Email verification was refused above, so no address list survives creation.
+    emails: null,
     maxAccessCount: maxAccess.value,
     accessCount: 0,
     disabled: typeof disabledRaw.value === 'boolean' ? disabledRaw.value : false,
@@ -228,160 +202,72 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
     deletionDate: deletionDate.toISOString(),
   };
 
+  const passwordRaw = prop(body, 'password');
   if (typeof passwordRaw.value === 'string' && passwordRaw.value.length > 0) {
     await setSendPassword(send, passwordRaw.value);
   } else if (send.authType === SendAuthType.Password) {
     return errorResponse('Password is required for password auth', 400);
   }
-
-  if (send.authType !== SendAuthType.Email) {
-    send.emails = null;
-  }
-
-  await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
-  await recordSendEvent(env, request, send, 'created');
-
-  return jsonResponse(sendToResponse(send));
+  return send;
 }
 
-export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
-  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
-
-  const body = await parseJsonBody(request);
-
-  if (body instanceof Response) return body;
-
-  const typeRaw = prop(body, 'type');
-  const sendType = parseSendType(typeRaw.value);
-  if (sendType !== SendType.File) {
-    return errorResponse('Send content is not a file', 400);
-  }
-
-  const fileLengthRaw = prop(body, 'fileLength');
-  const fileLengthParsed = parseFileLength(fileLengthRaw.value);
-  if (!fileLengthParsed.ok) return fileLengthParsed.response;
-  if (fileLengthParsed.value > maxFileSize) {
-    return errorResponse('Send storage limit exceeded with this file', 400);
-  }
-
-  const nameRaw = prop(body, 'name');
-  const keyRaw = prop(body, 'key');
-  const deletionDateRaw = prop(body, 'deletionDate');
-  const fileRaw = prop(body, 'file');
-
-  if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
-    return errorResponse('Name is required', 400);
-  }
-  if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) {
-    return errorResponse('Key is required', 400);
-  }
-
-  const deletionDate = parseDate(deletionDateRaw.value);
-  if (!deletionDate) {
-    return errorResponse('Invalid deletionDate', 400);
-  }
-  const deletionValidation = validateDeletionDate(deletionDate);
-  if (deletionValidation) return deletionValidation;
-
-  const fileData = sanitizeSendData(fileRaw.value);
-  if (!fileData) {
-    return errorResponse('Send data not provided', 400);
-  }
-
-  const fileId = generateUUID();
-  fileData.id = fileId;
-  fileData.size = fileLengthParsed.value;
-  fileData.sizeName = formatSize(fileLengthParsed.value);
-
-  const maxAccessRaw = prop(body, 'maxAccessCount');
-  const maxAccess = parseMaxAccessCount(maxAccessRaw.value);
-  if (!maxAccess.ok) return maxAccess.response;
-
-  const expirationRaw = prop(body, 'expirationDate');
-  const expirationDate = expirationRaw.value === null || expirationRaw.value === undefined
-    ? null
-    : parseDate(expirationRaw.value);
-  if (expirationRaw.value !== null && expirationRaw.value !== undefined && !expirationDate) {
-    return errorResponse('Invalid expirationDate', 400);
-  }
-
-  const disabledRaw = prop(body, 'disabled');
-  const hideEmailRaw = prop(body, 'hideEmail');
-  const notesRaw = prop(body, 'notes');
-  const passwordRaw = prop(body, 'password');
-  const authTypeRaw = prop(body, 'authType');
-  const emailsRaw = prop(body, 'emails');
-
-  const requestedAuthType = parseSendAuthType(authTypeRaw.value);
-  if (authTypeRaw.present && requestedAuthType === null) {
-    return errorResponse('Invalid authType', 400);
-  }
-  if (requestedAuthType === SendAuthType.Email) {
-    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-  }
-
-  const normalizedEmails = normalizeEmails(emailsRaw.value);
-  if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) {
-    return errorResponse('Invalid emails', 400);
-  }
-  if (normalizedEmails) {
-    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-  }
-
-  const now = new Date().toISOString();
-  const send: Send = {
-    id: generateUUID(),
-    userId,
-    type: sendType,
-    name: nameRaw.value.trim(),
-    notes: typeof notesRaw.value === 'string' ? notesRaw.value : null,
-    data: JSON.stringify(fileData),
-    key: keyRaw.value,
-    passwordHash: null,
-    passwordSalt: null,
-    passwordIterations: null,
-    authType: requestedAuthType ?? SendAuthType.None,
-    emails: normalizedEmails,
-    maxAccessCount: maxAccess.value,
-    accessCount: 0,
-    disabled: typeof disabledRaw.value === 'boolean' ? disabledRaw.value : false,
-    hideEmail: typeof hideEmailRaw.value === 'boolean' ? hideEmailRaw.value : null,
-    createdAt: now,
-    updatedAt: now,
-    expirationDate: expirationDate ? expirationDate.toISOString() : null,
-    deletionDate: deletionDate.toISOString(),
-  };
-
-  if (typeof passwordRaw.value === 'string' && passwordRaw.value.length > 0) {
-    await setSendPassword(send, passwordRaw.value);
-  } else if (send.authType === SendAuthType.Password) {
-    return errorResponse('Password is required for password auth', 400);
-  }
-
-  if (send.authType !== SendAuthType.Email) {
-    send.emails = null;
-  }
-
+// Creating or editing a Send persists it, bumps the owner's revision, signals their devices and
+// records the matching event.
+async function saveSendAndNotify(request: Request, env: Env, send: Send, action: 'created' | 'edited'): Promise<void> {
   await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
-  await recordSendEvent(env, request, send, 'created');
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) {
-    return errorResponse('Server configuration error', 500);
-  }
-  const uploadToken = await createSendFileUploadToken(userId, send.id, fileId, jwtSecret);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
+  notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
+  (action === 'created' ? notifyUserSendCreate : notifyUserSendUpdate)(env, {
+    userId: send.userId,
+    sendId: send.id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(request),
+  });
+  await recordSendEvent(env, request, send, action);
+}
 
+// The file arrives in a second request authorised by a short-lived upload token bound to this Send.
+async function sendFileUploadResponse(request: Request, env: Env, send: Send, fileId: string): Promise<Response> {
+  const jwtSecret = getSafeJwtSecret(env);
+  if (!jwtSecret) return errorResponse('Server configuration error', 500);
+  const uploadToken = await createSendFileUploadToken(send.userId, send.id, fileId, jwtSecret);
   return jsonResponse({
     fileUploadType: 1,
     object: 'send-fileUpload',
     url: buildDirectUploadUrl(request, `/api/sends/${send.id}/file/${fileId}`, uploadToken),
     sendResponse: sendToResponse(send),
   });
+}
+
+export async function handleCreateSend(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+
+  const sendType = parseSendType(prop(body, 'type').value);
+  if (sendType === null) return errorResponse('Invalid Send type', 400);
+  if (sendType === SendType.File) return errorResponse('File sends should use /api/sends/file/v2', 400);
+
+  const send = await parseNewSend(body, userId, 'text');
+  if (send instanceof Response) return send;
+  await saveSendAndNotify(request, env, send, 'created');
+  return jsonResponse(sendToResponse(send));
+}
+
+export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
+  const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+
+  if (parseSendType(prop(body, 'type').value) !== SendType.File) return errorResponse('Send content is not a file', 400);
+  const fileLength = parseFileLength(prop(body, 'fileLength').value);
+  if (!fileLength.ok) return fileLength.response;
+  if (fileLength.value > maxFileSize) return errorResponse('Send storage limit exceeded with this file', 400);
+
+  const fileId = generateUUID();
+  const send = await parseNewSend(body, userId, 'file', { id: fileId, size: fileLength.value, sizeName: formatSize(fileLength.value) });
+  if (send instanceof Response) return send;
+  await saveSendAndNotify(request, env, send, 'created');
+  return sendFileUploadResponse(request, env, send, fileId);
 }
 
 export async function handleGetSendFileUpload(
@@ -391,32 +277,11 @@ export async function handleGetSendFileUpload(
   sendId: string,
   fileId: string
 ): Promise<Response> {
-  void request;
   const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
-  if (!send || send.userId !== userId) {
-    return errorResponse('Send not found', 404);
-  }
-  if (send.type !== SendType.File) {
-    return errorResponse('Send is not a file type send.', 400);
-  }
-
-  const sendData = parseStoredSendData(send);
-  const expectedFileId = typeof sendData.id === 'string' ? sendData.id : null;
-  if (!expectedFileId || expectedFileId !== fileId) {
-    return errorResponse('Send file does not match send data.', 400);
-  }
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) {
-    return errorResponse('Server configuration error', 500);
-  }
-  const uploadToken = await createSendFileUploadToken(userId, send.id, fileId, jwtSecret);
-
-  return jsonResponse({
-    fileUploadType: 1,
-    object: 'send-fileUpload',
-    url: buildDirectUploadUrl(request, `/api/sends/${send.id}/file/${fileId}`, uploadToken),
-    sendResponse: sendToResponse(send),
-  });
+  if (!send || send.userId !== userId) return errorResponse('Send not found', 404);
+  if (send.type !== SendType.File) return errorResponse('Send is not a file type send.', 400);
+  if (!sendFileIdMatches(send, fileId)) return errorResponse('Send file does not match send data.', 400);
+  return sendFileUploadResponse(request, env, send, fileId);
 }
 
 export async function handleUploadSendFile(
@@ -611,11 +476,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   }
 
   send.updatedAt = new Date().toISOString();
-  await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
-  await recordSendEvent(env, request, send, 'edited');
+  await saveSendAndNotify(request, env, send, 'edited');
 
   return jsonResponse(sendToResponse(send));
 }
@@ -636,8 +497,8 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
 
   await sendRepo.deleteSend(env.DB, sendId, userId);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendDeleteForRequest(request, env, sendId, userId, revisionDate);
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserSendDelete(env, { userId, sendId, revisionDate, contextId: readActingDeviceIdentifier(request) });
   await recordSendEvent(env, request, send, 'deleted');
   await writeDataAudit(env.DB, request, userId, 'send', 'send.delete', {
     id: sendId,
@@ -669,9 +530,9 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
 
   const revisionDate = await sendRepo.bulkDeleteSends(env.DB, body.ids, userId);
   if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
+    notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const send of sends) {
-      notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
+      notifyUserSendDelete(env, { userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
     }
     await recordSendEvents(env, request, userId, sends, 'deleted');
     await writeDataAudit(env.DB, request, userId, 'send', 'send.delete.bulk', {
@@ -691,11 +552,7 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
 
   await setSendPassword(send, null);
   send.updatedAt = new Date().toISOString();
-  await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
-  await recordSendEvent(env, request, send, 'edited');
+  await saveSendAndNotify(request, env, send, 'edited');
   await writeDataAudit(env.DB, request, userId, 'send', 'send.password.remove', {
     id: send.id,
     type: send.type,
@@ -713,11 +570,7 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
   send.authType = SendAuthType.None;
   send.emails = null;
   send.updatedAt = new Date().toISOString();
-  await sendRepo.saveSend(env.DB, send);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
-  await recordSendEvent(env, request, send, 'edited');
+  await saveSendAndNotify(request, env, send, 'edited');
   await writeDataAudit(env.DB, request, userId, 'send', 'send.auth.remove', {
     id: send.id,
     type: send.type,

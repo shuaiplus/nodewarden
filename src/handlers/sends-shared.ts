@@ -1,12 +1,5 @@
 import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
-import {
-  notifyUserSendCreate,
-  notifyUserSendDelete,
-  notifyUserSendUpdate,
-  notifyUserVaultSync,
-} from '../durable/notifications-hub';
 import { errorResponse, jsonResponse, prop } from '../utils/response';
-import { readActingDeviceIdentifier } from '../utils/device';
 import { LIMITS } from '../config/limits';
 import * as sendRepo from '../services/storage-send-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -14,71 +7,6 @@ import * as userRepo from '../services/storage-user-repo';
 export const SEND_INACCESSIBLE_MSG = 'Send does not exist or is no longer available';
 const SEND_PASSWORD_ITERATIONS = 100_000;
 export const SEND_PASSWORD_LIMIT_SCOPE = 'send-password';
-
-export function notifyVaultSyncForRequest(
-  request: Request,
-  env: Env,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-}
-
-export function notifySendCreateForRequest(
-  request: Request,
-  env: Env,
-  sendId: string,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserSendCreate(env, {
-    userId,
-    sendId,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
-}
-
-export function notifySendUpdateForRequest(
-  request: Request,
-  env: Env,
-  sendId: string,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserSendUpdate(env, {
-    userId,
-    sendId,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
-}
-
-export function notifySendDeleteForRequest(
-  request: Request,
-  env: Env,
-  sendId: string,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserSendDelete(env, {
-    userId,
-    sendId,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
-}
-
-export function getAliasedProp(source: unknown, aliases: string[]): { present: boolean; value: unknown } {
-  if (!source || typeof source !== 'object') return { present: false, value: undefined };
-  for (const key of aliases) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      const value = (source as Record<string, unknown>)[key];
-      return { present: true, value };
-    }
-  }
-  return { present: false, value: undefined };
-}
 
 export function base64UrlEncode(data: Uint8Array): string {
   const base64 = btoa(String.fromCharCode(...data));
@@ -193,6 +121,12 @@ export function parseStoredSendData(send: Send): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+// A file Send names its stored object inside the data blob; the route's file id must be that one.
+export function sendFileIdMatches(send: Send, fileId: string): boolean {
+  const { id } = parseStoredSendData(send);
+  return !!id && id === fileId;
 }
 
 function normalizeSendDataSizeField(data: Record<string, unknown>): Record<string, unknown> {

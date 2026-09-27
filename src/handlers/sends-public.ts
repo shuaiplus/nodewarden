@@ -1,8 +1,10 @@
-import { Env, SendType } from '../types';
+import { Env, Send, SendType } from '../types';
 import { recordSendEvent } from '../services/events';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { sanitizeDownloadContentType } from '../utils/content-type';
+import { readActingDeviceIdentifier } from '../utils/device';
+import { notifyUserSendUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import {
   createSendAccessToken,
   createSendFileDownloadToken,
@@ -21,10 +23,9 @@ import {
   getSafeJwtSecret,
   hasEmailAuth,
   isSendAvailable,
-  notifySendUpdateForRequest,
-  notifyVaultSyncForRequest,
   parseStoredSendData,
   resolveSendFromIdOrAccessId,
+  sendFileIdMatches,
   sendPasswordLimitKey,
   sendPasswordLockedErrorResponse,
   sendPasswordLockedOAuthResponse,
@@ -45,17 +46,10 @@ function contentDispositionAttachment(fileName: string | null | undefined): stri
   return `attachment; filename="${value}"`;
 }
 
-export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
-  const sendId = fromAccessId(accessId);
-  if (!sendId) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
-
-  const send = await sendRepo.getSend(env.DB, sendId);
-  if (!send || !isSendAvailable(send)) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
-
+// Reads the optional JSON body and checks the Send password inside the per-client attempt limit,
+// so a guessed password costs the guesser lockouts rather than the owner's Send. Resolves to the
+// rejection to answer with, or null once the caller may proceed.
+async function authorizeSendByPassword(request: Request, env: Env, send: Send): Promise<Response | null> {
   let body: unknown = {};
   try {
     body = await request.json();
@@ -63,50 +57,74 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     body = {};
   }
 
-  let sendPasswordLimitIpKey: string | null = null;
-  let sendPasswordRateLimit: RateLimitService | null = null;
-  if (send.passwordHash) {
-    const clientIdentifier = getClientIdentifier(request);
-    if (!clientIdentifier) {
-      return errorResponse('Client IP is required', 403);
-    }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
-    sendPasswordRateLimit = new RateLimitService(env.DB);
-    const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
-    if (!sendPasswordCheck.allowed) {
-      return sendPasswordLockedErrorResponse(sendPasswordCheck.retryAfterSeconds || 60);
-    }
+  const clientIdentifier = send.passwordHash ? getClientIdentifier(request) : null;
+  if (send.passwordHash && !clientIdentifier) return errorResponse('Client IP is required', 403);
+  const limitKey = clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
+  const rateLimit = new RateLimitService(env.DB);
+  if (limitKey) {
+    const check = await rateLimit.checkLoginAttempt(limitKey);
+    if (!check.allowed) return sendPasswordLockedErrorResponse(check.retryAfterSeconds || 60);
   }
 
   const validation = await validatePublicSendAccess(send, body);
   if (!validation.ok) {
-    if (validation.reason === 'invalid_password' && sendPasswordRateLimit && sendPasswordLimitIpKey) {
-      const failed = await sendPasswordRateLimit.recordFailedLogin(sendPasswordLimitIpKey);
-      if (failed.locked) {
-        return sendPasswordLockedErrorResponse(failed.retryAfterSeconds || 60);
-      }
+    if (validation.reason === 'invalid_password' && limitKey) {
+      const failed = await rateLimit.recordFailedLogin(limitKey);
+      if (failed.locked) return sendPasswordLockedErrorResponse(failed.retryAfterSeconds || 60);
     }
     return validation.response;
   }
+  if (limitKey) await rateLimit.clearLoginAttempts(limitKey);
+  return null;
+}
 
-  if (send.passwordHash && sendPasswordRateLimit && sendPasswordLimitIpKey) {
-    await sendPasswordRateLimit.clearLoginAttempts(sendPasswordLimitIpKey);
-  }
+// Resolves the available Send named by the bearer send-access token, or the rejection to answer with.
+async function authorizeSendByToken(request: Request, env: Env): Promise<{ secret: string; send: Send } | Response> {
+  const jwt = getSafeJwtSecret(env);
+  if (!jwt.ok) return jwt.response;
+  const token = extractBearerToken(request);
+  const claims = token ? await verifySendAccessToken(token, jwt.secret) : null;
+  if (!claims) return errorResponse('Unauthorized', 401);
+  const send = await sendRepo.getSend(env.DB, claims.sub);
+  if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  return { secret: jwt.secret, send };
+}
+
+// Counts one access against the Send's limit, then tells the owner's devices and the event log.
+async function touchSendAccess(request: Request, env: Env, send: Send): Promise<Response | null> {
+  if (!await sendRepo.incrementSendAccessCount(env.DB, send.id)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  send.accessCount += 1;
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
+  notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserSendUpdate(env, { userId: send.userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+  await recordSendEvent(env, request, send, 'accessed');
+  return null;
+}
+
+// The file itself is fetched through a short-lived signed URL rather than a bearer header.
+async function sendFileDownloadResponse(request: Request, send: Send, fileId: string, secret: string): Promise<Response> {
+  const token = await createSendFileDownloadToken(send.id, fileId, secret);
+  return jsonResponse({
+    object: 'send-fileDownload',
+    id: fileId,
+    url: `${new URL(request.url).origin}/api/sends/${send.id}/${fileId}?t=${token}`,
+  });
+}
+
+export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
+  const sendId = fromAccessId(accessId);
+  const send = sendId ? await sendRepo.getSend(env.DB, sendId) : null;
+  if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+
+  const rejected = await authorizeSendByPassword(request, env, send);
+  if (rejected) return rejected;
 
   if (send.type === SendType.Text) {
-    const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
-    if (!updated) {
-      return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-    }
-    send.accessCount += 1;
-    const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
-    notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
-    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
-    await recordSendEvent(env, request, send, 'accessed');
+    const touched = await touchSendAccess(request, env, send);
+    if (touched) return touched;
   }
 
-  const creatorIdentifier = await getCreatorIdentifier(env.DB, send);
-  return jsonResponse(sendToAccessResponse(send, creatorIdentifier));
+  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(env.DB, send)));
 }
 
 export async function handleAccessSendFile(
@@ -117,156 +135,46 @@ export async function handleAccessSendFile(
 ): Promise<Response> {
   const safeSecret = getSafeJwtSecret(env);
   if (!safeSecret.ok) return safeSecret.response;
-  const { secret } = safeSecret;
 
   const send = await resolveSendFromIdOrAccessId(env.DB, idOrAccessId);
-  if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
+  if (!send || !isSendAvailable(send) || send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const data = parseStoredSendData(send);
-  const expectedFileId = typeof data.id === 'string' ? data.id : null;
-  if (!expectedFileId || expectedFileId !== fileId) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
+  const rejected = await authorizeSendByPassword(request, env, send);
+  if (rejected) return rejected;
 
-  let body: unknown = {};
-  try {
-    body = await request.json();
-  } catch {
-    body = {};
-  }
+  const touched = await touchSendAccess(request, env, send);
+  if (touched) return touched;
 
-  let sendPasswordLimitIpKey: string | null = null;
-  let sendPasswordRateLimit: RateLimitService | null = null;
-  if (send.passwordHash) {
-    const clientIdentifier = getClientIdentifier(request);
-    if (!clientIdentifier) {
-      return errorResponse('Client IP is required', 403);
-    }
-    sendPasswordLimitIpKey = sendPasswordLimitKey(clientIdentifier, send.id);
-    sendPasswordRateLimit = new RateLimitService(env.DB);
-    const sendPasswordCheck = await sendPasswordRateLimit.checkLoginAttempt(sendPasswordLimitIpKey);
-    if (!sendPasswordCheck.allowed) {
-      return sendPasswordLockedErrorResponse(sendPasswordCheck.retryAfterSeconds || 60);
-    }
-  }
-
-  const validation = await validatePublicSendAccess(send, body);
-  if (!validation.ok) {
-    if (validation.reason === 'invalid_password' && sendPasswordRateLimit && sendPasswordLimitIpKey) {
-      const failed = await sendPasswordRateLimit.recordFailedLogin(sendPasswordLimitIpKey);
-      if (failed.locked) {
-        return sendPasswordLockedErrorResponse(failed.retryAfterSeconds || 60);
-      }
-    }
-    return validation.response;
-  }
-
-  if (send.passwordHash && sendPasswordRateLimit && sendPasswordLimitIpKey) {
-    await sendPasswordRateLimit.clearLoginAttempts(sendPasswordLimitIpKey);
-  }
-
-  const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
-  if (!updated) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
-  send.accessCount += 1;
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
-  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
-  await recordSendEvent(env, request, send, 'accessed');
-
-  const token = await createSendFileDownloadToken(send.id, fileId, secret);
-  const url = new URL(request.url);
-  const downloadUrl = `${url.origin}/api/sends/${send.id}/${fileId}?t=${token}`;
-
-  return jsonResponse({
-    object: 'send-fileDownload',
-    id: fileId,
-    url: downloadUrl,
-  });
+  return sendFileDownloadResponse(request, send, fileId, safeSecret.secret);
 }
 
 export async function handleAccessSendV2(request: Request, env: Env): Promise<Response> {
-  const jwt = getSafeJwtSecret(env);
-  if (!jwt.ok) return jwt.response;
-
-  const token = extractBearerToken(request);
-  if (!token) {
-    return errorResponse('Unauthorized', 401);
-  }
-
-  const claims = await verifySendAccessToken(token, jwt.secret);
-  if (!claims) {
-    return errorResponse('Unauthorized', 401);
-  }
-
-  const send = await sendRepo.getSend(env.DB, claims.sub);
-  if (!send || !isSendAvailable(send)) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
+  const auth = await authorizeSendByToken(request, env);
+  if (auth instanceof Response) return auth;
+  const { send } = auth;
 
   if (send.type === SendType.Text) {
-    const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
-    if (!updated) {
-      return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-    }
-    send.accessCount += 1;
-    const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
-    notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
-    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
-    await recordSendEvent(env, request, send, 'accessed');
+    const touched = await touchSendAccess(request, env, send);
+    if (touched) return touched;
   }
 
-  const creatorIdentifier = await getCreatorIdentifier(env.DB, send);
-  return jsonResponse(sendToAccessResponse(send, creatorIdentifier));
+  return jsonResponse(sendToAccessResponse(send, await getCreatorIdentifier(env.DB, send)));
 }
 
 export async function handleAccessSendFileV2(request: Request, env: Env, fileId: string): Promise<Response> {
-  const jwt = getSafeJwtSecret(env);
-  if (!jwt.ok) return jwt.response;
-
-  const token = extractBearerToken(request);
-  if (!token) {
-    return errorResponse('Unauthorized', 401);
-  }
-
-  const claims = await verifySendAccessToken(token, jwt.secret);
-  if (!claims) {
-    return errorResponse('Unauthorized', 401);
-  }
-
-  const send = await sendRepo.getSend(env.DB, claims.sub);
-  if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
+  const auth = await authorizeSendByToken(request, env);
+  if (auth instanceof Response) return auth;
+  const { send, secret } = auth;
+  if (send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const data = parseStoredSendData(send);
-  const expectedFileId = typeof data.id === 'string' ? data.id : null;
-  if (!expectedFileId || expectedFileId !== fileId) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
+  const touched = await touchSendAccess(request, env, send);
+  if (touched) return touched;
 
-  const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
-  if (!updated) {
-    return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  }
-  send.accessCount += 1;
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
-  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
-  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
-  await recordSendEvent(env, request, send, 'accessed');
-
-  const downloadToken = await createSendFileDownloadToken(send.id, fileId, jwt.secret);
-  const url = new URL(request.url);
-  const downloadUrl = `${url.origin}/api/sends/${send.id}/${fileId}?t=${downloadToken}`;
-
-  return jsonResponse({
-    object: 'send-fileDownload',
-    id: fileId,
-    url: downloadUrl,
-  });
+  return sendFileDownloadResponse(request, send, fileId, secret);
 }
 
 export async function handleDownloadSendFile(
