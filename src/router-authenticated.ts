@@ -311,5 +311,4 @@ authenticatedRoutes.on('GET', ['/api/settings/domains', '/settings/domains'], (c
 authenticatedRoutes.on(['PUT', 'POST'], ['/api/settings/domains', '/settings/domains'], (c) => handleUpdateDomains(c.req.raw, c.env, c.get('userId')));
 
 authenticatedRoutes.route('/', deviceRoutes);
-
 authenticatedRoutes.route('/', adminRoutes);

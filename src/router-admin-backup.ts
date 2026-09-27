@@ -1,4 +1,4 @@
-import type { Env, User } from './types';
+import { Hono } from 'hono';
 import {
   handleAdminExportBackup,
   handleDownloadAdminRemoteBackup,
@@ -15,75 +15,29 @@ import {
   handleUpdateAdminBackupSettings,
 } from './handlers/backup';
 import { errorResponse } from './utils/response';
+import type { AppEnv } from './router';
 
-export async function handleAdminBackupRoute(
-  request: Request,
-  env: Env,
-  actorUser: User,
-  path: string,
-  method: string
-): Promise<Response | null> {
-  if (path === '/api/admin/backup/export' && method === 'POST') {
-    return handleAdminExportBackup(request, env, actorUser);
-  }
+export const adminBackupRoutes = new Hono<AppEnv>();
 
-  if (path === '/api/admin/backup/blob') {
-    // POST only: this endpoint requires master-password verification, and a GET
-    // could only carry that credential in the query string, where it would leak
-    // into request logs, proxy logs, browser history and Referer headers.
-    // The credential is the same value clients send to /identity/connect/token,
-    // so a leaked copy is enough to sign in as this admin.
-    if (method === 'POST') {
-      return handleDownloadAdminBackupAttachment(request, env, actorUser);
-    }
-    if (method === 'GET') {
-      return errorResponse(
-        'Use POST with a JSON body for this endpoint. Credentials must not be sent in the URL.',
-        405
-      );
-    }
-    return null;
-  }
-
-  if (path === '/api/admin/backup/settings') {
-    if (method === 'GET') return handleGetAdminBackupSettings(request, env, actorUser);
-    if (method === 'PUT') return handleUpdateAdminBackupSettings(request, env, actorUser);
-    return null;
-  }
-
-  if (path === '/api/admin/backup/settings/repair') {
-    if (method === 'GET') return handleGetAdminBackupSettingsRepairState(request, env, actorUser);
-    if (method === 'POST') return handleRepairAdminBackupSettings(request, env, actorUser);
-    return null;
-  }
-
-  if (path === '/api/admin/backup/run' && method === 'POST') {
-    return handleRunAdminConfiguredBackup(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/remote' && method === 'GET') {
-    return handleListAdminRemoteBackups(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/remote/download' && method === 'POST') {
-    return handleDownloadAdminRemoteBackup(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/remote/integrity' && method === 'POST') {
-    return handleInspectAdminRemoteBackup(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/remote/file' && method === 'DELETE') {
-    return handleDeleteAdminRemoteBackup(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/remote/restore' && method === 'POST') {
-    return handleRestoreAdminRemoteBackup(request, env, actorUser);
-  }
-
-  if (path === '/api/admin/backup/import' && method === 'POST') {
-    return handleAdminImportBackup(request, env, actorUser);
-  }
-
-  return null;
-}
+adminBackupRoutes.post('/api/admin/backup/export', (c) => handleAdminExportBackup(c.req.raw, c.env, c.get('currentUser')));
+// POST only: this endpoint requires master-password verification, and a GET
+// could only carry that credential in the query string, where it would leak
+// into request logs, proxy logs, browser history and Referer headers.
+// The credential is the same value clients send to /identity/connect/token,
+// so a leaked copy is enough to sign in as this admin.
+adminBackupRoutes.post('/api/admin/backup/blob', (c) => handleDownloadAdminBackupAttachment(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.get('/api/admin/backup/blob', () => errorResponse(
+  'Use POST with a JSON body for this endpoint. Credentials must not be sent in the URL.',
+  405
+));
+adminBackupRoutes.get('/api/admin/backup/settings', (c) => handleGetAdminBackupSettings(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.put('/api/admin/backup/settings', (c) => handleUpdateAdminBackupSettings(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.get('/api/admin/backup/settings/repair', (c) => handleGetAdminBackupSettingsRepairState(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/settings/repair', (c) => handleRepairAdminBackupSettings(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/run', (c) => handleRunAdminConfiguredBackup(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.get('/api/admin/backup/remote', (c) => handleListAdminRemoteBackups(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/remote/download', (c) => handleDownloadAdminRemoteBackup(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/remote/integrity', (c) => handleInspectAdminRemoteBackup(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.delete('/api/admin/backup/remote/file', (c) => handleDeleteAdminRemoteBackup(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/remote/restore', (c) => handleRestoreAdminRemoteBackup(c.req.raw, c.env, c.get('currentUser')));
+adminBackupRoutes.post('/api/admin/backup/import', (c) => handleAdminImportBackup(c.req.raw, c.env, c.get('currentUser')));

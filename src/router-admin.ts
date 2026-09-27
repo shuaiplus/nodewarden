@@ -13,7 +13,7 @@ import {
   handleAdminUpdateAuditLogSettings,
   handleAdminClearAuditLogs,
 } from './handlers/admin';
-import { handleAdminBackupRoute } from './router-admin-backup';
+import { adminBackupRoutes } from './router-admin-backup';
 import { errorResponse } from './utils/response';
 import type { AppEnv } from './router';
 
@@ -47,11 +47,7 @@ adminRoutes.delete('/api/admin/logs', (c) => handleAdminClearAuditLogs(c.req.raw
 adminRoutes.get('/api/admin/logs/settings', (c) => handleAdminGetAuditLogSettings(c.req.raw, c.env, c.get('currentUser')));
 adminRoutes.on(['PUT', 'POST'], '/api/admin/logs/settings', (c) => handleAdminUpdateAuditLogSettings(c.req.raw, c.env, c.get('currentUser')));
 
-adminRoutes.use(async (c, next) => {
-  const adminBackupResponse = await handleAdminBackupRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
-  if (adminBackupResponse) return adminBackupResponse;
-  await next();
-});
+adminRoutes.route('/', adminBackupRoutes);
 
 adminRoutes.get('/api/admin/invites', (c) => handleAdminListInvites(c.req.raw, c.env, c.get('currentUser')));
 adminRoutes.post('/api/admin/invites', (c) => handleAdminCreateInvite(c.req.raw, c.env, c.get('currentUser')));
