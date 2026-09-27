@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
 import { TOTP } from 'otpauth';
 import { unzipSync, zipSync } from 'fflate';
 
+import { getOrm } from '../db/client';
 import { ensureStorageSchema } from '../db/migrate';
+import { authRequests, config, devices, users } from '../db/schema';
 import { hashPassword } from '../services/auth-password';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
@@ -56,7 +59,7 @@ test('new-device OTP uses exact errors, sends in the background, verifies email 
 test('known devices, young accounts, empty device history, opt-out, flag-off and mail-off bypass the challenge', async () => {
   for (const kind of ['known', 'young', 'no-devices', 'opt-out', 'flag-off', 'mail-off']) {
     const f = await setup(kind === 'young' ? { createdAt: new Date().toISOString() } : kind === 'opt-out' ? { verifyDevices: false } : {});
-    if (kind === 'no-devices') await f.env.DB.prepare('DELETE FROM devices WHERE user_id=?').bind(f.user.id).run();
+    if (kind === 'no-devices') await getOrm(f.env.DB).delete(devices).where(eq(devices.userId, f.user.id));
     if (kind === 'flag-off') f.env.ENABLE_NEW_DEVICE_VERIFICATION = '0';
     if (kind === 'mail-off') delete f.env.EMAIL;
     const response = await f.login(kind === 'known' ? { deviceIdentifier: 'known-device' } : {});
@@ -65,7 +68,7 @@ test('known devices, young accounts, empty device history, opt-out, flag-off and
     assert.equal(f.mail.sent.length, 0, kind);
   }
   const f = await setup();
-  await f.env.DB.prepare('DELETE FROM devices WHERE user_id=?').bind(f.user.id).run();
+  await getOrm(f.env.DB).delete(devices).where(eq(devices.userId, f.user.id));
   assert.deepEqual(await (await f.login({ newDeviceOtp: '123456' })).json(), INVALID);
 });
 
@@ -78,10 +81,10 @@ test('TOTP, approved device requests and personal API keys do not need new-devic
   assert.equal(f.mail.sent.length, 0);
   const device = await setup({ apiKey: 'personal-api-key' });
   const id = crypto.randomUUID();
-  await device.env.DB.prepare(`INSERT INTO auth_requests
-    (id,user_id,type,request_device_identifier,request_device_type,access_code,public_key,key,approved,creation_date,response_date)
-    VALUES (?,?,0,'approved-device',9,'access-code','public-key','2.key|key|key',1,?,?)`)
-    .bind(id, device.user.id, new Date().toISOString(), new Date().toISOString()).run();
+  await getOrm(device.env.DB).insert(authRequests).values({
+    id, userId: device.user.id, type: 0, requestDeviceIdentifier: 'approved-device', requestDeviceType: 9, accessCode: 'access-code', publicKey: 'public-key',
+    key: '2.key|key|key', approved: 1, creationDate: new Date().toISOString(), responseDate: new Date().toISOString(),
+  });
   assert.equal((await device.login({ password: 'access-code', authRequest: id })).status, 200);
   const apiKey = await device.login({ grant_type: 'client_credentials', client_id: `user.${device.user.id}`, client_secret: 'personal-api-key', scope: 'api', deviceIdentifier: 'api-device' });
   assert.equal(apiKey.status, 200);
@@ -149,7 +152,7 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   assert.equal(registered.status, 200);
   const user = (await userRepo.getUser(env.DB, 'first@x.io'))!;
   assert.equal(user.verifyDevices, true);
-  await env.DB.prepare('UPDATE users SET verify_devices=0 WHERE id=?').bind(user.id).run();
+  await getOrm(env.DB).update(users).set({ verifyDevices: 0 }).where(eq(users.id, user.id));
   await ensureStorageSchema(env.DB);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.verifyDevices, false);
   const archive = await buildBackupArchive(env, new Date(), { includeAttachments: false });
@@ -162,6 +165,6 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   await importBackupArchiveBytes(zipSync(files), restored, user.id, false);
   await ensureStorageSchema(restored.DB);
   assert.equal((await userRepo.getUserById(restored.DB, user.id))?.verifyDevices, false);
-  assert.equal(await restored.DB.prepare("SELECT value FROM config WHERE key='migration.verify-devices-on'").first('value'), '1');
+  assert.equal((await getOrm(restored.DB).select({ value: config.value }).from(config).where(eq(config.key, 'migration.verify-devices-on')).get())?.value, '1');
   await drainWaitUntil();
 });
