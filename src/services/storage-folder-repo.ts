@@ -1,12 +1,13 @@
-import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 
 import { chunkRows, getOrm } from '../db/client';
 import { ciphers, folders } from '../db/schema';
+import { jsonExtract, jsonRemove } from '../db/sql';
 import type { Folder } from '../types';
 import { updateRevisionDate } from './storage-revision-repo';
 
 function folderClearedData() {
-  return sql`json_remove(${ciphers.data}, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')`;
+  return jsonRemove(ciphers.data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate');
 }
 
 export async function getFolder(db: D1Database, id: string): Promise<Folder | null> {
@@ -58,8 +59,8 @@ export async function clearFolderFromCiphers(
       isNull(ciphers.organizationId),
       or(
         eq(ciphers.folderId, folderId),
-        sql`json_extract(${ciphers.data}, '$.folderId') = ${folderId}`,
-        sql`json_extract(${ciphers.data}, '$.folder_id') = ${folderId}`,
+        eq(jsonExtract(ciphers.data, '$.folderId'), folderId),
+        eq(jsonExtract(ciphers.data, '$.folder_id'), folderId),
       ),
     ));
 }
@@ -72,8 +73,8 @@ export async function bulkDeleteFolders(db: D1Database, ids: string[], userId: s
   const now = new Date().toISOString();
   const statements = [];
 
-  for (const chunk of chunkRows(uniqueIds, 3, 2)) {
-    const inList = sql.join(chunk.map((id) => sql`${id}`), sql`, `);
+  // The cipher update binds each id three times, beside nine other values: its sets, the user and the JSON paths.
+  for (const chunk of chunkRows(uniqueIds, 3, 9)) {
     statements.push(
       orm
         .update(ciphers)
@@ -83,8 +84,8 @@ export async function bulkDeleteFolders(db: D1Database, ids: string[], userId: s
           isNull(ciphers.organizationId),
           or(
             inArray(ciphers.folderId, chunk),
-            sql`json_extract(${ciphers.data}, '$.folderId') in (${inList})`,
-            sql`json_extract(${ciphers.data}, '$.folder_id') in (${inList})`,
+            inArray(jsonExtract(ciphers.data, '$.folderId'), chunk),
+            inArray(jsonExtract(ciphers.data, '$.folder_id'), chunk),
           ),
         )),
       orm.delete(folders).where(and(eq(folders.userId, userId), inArray(folders.id, chunk))),
