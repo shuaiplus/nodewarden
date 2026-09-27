@@ -1,4 +1,5 @@
 import { decode, verify } from 'hono/jwt';
+import { signHs256Jwt } from '../utils/jwt';
 import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -26,7 +27,7 @@ export async function userRequiresSso(env: Env, userId: string): Promise<boolean
 export async function handleSsoPrevalidate(env: Env): Promise<Response> {
   if (!isSsoEnabled(env)) return errorResponse('SSO is not enabled', 404);
   const now = Math.floor(Date.now() / 1000);
-  const token = await signOpaque(env.JWT_SECRET, { sub: 'nodewarden-sso', nbf: now, exp: now + 120 });
+  const token = await signHs256Jwt({ sub: 'nodewarden-sso', nbf: now, exp: now + 120 }, env.JWT_SECRET);
   return jsonResponse({ token });
 }
 
@@ -230,12 +231,4 @@ function hasValidIdTokenClaims(env: Env, authority: string, claims: Record<strin
   if (typeof exp !== 'number' || exp + ID_TOKEN_CLOCK_SKEW_SECONDS < now) return false;
   if (typeof nbf === 'number' && nbf - ID_TOKEN_CLOCK_SKEW_SECONDS > now) return false;
   return true;
-}
-
-async function signOpaque(secret: string, claims: Record<string, unknown>): Promise<string> {
-  const body = btoa(JSON.stringify(claims));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
-  const sig = btoa(String.fromCharCode(...new Uint8Array(signature)));
-  return `${body}.${sig}`;
 }
