@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq, like } from 'drizzle-orm';
 
 import { AuthService } from '../services/auth';
 import { createAuth } from '../auth';
+import { getOrm } from '../db/client';
+import { auditLogs, session, verification } from '../db/schema';
+import { jsonSet } from '../db/sql';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword } from '../services/auth-password';
 import { setUserStatus } from '../services/account-deletion';
@@ -31,7 +35,7 @@ test('portal disable/enable rotates the stamp, invalidates existing tokens, and 
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: {} })).status, 403);
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf }, headers: { Origin: 'https://foreign.test' } })).status, 403);
   // Reversible status changes need CSRF but no fresh step-up.
-  await env.DB.prepare("UPDATE verification SET value=json_set(value,'$.authTime',0) WHERE id LIKE 'admin-session:%'").run();
+  await getOrm(env.DB).update(verification).set({ value: jsonSet(verification.value, '$.authTime', 0) }).where(like(verification.id, 'admin-session:%'));
   const disabled = await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf } });
   assert.equal(disabled.status, 303);
   assert.match(disabled.headers.get('Location')!, /m=disabled/);
@@ -46,10 +50,11 @@ test('portal disable/enable rotates the stamp, invalidates existing tokens, and 
   assert.equal((await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'refresh_token', refresh_token: 'old-session' } })).status, 400);
   const repeated = await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf } });
   assert.equal(repeated.status, 303);
-  const events = await env.DB.prepare("SELECT actor_user_id,metadata FROM audit_logs WHERE action='admin.portal.user.disable'").all<{ actor_user_id: string | null; metadata: string }>();
-  assert.equal(events.results.length, 1);
-  assert.equal(events.results[0].actor_user_id, null);
-  assert.equal(JSON.parse(events.results[0].metadata).adminEmail, ADMIN);
+  const events = await getOrm(env.DB).select({ actorUserId: auditLogs.actorUserId, metadata: auditLogs.metadata }).from(auditLogs)
+    .where(eq(auditLogs.action, 'admin.portal.user.disable'));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].actorUserId, null);
+  assert.equal(JSON.parse(events[0].metadata!).adminEmail, ADMIN);
   const enabled = await portalFetch(env, { path: `/admin/users/${user.id}/enable`, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf } });
   assert.equal(enabled.status, 303);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, updated.securityStamp);
@@ -109,7 +114,7 @@ test('Better Auth refuses new sessions while a user is disabled', async () => {
   const rejected = await signIn();
   assert.equal(rejected.status, 401);
   assert.equal((await rejected.json() as { code: string }).code, 'FAILED_TO_CREATE_SESSION');
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id=?').bind(user.id).first('n'), 0);
+  assert.equal(await getOrm(env.DB).$count(session, eq(session.userId, user.id)), 0);
   assert.deepEqual(await setUserStatus(env, user.id, 'active', audit), { kind: 'updated' });
   assert.deepEqual(await beforeCreate(candidate, null), { data: candidate });
   assert.equal((await signIn()).status, 200);
@@ -121,8 +126,7 @@ test('stale Better Auth KV sessions cannot survive disable and re-enable', async
   const env = await createTestEnv({ CACHE_KV: cache.binding });
   const user = await seedUser(env);
   const token = 'cached-session-token';
-  await env.DB.prepare('INSERT INTO session (id, token, user_id, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind('cached-session', token, user.id, Date.now() + 60000, Date.now(), Date.now()).run();
+  await getOrm(env.DB).insert(session).values({ id: 'cached-session', token, userId: user.id, expiresAt: Date.now() + 60000, createdAt: Date.now(), updatedAt: Date.now() });
   await cache.binding.put(token, JSON.stringify({
     session: { id: 'cached-session', token, userId: user.id, expiresAt: new Date(Date.now() + 60000).toISOString(), createdAt: user.createdAt, updatedAt: user.updatedAt },
     user: { ...user, emailVerified: true },

@@ -6,7 +6,7 @@ import { MembershipStatus } from '../services/org-types';
 const { createOwnedOrganization } = await import('../handlers/organizations');
 import * as orgRepo from '../services/storage-org-repo';
 import { getOrm } from '../db/client';
-import { organizations, smSecrets, smProjects } from '../db/schema';
+import { auditLogs, organizations, smSecrets, smProjects } from '../db/schema';
 import { eq } from 'drizzle-orm';
 
 const email = 'portal@x.io';
@@ -51,6 +51,6 @@ test('portal organization deletion validates confirmation and audits the atomic 
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: org.name } })).status, 403);
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: org.name } })).status, 303);
   assert.equal(await orgRepo.getOrganization(env.DB, org.id), null);
-  assert.ok(await env.DB.prepare("SELECT id FROM audit_logs WHERE action='admin.portal.org.delete'").first());
+  assert.ok(await getOrm(env.DB).$count(auditLogs, eq(auditLogs.action, 'admin.portal.org.delete')));
   assert.equal((await portalFetch(env, { path: `/admin/organizations/view/${org.id}`, cookie: auth.cookie })).status, 404);
 });

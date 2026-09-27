@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq, like } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { auditLogs, users, verification } from '../db/schema';
+import { jsonSet } from '../db/sql';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
 import { searchUsersByEmailPrefix } from '../services/storage-user-repo';
 
@@ -35,7 +39,7 @@ test('portal delete requires CSRF, recent login and matching email; logs success
   assert.equal((await portalFetch(env, { path, cookie: auth.cookie })).status, 405);
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: user.email } })).status, 403);
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: 'wrong' } })).status, 400);
-  await env.DB.prepare("UPDATE verification SET value=json_set(value,'$.authTime',0) WHERE id LIKE 'admin-session:%'").run();
+  await getOrm(env.DB).update(verification).set({ value: jsonSet(verification.value, '$.authTime', 0) }).where(like(verification.id, 'admin-session:%'));
   const stale = await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(stale.status, 303);
   assert.match(stale.headers.get('Location')!, /m=reauth/);
@@ -43,9 +47,9 @@ test('portal delete requires CSRF, recent login and matching email; logs success
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: fresh.cookie });
   assert.match(await view.text(), /&lt;script&gt;/);
   assert.equal((await portalFetch(env, { path, method: 'POST', cookie: fresh.cookie, form: { csrf: fresh.csrf, confirmation: user.email.toUpperCase() } })).status, 303);
-  assert.equal(await env.DB.prepare('SELECT id FROM users WHERE id=?').bind(user.id).first(), null);
-  const audit = await env.DB.prepare("SELECT metadata FROM audit_logs WHERE action='admin.portal.user.delete'").first<{ metadata: string }>();
-  assert.equal(JSON.parse(audit!.metadata).adminEmail, adminEmail);
+  assert.equal(await getOrm(env.DB).$count(users, eq(users.id, user.id)), 0);
+  const audit = await getOrm(env.DB).select({ metadata: auditLogs.metadata }).from(auditLogs).where(eq(auditLogs.action, 'admin.portal.user.delete')).get();
+  assert.equal(JSON.parse(audit!.metadata!).adminEmail, adminEmail);
   assert.equal((await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: fresh.cookie })).status, 404);
   const lastAdmin = await seedUser(env, { role: 'admin' });
   const refused = await portalFetch(env, { path: `/admin/users/delete/${lastAdmin.id}`, method: 'POST', cookie: fresh.cookie, form: { csrf: fresh.csrf, confirmation: lastAdmin.email } });

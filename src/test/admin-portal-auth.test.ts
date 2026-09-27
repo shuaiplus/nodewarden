@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq, like } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { auditLogs, verification } from '../db/schema';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, portalFetch, signInToAdminPortal, type SentEmail } from './support/env';
 import { sha256Base64Url } from '../utils/account-passkeys';
 const email = `admin@${MAILABLE_DOMAIN}`;
@@ -36,9 +39,10 @@ test('admin links are same-browser POST-only and single-use; sessions use CSRF a
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login/logout', form: { csrf }, cookie: session, headers: { Origin: 'https://evil.test' } })).status, 403);
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login/logout', form: { csrf }, cookie: session })).status, 303);
   assert.equal((await portalFetch(env, { path: '/admin', cookie: session })).status, 303);
-  const audit = await env.DB.prepare("SELECT actor_user_id,metadata FROM audit_logs WHERE action='admin.portal.login'").first<{ actor_user_id: string | null; metadata: string }>();
-  assert.equal(audit?.actor_user_id, null);
-  assert.equal(JSON.parse(audit!.metadata).adminEmail, email);
+  const audit = await getOrm(env.DB).select({ actorUserId: auditLogs.actorUserId, metadata: auditLogs.metadata }).from(auditLogs)
+    .where(eq(auditLogs.action, 'admin.portal.login')).get();
+  assert.equal(audit?.actorUserId, null);
+  assert.equal(JSON.parse(audit!.metadata!).adminEmail, email);
 });
 
 test('admin request responses conceal directory membership, mail failure and per-admin budget', async (t) => {
@@ -53,8 +57,7 @@ test('admin request responses conceal directory membership, mail failure and per
   }
   statuses.forEach((status) => assert.deepEqual(status, statuses[0]));
   assert.equal(capture.sent.length, 3);
-  const count = await env.DB.prepare("SELECT count(*) AS n FROM verification WHERE id LIKE 'admin-login:%'").first<{ n: number }>();
-  assert.equal(count!.n, 3);
+  assert.equal(await getOrm(env.DB).$count(verification, like(verification.id, 'admin-login:%')), 3);
   for (let i = 0; i < 5; i++) await portalFetch(env, { method: 'POST', path: '/admin/login', form: { email: 'unknown@' + MAILABLE_DOMAIN } });
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login', form: { email } })).status, 429);
   const failed = await createTestEnv({ ...capture.overrides, EMAIL: failingEmail('E_RECIPIENT_SUPPRESSED'), ADMIN_EMAILS: email });
@@ -72,7 +75,7 @@ test('admin sessions expire and directory/stamp changes revoke both links and se
   env.ADMIN_EMAILS = email + ':rotated';
   assert.equal((await portalFetch(env, { path: '/admin', cookie: session.cookie })).status, 303);
   const renewed = await signInToAdminPortal(env, email);
-  await env.DB.prepare("UPDATE verification SET expires_at=0 WHERE id LIKE 'admin-session:%'").run();
+  await getOrm(env.DB).update(verification).set({ expiresAt: 0 }).where(like(verification.id, 'admin-session:%'));
   assert.equal((await portalFetch(env, { path: '/admin', cookie: renewed.cookie })).status, 303);
   const request = await portalFetch(env, { method: 'POST', path: '/admin/login', form: { email } });
   await drainWaitUntil();
@@ -81,7 +84,7 @@ test('admin sessions expire and directory/stamp changes revoke both links and se
   env.ADMIN_EMAILS = email;
   const expiring = await portalFetch(env, { method: 'POST', path: '/admin/login', form: { email } });
   await drainWaitUntil();
-  await env.DB.prepare('UPDATE verification SET expires_at=0 WHERE id=?').bind('admin-login:' + await sha256Base64Url(token(capture.sent))).run();
+  await getOrm(env.DB).update(verification).set({ expiresAt: 0 }).where(eq(verification.id, 'admin-login:' + await sha256Base64Url(token(capture.sent))));
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login/confirm', form: { token: token(capture.sent) }, cookie: cookie(expiring, '__Host-nw_admin_login') })).status, 400);
 });
 
