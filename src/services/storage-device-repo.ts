@@ -1,6 +1,6 @@
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, ne, or } from 'drizzle-orm';
 
-import { chunkRows, getOrm } from '../db/client';
+import { getOrm, statementChunks } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
 import { caseWhen, coalesce, excluded } from '../db/sql';
 import type { Device, TrustedDeviceTokenSummary } from '../types';
@@ -152,8 +152,7 @@ export async function clearDeviceKeys(
     .update(devices)
     .set({ encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, updatedAt })
     .where(and(eq(devices.userId, userId), inArray(devices.deviceIdentifier, chunk)));
-  // Each chunk binds its ids plus the fixed values a one-id probe counts (an empty list renders as `false`).
-  const statements = chunkRows(uniqueIds, 1, clear(['']).toSQL().params.length - 1).map(clear);
+  const statements = statementChunks(uniqueIds, clear).map(clear);
   const results = await orm.batch(statements as [typeof statements[0], ...typeof statements]);
   return results.reduce((total, result) => total + Number(result.meta.changes ?? 0), 0);
 }

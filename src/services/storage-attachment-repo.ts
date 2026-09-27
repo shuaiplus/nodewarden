@@ -1,7 +1,7 @@
 import { and, eq, exists, inArray, isNull, type SQLWrapper } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { chunkRows, getOrm, type Orm } from '../db/client';
+import { getOrm, type Orm, statementChunks } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
 import { excluded } from '../db/sql';
 import type { Attachment } from '../types';
@@ -85,8 +85,9 @@ export async function bulkDeleteAttachmentsByIds(db: D1Database, attachmentIds: 
   const uniqueIds = [...new Set(attachmentIds.map((id) => String(id || '').trim()).filter(Boolean))];
   if (!uniqueIds.length) return;
   const orm = getOrm(db);
-  for (const chunk of chunkRows(uniqueIds, 1)) {
-    await orm.delete(attachments).where(inArray(attachments.id, chunk));
+  const remove = (chunk: string[]) => orm.delete(attachments).where(inArray(attachments.id, chunk));
+  for (const chunk of statementChunks(uniqueIds, remove)) {
+    await remove(chunk);
   }
 }
 
@@ -100,8 +101,9 @@ export async function getAttachmentsByCipherIds(db: D1Database, cipherIds: strin
   const uniqueCipherIds = [...new Set(cipherIds)];
   if (!uniqueCipherIds.length) return grouped;
   const orm = getOrm(db);
-  for (const chunk of chunkRows(uniqueCipherIds, 1)) {
-    const rows = await orm.select().from(attachments).where(inArray(attachments.cipherId, chunk));
+  const read = (chunk: string[]) => orm.select().from(attachments).where(inArray(attachments.cipherId, chunk));
+  for (const chunk of statementChunks(uniqueCipherIds, read)) {
+    const rows = await read(chunk);
     for (const item of rows) {
       const list = grouped.get(item.cipherId);
       if (list) list.push(item);

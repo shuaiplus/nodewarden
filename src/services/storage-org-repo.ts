@@ -3,7 +3,7 @@ import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte,
 import type { BatchItem } from 'drizzle-orm/batch';
 import { alias, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { chunkRows, columnCount, getOrm, type Orm } from '../db/client';
+import { chunkRows, columnCount, getOrm, type Orm, statementChunks } from '../db/client';
 import {
   cipherCollections,
   ciphers,
@@ -255,8 +255,8 @@ export async function listMembershipsWithAccountsByOrg(
 // rather than a user lookup per invitee, which ran alongside every send in the same invocation.
 export async function listRegisteredEmails(db: D1Database, emails: string[]): Promise<Set<string>> {
   const orm = getOrm(db);
-  const chunks = await Promise.all(chunkRows(emails, 1)
-    .map((chunk) => orm.select({ email: users.email }).from(users).where(inArray(users.email, chunk))));
+  const read = (chunk: string[]) => orm.select({ email: users.email }).from(users).where(inArray(users.email, chunk));
+  const chunks = await Promise.all(statementChunks(emails, read).map(read));
   return new Set(chunks.flat().map(({ email }) => email));
 }
 
@@ -277,8 +277,7 @@ export async function applyMembershipAction(db: D1Database, orgId: string, ids: 
         .set({ status: plus(status, action === 'revoke' ? -REVOKE_STATUS_OFFSET : REVOKE_STATUS_OFFSET), updatedAt: now })
         .where(and(inOrg, action === 'revoke' ? gt(status, MembershipStatus.Revoked) : lte(status, MembershipStatus.Revoked)));
   };
-  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
-  const writes = chunkRows(ids, 1, write([]).toSQL().params.length).map(write);
+  const writes = statementChunks(ids, write).map(write);
   await orm.batch([bumpOrgMemberRevisions(db, orgId, now), ...writes]);
 }
 
@@ -637,8 +636,9 @@ export async function saveAcceptedMembership(db: D1Database, member: MembershipR
 // ciphers so a bulk change adds a handful of statements, each within the bound-parameter limit.
 function cipherCollectionReplacement(orm: Orm, cipherIds: string[], collectionIds: string[]): BatchItem<'sqlite'>[] {
   const links = cipherIds.flatMap((cipherId) => collectionIds.map((collectionId) => ({ cipherId, collectionId })));
+  const unlink = (chunk: string[]) => orm.delete(cipherCollections).where(inArray(cipherCollections.cipherId, chunk));
   return [
-    ...chunkRows(cipherIds, 1).map((chunk) => orm.delete(cipherCollections).where(inArray(cipherCollections.cipherId, chunk))),
+    ...statementChunks(cipherIds, unlink).map(unlink),
     ...chunkRows(links, columnCount(cipherCollections)).map((chunk) => orm.insert(cipherCollections).values(chunk).onConflictDoNothing()),
   ];
 }
@@ -649,13 +649,13 @@ export async function replaceCipherCollections(db: D1Database, cipherId: string,
   await orm.batch(statements as [typeof statements[0], ...typeof statements]);
 }
 
-// Applies a collection plan to one cipher in one batch. Each delete binds the cipher id next to its
-// chunk of collection ids, so leave room for that parameter.
+// Applies a collection plan to one cipher in one batch.
 export async function updateCipherCollections(db: D1Database, cipherId: string, plan: CollectionAssignmentPlan): Promise<void> {
   const orm = getOrm(db);
+  const unlink = (chunk: string[]) => orm.delete(cipherCollections)
+    .where(and(eq(cipherCollections.cipherId, cipherId), inArray(cipherCollections.collectionId, chunk)));
   const statements = [
-    ...chunkRows(plan.remove, 1, 1).map((chunk) => orm.delete(cipherCollections)
-      .where(and(eq(cipherCollections.cipherId, cipherId), inArray(cipherCollections.collectionId, chunk)))),
+    ...statementChunks(plan.remove, unlink).map(unlink),
     ...chunkRows(plan.insert.map((collectionId) => ({ cipherId, collectionId })), columnCount(cipherCollections))
       .map((chunk) => orm.insert(cipherCollections).values(chunk).onConflictDoNothing()),
   ];

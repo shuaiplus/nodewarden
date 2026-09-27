@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { chunkRows, getOrm } from '../db/client';
+import { getOrm, statementChunks } from '../db/client';
 import { ciphers, organizationMemberships } from '../db/schema';
 import { bound, jsonExtract, jsonRemove, scalar } from '../db/sql';
 import type { Cipher } from '../types';
@@ -194,8 +194,7 @@ async function chunkedUpdate(
     .update(ciphers)
     .set(set)
     .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
-  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
-  for (const chunk of chunkRows(uniqueIds, 1, update([]).toSQL().params.length)) {
+  for (const chunk of statementChunks(uniqueIds, update)) {
     await update(chunk);
   }
   return updateRevisionDate(db, userId);
@@ -247,8 +246,9 @@ export async function bulkDeleteCiphers(
   const uniqueIds = sanitizeIds(ids);
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
-    await orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+  const remove = (chunk: string[]) => orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+  for (const chunk of statementChunks(uniqueIds, remove)) {
+    await remove(chunk);
   }
   return updateRevisionDate(db, userId);
 }
@@ -301,11 +301,9 @@ export async function getCiphersByIds(
   if (!uniqueIds.length) return [];
   const orm = getOrm(db);
   const out: Cipher[] = [];
-  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
-    const rows = await orm
-      .select()
-      .from(ciphers)
-      .where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+  const read = (chunk: string[]) => orm.select().from(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
+  for (const chunk of statementChunks(uniqueIds, read)) {
+    const rows = await read(chunk);
     out.push(
       ...rows.flatMap((row) => {
         const cipher = parseCipherRow(row);

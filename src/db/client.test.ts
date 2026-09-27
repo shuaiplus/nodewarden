@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { inspect } from 'node:util';
-import { DrizzleQueryError, eq, type SQL } from 'drizzle-orm';
+import { DrizzleQueryError, and, eq, inArray, type SQL } from 'drizzle-orm';
 
 import { createTestEnv, seedUser } from '../test/support/env';
-import { abortUnlessChanged, getOrm, userRowMatches, withoutQueryParams } from './client';
-import { users } from './schema';
-import { SINGLE_ROW } from './sql';
+import { D1_MAX_BOUND_PARAMETERS, abortUnlessChanged, getOrm, statementChunks, userRowMatches, withoutQueryParams } from './client';
+import { ciphers, users } from './schema';
+import { SINGLE_ROW, jsonExtract } from './sql';
 
 test('abortUnlessChanged rolls a batch back only when the guarded write matched no rows', async () => {
   const env = await createTestEnv();
@@ -29,6 +29,25 @@ test('userRowMatches holds only while the user row exists and meets every given 
   assert.equal(await holds(user.id, eq(users.securityStamp, user.securityStamp), undefined), true);
   assert.equal(await holds(user.id, eq(users.securityStamp, 'rotated-elsewhere')), false);
   assert.equal(await holds('missing-user'), false);
+});
+
+test('statementChunks fills each chunk up to the parameter cap, counting what the statement binds besides its items', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const orm = getOrm(env.DB);
+  // The NULL in SET, the user id and the JSON path left of IN all bind; an empty render would drop the path.
+  const unfile = (chunk: string[]) => orm.update(ciphers).set({ folderId: null })
+    .where(and(eq(ciphers.userId, user.id), inArray(jsonExtract(ciphers.data, '$.folderId'), chunk)));
+  const ids = Array.from({ length: 250 }, (_, index) => `folder-${index}`);
+  const chunks = statementChunks(ids, unfile);
+  assert.deepEqual(chunks.flat(), ids);
+  assert.ok(chunks.every((chunk) => unfile(chunk).toSQL().params.length <= D1_MAX_BOUND_PARAMETERS));
+  assert.ok(unfile(ids.slice(0, chunks[0].length + 1)).toSQL().params.length > D1_MAX_BOUND_PARAMETERS);
+  const statements = chunks.map(unfile);
+  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+  assert.deepEqual(statementChunks([], unfile), []);
+  assert.deepEqual(statementChunks(['only'], unfile), [['only']]);
+  assert.throws(() => statementChunks(ids, () => orm.select().from(users)), /binds nothing per item/);
 });
 
 test('withoutQueryParams keeps the statement and driver error but never the bound values', async () => {

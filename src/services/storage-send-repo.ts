@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 
-import { chunkRows, getOrm } from '../db/client';
+import { getOrm, statementChunks } from '../db/client';
 import { sends } from '../db/schema';
 import { plus } from '../db/sql';
 import type { Send } from '../types';
@@ -127,8 +127,7 @@ export async function getSendsByIds(db: D1Database, ids: string[], userId: strin
   const read = (chunk: string[]) => orm.select().from(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
   const out: Send[] = [];
 
-  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
-  for (const chunk of chunkRows(uniqueIds, 1, read([]).toSQL().params.length)) {
+  for (const chunk of statementChunks(uniqueIds, read)) {
     out.push(...(await read(chunk)).map(mapSendRow));
   }
 
@@ -140,7 +139,7 @@ export async function bulkDeleteSends(db: D1Database, ids: string[], userId: str
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
   const remove = (chunk: string[]) => orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
-  for (const chunk of chunkRows(uniqueIds, 1, remove([]).toSQL().params.length)) {
+  for (const chunk of statementChunks(uniqueIds, remove)) {
     await remove(chunk);
   }
 

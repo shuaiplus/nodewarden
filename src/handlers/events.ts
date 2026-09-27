@@ -1,6 +1,6 @@
 import { inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { chunkRows, getOrm } from '../db/client';
+import { getOrm, statementChunks } from '../db/client';
 import { ciphers } from '../db/schema';
 import type { Env, User } from '../types';
 import { errorResponse, parseBody } from '../utils/response';
@@ -47,8 +47,8 @@ export async function handleEventRoute(request: Request, env: Env, user: User, p
     if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
     const memberByOrg = new Map(memberships.map(member => [member.orgId, member]));
     const ids = [...new Set(input.filter(event => CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId).map(event => event.cipherId!))];
-    const cipherRows = (await Promise.all(chunkRows(ids, 1).map(chunk => getOrm(env.DB).select({ id: ciphers.id, organizationId: ciphers.organizationId })
-      .from(ciphers).where(inArray(ciphers.id, chunk))))).flat();
+    const readCiphers = (chunk: string[]) => getOrm(env.DB).select({ id: ciphers.id, organizationId: ciphers.organizationId }).from(ciphers).where(inArray(ciphers.id, chunk));
+    const cipherRows = (await Promise.all(statementChunks(ids, readCiphers).map(readCiphers))).flat();
     const collections = await orgRepo.listCipherCollectionIdsByCipherIds(env.DB, cipherRows.map(cipher => cipher.id));
     const accessByOrg = new Map(await Promise.all([...new Set(cipherRows.map(cipher => cipher.organizationId))].filter((orgId): orgId is string => {
       const member = orgId ? memberByOrg.get(orgId) : undefined;

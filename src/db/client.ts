@@ -21,6 +21,17 @@ export function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters =
   return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
 }
 
+// Splits items into chunks small enough that statement(chunk) stays within D1's bound-parameter limit.
+// Rendering the statement for one and for two items measures what each item and everything else binds
+// (JSON paths, literals, NULLs in SET, bound expressions left of IN), which hand counts kept getting wrong.
+// Multi-row inserts keep chunkRows(rows, columnCount(table)): which columns bind varies with each row.
+export function statementChunks<T>(items: T[], statement: (chunk: T[]) => { toSQL(): { params: unknown[] } }): T[][] {
+  if (items.length < 2) return items.length ? [items] : [];
+  const [one, two] = [1, 2].map((size) => statement(items.slice(0, size)).toSQL().params.length);
+  if (two === one) throw new Error('statementChunks: the statement binds nothing per item');
+  return chunkRows(items, two - one, 2 * one - two);
+}
+
 // Constructing the driver is cheap, but the relation graph it derives is not:
 // memoise per binding so a Worker isolate builds it at most once per database.
 const ormByBinding = new WeakMap<D1Database, Orm>();

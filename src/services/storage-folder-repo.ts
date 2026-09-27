@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 
-import { chunkRows, getOrm } from '../db/client';
+import { getOrm, statementChunks } from '../db/client';
 import { ciphers, folders } from '../db/schema';
 import { jsonExtract, jsonRemove } from '../db/sql';
 import type { Folder } from '../types';
@@ -83,10 +83,8 @@ export async function bulkDeleteFolders(db: D1Database, ids: string[], userId: s
         inArray(jsonExtract(ciphers.data, '$.folder_id'), chunk),
       ),
     ));
-  // Chunks are sized for the unfile, which binds more than the folder delete: each id once in each of its lists,
-  // plus the fixed values a one-id probe counts (an empty list renders as `false`, dropping the JSON path beside it).
-  const idLists = 3;
-  const statements = chunkRows(uniqueIds, idLists, unfile(['']).toSQL().params.length - idLists).flatMap((chunk) => [
+  // Chunks are sized for the unfile, which binds more than the folder delete.
+  const statements = statementChunks(uniqueIds, unfile).flatMap((chunk) => [
     unfile(chunk),
     orm.delete(folders).where(and(eq(folders.userId, userId), inArray(folders.id, chunk))),
   ]);
