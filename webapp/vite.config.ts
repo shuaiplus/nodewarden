@@ -189,15 +189,15 @@ self.addEventListener('fetch', (event) => {
 `;
 }
 
-function buildCacheVersion(isDemo: boolean, urls: string[]): string {
+function buildCacheVersion(urls: string[]): string {
   const digest = createHash('sha256')
-    .update(`${isDemo ? 'demo' : 'app'}\n${urls.join('\n')}`)
+    .update(`app\n${urls.join('\n')}`)
     .digest('hex')
     .slice(0, 16);
-  return `${isDemo ? 'demo' : 'app'}-${digest}`;
+  return `app-${digest}`;
 }
 
-function pwaServiceWorkerPlugin(isDemo: boolean): Plugin {
+function pwaServiceWorkerPlugin(): Plugin {
   return {
     name: 'nodewarden-pwa-service-worker',
     generateBundle(_, bundle) {
@@ -226,7 +226,7 @@ function pwaServiceWorkerPlugin(isDemo: boolean): Plugin {
       }
 
       const sortedUrls = Array.from(buildUrls).sort();
-      const version = buildCacheVersion(isDemo, Array.from(buildUrls).sort());
+      const version = buildCacheVersion(sortedUrls);
       this.emitFile({
         type: 'asset',
         fileName: 'sw.js',
@@ -236,11 +236,10 @@ function pwaServiceWorkerPlugin(isDemo: boolean): Plugin {
   };
 }
 
-function searchIndexPolicyPlugin(isDemo: boolean): Plugin {
+function searchIndexPolicyPlugin(): Plugin {
   return {
     name: 'nodewarden-search-index-policy',
     transformIndexHtml(html: string) {
-      if (isDemo) return html;
       return html.replace(
         '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
         '<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />'
@@ -250,30 +249,18 @@ function searchIndexPolicyPlugin(isDemo: boolean): Plugin {
       this.emitFile({
         type: 'asset',
         fileName: 'robots.txt',
-        source: isDemo
-          ? 'User-agent: *\nAllow: /\n'
-          : 'User-agent: *\nDisallow: /\n',
+        source: 'User-agent: *\nDisallow: /\n',
       });
     },
   };
 }
 
-export default defineConfig(({ mode }) => {
-  const isDemo = mode === 'demo';
-
+export default defineConfig(() => {
   return {
     root: rootDir,
-    plugins: [preact(), searchIndexPolicyPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
-    define: {
-      __NODEWARDEN_DEMO__: JSON.stringify(isDemo),
-    },
+    plugins: [preact(), searchIndexPolicyPlugin(), pwaServiceWorkerPlugin()],
     resolve: {
       alias: {
-        '@/lib/demo': path.resolve(rootDir, isDemo ? 'src/lib/demo.ts' : 'src/lib/demo.empty.ts'),
-        '@/lib/demo-brand-icons': path.resolve(
-          rootDir,
-          isDemo ? 'src/lib/demo-brand-icons.ts' : 'src/lib/demo.empty.ts'
-        ),
         '@': path.resolve(rootDir, 'src'),
         '@shared': path.resolve(rootDir, '../shared'),
       },

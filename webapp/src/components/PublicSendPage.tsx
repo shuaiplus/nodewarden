@@ -6,7 +6,6 @@ import { toBufferSource } from '@/lib/crypto';
 import { downloadBytesAsFile, readResponseBytesWithProgress } from '@/lib/download';
 import NotFoundPage from '@/components/NotFoundPage';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
-import { getDemoPublicSend, IS_DEMO_MODE } from '@/lib/demo';
 import { t } from '@/lib/i18n';
 
 interface PublicSendPageProps {
@@ -94,13 +93,12 @@ function parsePublicSendData(value: unknown): PublicSendData | null {
 }
 
 export default function PublicSendPage(props: PublicSendPageProps) {
-  const initialDemoSend = IS_DEMO_MODE ? getDemoPublicSend(props.accessId) : null;
-  const [loading, setLoading] = useState(!IS_DEMO_MODE);
+  const [loading, setLoading] = useState(true);
   const [password, setPassword] = useState('');
   const [needPassword, setNeedPassword] = useState(false);
   const [error, setError] = useState('');
-  const [notFound, setNotFound] = useState(IS_DEMO_MODE && !initialDemoSend);
-  const [sendData, setSendData] = useState<PublicSendData | null>(initialDemoSend);
+  const [notFound, setNotFound] = useState(false);
+  const [sendData, setSendData] = useState<PublicSendData | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const loadRequestRef = useRef(0);
@@ -117,17 +115,6 @@ export default function PublicSendPage(props: PublicSendPageProps) {
     setNotFound(false);
     setLoading(true);
     try {
-      if (IS_DEMO_MODE) {
-        const demoSend = getDemoPublicSend(props.accessId);
-        if (!demoSend) {
-          setNotFound(true);
-          setSendData(null);
-          return;
-        }
-        setSendData(demoSend);
-        setNeedPassword(false);
-        return;
-      }
       if (!hasUsableSendKey(props.keyPart)) {
         setNotFound(true);
         setSendData(null);
@@ -173,11 +160,6 @@ export default function PublicSendPage(props: PublicSendPageProps) {
     setDownloadPercent(null);
     setError('');
     try {
-      if (IS_DEMO_MODE) {
-        const bytes = new TextEncoder().encode('NodeWarden demo file Send.\nThis download is generated locally in demo mode.\n');
-        downloadBytesAsFile(bytes, sendData.decFileName || sendData.file?.fileName || 'nodewarden-demo-send.txt', 'application/octet-stream');
-        return;
-      }
       const url = await accessPublicSendFile(sendData.id, sendData.file.id, props.keyPart, password || undefined);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(t('txt_download_failed'));
@@ -209,15 +191,6 @@ export default function PublicSendPage(props: PublicSendPageProps) {
   }
 
   useEffect(() => {
-    if (IS_DEMO_MODE) {
-      const demoSend = getDemoPublicSend(props.accessId);
-      setSendData(demoSend);
-      setNotFound(!demoSend);
-      setNeedPassword(false);
-      setError('');
-      setLoading(false);
-      return;
-    }
     void loadSend();
     return () => {
       loadAbortRef.current?.abort();

@@ -21,9 +21,6 @@ interface RegisterValues {
 
 interface AuthViewsProps {
   mode: 'login' | 'register' | 'locked';
-  relaxedLoginInput?: boolean;
-  authPlaceholder?: string;
-  unlockPlaceholder?: string;
   pendingAction: 'login' | 'passkey' | 'register' | 'unlock' | null;
   unlockReady: boolean;
   unlockPreparing: boolean;
@@ -140,7 +137,6 @@ export default function AuthViews(props: AuthViewsProps) {
               value={props.unlockPassword}
               autoFocus
               autoComplete="current-password"
-              placeholder={props.unlockPlaceholder}
               onInput={props.onChangeUnlock}
             />
             <div className="auth-support-row">
@@ -302,7 +298,6 @@ export default function AuthViews(props: AuthViewsProps) {
                 value={props.passkeyPassword}
                 autoFocus
                 autoComplete="current-password"
-                placeholder={props.authPlaceholder}
                 onInput={props.onChangePasskeyPassword}
               />
               <button type="submit" className="btn btn-primary full" disabled={loginBusy}>
@@ -321,10 +316,9 @@ export default function AuthViews(props: AuthViewsProps) {
             <span>{t('txt_email')}</span>
             <input
               className="input"
-              type={props.relaxedLoginInput ? 'text' : 'email'}
+              type="email"
               value={props.loginValues.email}
               autoComplete="username"
-              placeholder={props.authPlaceholder}
               autoFocus
               onInput={(e) => props.onChangeLogin({ ...props.loginValues, email: (e.currentTarget as HTMLInputElement).value })}
             />
@@ -333,7 +327,6 @@ export default function AuthViews(props: AuthViewsProps) {
             label={t('txt_master_password')}
             value={props.loginValues.password}
             autoComplete="current-password"
-            placeholder={props.authPlaceholder}
             onInput={(v) => props.onChangeLogin({ ...props.loginValues, password: v })}
           />
           <div className="auth-support-row">

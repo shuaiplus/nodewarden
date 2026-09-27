@@ -8,13 +8,11 @@ import {
   getWebsiteIconStatus,
   subscribeWebsiteIconStatus,
 } from '@/lib/website-icon-cache';
-import { demoBrandIconUrl } from '@/lib/demo-brand-icons';
 import { getCurrentNetworkStatus, subscribeNetworkStatus } from '@/lib/network-status';
 import { areWebsiteIconsEnabled } from '@/lib/website-icon-settings';
 import { firstCipherUri, hostFromUri, websiteIconUrl } from '@/lib/website-utils';
 
 const ICON_LOAD_ROOT_MARGIN = '180px 0px';
-const SHOULD_LOAD_DEMO_BRAND_ICONS = __NODEWARDEN_DEMO__;
 
 interface WebsiteIconProps {
   cipher: Cipher;
@@ -30,7 +28,6 @@ export default function WebsiteIcon(props: WebsiteIconProps) {
   const [status, setStatus] = useState(() => (host ? getWebsiteIconStatus(host) : 'idle'));
   const [imageUrl, setImageUrl] = useState(() => (host ? getWebsiteIconImageUrl(host) : ''));
   const [networkStatus, setNetworkStatus] = useState(getCurrentNetworkStatus);
-  const demoIconUrl = SHOULD_LOAD_DEMO_BRAND_ICONS && host ? demoBrandIconUrl(host) : '';
 
   useEffect(() => subscribeNetworkStatus(setNetworkStatus), []);
 
@@ -81,27 +78,11 @@ export default function WebsiteIcon(props: WebsiteIconProps) {
   }, [host, shouldLoad, status]);
 
   useEffect(() => {
-    if (SHOULD_LOAD_DEMO_BRAND_ICONS) return;
-    if (demoIconUrl) return;
     if (!iconsEnabled) return;
     if (networkStatus !== 'online') return;
     if (!host || !src || !shouldLoad || status !== 'idle') return;
     beginWebsiteIconLoad(host, src);
-  }, [demoIconUrl, host, iconsEnabled, networkStatus, src, shouldLoad, status]);
-
-  if (demoIconUrl) {
-    return (
-      <span className="list-icon-stack" ref={nodeRef}>
-        <img
-          className="list-icon loaded"
-          src={demoIconUrl}
-          alt=""
-          loading="lazy"
-          decoding="async"
-        />
-      </span>
-    );
-  }
+  }, [host, iconsEnabled, networkStatus, src, shouldLoad, status]);
 
   if (!host || !iconsEnabled || status === 'error') {
     return <span className="list-icon-fallback">{props.fallback ?? <Globe size={18} />}</span>;
