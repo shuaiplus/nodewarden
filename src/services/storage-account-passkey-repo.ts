@@ -1,7 +1,8 @@
-import { and, asc, count, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, isNotNull, isNull, lt, ne, or, type SQL } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
-import { webauthnChallenges, webauthnCredentials } from '../db/schema';
+import { getOrm, userRowMatches } from '../db/client';
+import { users, webauthnChallenges, webauthnCredentials } from '../db/schema';
+import { SINGLE_ROW, bound, coalesce } from '../db/sql';
 import type { AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential } from '../types';
 import { normalizeTransports } from '../utils/account-passkeys';
 
@@ -55,15 +56,15 @@ export async function saveAccountPasskeyCredential(
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
   };
-  const insert = getOrm(db).insert(webauthnCredentials);
-  const write = securityStamp === undefined ? insert.values(values) : insert.select(sql`
-    SELECT ${values.id}, ${values.userId}, ${values.purpose}, ${values.name}, ${values.publicKey},
-      ${values.credentialId}, ${values.counter}, ${values.type}, ${values.aaGuid}, ${values.transports},
-      ${values.encryptedUserKey}, ${values.encryptedPublicKey}, ${values.encryptedPrivateKey},
-      ${values.supportsPrf}, ${values.createdAt}, ${values.updatedAt}
-    WHERE EXISTS (SELECT 1 FROM users WHERE id = ${values.userId} AND security_stamp = ${securityStamp}
-      AND (${values.purpose} <> 'twoFactor' OR COALESCE(totp_recovery_code, '') <> ''))
-  `);
+  const orm = getOrm(db);
+  const insert = orm.insert(webauthnCredentials);
+  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) =>
+    [key, bound(value).as(webauthnCredentials[key as keyof typeof values].name)])) as { [K in keyof typeof values]: SQL.Aliased };
+  // A two-factor key also needs the user to hold a recovery code at that stamp.
+  const write = securityStamp === undefined ? insert.values(values) : insert.select(orm.select(literals).from(SINGLE_ROW).where(
+    userRowMatches(orm, values.userId, eq(users.securityStamp, securityStamp),
+      values.purpose === 'twoFactor' ? ne(coalesce(users.totpRecoveryCode, ''), '') : undefined),
+  ));
   const result = await write.onConflictDoUpdate({
     target: webauthnCredentials.id,
     set: {
