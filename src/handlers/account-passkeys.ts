@@ -40,8 +40,16 @@ import * as userRepo from '../services/storage-user-repo';
 const MAX_ACCOUNT_PASSKEYS = 5;
 const MAX_TWO_FACTOR_PASSKEYS = 5;
 
-// Passkey routes share one loose body; each legacy alias (secret, password, master_password_hash) is coerced where read.
-const PasskeyRequestSchema = z.looseObject({});
+// Passkey routes share one loose body: the user-verification fields are typed here (non-strings read as
+// absent), while each route parses its own WebAuthn and PRF fields.
+const optionalSecret = z.string().trim().optional().catch(undefined);
+const PasskeyRequestSchema = z.looseObject({
+  masterPasswordHash: optionalSecret,
+  master_password_hash: optionalSecret,
+  secret: optionalSecret,
+  password: optionalSecret,
+  userVerificationToken: optionalSecret,
+});
 type PasskeyRequest = z.output<typeof PasskeyRequestSchema>;
 
 async function readJsonBody(request: Request): Promise<PasskeyRequest | Response> {
@@ -53,7 +61,7 @@ async function verifyUserSecret(
   user: User,
   body: PasskeyRequest
 ): Promise<boolean> {
-  const secret = String(body.masterPasswordHash || body.master_password_hash || body.secret || body.password || '').trim();
+  const secret = body.masterPasswordHash || body.master_password_hash || body.secret || body.password;
   if (!secret) return false;
   const storedHash = String(user.masterPasswordHash || '').trim();
   if (!storedHash) return false;
@@ -62,7 +70,7 @@ async function verifyUserSecret(
 }
 
 async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
-  const token = String(body.userVerificationToken || '');
+  const token = body.userVerificationToken || '';
   return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
 }
 
