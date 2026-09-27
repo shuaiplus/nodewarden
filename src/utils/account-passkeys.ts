@@ -18,7 +18,8 @@ import { signHs256Jwt, verifyHs256Jwt } from './jwt';
 import { bytesToBase64Url } from './passkey';
 import { getConfiguredWebAuthnAllowedOrigins } from './origins';
 
-const ACCOUNT_PASSKEY_TOKEN_TYPE = 'nodewarden.account-passkey.challenge.v1';
+// v1 tokens carried a millisecond exp that a seconds-based check reads as far future, so they are refused.
+const ACCOUNT_PASSKEY_TOKEN_TYPE = 'nodewarden.account-passkey.challenge.v2';
 const ACCOUNT_PASSKEY_TOKEN_TTL_MS = 17 * 60 * 1000;
 const ACCOUNT_PASSKEY_CREATE_TOKEN_TTL_MS = 7 * 60 * 1000;
 const DEFAULT_RP_NAME = 'NodeWarden';

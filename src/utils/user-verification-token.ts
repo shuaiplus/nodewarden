@@ -1,7 +1,8 @@
 import type { Env } from '../types';
 import { signHs256Jwt, verifyHs256Jwt } from './jwt';
 
-const USER_VERIFICATION_TOKEN_TYPE = 'nodewarden.user-verification.v1';
+// v1 tokens carried a millisecond exp that a seconds-based check reads as far future, so they are refused.
+const USER_VERIFICATION_TOKEN_TYPE = 'nodewarden.user-verification.v2';
 const USER_VERIFICATION_TOKEN_TTL_SECONDS = 5 * 60;
 
 export type UserVerificationPurpose = 'backup.settings.repair';
