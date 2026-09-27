@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrm } from '../db/client';
-import { users } from '../db/schema';
+import { session, trustedTwoFactorDeviceTokens, users, webauthnCredentials } from '../db/schema';
 import type { User } from '../types';
 import { isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode } from '../utils/recovery-code';
@@ -29,22 +29,28 @@ export async function ensureTwoFactorRecoveryCode(db: D1Database, userId: string
   return row?.code ?? null;
 }
 
+// Batch the result with getOrm(db).batch(); the first result's meta.changes reports whether the clear applied.
 export function twoFactorClearStatements(
   db: D1Database,
   userId: string,
   { recoveryCode, securityStamp }: { recoveryCode: string | null; securityStamp: string },
   expected?: Pick<User, 'securityStamp' | 'totpRecoveryCode'>,
-): D1PreparedStatement[] {
-  const verifiedSnapshot = expected ? " AND status = 'active' AND security_stamp = ? AND totp_recovery_code = ?" : '';
+) {
+  const orm = getOrm(db);
   // Each dependent delete runs only if this batch installed its fresh stamp.
-  const cleared = 'EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)';
+  const cleared = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND security_stamp = ${securityStamp})`;
   return [
-    db.prepare(`UPDATE users SET totp_secret = NULL, two_factor_email = NULL, totp_recovery_code = ?,
-      yubikey_key1 = NULL, yubikey_key2 = NULL, yubikey_key3 = NULL, yubikey_key4 = NULL,
-      yubikey_key5 = NULL, yubikey_nfc = 0, security_stamp = ?, updated_at = ? WHERE id = ?${verifiedSnapshot}`)
-      .bind(recoveryCode, securityStamp, new Date().toISOString(), userId, ...(expected ? [expected.securityStamp, expected.totpRecoveryCode] : [])),
-    db.prepare(`DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND ${cleared}`).bind(userId, userId, securityStamp),
-    db.prepare(`DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
-    db.prepare(`DELETE FROM session WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
-  ];
+    orm.update(users).set({
+      totpSecret: null, twoFactorEmail: null, totpRecoveryCode: recoveryCode,
+      yubikeyKey1: null, yubikeyKey2: null, yubikeyKey3: null, yubikeyKey4: null, yubikeyKey5: null,
+      yubikeyNfc: 0, securityStamp, updatedAt: new Date().toISOString(),
+    }).where(and(eq(users.id, userId), expected && and(
+      eq(users.status, 'active'), eq(users.securityStamp, expected.securityStamp),
+      // A snapshot without a recovery code binds NULL and so never matches, as the equality always has.
+      sql`${users.totpRecoveryCode} = ${expected.totpRecoveryCode}`,
+    ))),
+    orm.delete(webauthnCredentials).where(and(eq(webauthnCredentials.userId, userId), eq(webauthnCredentials.purpose, 'twoFactor'), cleared)),
+    orm.delete(trustedTwoFactorDeviceTokens).where(and(eq(trustedTwoFactorDeviceTokens.userId, userId), cleared)),
+    orm.delete(session).where(and(eq(session.userId, userId), cleared)),
+  ] as const;
 }

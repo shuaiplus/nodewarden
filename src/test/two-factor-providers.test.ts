@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { sql } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
 import { hashPassword } from '../services/auth-password';
 import { twoFactorClearStatements } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
@@ -114,10 +116,11 @@ for (const loginRecovery of [false, true]) {
 test('a failed clear batch leaves credentials and security stamp intact', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { totpSecret: TOTP });
-  await assert.rejects(env.DB.batch([
+  const orm = getOrm(env.DB);
+  await assert.rejects(orm.batch([
     ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
-    env.DB.prepare('SELECT * FROM missing_table'),
-  ]));
+    orm.select({ one: sql`1` }).from(sql`missing_table`),
+  ]), /no such table: missing_table/);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
 });
 

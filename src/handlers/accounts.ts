@@ -1340,7 +1340,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   }
 
   const nextRecoveryCode = createRecoveryCode();
-  const [cleared] = await env.DB.batch(twoFactorClearStatements(env.DB, user.id, {
+  const [cleared] = await getOrm(env.DB).batch(twoFactorClearStatements(env.DB, user.id, {
     recoveryCode: nextRecoveryCode,
     securityStamp: generateUUID(),
   }, user));

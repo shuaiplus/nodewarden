@@ -1,9 +1,9 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, exists, gt, lt, sql } from 'drizzle-orm';
 
 import { twoFactorClearStatements } from './two-factor-providers';
 import { readEnvConfig } from '../config/env';
-import { getOrm } from '../db/client';
-import { verification } from '../db/schema';
+import { abortUnlessChanged, getOrm } from '../db/client';
+import { users, verification } from '../db/schema';
 import type { Env, User } from '../types';
 import { constantTimeEquals, hashApiKey } from '../utils/api-key';
 import { readAuthRequestDeviceInfo } from '../utils/device';
@@ -56,15 +56,25 @@ export async function saveSsoContinuation(env: Env, context: SsoContinuationCont
 }
 
 export async function consumeSsoContinuation(env: Env, continuation: SsoContinuation, user: User, recovery?: { recoveryCode: string; securityStamp: string }): Promise<boolean> {
-  const claim = env.DB.prepare(`UPDATE verification SET value = json_set(value, '$.consumed', 1), updated_at = ?
-    WHERE id = ? AND identifier = ? AND expires_at > ? AND json_extract(value, '$.expiresAt') > ? AND json_extract(value, '$.consumed') = 0
-      AND json_extract(value, '$.binding') = ? AND json_extract(value, '$.userId') = ? AND json_extract(value, '$.securityStamp') = ? AND json_extract(value, '$.email') = ?
-      AND EXISTS (SELECT 1 FROM users WHERE id = ? AND status = 'active' AND security_stamp = ? AND email = ?)`)
-    .bind(Date.now(), continuation.id, PURPOSE, Date.now(), Date.now(), continuation.binding, user.id, user.securityStamp, user.email, user.id, user.securityStamp, user.email);
+  const now = Date.now();
+  const orm = getOrm(env.DB);
+  const claim = orm.update(verification).set({ value: sql`json_set(${verification.value}, '$.consumed', 1)`, updatedAt: now })
+    .where(and(
+      eq(verification.id, continuation.id), eq(verification.identifier, PURPOSE), gt(verification.expiresAt, now),
+      sql`json_extract(${verification.value}, '$.expiresAt') > ${now}`,
+      sql`json_extract(${verification.value}, '$.consumed') = 0`,
+      sql`json_extract(${verification.value}, '$.binding') = ${continuation.binding}`,
+      sql`json_extract(${verification.value}, '$.userId') = ${user.id}`,
+      sql`json_extract(${verification.value}, '$.securityStamp') = ${user.securityStamp}`,
+      sql`json_extract(${verification.value}, '$.email') = ${user.email}`,
+      exists(orm.select({ id: users.id }).from(users).where(and(
+        eq(users.id, user.id), eq(users.status, 'active'), eq(users.securityStamp, user.securityStamp), eq(users.email, user.email),
+      ))),
+    ));
   try {
-    const [result] = await env.DB.batch([claim, ...(recovery ? [
+    const [result] = await orm.batch([claim, ...(recovery ? [
       // D1 batches are atomic; a losing claim must not clear factors or rotate the account stamp.
-      env.DB.prepare("SELECT CASE WHEN changes() = 0 THEN json('invalid sso continuation') END"),
+      abortUnlessChanged(orm, 'invalid sso continuation'),
       ...twoFactorClearStatements(env.DB, user.id, recovery),
     ] : [])]);
     return result.meta.changes === 1;

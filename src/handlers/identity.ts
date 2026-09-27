@@ -722,7 +722,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (ssoContinuation) {
       if (!await consumeSsoContinuation(env, ssoContinuation, user, recovery)) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     } else if (recovery) {
-      const [cleared] = await env.DB.batch(twoFactorClearStatements(env.DB, user.id, recovery, user));
+      const [cleared] = await getOrm(env.DB).batch(twoFactorClearStatements(env.DB, user.id, recovery, user));
       if (!cleared.meta.changes) return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, TWO_FACTOR_PROVIDER_RECOVERY_CODE);
     }
     if (recovery) {

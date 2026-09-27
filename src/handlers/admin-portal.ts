@@ -175,13 +175,12 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         if (!twoFactorProviders(user, passkeys > 0).length) return portalRedirect(viewPath + '?m=nothing-to-reset');
         const check = await sensitiveActionCheck(typedEmail, user.email.toLowerCase(), viewPath);
         if (check) return check;
-        const event = auditEventStatement(env.DB, {
-          action: 'admin.portal.user.two_factor.reset', category: 'security', level: 'security', actorUserId: null,
-          targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
-        }).toSQL();
-        await env.DB.batch([
+        await getOrm(env.DB).batch([
           ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
-          env.DB.prepare(event.sql).bind(...event.params),
+          auditEventStatement(env.DB, {
+            action: 'admin.portal.user.two_factor.reset', category: 'security', level: 'security', actorUserId: null,
+            targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
+          }),
         ]);
         AuthService.invalidateUserCache(user.id);
         notifyUserLogout(env, user.id, null);

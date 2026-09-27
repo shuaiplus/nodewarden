@@ -129,7 +129,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   const originalBatch = f.env.DB.batch.bind(f.env.DB);
   let injectConflict = true;
   t.mock.method(f.env.DB, 'batch', async (statements: D1PreparedStatement[]) => {
-    if (injectConflict && (statements[0] as any).query?.startsWith('UPDATE verification SET value')) {
+    if (injectConflict && (statements[0] as any).query?.startsWith('update "verification" set "value"')) {
       injectConflict = false;
       await f.env.DB.prepare("UPDATE verification SET value = json_set(value, '$.consumed', 1) WHERE identifier = 'sso-continuation'").run();
     }
@@ -160,7 +160,7 @@ test('the final SSO claim checks fresh account state before creating remembered 
   const originalBatch = f.env.DB.batch.bind(f.env.DB);
   let changed = false;
   t.mock.method(f.env.DB, 'batch', async (statements: D1PreparedStatement[]) => {
-    if (!changed && (statements[0] as any).query?.startsWith('UPDATE verification SET value')) {
+    if (!changed && (statements[0] as any).query?.startsWith('update "verification" set "value"')) {
       changed = true;
       await f.env.DB.prepare("UPDATE users SET security_stamp = 'changed-before-claim' WHERE id = ?").bind(f.user.id).run();
     }
