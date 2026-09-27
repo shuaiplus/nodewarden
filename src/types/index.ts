@@ -156,10 +156,28 @@ export enum CipherType {
   Passport = 8,
 }
 
+// Clients may omit any of these keys; a response keeps the ones a stored entry had.
 export interface CipherLoginUri {
-  uri: string | null;
-  uriChecksum: string | null;
-  match: number | null;
+  uri?: string | null;
+  uriChecksum?: string | null;
+  match?: number | null;
+}
+
+// Every passkey value is an EncString; unknown client keys pass through.
+export interface CipherFido2Credential {
+  credentialId: string;
+  keyType: string;
+  keyAlgorithm: string;
+  keyCurve: string;
+  keyValue: string;
+  rpId: string;
+  counter: string;
+  discoverable: string;
+  userHandle?: string | null;
+  userName?: string | null;
+  rpName?: string | null;
+  userDisplayName?: string | null;
+  [key: string]: unknown;
 }
 
 export interface CipherLogin {
@@ -168,7 +186,7 @@ export interface CipherLogin {
   uris: CipherLoginUri[] | null;
   totp: string | null;
   autofillOnPageLoad: boolean | null;
-  fido2Credentials: any[] | null;
+  fido2Credentials: CipherFido2Credential[] | null;
   uri: string | null;
   passwordRevisionDate: string | null;
 }
@@ -186,6 +204,8 @@ export interface CipherSshKey {
   publicKey: string;
   privateKey: string;
   keyFingerprint: string;
+  // Legacy alias of keyFingerprint that older web payloads read.
+  fingerprint?: string;
 }
 
 export interface CipherBankAccount {
@@ -296,6 +316,7 @@ export interface Cipher {
   updatedAt: string;
   archivedAt: string | null;
   deletedAt: string | null;
+  encryptedFor?: string | null;
   /** Allow unknown fields from Bitwarden clients to be stored and passed through transparently. */
   [key: string]: unknown;
 }
@@ -658,11 +679,22 @@ export interface CipherResponse {
   permissions: CipherPermissions | null;
   object: string;
   collectionIds: string[];
-  attachments: any[] | null;
+  attachments: AttachmentResponse[] | null;
   key: string | null;
   encryptedFor: string | null;
   /** Allow unknown fields to pass through to clients transparently. */
   [key: string]: unknown;
+}
+
+export interface AttachmentResponse {
+  id: string;
+  fileName: string;
+  // Bitwarden clients decode the size as a string in cipher payloads.
+  size: string;
+  sizeName: string;
+  key: string | null;
+  url: string;
+  object: string;
 }
 
 export interface CipherPermissions {

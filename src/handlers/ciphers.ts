@@ -12,6 +12,7 @@ import {
   CipherDriversLicense,
   CipherPassport,
   Attachment,
+  AttachmentResponse,
   PasswordHistory,
 } from '../types';
 import type { CipherField } from '../types';
@@ -74,21 +75,10 @@ function normalizeResponseFolderId(folderId: unknown, validFolderIds?: ReadonlyS
   return validFolderIds && !validFolderIds.has(normalized) ? null : normalized;
 }
 
-function readBooleanOrFallback(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback;
-}
-
-function buildCipherPermissions(passthrough: Record<string, unknown>): { delete: boolean; restore: boolean } {
-  const raw = passthrough.permissions;
-  const source = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
-    : null;
-
-  return {
-    delete: readBooleanOrFallback(source?.delete, true),
-    restore: readBooleanOrFallback(source?.restore, true),
-  };
-}
+// Stored permission flags default to allowed; anything but a boolean reads as the default.
+const storedFlag = z.boolean().catch(true);
+const StoredPermissions = z.object({ delete: storedFlag, restore: storedFlag })
+  .catch(() => ({ delete: true, restore: true }));
 
 // Every cipher write ends the same way: bump the owner's revision, signal their devices with the
 // matching cipher event, and record the organization event when upstream logs one for the write.
@@ -283,12 +273,12 @@ function shouldAcceptCipherKey(value: unknown): boolean {
   return value == null || value === '' || isValidEncString(value);
 }
 
-function sanitizeEncryptedObject<T extends Record<string, any>>(
+function sanitizeEncryptedObject<T extends object>(
   source: T | null | undefined,
   encryptedKeys: readonly string[] | Record<string, number>
 ): T | null {
   if (!source || typeof source !== 'object') return source ?? null;
-  const next: Record<string, any> = { ...source };
+  const next = { ...source } as Record<string, unknown>;
   const entries = Array.isArray(encryptedKeys)
     ? encryptedKeys.map((key) => [key, 10000] as const)
     : Object.entries(encryptedKeys);
@@ -353,75 +343,89 @@ function normalizeCipherForStorage(cipher: Cipher): Cipher {
   return syncCipherComputedAliases(cipher);
 }
 
-export function normalizeCipherLoginForStorage(login: any): any {
-  if (!login || typeof login !== 'object') return login ?? null;
-  return {
-    ...login,
-    fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
-  };
+// Nested client values are stored as sent, so the response path re-reads them: a valid EncString
+// reads trimmed, and anything else reads as null or drops its entry.
+const encString = z.custom<string>(isValidEncString).transform((value) => value.trim());
+const storedValue = <Output>(read: (value: unknown) => Output) => z.unknown().optional().transform(read);
+const encStringOrNull = storedValue(optionalEncString);
+const uriEncStringOrNull = storedValue((value) => optionalEncStringWithin(value, 10000));
+
+// Each stored entry parses on its own: a rejected entry is dropped, and a kept one keeps its unknown
+// client keys, in stored order, around the normalized ones. No surviving entry reads as null.
+function parseStoredEntries<Entry extends object>(entries: unknown, schema: z.ZodType<Entry>): Array<Record<string, unknown> & Entry> | null {
+  const parsed = (Array.isArray(entries) ? entries : []).flatMap((entry: Record<string, unknown>) => {
+    const result = schema.safeParse(entry);
+    return result.success ? [{ ...entry, ...result.data }] : [];
+  });
+  return parsed.length ? parsed : null;
 }
 
-export function normalizeCipherLoginForCompatibility(
-  login: any,
-  requiresUriChecksum: boolean = false,
-  preserveRepairableUris: boolean = false
-): any {
-  const normalized = normalizeCipherLoginForStorage(login);
-  if (!normalized || typeof normalized !== 'object') return normalized ?? null;
-  const next = sanitizeEncryptedObject(normalized, {
+// A URI entry survives while it still holds a URI, a checksum or a match rule. Official Bitwarden
+// treats uriChecksum as nullable encrypted metadata, so a URI without one keeps its entry with a
+// null checksum and clients that can repair checksums do so.
+const StoredLoginUri = z.object({
+  uri: uriEncStringOrNull.optional(),
+  uriChecksum: uriEncStringOrNull.optional(),
+  match: z.custom<number | null>().optional(),
+})
+  .refine(({ uri, uriChecksum, match }) => !!(uri || uriChecksum) || match != null)
+  .transform((entry) => (entry.uri ? { ...entry, uriChecksum: entry.uriChecksum ?? null } : entry));
+
+// A passkey needs all of its key material; a malformed optional label reads as null.
+const StoredFido2Credential = z.object({
+  credentialId: encString,
+  keyType: encString,
+  keyAlgorithm: encString,
+  keyCurve: encString,
+  keyValue: encString,
+  rpId: encString,
+  counter: encString,
+  discoverable: encString,
+  userHandle: encStringOrNull.optional(),
+  userName: encStringOrNull.optional(),
+  rpName: encStringOrNull.optional(),
+  userDisplayName: encStringOrNull.optional(),
+});
+
+const StoredCipherField = z.object({
+  name: encStringOrNull,
+  value: encStringOrNull,
+  type: storedValue((type) => Number(type) || 0),
+  linkedId: z.custom<number | null>().default(null),
+});
+
+const StoredPasswordHistoryEntry = z.object({
+  password: encString,
+  lastUsedDate: storedValue((lastUsedDate) => normalizeCipherTimestamp(lastUsedDate) ?? new Date().toISOString()),
+});
+
+// A secure note carries only its subtype, spelled Type by older payloads; anything unreadable is a
+// generic note.
+const StoredSecureNote = z.object({ type: z.unknown().optional(), Type: z.unknown().optional() })
+  .transform(({ type, Type }) => ({ type: Number(type ?? Type ?? 0) }))
+  .refine(({ type }) => Number.isFinite(type))
+  .catch(() => ({ type: 0 }));
+
+// Passkeys are only ever stored as a list, so any other value reads as none.
+export function normalizeCipherLoginForStorage(
+  login: (Omit<CipherLogin, 'fido2Credentials'> & { fido2Credentials?: unknown }) | null | undefined
+): CipherLogin | null {
+  if (!login || typeof login !== 'object') return null;
+  return { ...login, fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null };
+}
+
+export function normalizeCipherLoginForCompatibility(login: CipherLogin | null): CipherLogin | null {
+  const next = sanitizeEncryptedObject(normalizeCipherLoginForStorage(login), {
     username: 1000,
     password: 5000,
     totp: 1000,
     uri: 10000,
   });
-  if (!next) return null;
-  next.uris = normalizeCipherLoginUrisForCompatibility(next.uris, {
-    requiresUriChecksum,
-    preserveRepairableUris,
-  });
-  next.fido2Credentials = normalizeFido2CredentialsForCompatibility(next.fido2Credentials);
-  return next;
-}
-
-function normalizeCipherLoginUrisForCompatibility(
-  uris: any,
-  options: { requiresUriChecksum?: boolean; preserveRepairableUris?: boolean } = {}
-): any[] | null {
-  if (!Array.isArray(uris) || uris.length === 0) return null;
-  const out: any[] = [];
-
-  for (const uri of uris) {
-    if (!uri || typeof uri !== 'object') continue;
-    const next = sanitizeEncryptedObject(uri, ['uri', 'uriChecksum']);
-    if (!next) continue;
-
-    const hasUri = isValidEncString(next.uri);
-    const hasChecksum = isValidEncString(next.uriChecksum);
-    const hasMatch = next.match != null;
-
-    if (hasUri && String(next.uri).trim().length > 10000) continue;
-    if (hasChecksum && String(next.uriChecksum).trim().length > 10000) {
-      next.uriChecksum = null;
-    }
-
-    if (hasUri && isValidEncString(next.uriChecksum)) {
-      out.push(next);
-      continue;
-    }
-
-    if (hasUri && !hasChecksum) {
-      // Official Bitwarden treats UriChecksum as nullable encrypted metadata.
-      // Keep the URI intact and let clients that can repair checksums do so.
-      out.push({ ...next, uriChecksum: null });
-      continue;
-    }
-
-    if (hasChecksum || hasMatch) {
-      out.push(next);
-    }
-  }
-
-  return out.length ? out : null;
+  return next && {
+    ...next,
+    uris: parseStoredEntries(next.uris, StoredLoginUri),
+    fido2Credentials: parseStoredEntries(next.fido2Credentials, StoredFido2Credential),
+  };
 }
 
 export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): string | null {
@@ -489,86 +493,20 @@ export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): s
   return null;
 }
 
-function normalizeFido2CredentialsForCompatibility(credentials: any): any[] | null {
-  if (!Array.isArray(credentials) || credentials.length === 0) return null;
-  const requiredEncryptedKeys = [
-    'credentialId',
-    'keyType',
-    'keyAlgorithm',
-    'keyCurve',
-    'keyValue',
-    'rpId',
-    'counter',
-    'discoverable',
-  ];
-  const optionalEncryptedKeys = ['userHandle', 'userName', 'rpName', 'userDisplayName'];
-  const out: any[] = [];
-
-  for (const credential of credentials) {
-    if (!credential || typeof credential !== 'object') continue;
-    const next: Record<string, any> = { ...credential };
-    let valid = true;
-    for (const key of requiredEncryptedKeys) {
-      if (!isValidEncString(next[key])) {
-        valid = false;
-        break;
-      }
-      next[key] = String(next[key]).trim();
-    }
-    if (!valid) continue;
-    for (const key of optionalEncryptedKeys) {
-      if (Object.prototype.hasOwnProperty.call(next, key)) {
-        next[key] = optionalEncString(next[key]);
-      }
-    }
-    out.push(next);
-  }
-
-  return out.length ? out : null;
-}
-
 // Android 2026.2.0 requires sshKey.keyFingerprint in sync payloads.
 // Keep legacy alias "fingerprint" in parallel for older web payloads.
-export function normalizeCipherSshKeyForCompatibility(sshKey: any): any {
-  if (!sshKey || typeof sshKey !== 'object') return sshKey ?? null;
-
-  const candidate =
-    sshKey.keyFingerprint !== undefined && sshKey.keyFingerprint !== null
-      ? sshKey.keyFingerprint
-      : sshKey.fingerprint;
-
-  const normalizedFingerprint =
-    candidate === undefined || candidate === null
-      ? ''
-      : String(candidate);
-
-  if (
-    !isValidEncString(sshKey.privateKey) ||
-    !isValidEncString(sshKey.publicKey) ||
-    !isValidEncString(normalizedFingerprint)
-  ) {
+export function normalizeCipherSshKeyForCompatibility(sshKey: unknown): CipherSshKey | null {
+  if (!sshKey || typeof sshKey !== 'object') return null;
+  const stored: Record<string, unknown> = { ...sshKey };
+  const fingerprint = String(stored.keyFingerprint ?? stored.fingerprint ?? '');
+  if (!isValidEncString(stored.privateKey) || !isValidEncString(stored.publicKey) || !isValidEncString(fingerprint)) {
     return null;
   }
-
-  return {
-    ...sshKey,
-    privateKey: String(sshKey.privateKey).trim(),
-    publicKey: String(sshKey.publicKey).trim(),
-    keyFingerprint: normalizedFingerprint,
-    fingerprint: normalizedFingerprint,
-  };
-}
-
-function normalizeCipherSecureNoteForCompatibility(secureNote: any): CipherSecureNote | null {
-  if (!secureNote || typeof secureNote !== 'object') return null;
-  const type = Number(secureNote?.type ?? secureNote?.Type ?? 0);
-  return {
-    type: Number.isFinite(type) ? type : 0,
-  };
+  return { ...stored, privateKey: stored.privateKey.trim(), publicKey: stored.publicKey.trim(), keyFingerprint: fingerprint, fingerprint };
 }
 
 // Format attachments for API response
-export function formatAttachments(attachments: Attachment[]): any[] | null {
+export function formatAttachments(attachments: Attachment[]): AttachmentResponse[] | null {
   if (attachments.length === 0) return null;
   const formatted = attachments
     .filter((a) => isValidEncString(a.fileName))
@@ -710,35 +648,6 @@ export function applyCipherEmbeddedAttachmentMetadata(cipherData: Record<string,
   });
 }
 
-function normalizeCipherFieldsForCompatibility(fields: any): any[] | null {
-  if (!Array.isArray(fields) || fields.length === 0) return null;
-  const out = fields
-    .map((field: any) => {
-      if (!field || typeof field !== 'object') return null;
-      return {
-        ...field,
-        name: optionalEncString(field.name),
-        value: optionalEncString(field.value),
-        type: Number(field.type) || 0,
-        linkedId: field.linkedId ?? null,
-      };
-    })
-    .filter(Boolean);
-  return out.length ? out : null;
-}
-
-function normalizePasswordHistoryForCompatibility(passwordHistory: any): PasswordHistory[] | null {
-  if (!Array.isArray(passwordHistory) || passwordHistory.length === 0) return null;
-  const out = passwordHistory
-    .filter((entry: any) => entry && typeof entry === 'object' && isValidEncString(entry.password))
-    .map((entry: any) => ({
-      ...entry,
-      password: String(entry.password).trim(),
-      lastUsedDate: normalizeCipherTimestamp(entry.lastUsedDate) ?? new Date().toISOString(),
-    }));
-  return out.length ? out : null;
-}
-
 export function isCipherResponseSyncCompatible(cipher: CipherResponse): boolean {
   return isValidEncString(cipher.name);
 }
@@ -755,12 +664,8 @@ export function cipherToResponse(
   // Strip internal-only fields that must not appear in the API response
   const { userId, createdAt, updatedAt, archivedAt, deletedAt, ...passthrough } = cipher;
   const responseCipherKey = optionalEncString(cipher.key);
-  const normalizedLogin = normalizeCipherLoginForCompatibility(
-    (passthrough as any).login ?? null,
-    !!responseCipherKey,
-    !!options.preserveRepairableUris
-  );
-  const normalizedCard = sanitizeEncryptedObject((passthrough as any).card ?? null, {
+  const normalizedLogin = normalizeCipherLoginForCompatibility(passthrough.login ?? null);
+  const normalizedCard = sanitizeEncryptedObject(passthrough.card ?? null, {
     cardholderName: 1000,
     brand: 1000,
     number: 1000,
@@ -768,7 +673,7 @@ export function cipherToResponse(
     expYear: 1000,
     code: 1000,
   });
-  const normalizedIdentity = sanitizeEncryptedObject((passthrough as any).identity ?? null, [
+  const normalizedIdentity = sanitizeEncryptedObject(passthrough.identity ?? null, [
     'title',
     'firstName',
     'middleName',
@@ -788,25 +693,21 @@ export function cipherToResponse(
     'passportNumber',
     'licenseNumber',
   ]);
-  const normalizedSshKey = normalizeCipherSshKeyForCompatibility((passthrough as any).sshKey ?? null);
+  const normalizedSshKey = normalizeCipherSshKeyForCompatibility(passthrough.sshKey);
   const normalizedBankAccount = sanitizeEncryptedObject(
-    (passthrough as any).bankAccount ?? null,
+    passthrough.bankAccount ?? null,
     BANK_ACCOUNT_ENCRYPTED_KEYS
   );
   const normalizedDriversLicense = sanitizeEncryptedObject(
-    (passthrough as any).driversLicense ?? null,
+    passthrough.driversLicense ?? null,
     DRIVERS_LICENSE_ENCRYPTED_KEYS
   );
   const normalizedPassport = sanitizeEncryptedObject(
-    (passthrough as any).passport ?? null,
+    passthrough.passport ?? null,
     PASSPORT_ENCRYPTED_KEYS
   );
   const responseType = Number(cipher.type) || 1;
-  const normalizedSecureNote = responseType === 2
-    ? normalizeCipherSecureNoteForCompatibility((passthrough as any).secureNote ?? null) ?? { type: 0 }
-    : null;
   const responseAttachments = applyCipherEmbeddedAttachmentMetadata(cipher, attachments);
-  const responsePermissions = buildCipherPermissions(passthrough);
 
   return {
     // Pass through ALL stored cipher fields (known + unknown)
@@ -814,33 +715,33 @@ export function cipherToResponse(
     // Server-computed / enforced fields (always override)
     folderId: normalizeResponseFolderId(cipher.folderId, options.validFolderIds),
     type: responseType,
-    organizationId: normalizeOptionalId((passthrough as any).organizationId ?? null),
-    organizationUseTotp: !!((passthrough as any).organizationUseTotp ?? false),
+    organizationId: normalizeOptionalId(passthrough.organizationId),
+    organizationUseTotp: !!passthrough.organizationUseTotp,
     creationDate: createdAt,
     revisionDate: updatedAt,
     deletedDate: deletedAt,
     archivedDate: archivedAt ?? null,
-    edit: readBooleanOrFallback((passthrough as any).edit, true),
-    viewPassword: readBooleanOrFallback((passthrough as any).viewPassword, true),
-    permissions: responsePermissions,
+    edit: storedFlag.parse(passthrough.edit),
+    viewPassword: storedFlag.parse(passthrough.viewPassword),
+    permissions: StoredPermissions.parse(passthrough.permissions),
     object: 'cipherDetails',
-    collectionIds: Array.isArray((passthrough as any).collectionIds) ? (passthrough as any).collectionIds : [],
+    collectionIds: Array.isArray(passthrough.collectionIds) ? passthrough.collectionIds : [],
     attachments: formatAttachments(responseAttachments),
     name: isValidEncString(cipher.name) ? cipher.name.trim() : cipher.name,
     notes: optionalEncString(cipher.notes),
     login: normalizedLogin,
     card: normalizedCard,
     identity: normalizedIdentity,
-    secureNote: normalizedSecureNote,
-    fields: normalizeCipherFieldsForCompatibility((passthrough as any).fields),
-    passwordHistory: normalizePasswordHistoryForCompatibility((passthrough as any).passwordHistory),
+    secureNote: responseType === 2 ? StoredSecureNote.parse(passthrough.secureNote) : null,
+    fields: parseStoredEntries(passthrough.fields, StoredCipherField),
+    passwordHistory: parseStoredEntries(passthrough.passwordHistory, StoredPasswordHistoryEntry),
     sshKey: normalizedSshKey,
     bankAccount: responseType === 6 ? normalizedBankAccount : null,
     driversLicense: responseType === 7 ? normalizedDriversLicense : null,
     passport: responseType === 8 ? normalizedPassport : null,
     key: responseCipherKey,
-    data: typeof (passthrough as any).data === 'string' ? (passthrough as any).data : null,
-    encryptedFor: (passthrough as any).encryptedFor ?? null,
+    data: typeof passthrough.data === 'string' ? passthrough.data : null,
+    encryptedFor: passthrough.encryptedFor ?? null,
   };
 }
 
