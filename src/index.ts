@@ -8,7 +8,7 @@ import { BackupTransferRunner } from './durable/backup-transfer-runner';
 import type { PlatformEvent } from './services/queue-publisher';
 import * as orgRepo from './services/storage-org-repo';
 import { app } from './router';
-import { applyCors, jsonResponse } from './utils/response';
+import { applyCors, applySecurityHeaders, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import {
@@ -118,8 +118,7 @@ export default {
       return applyCors(normalizedRequest, resp, env);
     }
 
-    const resp = await app.fetch(normalizedRequest, env, ctx);
-    return applyCors(normalizedRequest, resp, env);
+    return applySecurityHeaders(normalizedRequest, await app.fetch(normalizedRequest, env, ctx));
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

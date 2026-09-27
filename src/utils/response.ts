@@ -1,5 +1,4 @@
 import { isAdminPortalPath } from '../web-vault-visibility';
-import { LIMITS } from '../config/limits';
 import type { Env } from '../types';
 import {
   isBrowserExtensionOrigin,
@@ -8,24 +7,6 @@ import {
   isOfficialBitwardenDesktopOrigin,
   normalizeOrigin,
 } from './origins';
-
-const CORS_METHODS = 'GET, POST, PUT, DELETE, PATCH, OPTIONS';
-const DEFAULT_CORS_HEADERS = [
-  'Content-Type',
-  'Authorization',
-  'Accept',
-  'Device-Type',
-  'Device-Identifier',
-  'Device-Name',
-  'Bitwarden-Client-Name',
-  'Bitwarden-Client-Version',
-  'Bitwarden-Package-Type',
-  'Is-Prerelease',
-  'X-Request-Email',
-  'X-Device-Identifier',
-  'X-Device-Name',
-  'X-NodeWarden-Web-Session',
-];
 
 function isWildcardCorsPath(path: string): boolean {
   return (
@@ -39,62 +20,37 @@ function isWildcardCorsPath(path: string): boolean {
   );
 }
 
-function getCorsPolicy(request: Request, env: Env): { allowOrigin: string | null; allowCredentials: boolean } {
+export type CorsPolicy = { kind: 'credentialed'; origin: string } | { kind: 'public' } | { kind: 'none' };
+
+// This Worker, configured vault origins and trusted extension or desktop origins may read responses
+// with credentials; anyone may read the wildcard paths without them; the admin portal is never shared.
+export function corsPolicy(request: Request, env: Env): CorsPolicy {
   const url = new URL(request.url);
-  const originHeader = request.headers.get('Origin');
-  if (!originHeader) {
-    return isWildcardCorsPath(url.pathname)
-      ? { allowOrigin: '*', allowCredentials: false }
-      : { allowOrigin: null, allowCredentials: false };
+  if (isAdminPortalPath(url.pathname)) return { kind: 'none' };
+  const origin = normalizeOrigin(request.headers.get('Origin'));
+  if (origin && (
+    origin === url.origin
+    || isConfiguredWebVaultOrigin(env, origin)
+    || ((isBrowserExtensionOrigin(origin) || isOfficialBitwardenDesktopOrigin(origin)) && isConfiguredWebAuthnAllowedOrigin(env, origin))
+  )) {
+    return { kind: 'credentialed', origin };
   }
-  const origin = normalizeOrigin(originHeader);
-  if (origin === url.origin || isConfiguredWebVaultOrigin(env, origin)) {
-    return { allowOrigin: origin, allowCredentials: true };
-  }
-  if (
-    (isBrowserExtensionOrigin(origin) || isOfficialBitwardenDesktopOrigin(origin))
-    && isConfiguredWebAuthnAllowedOrigin(env, origin)
-  ) {
-    return { allowOrigin: origin, allowCredentials: true };
-  }
-  if (isWildcardCorsPath(url.pathname)) {
-    return { allowOrigin: '*', allowCredentials: false };
-  }
-  return { allowOrigin: null, allowCredentials: false };
+  return isWildcardCorsPath(url.pathname) ? { kind: 'public' } : { kind: 'none' };
 }
 
-function buildCorsHeaders(request: Request, env: Env): Record<string, string> {
-  if (isAdminPortalPath(new URL(request.url).pathname)) return {};
-  const requestedHeaders = String(request.headers.get('Access-Control-Request-Headers') || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const allowHeaders = Array.from(new Set([...DEFAULT_CORS_HEADERS, ...requestedHeaders]));
-
-  const headers: Record<string, string> = {
-    'Access-Control-Allow-Methods': CORS_METHODS,
-    'Access-Control-Allow-Headers': allowHeaders.join(', '),
-    'Access-Control-Expose-Headers': '*',
-    'Access-Control-Max-Age': String(LIMITS.cors.preflightMaxAgeSeconds),
-  };
-
-  const corsPolicy = getCorsPolicy(request, env);
-  if (corsPolicy.allowOrigin) {
-    headers['Access-Control-Allow-Origin'] = corsPolicy.allowOrigin;
-    if (corsPolicy.allowCredentials) {
-      headers['Access-Control-Allow-Credentials'] = 'true';
-    }
-    headers['Vary'] = 'Origin, Access-Control-Request-Headers';
-  }
-
-  return headers;
+// Responses built outside the Hono app (static assets, the database-unavailable error) miss its cors
+// middleware, so they take the same origin decision here.
+export function applyCors(request: Request, response: Response, env: Env): Response {
+  const secured = applySecurityHeaders(request, response);
+  const policy = corsPolicy(request, env);
+  if (policy.kind === 'none') return secured;
+  secured.headers.set('Access-Control-Allow-Origin', policy.kind === 'public' ? '*' : policy.origin);
+  if (policy.kind === 'credentialed') secured.headers.set('Access-Control-Allow-Credentials', 'true');
+  secured.headers.append('Vary', 'Origin');
+  return secured;
 }
 
-export function applyCors(
-  request: Request,
-  response: Response,
-  env: Env
-): Response {
+export function applySecurityHeaders(request: Request, response: Response): Response {
   // WebSocket upgrade responses must be returned untouched.
   const webSocket = (response as Response & { webSocket?: unknown }).webSocket;
   if (response.status === 101 || webSocket) {
@@ -102,10 +58,6 @@ export function applyCors(
   }
 
   const headers = new Headers(response.headers);
-  const corsHeaders = buildCorsHeaders(request, env);
-  for (const [k, v] of Object.entries(corsHeaders)) {
-    headers.set(k, v);
-  }
   // Security headers applied to every response.
   headers.set('X-Content-Type-Options', 'nosniff');
   if (!headers.has('Referrer-Policy')) headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -200,14 +152,6 @@ export function identityErrorResponse(
     status,
     { 'Cache-Control': 'no-store', Pragma: 'no-cache', ...headers }
   );
-}
-
-// Handle CORS preflight
-export function handleCors(request: Request, env: Env): Response {
-  return new Response(null, {
-    status: 204,
-    headers: buildCorsHeaders(request, env),
-  });
 }
 
 // HTML response helper

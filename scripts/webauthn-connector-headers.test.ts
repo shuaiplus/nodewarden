@@ -4,7 +4,8 @@ import test from 'node:test';
 
 import type { Env } from '../src/types';
 import { getConfiguredWebAuthnAllowedOrigins } from '../src/utils/origins';
-import { applyCors, handleCors } from '../src/utils/response';
+import { applyCors } from '../src/utils/response';
+import { authedFetch, createTestEnv } from './support/env';
 
 const env = {} as Env;
 
@@ -23,15 +24,16 @@ test('only the iframe connector drops anti-framing headers', () => {
   }
 });
 
-test('official Bitwarden desktop origin receives credentialed CORS', () => {
+test('official Bitwarden desktop origin receives credentialed CORS', async () => {
   assert.ok(getConfiguredWebAuthnAllowedOrigins(env).includes('bw-desktop-file://bundle'));
-  const preflight = handleCors(new Request('https://vault.example.test/api/sync', {
+  const preflight = await authedFetch(await createTestEnv(), {
     method: 'OPTIONS',
+    path: '/api/sync',
     headers: {
       Origin: 'bw-desktop-file://bundle',
       'Access-Control-Request-Headers': 'authorization, content-type',
     },
-  }), env);
+  });
   assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), 'bw-desktop-file://bundle');
   assert.equal(preflight.headers.get('Access-Control-Allow-Credentials'), 'true');
 });

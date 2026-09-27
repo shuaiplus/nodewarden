@@ -1,11 +1,13 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { isMachineAllowedRoute, secretsManagerRoutes } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
 import { handleAdminPortal } from './handlers/admin-portal';
 import type { Env, User } from './types';
 import { AuthService, type Principal } from './services/auth';
 import { RateLimitService } from './services/ratelimit';
-import { handleCors, errorResponse } from './utils/response';
+import { corsPolicy, errorResponse } from './utils/response';
+import { normalizeOrigin } from './utils/origins';
 import { LIMITS } from './config/limits';
 import { authenticatedRoutes } from './router-authenticated';
 import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
@@ -19,7 +21,6 @@ export type AppEnv = {
 };
 
 function canServeWithUnsafeJwtSecret(path: string, method: string): boolean {
-  if (method === 'OPTIONS') return true;
   if (method === 'GET' && (path === '/api/web-bootstrap' || path === '/web-bootstrap')) return true;
   if (method === 'GET' && (path === '/config' || path === '/api/config' || path === '/api/version')) return true;
   if (method === 'GET' && path === '/fill-assist/manifest.json') return true;
@@ -116,9 +117,23 @@ export const app = new Hono<AppEnv>({
   },
 });
 
+const corsOptions = {
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  exposeHeaders: ['*'],
+  maxAge: LIMITS.cors.preflightMaxAgeSeconds,
+};
+// Only reached for origins corsPolicy already approved.
+const credentialedCors = cors({ ...corsOptions, credentials: true, origin: (origin) => normalizeOrigin(origin) });
+const publicCors = cors({ ...corsOptions, origin: '*' });
+
+// hono's credentials flag is static, so corsPolicy picks the instance per request. WebSocket
+// upgrades skip both because their 101 response must reach the runtime untouched.
 app.use(async (c, next) => {
-  if (c.req.method === 'OPTIONS' && !isAdminPortalPath(c.req.path)) return handleCors(c.req.raw, c.env);
-  await next();
+  if (c.req.header('Upgrade')?.toLowerCase() === 'websocket') return next();
+  const policy = corsPolicy(c.req.raw, c.env);
+  if (policy.kind === 'credentialed') return credentialedCors(c, next);
+  if (policy.kind === 'public') return publicCors(c, next);
+  return c.req.method === 'OPTIONS' && !isAdminPortalPath(c.req.path) ? c.body(null, 204) : next();
 });
 
 app.use(async (c, next) => {
