@@ -1,8 +1,11 @@
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 
 import { chunkRows, getOrm } from '../db/client';
-import { ciphers } from '../db/schema';
+import { ciphers, organizationMemberships } from '../db/schema';
+import { bound, jsonExtract, jsonRemove, scalar } from '../db/sql';
 import type { Cipher } from '../types';
+import { MembershipStatus, MembershipType } from './org-types';
 import { updateRevisionDate } from './storage-revision-repo';
 
 function normalizeOptionalId(value: unknown): string | null {
@@ -145,11 +148,12 @@ export function cipherUpsert(db: D1Database, cipher: Cipher) {
       },
       // An org overwrite is only legitimate when the stored row already belongs
       // to that same org; a NULL organization_id must never match an incoming org cipher.
+      // An incoming personal cipher binds NULL, which equals nothing either.
       where: or(
         eq(ciphers.userId, cipher.userId),
         and(
           isNotNull(ciphers.organizationId),
-          sql`${ciphers.organizationId} = ${organizationId}`,
+          eq(ciphers.organizationId, bound(organizationId)),
         ),
       ),
     });
@@ -171,14 +175,15 @@ export function deleteCiphersByOrganization(db: D1Database, organizationId: stri
   return getOrm(db).delete(ciphers).where(eq(ciphers.organizationId, organizationId));
 }
 
+// Each org item passes to the oldest other confirmed Owner of its org, else to its oldest other confirmed member.
 export function reassignOrganizationCiphers(db: D1Database, userId: string, guard: SQL) {
-  return getOrm(db).update(ciphers).set({
-    userId: sql`(
-      SELECT successor.user_id FROM organization_memberships successor
-      WHERE successor.org_id = ${ciphers.organizationId}
-        AND successor.user_id <> ${userId} AND successor.status = 2
-      ORDER BY (successor.type = 0) DESC, successor.created_at, successor.id LIMIT 1
-    )`,
+  const orm = getOrm(db);
+  const successor = alias(organizationMemberships, 'successor');
+  return orm.update(ciphers).set({
+    userId: scalar<string>(orm.select({ userId: successor.userId }).from(successor)
+      .where(and(eq(successor.orgId, ciphers.organizationId), ne(successor.userId, userId), eq(successor.status, MembershipStatus.Confirmed)))
+      .orderBy(desc(eq(successor.type, MembershipType.Owner)), asc(successor.createdAt), asc(successor.id))
+      .limit(1)),
   }).where(and(eq(ciphers.userId, userId), isNotNull(ciphers.organizationId), guard));
 }
 
@@ -186,18 +191,19 @@ async function chunkedUpdate(
   db: D1Database,
   ids: string[],
   userId: string,
-  fixedBinds: number,
   set: Record<string, unknown>,
   extraWhere: ReturnType<typeof and> | undefined
 ): Promise<string | null> {
   const uniqueIds = sanitizeIds(ids);
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  for (const chunk of chunkRows(uniqueIds, 1, fixedBinds)) {
-    await orm
-      .update(ciphers)
-      .set(set)
-      .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
+  const update = (chunk: string[]) => orm
+    .update(ciphers)
+    .set(set)
+    .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
+  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
+  for (const chunk of chunkRows(uniqueIds, 1, update([]).toSQL().params.length)) {
+    await update(chunk);
   }
   return updateRevisionDate(db, userId);
 }
@@ -212,11 +218,10 @@ export async function bulkSoftDeleteCiphers(
     db,
     ids,
     userId,
-    3,
     {
       deletedAt: now,
       updatedAt: now,
-      data: sql`json_remove(${ciphers.data}, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')`,
+      data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
     },
     undefined
   );
@@ -232,11 +237,10 @@ export async function bulkRestoreCiphers(
     db,
     ids,
     userId,
-    2,
     {
       deletedAt: null,
       updatedAt: now,
-      data: sql`json_remove(${ciphers.data}, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')`,
+      data: jsonRemove(ciphers.data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate'),
     },
     undefined
   );
@@ -279,8 +283,8 @@ export async function getCiphersPage(
     ? undefined
     : and(
       isNull(ciphers.deletedAt),
-      sql`json_extract(${ciphers.data}, '$.deletedAt') is null`,
-      sql`json_extract(${ciphers.data}, '$.deletedDate') is null`,
+      isNull(jsonExtract(ciphers.data, '$.deletedAt')),
+      isNull(jsonExtract(ciphers.data, '$.deletedDate')),
     );
   const rows = await getOrm(db)
     .select()
@@ -330,11 +334,10 @@ export async function bulkMoveCiphers(
     db,
     ids,
     userId,
-    3,
     {
       folderId: normalizeOptionalId(folderId),
       updatedAt: now,
-      data: sql`json_remove(${ciphers.data}, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')`,
+      data: jsonRemove(ciphers.data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate'),
     },
     undefined
   );
@@ -350,16 +353,15 @@ export async function bulkArchiveCiphers(
     db,
     ids,
     userId,
-    3,
     {
       archivedAt: now,
       updatedAt: now,
-      data: sql`json_remove(${ciphers.data}, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')`,
+      data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
     },
     and(
       isNull(ciphers.deletedAt),
-      sql`json_extract(${ciphers.data}, '$.deletedAt') is null`,
-      sql`json_extract(${ciphers.data}, '$.deletedDate') is null`,
+      isNull(jsonExtract(ciphers.data, '$.deletedAt')),
+      isNull(jsonExtract(ciphers.data, '$.deletedDate')),
     )
   );
 }
@@ -374,11 +376,10 @@ export async function bulkUnarchiveCiphers(
     db,
     ids,
     userId,
-    2,
     {
       archivedAt: null,
       updatedAt: now,
-      data: sql`json_remove(${ciphers.data}, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')`,
+      data: jsonRemove(ciphers.data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate'),
     },
     undefined
   );
