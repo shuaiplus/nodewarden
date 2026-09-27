@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Principal } from '../services/auth';
 import { LIMITS } from '../config/limits';
 import { policyConflict, prepareSecretPolicies } from './sm-access-policies';
@@ -5,14 +6,40 @@ import { isSerializedEncString } from '../utils/account-passkeys';
 import { projectAccess, serviceAccountAccess, secretAccess, canCreateSecret, canUpdateSecret, resolveSmActor, type SmAccess } from '../services/sm-authz';
 import type { Env } from '../types';
 import * as smRepo from '../services/storage-secret-repo';
-import { errorResponse, jsonResponse } from '../utils/response';
-import { generateUUID, isUUID } from '../utils/uuid';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { generateUUID } from '../utils/uuid';
 import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
 import { publishSecretChanged } from '../services/queue-publisher';
 import { EventType, listEventsResponse, recordEvents } from '../services/events';
 import { canAccessEventLogs, isActiveMember } from '../services/org-authz';
 import { MembershipType } from '../services/org-types';
 import { getMembershipByUserAndOrg } from '../services/storage-org-repo';
+
+// SM names, keys, values and notes stay client ciphertext: each must be a serialized EncString.
+const encrypted = (max: number, error: string) => z.string({ error }).refine(value => value.length <= max && isSerializedEncString(value), { error });
+const guids = (error: string) => z.array(z.guid({ error }), { error }).transform(ids => ids.map(id => id.toLowerCase()));
+const NAME_ERROR = 'Name must be an encrypted string of at most 1000 characters.';
+const NameBody = z.object({ name: encrypted(1000, NAME_ERROR) }, { error: NAME_ERROR });
+const IDS_ERROR = 'Ids must be an array of GUIDs.';
+const IdsBody = z.object({ ids: guids(IDS_ERROR) }, { error: IDS_ERROR });
+
+// The grant lists stay unknown here because parsePolicyRequests owns their messages.
+export const PolicyRequests = z.record(z.string(), z.unknown(), { error: 'Access policies must be an object.' });
+
+const SECRET_ERROR = 'Key, value and note must be encrypted strings within their size limits.';
+const SecretBody = z.object({
+  key: encrypted(1000, SECRET_ERROR), value: encrypted(35000, SECRET_ERROR), note: encrypted(10000, SECRET_ERROR),
+  projectIds: guids('ProjectIds must be an array of GUIDs.').nullish().transform(ids => ids ?? []),
+  accessPoliciesRequests: PolicyRequests.nullish(),
+}, { error: SECRET_ERROR });
+
+const TOKEN_ERROR = 'Name, encryptedPayload and key must be encrypted strings within their size limits.';
+const EXPIRE_ERROR = 'ExpireAt must be in the future.';
+const AccessTokenBody = z.object({
+  name: encrypted(200, TOKEN_ERROR), encryptedPayload: encrypted(4000, TOKEN_ERROR), key: encrypted(Infinity, TOKEN_ERROR),
+  expireAt: z.string({ error: EXPIRE_ERROR }).refine(value => Date.parse(value) > Date.now(), { error: EXPIRE_ERROR })
+    .transform(value => new Date(value).toISOString()).nullish(),
+}, { error: TOKEN_ERROR });
 
 function eventActor(principal: Principal) {
   return principal.kind === 'user' ? { userId: principal.user.id } : { serviceAccountId: principal.serviceAccountId };
@@ -65,12 +92,9 @@ export async function handleProjectSecrets(env: Env, principal: Principal, id: s
 }
 
 async function secretInput(request: Request) {
-  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !encryptedField(body.key, 1000) || !encryptedField(body.value, 35000) || !encryptedField(body.note, 10000)) return errorResponse('Key, value and note must be encrypted strings within their size limits.', 400);
-  if (body.projectIds != null && (!Array.isArray(body.projectIds) || !body.projectIds.every(isUUID))) return errorResponse('ProjectIds must be an array of GUIDs.', 400);
-  const projectIds = (body.projectIds as string[] | null | undefined)?.map(id => id.toLowerCase()) ?? [];
-  if (projectIds.length > 1) return errorResponse('Only one project assignment is supported.', 400, {}, { ProjectIds: ['Only one project assignment is supported.'] });
-  return { key: body.key, value: body.value, note: body.note, projectIds, accessPoliciesRequests: body.accessPoliciesRequests };
+  const input = await parseBody(request, SecretBody, SECRET_ERROR);
+  if (input instanceof Response || input.projectIds.length <= 1) return input;
+  return errorResponse('Only one project assignment is supported.', 400, {}, { ProjectIds: ['Only one project assignment is supported.'] });
 }
 
 export async function handleCreateSecret(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
@@ -121,8 +145,8 @@ export async function handleUpdateSecret(request: Request, env: Env, principal: 
 }
 
 export async function handleDeleteSecrets(request: Request, env: Env, principal: Principal): Promise<Response> {
-  const ids = await readIds(request);
-  if (!ids) return errorResponse('Request body must be an array of secret GUIDs', 400);
+  const ids = await readIds(request, 'Request body must be an array of secret GUIDs');
+  if (ids instanceof Response) return ids;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   const orgId = secrets[0]?.orgId;
@@ -138,9 +162,9 @@ export async function handleDeleteSecrets(request: Request, env: Env, principal:
 }
 
 export async function handleSecretsByIds(request: Request, env: Env, principal: Principal): Promise<Response> {
-  const body = await request.json().catch(() => null) as { ids?: unknown } | null;
-  if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
-  const ids = body.ids.map(id => id.toLowerCase());
+  const body = await parseBody(request, IdsBody, IDS_ERROR);
+  if (body instanceof Response) return body;
+  const { ids } = body;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   const orgId = secrets[0]?.orgId;
@@ -157,19 +181,14 @@ export async function smContext(env: Env, principal: Principal, orgId: string) {
   return actor ? { actor, grants: await smRepo.loadSmGrants(env.DB, actor, orgId) } : null;
 }
 
-export function encryptedField(value: unknown, max = Infinity): value is string {
-  return typeof value === 'string' && value.length <= max && isSerializedEncString(value);
-}
-
 export function listResponse<T>(data: T[]) { return { data, object: 'list', continuationToken: null }; }
 
 function projectResponse(project: smRepo.SmProject, level: SmAccess) {
   return { id: project.id, organizationId: project.orgId, name: project.name, creationDate: project.createdAt, revisionDate: project.updatedAt, read: level !== 'none', write: level === 'write', object: 'project' };
 }
 
-export async function readIds(request: Request): Promise<string[] | null> {
-  const ids: unknown = await request.json().catch(() => null);
-  return Array.isArray(ids) && ids.every(isUUID) ? ids.map(id => id.toLowerCase()) : null;
+function readIds(request: Request, message: string) {
+  return parseBody(request, guids(message), message);
 }
 
 export async function handleListProjects(env: Env, principal: Principal, orgId: string): Promise<Response> {
@@ -183,8 +202,8 @@ export async function handleListProjects(env: Env, principal: Principal, orgId: 
 export async function handleCreateProject(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
   const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
-  const body = await request.json().catch(() => null) as { name?: unknown } | null;
-  if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+  const body = await parseBody(request, NameBody, NAME_ERROR);
+  if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const project = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo.createProject(env.DB, project, context.actor);
@@ -200,8 +219,8 @@ export async function handleProject(request: Request, env: Env, principal: Princ
   if (counts) return context.actor.kind === 'serviceAccount' ? errorResponse('Not found', 404) : jsonResponse(await smRepo.projectCounts(env.DB, project, access));
   if (access === 'none' || (request.method === 'PUT' && access !== 'write')) return errorResponse('Not found', 404);
   if (request.method === 'PUT') {
-    const body = await request.json().catch(() => null) as { name?: unknown } | null;
-    if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+    const body = await parseBody(request, NameBody, NAME_ERROR);
+    if (body instanceof Response) return body;
     project.name = body.name; project.updatedAt = new Date().toISOString();
     if (!await smRepo.updateProject(env.DB, project)) return errorResponse('Not found', 404);
   }
@@ -210,8 +229,8 @@ export async function handleProject(request: Request, env: Env, principal: Princ
 }
 
 export async function handleDeleteProjects(request: Request, env: Env, principal: Principal): Promise<Response> {
-  const ids = await readIds(request);
-  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  const ids = await readIds(request, 'Request body must be an array of GUIDs');
+  if (ids instanceof Response) return ids;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const projects = await smRepo.getProjectsByIds(env.DB, ids);
   const orgId = projects[0]?.orgId;
@@ -239,8 +258,8 @@ export async function handleListServiceAccounts(env: Env, principal: Principal, 
 export async function handleCreateServiceAccount(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
   const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
-  const body = await request.json().catch(() => null) as { name?: unknown; projectIds?: unknown } | null;
-  if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+  const body = await parseBody(request, NameBody, NAME_ERROR);
+  if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo.createServiceAccount(env.DB, account, context.actor.membershipId);
@@ -259,8 +278,8 @@ export async function handleServiceAccount(request: Request, env: Env, principal
   if (counts) return jsonResponse(await smRepo.serviceAccountCounts(env.DB, account, access));
   if (access === 'none') return errorResponse('Not found', 404);
   if (request.method === 'PUT') {
-    const body = await request.json().catch(() => null) as { name?: unknown } | null;
-    if (!encryptedField(body?.name, 1000)) return errorResponse('Name must be an encrypted string of at most 1000 characters.', 400);
+    const body = await parseBody(request, NameBody, NAME_ERROR);
+    if (body instanceof Response) return body;
     account.name = body.name; account.updatedAt = new Date().toISOString();
     if (!await smRepo.updateServiceAccount(env.DB, account)) return errorResponse('Not found', 404);
   }
@@ -268,8 +287,8 @@ export async function handleServiceAccount(request: Request, env: Env, principal
 }
 
 export async function handleDeleteServiceAccounts(request: Request, env: Env, principal: Principal): Promise<Response> {
-  const ids = await readIds(request);
-  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  const ids = await readIds(request, 'Request body must be an array of GUIDs');
+  if (ids instanceof Response) return ids;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const accounts = await smRepo.getServiceAccountsByIds(env.DB, ids);
   const orgId = accounts[0]?.orgId;
@@ -286,9 +305,9 @@ export async function handleRevokeAccessTokens(request: Request, env: Env, princ
   const account = await smRepo.getServiceAccount(env.DB, id);
   const context = account && await smContext(env, principal, account.orgId);
   if (!context || serviceAccountAccess(context.actor, context.grants, id) !== 'write') return errorResponse('Not found', 404);
-  const body = await request.json().catch(() => null) as { ids?: unknown } | null;
-  if (!Array.isArray(body?.ids) || !body.ids.every(isUUID)) return errorResponse('Ids must be an array of GUIDs.', 400);
-  await smRepo.revokeAccessTokens(env.DB, id, body.ids.map(id => id.toLowerCase()));
+  const body = await parseBody(request, IdsBody, IDS_ERROR);
+  if (body instanceof Response) return body;
+  await smRepo.revokeAccessTokens(env.DB, id, body.ids);
   return new Response(null, { status: 200 });
 }
 
@@ -303,12 +322,10 @@ export async function handleCreateAccessToken(request: Request, env: Env, princi
   const account = await smRepo.getServiceAccount(env.DB, serviceAccountId);
   const context = account && await smContext(env, principal, account.orgId);
   if (!account || !context || serviceAccountAccess(context.actor, context.grants, account.id) !== 'write') return errorResponse('Not found', 404);
-  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !encryptedField(body.name, 200) || !encryptedField(body.encryptedPayload, 4000) || !encryptedField(body.key)) return errorResponse('Name, encryptedPayload and key must be encrypted strings within their size limits.', 400);
-  const expires = body.expireAt == null ? null : typeof body.expireAt === 'string' ? Date.parse(body.expireAt) : NaN;
-  if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now())) return errorResponse('ExpireAt must be in the future.', 400);
+  const body = await parseBody(request, AccessTokenBody, TOKEN_ERROR);
+  if (body instanceof Response) return body;
   const clientSecret = randomStringAlphanum(LIMITS.auth.clientSecretLength);
-  const token = { id: generateUUID(), serviceAccountId, name: body.name, encryptedPayload: body.encryptedPayload, key: body.key, clientSecretHash: await hashApiKey(clientSecret), expireAt: expires === null ? null : new Date(expires).toISOString(), revokedAt: null, createdAt: new Date().toISOString() };
+  const token = { id: generateUUID(), serviceAccountId, name: body.name, encryptedPayload: body.encryptedPayload, key: body.key, clientSecretHash: await hashApiKey(clientSecret), expireAt: body.expireAt ?? null, revokedAt: null, createdAt: new Date().toISOString() };
   await smRepo.saveAccessToken(env.DB, token);
   return jsonResponse({ id: token.id, name: token.name, clientSecret, expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessTokenCreation' });
 }
@@ -369,8 +386,8 @@ export async function handleSecretsTrash(request: Request, env: Env, principal: 
   const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind !== 'admin') return errorResponse('Not found', 404);
   if (!action) return jsonResponse(await secretsListResponse(env, orgId, (await smRepo.listSecrets(env.DB, orgId, true)).filter(secret => !!secret.deletedAt), context));
-  const ids = await readIds(request);
-  if (!ids) return errorResponse('Request body must be an array of GUIDs', 400);
+  const ids = await readIds(request, 'Request body must be an array of GUIDs');
+  if (ids instanceof Response) return ids;
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   if (secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || !secret.deletedAt)) return errorResponse('Not found', 404);

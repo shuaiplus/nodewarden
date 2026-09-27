@@ -1,11 +1,12 @@
+import type { z } from 'zod';
 import type { Principal } from '../services/auth';
 import type { Env } from '../types';
 import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
 import { diffPolicies, parsePolicyRequests, projectAccess, secretAccess, serviceAccountAccess } from '../services/sm-authz';
-import { errorResponse, jsonResponse } from '../utils/response';
-import { listResponse, smContext } from './secrets-manager';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { listResponse, PolicyRequests, smContext } from './secrets-manager';
 import { EventType, recordEvents, type EventInput } from '../services/events';
 
 export async function peopleDirectory(env: Env, orgId: string, membershipId: string) {
@@ -43,8 +44,8 @@ export async function handlePeoplePolicies(request: Request, env: Env, principal
   const access = kind === 'project' ? projectAccess(context.actor, context.grants, id) : serviceAccountAccess(context.actor, context.grants, id);
   if (access !== 'write') return errorResponse('Not found', 404);
   if (request.method === 'PUT') {
-    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || Array.isArray(body) || typeof body !== 'object') return errorResponse('Access policies must be an object.', 400);
+    const body = await parseBody(request, PolicyRequests, 'Access policies must be an object.');
+    if (body instanceof Response) return body;
     const users = parsePolicyRequests(body.userAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     const groups = parsePolicyRequests(body.groupAccessPolicyRequests ?? [], 'granteeId', kind === 'serviceAccount');
     if (!users.ok) return errorResponse(users.message, 400);
@@ -95,8 +96,9 @@ export async function handleMachinePolicies(request: Request, env: Env, principa
   if (access !== 'write') return errorResponse('Not found', 404);
   let policies = kind === 'project' ? await smRepo.readProjectMachinePolicies(env.DB, row.orgId, id) : await smRepo.readGrantedProjects(env.DB, row.orgId, id);
   if (request.method === 'PUT') {
-    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    const parsed = parsePolicyRequests(body?.[kind === 'project' ? 'serviceAccountAccessPolicyRequests' : 'projectGrantedPolicyRequests'], kind === 'project' ? 'granteeId' : 'grantedId', false);
+    const body = await parseBody(request, PolicyRequests, 'Access policies must be arrays.');
+    if (body instanceof Response) return body;
+    const parsed = parsePolicyRequests(body[kind === 'project' ? 'serviceAccountAccessPolicyRequests' : 'projectGrantedPolicyRequests'], kind === 'project' ? 'granteeId' : 'grantedId', false);
     if (!parsed.ok) return errorResponse(parsed.message, 400);
     const current = new Map(policies.map(policy => [policy.id, policy.write_access ? 'write' as const : 'read' as const]));
     const { created, updated, deleted } = diffPolicies(current, parsed.value);
@@ -119,10 +121,8 @@ export async function handleMachinePolicies(request: Request, env: Env, principa
   });
 }
 
-export async function prepareSecretPolicies(env: Env, context: NonNullable<Awaited<ReturnType<typeof smContext>>>, orgId: string, secretId: string, input: unknown, creating: boolean): Promise<D1PreparedStatement[] | Response> {
-  if (input == null) return [];
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return errorResponse('Access policies must be an object.', 400);
-  const body = input as Record<string, unknown>;
+export async function prepareSecretPolicies(env: Env, context: NonNullable<Awaited<ReturnType<typeof smContext>>>, orgId: string, secretId: string, body: z.output<typeof PolicyRequests> | null | undefined, creating: boolean): Promise<D1PreparedStatement[] | Response> {
+  if (body == null) return [];
   const users = parsePolicyRequests(body.userAccessPolicyRequests, 'granteeId', false);
   const groups = parsePolicyRequests(body.groupAccessPolicyRequests, 'granteeId', false);
   const accounts = parsePolicyRequests(body.serviceAccountAccessPolicyRequests, 'granteeId', false);
