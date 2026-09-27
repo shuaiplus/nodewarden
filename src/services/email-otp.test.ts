@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createTestEnv } from '../../scripts/support/env';
+import { createTestEnv } from '../test/support/env';
 import { LIMITS } from '../config/limits';
 import { hmacSha256Base64Url } from '../utils/jwt';
 import { issueEmailOtp, purgeExpiredEmailOtps, redeemEmailOtp, spendEmailOtpIssueBudget, type EmailOtpTarget } from './email-otp';

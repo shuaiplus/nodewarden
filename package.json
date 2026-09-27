@@ -10,7 +10,7 @@
     "dev": "wrangler dev -c wrangler.toml",
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
     "domains:sync": "node scripts/sync-global-domains.mjs",
-    "test": "tsx --test 'src/**/*.test.ts' 'scripts/*.test.ts' 'scripts/*.test.mjs'",
+    "test": "tsx --test 'src/**/*.test.ts' 'src/**/*.test.mjs'",
     "db:generate": "drizzle-kit generate && node scripts/embed-baseline.mjs",
     "db:embed": "node scripts/embed-baseline.mjs",
     "db:seed": "tsx scripts/seed.ts",
