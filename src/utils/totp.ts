@@ -10,24 +10,21 @@ export function normalizeTotpSecret(input: string): string {
   return input.toUpperCase().replace(/[ \t\r\n-]/g, '').replace(/=+$/, '');
 }
 
-function decodeTotpSecret(secretRaw: string): Secret | null {
-  try {
-    const secret = Secret.fromBase32(normalizeTotpSecret(secretRaw));
-    return secret.bytes.length > 0 ? secret : null;
-  } catch {
-    // A stored or submitted key outside the base32 alphabet can never match, same as a wrong code.
-    return null;
-  }
-}
-
 export async function findMatchingTotpCounter(
   secretRaw: string,
   tokenRaw: string,
   nowMs: number = Date.now()
 ): Promise<number | null> {
   const token = tokenRaw.replace(/\s+/g, '');
-  const secret = TOTP_TOKEN_PATTERN.test(token) ? decodeTotpSecret(secretRaw) : null;
-  if (!secret) return null;
+  if (!TOTP_TOKEN_PATTERN.test(token)) return null;
+  let secret: Secret;
+  try {
+    secret = Secret.fromBase32(normalizeTotpSecret(secretRaw));
+  } catch {
+    // A stored or submitted key outside the base32 alphabet can never match, same as a wrong code.
+    return null;
+  }
+  if (secret.bytes.length === 0) return null;
   const options = { period: TOTP_PERIOD_SECONDS, timestamp: nowMs };
   const delta = TOTP.validate({ ...options, token, secret, digits: TOTP_DIGITS, window: TOTP_WINDOW });
   // The replay guard stores absolute step counters, not the window-relative delta.

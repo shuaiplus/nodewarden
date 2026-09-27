@@ -8,10 +8,6 @@ function normalizeRecoveryCode(raw: string): string {
   return String(raw || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
 }
 
-function formatRecoveryCode(compact: string): string {
-  return compact.replace(/(.{4})/g, '$1 ').trim();
-}
-
 export function createRecoveryCode(): string {
   let compact = '';
   while (compact.length < 32) {
@@ -22,7 +18,8 @@ export function createRecoveryCode(): string {
       if (compact.length >= 32) break;
     }
   }
-  return formatRecoveryCode(compact.slice(0, 32));
+  // Shown in groups of four characters.
+  return compact.slice(0, 32).replace(/(.{4})/g, '$1 ').trim();
 }
 
 export function recoveryCodeEquals(input: string, storedCode: string | null | undefined): boolean {
