@@ -10,20 +10,6 @@ const META_FILE = path.join(OUTPUT_DIR, 'global_domains.bitwarden.meta.json');
 const ENUM_PATH = 'src/Core/Enums/GlobalEquivalentDomainsType.cs';
 const STATIC_STORE_PATH = 'src/Core/Utilities/StaticStore.cs';
 
-function parseArgs(argv) {
-  const args = { ref: process.env.BITWARDEN_SERVER_REF || DEFAULT_REF };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--ref' && argv[i + 1]) {
-      args.ref = argv[i + 1];
-      i += 1;
-    } else if (arg.startsWith('--ref=')) {
-      args.ref = arg.slice('--ref='.length);
-    }
-  }
-  return args;
-}
-
 function rawUrl(ref, filePath) {
   return `https://raw.githubusercontent.com/bitwarden/server/${encodeURIComponent(ref)}/${filePath}`;
 }
@@ -41,74 +27,18 @@ async function fetchText(url) {
   return response.text();
 }
 
-function parseEnumTypes(source) {
-  const map = new Map();
-  const enumMatch = source.match(/enum\s+GlobalEquivalentDomainsType\b[\s\S]*?\{([\s\S]*?)\}/);
-  if (!enumMatch) {
-    throw new Error('GlobalEquivalentDomainsType enum was not found');
+// The last --ref wins; a bare --ref only consumes the next argument when it is non-empty.
+const cliArgs = process.argv.slice(2);
+let ref = process.env.BITWARDEN_SERVER_REF || DEFAULT_REF;
+for (let argIndex = 0; argIndex < cliArgs.length; argIndex += 1) {
+  const arg = cliArgs[argIndex];
+  if (arg === '--ref' && cliArgs[argIndex + 1]) {
+    ref = cliArgs[argIndex + 1];
+    argIndex += 1;
+  } else if (arg.startsWith('--ref=')) {
+    ref = arg.slice('--ref='.length);
   }
-
-  const body = enumMatch[1].replace(/\/\/.*$/gm, '');
-  const entryRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)\b/g;
-  let match;
-  while ((match = entryRe.exec(body)) !== null) {
-    map.set(match[1], Number(match[2]));
-  }
-
-  if (!map.size) {
-    throw new Error('No enum values were parsed from GlobalEquivalentDomainsType');
-  }
-  return map;
 }
-
-function parseStringList(source) {
-  const domains = [];
-  const stringRe = /"((?:\\.|[^"\\])*)"/g;
-  let match;
-  while ((match = stringRe.exec(source)) !== null) {
-    domains.push(match[1].replace(/\\"/g, '"').trim().toLowerCase());
-  }
-  return Array.from(new Set(domains.filter(Boolean)));
-}
-
-function parseGlobalDomains(source, enumTypes) {
-  const out = [];
-  const addRe = /GlobalDomains\.Add\s*\(\s*GlobalEquivalentDomainsType\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*new\s+List(?:<\s*string\s*>)?\s*\{([\s\S]*?)\}\s*\)\s*;/g;
-  let match;
-  while ((match = addRe.exec(source)) !== null) {
-    const name = match[1];
-    const type = enumTypes.get(name);
-    if (!Number.isInteger(type)) {
-      throw new Error(`GlobalDomains references unknown enum value ${name}`);
-    }
-
-    const domains = parseStringList(match[2]);
-    if (domains.length < 2) {
-      throw new Error(`GlobalDomains.${name} has fewer than two domains`);
-    }
-
-    out.push({
-      type,
-      domains,
-      excluded: false,
-    });
-  }
-
-  if (!out.length) {
-    throw new Error('No GlobalDomains.Add(...) rules were parsed from StaticStore.cs');
-  }
-  return out;
-}
-
-function formatRulesJson(rules) {
-  return `[\n${rules.map((rule) => `  ${JSON.stringify(rule)}`).join(',\n')}\n]`;
-}
-
-function formatMetaJson(meta) {
-  return JSON.stringify(meta, null, 2);
-}
-
-const { ref } = parseArgs(process.argv.slice(2));
 const enumUrl = rawUrl(ref, ENUM_PATH);
 const staticStoreUrl = rawUrl(ref, STATIC_STORE_PATH);
 
@@ -117,10 +47,47 @@ const [enumSource, staticStoreSource] = await Promise.all([
   fetchText(staticStoreUrl),
 ]);
 
-const enumTypes = parseEnumTypes(enumSource);
-const rules = parseGlobalDomains(staticStoreSource, enumTypes);
+const enumMatch = enumSource.match(/enum\s+GlobalEquivalentDomainsType\b[\s\S]*?\{([\s\S]*?)\}/);
+if (!enumMatch) {
+  throw new Error('GlobalEquivalentDomainsType enum was not found');
+}
+const enumTypes = new Map(Array.from(
+  enumMatch[1].replace(/\/\/.*$/gm, '').matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)\b/g),
+  ([, name, value]) => [name, Number(value)],
+));
+if (!enumTypes.size) {
+  throw new Error('No enum values were parsed from GlobalEquivalentDomainsType');
+}
+
+const rules = Array.from(
+  staticStoreSource.matchAll(/GlobalDomains\.Add\s*\(\s*GlobalEquivalentDomainsType\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*new\s+List(?:<\s*string\s*>)?\s*\{([\s\S]*?)\}\s*\)\s*;/g),
+  ([, name, domainList]) => {
+    const type = enumTypes.get(name);
+    if (!Number.isInteger(type)) {
+      throw new Error(`GlobalDomains references unknown enum value ${name}`);
+    }
+
+    // Each C# string literal in the list, unescaped and lowercased, deduplicated in source order.
+    const domains = Array.from(new Set(Array.from(
+      domainList.matchAll(/"((?:\\.|[^"\\])*)"/g),
+      ([, domain]) => domain.replace(/\\"/g, '"').trim().toLowerCase(),
+    ).filter(Boolean)));
+    if (domains.length < 2) {
+      throw new Error(`GlobalDomains.${name} has fewer than two domains`);
+    }
+
+    return {
+      type,
+      domains,
+      excluded: false,
+    };
+  },
+);
+if (!rules.length) {
+  throw new Error('No GlobalDomains.Add(...) rules were parsed from StaticStore.cs');
+}
 const domainsCount = rules.reduce((sum, rule) => sum + rule.domains.length, 0);
-const rulesJson = formatRulesJson(rules);
+const rulesJson = `[\n${rules.map((rule) => `  ${JSON.stringify(rule)}`).join(',\n')}\n]`;
 
 async function readJsonFile(filePath) {
   try {
@@ -155,6 +122,6 @@ const meta = {
 
 await mkdir(OUTPUT_DIR, { recursive: true });
 await writeFile(OUT_FILE, `${rulesJson}\n`, 'utf8');
-await writeFile(META_FILE, `${formatMetaJson(meta)}\n`, 'utf8');
+await writeFile(META_FILE, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
 
 console.log(`Wrote ${rules.length} global domain rules (${domainsCount} domains) from bitwarden/server@${ref}.`);
