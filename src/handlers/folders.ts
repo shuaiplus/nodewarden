@@ -5,7 +5,7 @@ import {
   notifyUserFolderUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -91,12 +91,9 @@ export async function handleGetFolder(request: Request, env: Env, userId: string
 // POST /api/folders
 export async function handleCreateFolder(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { name?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ name?: string }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.name) {
     return errorResponse('Name is required', 400);
@@ -132,12 +129,9 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
     return errorResponse('Folder not found', 404);
   }
 
-  let body: { name?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ name?: string }>(request);
+
+  if (body instanceof Response) return body;
 
   if (body.name) {
     folder.name = body.name;
@@ -185,12 +179,9 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
 // POST /api/folders/delete
 export async function handleBulkDeleteFolders(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[] };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[] }>(request);
+
+  if (body instanceof Response) return body;
 
   const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
   if (!ids.length) {

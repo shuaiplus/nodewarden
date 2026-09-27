@@ -2,7 +2,7 @@ import { deviceTypeName } from '../utils/device';
 import type { AuthRequestRecord, AuthRequestType, Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -96,7 +96,7 @@ function listResponse<T>(data: T[]) {
 
 async function readJsonBody(request: Request): Promise<Record<string, any> | null> {
   try {
-    const body = await request.json();
+    const body = normalizeJsonKeys(await request.json());
     return body && typeof body === 'object' ? body as Record<string, any> : null;
   } catch {
     return null;
@@ -127,12 +127,6 @@ async function enforceAuthRequestCreateRateLimit(
   return errorResponse('Too many authentication requests. Try again later.', 429);
 }
 
-function readBodyValue(body: Record<string, any>, names: string[]): unknown {
-  for (const name of names) {
-    if (body[name] !== undefined) return body[name];
-  }
-  return undefined;
-}
 
 function isSupportedAuthRequestType(value: number): value is AuthRequestType {
   return value === AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK || value === AUTH_REQUEST_TYPE_UNLOCK || value === AUTH_REQUEST_TYPE_ADMIN_APPROVAL;
@@ -142,16 +136,16 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
-  const email = normalizeText(readBodyValue(body, ['email', 'Email']), 320).toLowerCase();
-  const publicKey = normalizeText(readBodyValue(body, ['publicKey', 'PublicKey']), 8192);
-  const accessCode = normalizeText(readBodyValue(body, ['accessCode', 'AccessCode']), 25);
-  const requestedType = Number(readBodyValue(body, ['type', 'Type']));
+  const email = normalizeText(body.email, 320).toLowerCase();
+  const publicKey = normalizeText(body.publicKey, 8192);
+  const accessCode = normalizeText(body.accessCode, 25);
+  const requestedType = Number(body.type);
   const type = Number.isFinite(requestedType) ? requestedType : AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK;
   const deviceInfo = readAuthRequestDeviceInfo(
     {
-      deviceIdentifier: normalizeText(readBodyValue(body, ['deviceIdentifier', 'DeviceIdentifier']), 128),
-      deviceName: normalizeText(readBodyValue(body, ['deviceName', 'DeviceName']), 128),
-      deviceType: String(readBodyValue(body, ['deviceType', 'DeviceType']) ?? ''),
+      deviceIdentifier: normalizeText(body.deviceIdentifier, 128),
+      deviceName: normalizeText(body.deviceName, 128),
+      deviceType: String(body.deviceType ?? ''),
     },
     request
   );
@@ -205,15 +199,15 @@ export async function handleCreateAdminAuthRequest(
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
-  const email = normalizeText(readBodyValue(body, ['email', 'Email']), 320).toLowerCase() || userEmail.toLowerCase();
-  const publicKey = normalizeText(readBodyValue(body, ['publicKey', 'PublicKey']), 8192);
-  const accessCode = normalizeText(readBodyValue(body, ['accessCode', 'AccessCode']), 25);
-  const requestedType = Number(readBodyValue(body, ['type', 'Type']));
+  const email = normalizeText(body.email, 320).toLowerCase() || userEmail.toLowerCase();
+  const publicKey = normalizeText(body.publicKey, 8192);
+  const accessCode = normalizeText(body.accessCode, 25);
+  const requestedType = Number(body.type);
   const deviceInfo = readAuthRequestDeviceInfo(
     {
-      deviceIdentifier: normalizeText(readBodyValue(body, ['deviceIdentifier', 'DeviceIdentifier']), 128),
-      deviceName: normalizeText(readBodyValue(body, ['deviceName', 'DeviceName']), 128),
-      deviceType: String(readBodyValue(body, ['deviceType', 'DeviceType']) ?? ''),
+      deviceIdentifier: normalizeText(body.deviceIdentifier, 128),
+      deviceName: normalizeText(body.deviceName, 128),
+      deviceType: String(body.deviceType ?? ''),
     },
     request
   );
@@ -310,10 +304,10 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
     return errorResponse('This request is no longer valid. Make sure to approve the most recent request.', 400);
   }
 
-  const approved = Boolean(readBodyValue(body, ['requestApproved', 'RequestApproved']));
-  const key = normalizeText(readBodyValue(body, ['key', 'Key']), 20000);
+  const approved = Boolean(body.requestApproved);
+  const key = normalizeText(body.key, 20000);
   const responseDeviceIdentifier =
-    normalizeText(readBodyValue(body, ['deviceIdentifier', 'DeviceIdentifier']), 128) ||
+    normalizeText(body.deviceIdentifier, 128) ||
     readActingDeviceIdentifier(request) ||
     'web';
 

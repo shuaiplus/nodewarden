@@ -219,3 +219,44 @@ export function htmlResponse(html: string, status: number = 200): Response {
     },
   });
 }
+
+// Official clients post camelCase; older and .NET-style clients post PascalCase. Lower-casing the
+// first letter of every PascalCase key once at parse time lets handlers read one spelling. Keys whose
+// second character is not lowercase (ids, acronyms such as OTP) keep their case, and a camelCase key
+// already present wins over its PascalCase twin.
+export function normalizeJsonKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(normalizeJsonKeys) as T;
+  if (!value || typeof value !== 'object') return value;
+  const source = value as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(source)) {
+    const name = /^[A-Z][a-z]/.test(key) ? key[0].toLowerCase() + key.slice(1) : key;
+    if (name !== key && name in source) continue;
+    normalized[name] = normalizeJsonKeys(entry);
+  }
+  return normalized as T;
+}
+
+// Parses a JSON body with normalized keys, or answers 400. Scalars read as an empty object; arrays
+// pass through for the routes that take a bare list.
+export async function parseJsonBody<T extends object = Record<string, unknown>>(request: Request, message = 'Invalid JSON'): Promise<T | Response> {
+  try {
+    const body: unknown = normalizeJsonKeys(await request.json());
+    return (body && typeof body === 'object' ? body : {}) as T;
+  } catch {
+    return errorResponse(message, 400);
+  }
+}
+
+// Reads the first present key from a normalized body, telling absent apart from null.
+export function prop<T = unknown>(source: unknown, keys: string | string[]): { present: boolean; value: T | undefined } {
+  if (!source || typeof source !== 'object') return { present: false, value: undefined };
+  const record = source as Record<string, unknown>;
+  const key = (Array.isArray(keys) ? keys : [keys]).find((candidate) => Object.prototype.hasOwnProperty.call(record, candidate));
+  return key === undefined ? { present: false, value: undefined } : { present: true, value: record[key] as T };
+}
+
+export function readString(source: unknown, keys: string | string[]): string {
+  const { value } = prop(source, keys);
+  return typeof value === 'string' ? value : '';
+}

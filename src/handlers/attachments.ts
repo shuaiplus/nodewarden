@@ -1,6 +1,6 @@
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { sanitizeDownloadContentType } from '../utils/content-type';
@@ -176,17 +176,9 @@ export async function handleCreateAttachment(
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  let body: {
-    fileName?: string;
-    key?: string;
-    fileSize?: number;
-  };
+  const body = await parseJsonBody<{ fileName?: string; key?: string; fileSize?: number; }>(request);
 
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  if (body instanceof Response) return body;
 
   if (!body.fileName || !body.key) {
     return errorResponse('fileName and key are required', 400);
@@ -359,12 +351,9 @@ export async function handleUpdateAttachmentMetadata(
     return errorResponse('Attachment not found', 404);
   }
 
-  let body: { fileName?: string | null; key?: string | null };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ fileName?: string | null; key?: string | null }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!Object.prototype.hasOwnProperty.call(body, 'fileName') && !Object.prototype.hasOwnProperty.call(body, 'key')) {
     return errorResponse('No metadata fields supplied', 400);

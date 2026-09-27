@@ -2,7 +2,7 @@ import { inArray } from 'drizzle-orm';
 import { chunkRows, getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
 import type { Env, User } from '../types';
-import { errorResponse } from '../utils/response';
+import { errorResponse, parseJsonBody } from '../utils/response';
 import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import * as orgRepo from '../services/storage-org-repo';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
@@ -27,16 +27,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 interface ClientEvent { type: number; date: string; cipherId: string | null; organizationId: string | null }
 
 async function collectEvents(request: Request, env: Env, user: User): Promise<Response> {
-  let body: unknown;
-  try { body = await request.json(); } catch { return errorResponse('Invalid events.', 400); }
+  const body = await parseJsonBody(request, 'Invalid events.');
+  if (body instanceof Response) return body;
   if (!Array.isArray(body) || !body.length || body.length > MAX_COLLECTED_EVENTS) return errorResponse('Invalid events.', 400);
   const input: ClientEvent[] = [];
   for (const event of body) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) return errorResponse('Invalid events.', 400);
-    const type = event.type ?? event.Type;
-    const date = event.date ?? event.Date;
-    const cipherId = event.cipherId ?? event.CipherId ?? null;
-    const organizationId = event.organizationId ?? event.OrganizationId ?? null;
+    const type = event.type;
+    const date = event.date;
+    const cipherId = event.cipherId ?? null;
+    const organizationId = event.organizationId ?? null;
     if (!Number.isInteger(type) || typeof date !== 'string' || !Number.isFinite(Date.parse(date))
       || (cipherId !== null && (typeof cipherId !== 'string' || !UUID.test(cipherId)))
       || (organizationId !== null && (typeof organizationId !== 'string' || !UUID.test(organizationId)))) return errorResponse('Invalid events.', 400);

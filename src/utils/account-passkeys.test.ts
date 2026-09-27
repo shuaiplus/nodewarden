@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { normalizeRegistrationResponse } from './account-passkeys';
+import { normalizeJsonKeys } from './response';
 
 // Mirrors the deviceResponse built by putTwoFactorWebAuthn in the official web vault
 // (clients web-v2026.9.0 default-two-factor-api.service.ts): base64url values and a
-// PascalCase AttestationObject next to a camelCase clientDataJson.
+// PascalCase AttestationObject next to a camelCase clientDataJson. Route bodies pass through
+// normalizeJsonKeys before reaching the parser, so the test does too.
 const officialTwoFactorDeviceResponse = {
   id: 'Y3JlZGVudGlhbC1pZA',
   rawId: 'Y3JlZGVudGlhbC1pZA',
@@ -19,7 +21,7 @@ const officialTwoFactorDeviceResponse = {
 };
 
 test('accepts the official web 2FA WebAuthn body with PascalCase AttestationObject', () => {
-  const normalized = normalizeRegistrationResponse(officialTwoFactorDeviceResponse);
+  const normalized = normalizeRegistrationResponse(normalizeJsonKeys(officialTwoFactorDeviceResponse));
   const { AttestationObject, clientDataJson, transports } = officialTwoFactorDeviceResponse.response;
   assert.ok(normalized);
   assert.equal(normalized.response.attestationObject, AttestationObject);
@@ -30,7 +32,7 @@ test('accepts the official web 2FA WebAuthn body with PascalCase AttestationObje
 test('rejects a registration body without an attestation object in either casing', () => {
   const { clientDataJson, transports } = officialTwoFactorDeviceResponse.response;
   assert.equal(
-    normalizeRegistrationResponse({ ...officialTwoFactorDeviceResponse, response: { clientDataJson, transports } }),
+    normalizeRegistrationResponse(normalizeJsonKeys({ ...officialTwoFactorDeviceResponse, response: { clientDataJson, transports } })),
     null
   );
 });

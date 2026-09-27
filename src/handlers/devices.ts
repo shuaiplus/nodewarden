@@ -4,7 +4,7 @@ import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
 import { readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import * as deviceRepo from '../services/storage-device-repo';
@@ -117,7 +117,7 @@ function parseKeysBody(body: any, fallback?: Device): {
 
 async function readJsonBody(request: Request): Promise<any> {
   try {
-    return await request.json();
+    return normalizeJsonKeys(await request.json());
   } catch {
     return null;
   }
@@ -138,14 +138,14 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
-  const identifier = normalizeIdentifier(body.identifier ?? body.Identifier ?? body.deviceIdentifier ?? body.DeviceIdentifier);
-  const name = parseDeviceName(body.name ?? body.Name ?? body.deviceName ?? body.DeviceName) || 'Unknown device';
-  const type = parseDeviceType(body.type ?? body.Type ?? body.deviceType ?? body.DeviceType);
+  const identifier = normalizeIdentifier(body.identifier ?? body.deviceIdentifier);
+  const name = parseDeviceName(body.name ?? body.deviceName) || 'Unknown device';
+  const type = parseDeviceType(body.type ?? body.deviceType);
   if (!identifier || type == null) return errorResponse('Device identifier and type are required', 400);
 
   await deviceRepo.upsertDevice(env.DB, userId, identifier, name, type, undefined, parseKeysBody(body));
 
-  const pushToken = String(body.pushToken ?? body.PushToken ?? '').trim();
+  const pushToken = String(body.pushToken ?? '').trim();
   if (pushToken) {
     const device = await deviceRepo.getDevice(env.DB, userId, identifier);
     const pushUuid = device?.pushUuid || generateUUID();
@@ -180,9 +180,9 @@ export async function handleReportLostTrust(request: Request, env: Env, userId: 
   const body = await readJsonBody(request) || {};
   const deviceInfo = readAuthRequestDeviceInfo(
     {
-      deviceIdentifier: String(body.identifier ?? body.Identifier ?? body.deviceIdentifier ?? body.DeviceIdentifier ?? ''),
-      deviceName: String(body.name ?? body.Name ?? body.deviceName ?? body.DeviceName ?? ''),
-      deviceType: String(body.type ?? body.Type ?? body.deviceType ?? body.DeviceType ?? ''),
+      deviceIdentifier: String(body.identifier ?? body.deviceIdentifier ?? ''),
+      deviceName: String(body.name ?? body.deviceName ?? ''),
+      deviceType: String(body.type ?? body.deviceType ?? ''),
     },
     request
   );

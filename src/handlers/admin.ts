@@ -2,7 +2,7 @@ import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody, normalizeJsonKeys } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 import * as adminRepo from '../services/storage-admin-repo';
@@ -31,7 +31,7 @@ async function requireMasterPasswordHash(
 
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
   try {
-    const body = await request.json();
+    const body = normalizeJsonKeys(await request.json());
     return body && typeof body === 'object' && !Array.isArray(body)
       ? body as Record<string, unknown>
       : {};
@@ -188,12 +188,8 @@ export async function handleAdminUpdateAuditLogSettings(
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
   const settings = await saveAuditLogSettings(env.DB, normalizeAuditLogSettings(body));
   await writeAuditLog(env.DB, actorUser.id, 'admin.audit.settings.update', 'auditLog', null, { ...settings }, request);
   return jsonResponse({

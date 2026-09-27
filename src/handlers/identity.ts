@@ -8,7 +8,7 @@ import { Env, TokenResponse, User } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { jsonResponse, errorResponse, identityErrorResponse, deviceErrorResponse } from '../utils/response';
+import { deviceErrorResponse, errorResponse, identityErrorResponse, jsonResponse, parseJsonBody, prop, normalizeJsonKeys } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
@@ -114,7 +114,7 @@ function notifyNewDevice(env: Env, request: Request, user: User, type: number): 
 }
 
 function readDevicePushToken(body: Record<string, string>): string {
-  return String(readBodyValue(body, ['devicePushToken', 'DevicePushToken', 'device_push_token']) || '').trim();
+  return String(prop(body, ['devicePushToken', 'device_push_token']).value || '').trim();
 }
 
 async function persistIdentityDevicePushToken(
@@ -167,13 +167,6 @@ function parseCookieValue(request: Request, name: string): string | null {
   return null;
 }
 
-function readBodyValue(body: Record<string, string>, names: string[]): string | undefined {
-  for (const name of names) {
-    const value = body[name];
-    if (value != null) return value;
-  }
-  return undefined;
-}
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -374,7 +367,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       const formData = await request.formData();
       body = Object.fromEntries(formData.entries()) as Record<string, string>;
     } else {
-      body = await request.json();
+      body = normalizeJsonKeys(await request.json());
     }
   } catch {
     return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
@@ -449,10 +442,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     // Login with password
     const email = body.username?.toLowerCase();
     const passwordHash = body.password;
-    const authRequestId = readBodyValue(body, ['authRequest', 'AuthRequest']);
-    const twoFactorToken = readBodyValue(body, ['twoFactorToken', 'TwoFactorToken']);
-    const twoFactorProvider = readBodyValue(body, ['twoFactorProvider', 'TwoFactorProvider']);
-    const twoFactorRemember = readBodyValue(body, ['twoFactorRemember', 'TwoFactorRemember']);
+    const authRequestId = body.authRequest;
+    const twoFactorToken = body.twoFactorToken;
+    const twoFactorProvider = body.twoFactorProvider;
+    const twoFactorRemember = body.twoFactorRemember;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
     if (!email || !passwordHash) {
@@ -645,7 +638,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (mail.kind === 'enabled' && mail.newDeviceVerification && !viaSsoShim && !validatedAuthRequestId
       && enabledProviders.length === 0 && user.verifyDevices
       && Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000) {
-      const otp = String(readBodyValue(body, ['newDeviceOtp', 'NewDeviceOtp']) ?? '').trim();
+      const otp = String(body.newDeviceOtp ?? '').trim();
       if (otp) {
         if (!await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)) return deviceErrorResponse('invalid_otp');
         await markEmailVerified(env, user.id);
@@ -1186,12 +1179,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 // POST /identity/accounts/prelogin
 export async function handlePrelogin(request: Request, env: Env): Promise<Response> {
 
-  let body: { email?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ email?: string }>(request);
+
+  if (body instanceof Response) return body;
 
   const email = body.email?.toLowerCase();
   if (!email) {
@@ -1222,7 +1212,7 @@ export async function handleRevocation(request: Request, env: Env): Promise<Resp
       const formData = await request.formData();
       body = Object.fromEntries(formData.entries()) as Record<string, string>;
     } else {
-      body = await request.json();
+      body = normalizeJsonKeys(await request.json());
     }
   } catch {
     return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });

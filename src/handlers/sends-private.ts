@@ -1,6 +1,6 @@
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody, prop } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -152,14 +152,11 @@ export async function handleGetSend(request: Request, env: Env, userId: string, 
 
 export async function handleCreateSend(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody(request);
 
-  const typeRaw = getAliasedProp(body, ['type', 'Type']);
+  if (body instanceof Response) return body;
+
+  const typeRaw = prop(body, 'type');
   const sendType = parseSendType(typeRaw.value);
   if (sendType === null) {
     return errorResponse('Invalid Send type', 400);
@@ -168,10 +165,10 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
     return errorResponse('File sends should use /api/sends/file/v2', 400);
   }
 
-  const nameRaw = getAliasedProp(body, ['name', 'Name']);
-  const keyRaw = getAliasedProp(body, ['key', 'Key']);
-  const deletionDateRaw = getAliasedProp(body, ['deletionDate', 'DeletionDate']);
-  const textRaw = getAliasedProp(body, ['text', 'Text']);
+  const nameRaw = prop(body, 'name');
+  const keyRaw = prop(body, 'key');
+  const deletionDateRaw = prop(body, 'deletionDate');
+  const textRaw = prop(body, 'text');
 
   if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
     return errorResponse('Name is required', 400);
@@ -193,11 +190,11 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
     return errorResponse('Send data not provided', 400);
   }
 
-  const maxAccessRaw = getAliasedProp(body, ['maxAccessCount', 'MaxAccessCount']);
+  const maxAccessRaw = prop(body, 'maxAccessCount');
   const maxAccess = parseMaxAccessCount(maxAccessRaw.value);
   if (!maxAccess.ok) return maxAccess.response;
 
-  const expirationRaw = getAliasedProp(body, ['expirationDate', 'ExpirationDate']);
+  const expirationRaw = prop(body, 'expirationDate');
   const expirationDate = expirationRaw.value === null || expirationRaw.value === undefined
     ? null
     : parseDate(expirationRaw.value);
@@ -205,12 +202,12 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
     return errorResponse('Invalid expirationDate', 400);
   }
 
-  const disabledRaw = getAliasedProp(body, ['disabled', 'Disabled']);
-  const hideEmailRaw = getAliasedProp(body, ['hideEmail', 'HideEmail']);
-  const notesRaw = getAliasedProp(body, ['notes', 'Notes']);
-  const passwordRaw = getAliasedProp(body, ['password', 'Password']);
-  const authTypeRaw = getAliasedProp(body, ['authType', 'AuthType']);
-  const emailsRaw = getAliasedProp(body, ['emails', 'Emails']);
+  const disabledRaw = prop(body, 'disabled');
+  const hideEmailRaw = prop(body, 'hideEmail');
+  const notesRaw = prop(body, 'notes');
+  const passwordRaw = prop(body, 'password');
+  const authTypeRaw = prop(body, 'authType');
+  const emailsRaw = prop(body, 'emails');
 
   const requestedAuthType = parseSendAuthType(authTypeRaw.value);
   if (authTypeRaw.present && requestedAuthType === null) {
@@ -274,30 +271,27 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
 export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody(request);
 
-  const typeRaw = getAliasedProp(body, ['type', 'Type']);
+  if (body instanceof Response) return body;
+
+  const typeRaw = prop(body, 'type');
   const sendType = parseSendType(typeRaw.value);
   if (sendType !== SendType.File) {
     return errorResponse('Send content is not a file', 400);
   }
 
-  const fileLengthRaw = getAliasedProp(body, ['fileLength', 'FileLength']);
+  const fileLengthRaw = prop(body, 'fileLength');
   const fileLengthParsed = parseFileLength(fileLengthRaw.value);
   if (!fileLengthParsed.ok) return fileLengthParsed.response;
   if (fileLengthParsed.value > maxFileSize) {
     return errorResponse('Send storage limit exceeded with this file', 400);
   }
 
-  const nameRaw = getAliasedProp(body, ['name', 'Name']);
-  const keyRaw = getAliasedProp(body, ['key', 'Key']);
-  const deletionDateRaw = getAliasedProp(body, ['deletionDate', 'DeletionDate']);
-  const fileRaw = getAliasedProp(body, ['file', 'File']);
+  const nameRaw = prop(body, 'name');
+  const keyRaw = prop(body, 'key');
+  const deletionDateRaw = prop(body, 'deletionDate');
+  const fileRaw = prop(body, 'file');
 
   if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
     return errorResponse('Name is required', 400);
@@ -323,11 +317,11 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
   fileData.size = fileLengthParsed.value;
   fileData.sizeName = formatSize(fileLengthParsed.value);
 
-  const maxAccessRaw = getAliasedProp(body, ['maxAccessCount', 'MaxAccessCount']);
+  const maxAccessRaw = prop(body, 'maxAccessCount');
   const maxAccess = parseMaxAccessCount(maxAccessRaw.value);
   if (!maxAccess.ok) return maxAccess.response;
 
-  const expirationRaw = getAliasedProp(body, ['expirationDate', 'ExpirationDate']);
+  const expirationRaw = prop(body, 'expirationDate');
   const expirationDate = expirationRaw.value === null || expirationRaw.value === undefined
     ? null
     : parseDate(expirationRaw.value);
@@ -335,12 +329,12 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
     return errorResponse('Invalid expirationDate', 400);
   }
 
-  const disabledRaw = getAliasedProp(body, ['disabled', 'Disabled']);
-  const hideEmailRaw = getAliasedProp(body, ['hideEmail', 'HideEmail']);
-  const notesRaw = getAliasedProp(body, ['notes', 'Notes']);
-  const passwordRaw = getAliasedProp(body, ['password', 'Password']);
-  const authTypeRaw = getAliasedProp(body, ['authType', 'AuthType']);
-  const emailsRaw = getAliasedProp(body, ['emails', 'Emails']);
+  const disabledRaw = prop(body, 'disabled');
+  const hideEmailRaw = prop(body, 'hideEmail');
+  const notesRaw = prop(body, 'notes');
+  const passwordRaw = prop(body, 'password');
+  const authTypeRaw = prop(body, 'authType');
+  const emailsRaw = prop(body, 'emails');
 
   const requestedAuthType = parseSendAuthType(authTypeRaw.value);
   if (authTypeRaw.present && requestedAuthType === null) {
@@ -505,14 +499,11 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     return errorResponse('Send not found', 404);
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody(request);
 
-  const typeRaw = getAliasedProp(body, ['type', 'Type']);
+  if (body instanceof Response) return body;
+
+  const typeRaw = prop(body, 'type');
   if (typeRaw.present) {
     const incomingType = parseSendType(typeRaw.value);
     if (incomingType === null) {
@@ -523,7 +514,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     }
   }
 
-  const deletionRaw = getAliasedProp(body, ['deletionDate', 'DeletionDate']);
+  const deletionRaw = prop(body, 'deletionDate');
   if (deletionRaw.present) {
     const deletionDate = parseDate(deletionRaw.value);
     if (!deletionDate) return errorResponse('Invalid deletionDate', 400);
@@ -532,7 +523,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     send.deletionDate = deletionDate.toISOString();
   }
 
-  const expirationRaw = getAliasedProp(body, ['expirationDate', 'ExpirationDate']);
+  const expirationRaw = prop(body, 'expirationDate');
   if (expirationRaw.present) {
     if (expirationRaw.value === null || expirationRaw.value === '') {
       send.expirationDate = null;
@@ -543,7 +534,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     }
   }
 
-  const nameRaw = getAliasedProp(body, ['name', 'Name']);
+  const nameRaw = prop(body, 'name');
   if (nameRaw.present) {
     if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
       return errorResponse('Name is required', 400);
@@ -551,7 +542,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     send.name = nameRaw.value.trim();
   }
 
-  const keyRaw = getAliasedProp(body, ['key', 'Key']);
+  const keyRaw = prop(body, 'key');
   if (keyRaw.present) {
     if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) {
       return errorResponse('Key is required', 400);
@@ -559,12 +550,12 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     send.key = keyRaw.value;
   }
 
-  const notesRaw = getAliasedProp(body, ['notes', 'Notes']);
+  const notesRaw = prop(body, 'notes');
   if (notesRaw.present) {
     send.notes = typeof notesRaw.value === 'string' ? notesRaw.value : null;
   }
 
-  const disabledRaw = getAliasedProp(body, ['disabled', 'Disabled']);
+  const disabledRaw = prop(body, 'disabled');
   if (disabledRaw.present) {
     if (typeof disabledRaw.value !== 'boolean') {
       return errorResponse('Invalid disabled', 400);
@@ -572,7 +563,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     send.disabled = disabledRaw.value;
   }
 
-  const hideEmailRaw = getAliasedProp(body, ['hideEmail', 'HideEmail']);
+  const hideEmailRaw = prop(body, 'hideEmail');
   if (hideEmailRaw.present) {
     if (hideEmailRaw.value === null) {
       send.hideEmail = null;
@@ -583,7 +574,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     }
   }
 
-  const maxAccessRaw = getAliasedProp(body, ['maxAccessCount', 'MaxAccessCount']);
+  const maxAccessRaw = prop(body, 'maxAccessCount');
   if (maxAccessRaw.present) {
     const parsedMax = parseMaxAccessCount(maxAccessRaw.value);
     if (!parsedMax.ok) return parsedMax.response;
@@ -591,7 +582,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   }
 
   if (send.type === SendType.Text) {
-    const textRaw = getAliasedProp(body, ['text', 'Text']);
+    const textRaw = prop(body, 'text');
     if (textRaw.present) {
       const textData = sanitizeSendData(textRaw.value);
       if (!textData) {
@@ -601,7 +592,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     }
   }
 
-  const authTypeRaw = getAliasedProp(body, ['authType', 'AuthType']);
+  const authTypeRaw = prop(body, 'authType');
   if (authTypeRaw.present) {
     const parsedAuthType = parseSendAuthType(authTypeRaw.value);
     if (parsedAuthType === null) {
@@ -614,7 +605,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     send.emails = null;
   }
 
-  const emailsRaw = getAliasedProp(body, ['emails', 'Emails']);
+  const emailsRaw = prop(body, 'emails');
   if (emailsRaw.present) {
     const normalizedEmails = normalizeEmails(emailsRaw.value);
     if (emailsRaw.value !== null && normalizedEmails === null) {
@@ -631,7 +622,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     }
   }
 
-  const passwordRaw = getAliasedProp(body, ['password', 'Password']);
+  const passwordRaw = prop(body, 'password');
   if (passwordRaw.present && typeof passwordRaw.value === 'string') {
     await setSendPassword(send, passwordRaw.value);
   }
@@ -679,12 +670,9 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
 
 export async function handleBulkDeleteSends(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[] };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[] }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.ids || !Array.isArray(body.ids)) {
     return errorResponse('ids array is required', 400);

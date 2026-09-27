@@ -1,6 +1,6 @@
 import type { Env, User } from '../types';
 import { AuthService } from '../services/auth';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { createEmergencyAccessInviteToken, verifyEmergencyAccessInviteToken } from '../utils/jwt';
 import { LIMITS } from '../config/limits';
@@ -310,12 +310,8 @@ export async function handleEmergencyAccessRoute(
     if (!canAct(record, user.id, EmergencyAccessType.Takeover)) return errorResponse('Emergency access not valid', 400);
     const grantor = await userRepo.getUserById(env.DB, record.grantorId);
     if (!grantor) return errorResponse('Grantor user not found', 404);
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return errorResponse('Invalid JSON', 400);
-    }
+    const body = await parseJsonBody(request);
+    if (body instanceof Response) return body;
     const update = parseMasterPasswordUpdate(body, grantor);
     if (!update.ok) return update.response;
     const auth = new AuthService(env);

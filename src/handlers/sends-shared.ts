@@ -5,7 +5,7 @@ import {
   notifyUserSendUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, prop } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { LIMITS } from '../config/limits';
 import * as sendRepo from '../services/storage-send-repo';
@@ -482,13 +482,8 @@ export async function validatePublicSendAccess(send: Send, body: unknown): Promi
 
   if (!send.passwordHash) return { ok: true };
 
-  const passwordRaw = getAliasedProp(body, ['password', 'Password']);
-  const passwordHashB64Raw = getAliasedProp(body, [
-    'password_hash_b64',
-    'passwordHashB64',
-    'passwordHash',
-    'password_hash',
-  ]);
+  const passwordRaw = prop(body, 'password');
+  const passwordHashB64Raw = prop(body, ['password_hash_b64', 'passwordHashB64', 'passwordHash', 'password_hash']);
 
   let validPassword = false;
   if (send.passwordSalt && send.passwordIterations) {

@@ -13,6 +13,7 @@ import {
   Attachment,
   PasswordHistory,
 } from '../types';
+import type { CipherField } from '../types';
 import { LIMITS } from '../config/limits';
 import {
   notifyUserCipherCreate,
@@ -21,7 +22,7 @@ import {
   notifyUserCiphersSync,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { jsonResponse, errorResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseJsonBody, prop } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -174,12 +175,12 @@ function normalizeCipherTimestamp(value: unknown): string | null {
 }
 
 function readCipherArchivedAt(source: any, fallback: string | null = null): string | null {
-  const archived = getAliasedProp(source, ['archivedAt', 'ArchivedAt', 'archivedDate', 'ArchivedDate']);
+  const archived = prop(source, ['archivedAt', 'archivedDate']);
   return archived.present ? normalizeCipherTimestamp(archived.value) : fallback;
 }
 
 function readCipherRevisionDate(source: any): string | null {
-  const revision = getAliasedProp(source, ['lastKnownRevisionDate', 'LastKnownRevisionDate']);
+  const revision = prop(source, 'lastKnownRevisionDate');
   return revision.present ? normalizeCipherTimestamp(revision.value) : null;
 }
 
@@ -599,11 +600,11 @@ function readIncomingAttachmentMetadataMap(
     for (const item of value) {
       if (!item || typeof item !== 'object') continue;
       const row = item as Record<string, unknown>;
-      const id = String(row.id ?? row.Id ?? '').trim();
+      const id = String(row.id ?? '').trim();
       if (!id) continue;
-      const fileName = getAliasedProp(row, ['fileName', 'FileName']);
-      const key = getAliasedProp(row, ['key', 'Key']);
-      const fileSize = getAliasedProp(row, ['fileSize', 'FileSize', 'size', 'Size']);
+      const fileName = prop(row, 'fileName');
+      const key = prop(row, 'key');
+      const fileSize = prop(row, ['fileSize', 'size']);
       out.push({
         id,
         fileName: fileName.value,
@@ -636,9 +637,9 @@ function readIncomingAttachmentMetadataMap(
 
     if (!rawValue || typeof rawValue !== 'object') continue;
     const row = rawValue as Record<string, unknown>;
-    const fileName = getAliasedProp(row, ['fileName', 'FileName']);
-    const key = getAliasedProp(row, ['key', 'Key']);
-    const fileSize = getAliasedProp(row, ['fileSize', 'FileSize', 'size', 'Size']);
+    const fileName = prop(row, 'fileName');
+    const key = prop(row, 'key');
+    const fileSize = prop(row, ['fileSize', 'size']);
     out.push({
       id,
       fileName: fileName.value,
@@ -655,8 +656,8 @@ function readIncomingAttachmentMetadataMap(
 
 function readIncomingAttachmentMetadata(source: any): IncomingAttachmentMetadata[] {
   const merged = new Map<string, IncomingAttachmentMetadata>();
-  const legacy = getAliasedProp(source, ['attachments', 'Attachments']);
-  const current = getAliasedProp(source, ['attachments2', 'Attachments2']);
+  const legacy = prop(source, 'attachments');
+  const current = prop(source, 'attachments2');
 
   if (legacy.present) {
     for (const item of readIncomingAttachmentMetadataMap(legacy.value, { legacyFileNameMap: true })) {
@@ -994,27 +995,24 @@ async function verifyFolderOwnership(db: D1Database, folderId: string | null | u
 // POST /api/ciphers
 export async function handleCreateCipher(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<Record<string, any>>(request);
+
+  if (body instanceof Response) return body;
 
   // Handle nested cipher object (from some clients)
   // Android client sends PascalCase "Cipher" for organization ciphers
-  const cipherData = body.Cipher || body.cipher || body;
-  const createFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
-  const createKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
-  const createLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
-  const createCard = readCipherProp<CipherCard | null>(cipherData, ['card', 'Card']);
-  const createIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
-  const createSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
-  const createSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
-  const createBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
-  const createDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
-  const createPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
-  const createPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
+  const cipherData = body.cipher || body;
+  const createFolderId = prop<string | null>(cipherData, 'folderId');
+  const createKey = prop<string | null>(cipherData, 'key');
+  const createLogin = prop<CipherLogin | null>(cipherData, 'login');
+  const createCard = prop<CipherCard | null>(cipherData, 'card');
+  const createIdentity = prop<CipherIdentity | null>(cipherData, 'identity');
+  const createSecureNote = prop<CipherSecureNote | null>(cipherData, 'secureNote');
+  const createSshKey = prop<CipherSshKey | null>(cipherData, 'sshKey');
+  const createBankAccount = prop<CipherBankAccount | null>(cipherData, 'bankAccount');
+  const createDriversLicense = prop<CipherDriversLicense | null>(cipherData, 'driversLicense');
+  const createPassport = prop<CipherPassport | null>(cipherData, 'passport');
+  const createPasswordHistory = prop<PasswordHistory[] | null>(cipherData, 'passwordHistory');
 
   if (createKey.present && !shouldAcceptCipherKey(createKey.value)) {
     return errorResponse('Cipher key encryption is not supported by this server. Resync the client and try again.', 400);
@@ -1023,9 +1021,9 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   const now = new Date().toISOString();
   // Opaque passthrough: spread ALL client fields to preserve unknown/future ones,
   // then override only server-controlled fields.
-  const organizationId = normalizeOptionalId(cipherData.organizationId ?? cipherData.OrganizationId ?? null);
-  const incomingCollectionIds = Array.isArray(cipherData.collectionIds || cipherData.CollectionIds || body.collectionIds)
-    ? (cipherData.collectionIds || cipherData.CollectionIds || body.collectionIds).map((id: unknown) => String(id || '').trim()).filter(Boolean)
+  const organizationId = normalizeOptionalId(cipherData.organizationId ?? null);
+  const incomingCollectionIds = Array.isArray(cipherData.collectionIds || body.collectionIds)
+    ? (cipherData.collectionIds || body.collectionIds).map((id: unknown) => String(id || '').trim()).filter(Boolean)
     : [];
   if (organizationId) {
     const assignment = await checkCollectionAssignment(env, userId, organizationId, incomingCollectionIds);
@@ -1056,7 +1054,7 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   cipher.driversLicense = createDriversLicense.present ? (createDriversLicense.value ?? null) : ((cipher as any).driversLicense ?? null);
   cipher.passport = createPassport.present ? (createPassport.value ?? null) : ((cipher as any).passport ?? null);
   cipher.passwordHistory = createPasswordHistory.present ? (createPasswordHistory.value ?? null) : (cipher.passwordHistory ?? null);
-  const createFields = getAliasedProp(cipherData, ['fields', 'Fields']);
+  const createFields = prop<CipherField[] | null>(cipherData, 'fields');
   cipher.fields = createFields.present ? (createFields.value ?? null) : (cipher.fields ?? null);
   normalizeCipherForStorage(cipher);
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
@@ -1091,17 +1089,17 @@ type CipherMerge = { ok: true; cipher: Cipher } | { ok: false; message: string }
 // Full-update semantics shared by PUT /ciphers/{id} and the share endpoints: the client body
 // replaces the stored cipher, while unknown fields survive and server-owned ones stay put.
 function mergeFullCipherUpdate(existingCipher: Cipher, cipherData: any, preserveRevisionDate: boolean): CipherMerge {
-  const incomingFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
-  const incomingKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
-  const incomingLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
-  const incomingCard = readCipherProp<CipherCard | null>(cipherData, ['card', 'Card']);
-  const incomingIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
-  const incomingSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
-  const incomingSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
-  const incomingBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
-  const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
-  const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
-  const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
+  const incomingFolderId = prop<string | null>(cipherData, 'folderId');
+  const incomingKey = prop<string | null>(cipherData, 'key');
+  const incomingLogin = prop<CipherLogin | null>(cipherData, 'login');
+  const incomingCard = prop<CipherCard | null>(cipherData, 'card');
+  const incomingIdentity = prop<CipherIdentity | null>(cipherData, 'identity');
+  const incomingSecureNote = prop<CipherSecureNote | null>(cipherData, 'secureNote');
+  const incomingSshKey = prop<CipherSshKey | null>(cipherData, 'sshKey');
+  const incomingBankAccount = prop<CipherBankAccount | null>(cipherData, 'bankAccount');
+  const incomingDriversLicense = prop<CipherDriversLicense | null>(cipherData, 'driversLicense');
+  const incomingPassport = prop<CipherPassport | null>(cipherData, 'passport');
+  const incomingPasswordHistory = prop<PasswordHistory[] | null>(cipherData, 'passwordHistory');
   const incomingRevisionDate = readCipherRevisionDate(cipherData);
   const hasAttachmentMigrationMetadata = hasIncomingAttachmentMetadata(cipherData);
 
@@ -1168,19 +1166,16 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const existingCipher = await loadAccessibleCipher(env, env.DB, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!existingCipher) return errorResponse('Cipher not found', 404);
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<Record<string, any>>(request);
+
+  if (body instanceof Response) return body;
 
   // Handle nested cipher object
   // Android client sends PascalCase "Cipher" for organization ciphers
-  const cipherData = body.Cipher || body.cipher || body;
+  const cipherData = body.cipher || body;
   // Upstream CiphersController.Put: an item changes owner only through share, so a different
   // organizationId means a stale client copy. An omitted one (NodeWarden web repair) keeps the owner.
-  const incomingOrganizationId = readCipherProp<string | null>(cipherData, ['organizationId', 'OrganizationId']);
+  const incomingOrganizationId = prop<string | null>(cipherData, 'organizationId');
   if (incomingOrganizationId.present && normalizeOptionalId(incomingOrganizationId.value) !== (existingCipher.organizationId ?? null)) {
     return errorResponse('Organization mismatch. Re-sync if you recently moved this item, then try again.', 400);
   }
@@ -1259,21 +1254,18 @@ async function shareOwnedCiphers(
 }
 
 function readShareCollectionIds(body: any): string[] {
-  return parseCipherIdList({ ids: body.collectionIds ?? body.CollectionIds }) ?? [];
+  return parseCipherIdList({ ids: body.collectionIds }) ?? [];
 }
 
 // PUT/POST /api/ciphers/:id/share
 export async function handleShareCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<Record<string, any>>(request);
 
-  const cipherData = body.Cipher || body.cipher || {};
-  const organizationId = normalizeOptionalId(cipherData.organizationId ?? cipherData.OrganizationId);
+  if (body instanceof Response) return body;
+
+  const cipherData = body.cipher || {};
+  const organizationId = normalizeOptionalId(cipherData.organizationId);
   const collectionIds = readShareCollectionIds(body);
   if (!organizationId) return errorResponse('Cipher OrganizationId is required.', 400);
   if (!collectionIds.length) return errorResponse(NO_SHARE_COLLECTION, 400);
@@ -1295,14 +1287,11 @@ export async function handleShareCipher(request: Request, env: Env, userId: stri
 // PUT/POST /api/ciphers/share
 export async function handleBulkShareCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: any;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<Record<string, any>>(request);
 
-  const cipherList: unknown = body.ciphers ?? body.Ciphers;
+  if (body instanceof Response) return body;
+
+  const cipherList: unknown = body.ciphers;
   if (!Array.isArray(cipherList) || !cipherList.length) return errorResponse('You must select at least one cipher.', 400);
   // The whole share is one D1 batch, so its size is capped like an import.
   if (cipherList.length > LIMITS.performance.importItemLimit) {
@@ -1353,13 +1342,10 @@ export async function handleUpdateCipherCollections(
   mode: CollectionChangeMode
 ): Promise<Response> {
 
-  let body: { collectionIds?: unknown; CollectionIds?: unknown } | null;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-  const requested = parseCipherIdList({ ids: body?.collectionIds ?? body?.CollectionIds });
+  const body = await parseJsonBody<{ collectionIds?: unknown }>(request);
+
+  if (body instanceof Response) return body;
+  const requested = parseCipherIdList({ ids: body.collectionIds });
   if (!requested) return errorResponse('The CollectionIds field is required.', 400);
 
   const change = await planCipherCollectionChange(env, env.DB, userId, id, requested, mode);
@@ -1489,12 +1475,9 @@ export async function handlePartialUpdateCipher(request: Request, env: Env, user
   const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  let body: { folderId?: string | null; favorite?: boolean };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ folderId?: string | null; favorite?: boolean }>(request);
+
+  if (body instanceof Response) return body;
 
   if (body.folderId !== undefined) {
     const folderId = normalizeOptionalId(body.folderId);
@@ -1523,12 +1506,9 @@ export async function handlePartialUpdateCipher(request: Request, env: Env, user
 // POST/PUT /api/ciphers/move - Bulk move to folder
 export async function handleBulkMoveCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[]; folderId?: string | null };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[]; folderId?: string | null }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.ids || !Array.isArray(body.ids)) {
     return errorResponse('ids array is required', 400);
@@ -1614,12 +1594,9 @@ export async function handleUnarchiveCipher(request: Request, env: Env, userId: 
 // PUT/POST /api/ciphers/archive
 export async function handleBulkArchiveCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: unknown };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: unknown }>(request);
+
+  if (body instanceof Response) return body;
 
   const ids = parseCipherIdList(body);
   if (!ids) {
@@ -1638,12 +1615,9 @@ export async function handleBulkArchiveCiphers(request: Request, env: Env, userI
 // PUT/POST /api/ciphers/unarchive
 export async function handleBulkUnarchiveCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: unknown };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: unknown }>(request);
+
+  if (body instanceof Response) return body;
 
   const ids = parseCipherIdList(body);
   if (!ids) {
@@ -1662,12 +1636,9 @@ export async function handleBulkUnarchiveCiphers(request: Request, env: Env, use
 // POST /api/ciphers/delete - Bulk soft delete
 export async function handleBulkDeleteCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[] };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[] }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.ids || !Array.isArray(body.ids)) {
     return errorResponse('ids array is required', 400);
@@ -1688,12 +1659,9 @@ export async function handleBulkDeleteCiphers(request: Request, env: Env, userId
 // POST /api/ciphers/restore - Bulk restore
 export async function handleBulkRestoreCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[] };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[] }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.ids || !Array.isArray(body.ids)) {
     return errorResponse('ids array is required', 400);
@@ -1711,12 +1679,9 @@ export async function handleBulkRestoreCiphers(request: Request, env: Env, userI
 // POST /api/ciphers/delete-permanent - Bulk permanent delete
 export async function handleBulkPermanentDeleteCiphers(request: Request, env: Env, userId: string): Promise<Response> {
 
-  let body: { ids?: string[] };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
+  const body = await parseJsonBody<{ ids?: string[] }>(request);
+
+  if (body instanceof Response) return body;
 
   if (!body.ids || !Array.isArray(body.ids)) {
     return errorResponse('ids array is required', 400);

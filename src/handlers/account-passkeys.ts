@@ -7,7 +7,7 @@ import {
 } from '@simplewebauthn/server';
 import type { AccountPasskeyChallengeScope, AccountPasskeyCredential, Env, User } from '../types';
 import { AuthService } from '../services/auth';
-import { errorResponse, identityErrorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, identityErrorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { bytesToBase64Url, parseClientDataJSON } from '../utils/passkey';
 import {
@@ -44,7 +44,7 @@ function parseBodyObject(body: unknown): Record<string, any> {
 
 async function readJsonBody(request: Request): Promise<Record<string, any> | null> {
   try {
-    return parseBodyObject(await request.json());
+    return parseBodyObject(normalizeJsonKeys(await request.json()));
   } catch {
     return null;
   }
@@ -64,7 +64,7 @@ async function verifyUserSecret(
 }
 
 async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: Record<string, any>): Promise<boolean> {
-  const token = String(body.userVerificationToken || body.UserVerificationToken || '');
+  const token = String(body.userVerificationToken || '');
   return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
 }
 
@@ -496,7 +496,7 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
     return errorResponse('User verification failed.', 400);
   }
 
-  const requestedId = Number(body.id ?? body.Id);
+  const requestedId = Number(body.id);
   if (!Number.isInteger(requestedId) || requestedId <= 0) {
     return errorResponse('Invalid key id', 400);
   }
