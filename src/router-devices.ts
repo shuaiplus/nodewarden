@@ -1,4 +1,4 @@
-import type { Env } from './types';
+import { Hono } from 'hono';
 import {
   handleGetAuthorizedDevices,
   handleGetDevice,
@@ -20,106 +20,29 @@ import {
   handleRegisterDevice,
   handleReportLostTrust,
 } from './handlers/devices';
+import type { AppEnv } from './router';
 
-function devicesPath(pattern: string): RegExp {
-  return new RegExp(`^/(?:api/)?devices${pattern}$`, 'i');
-}
+// Older clients call the device endpoints without the /api prefix.
+const devices = <Suffix extends string>(suffix: Suffix): [`/api/devices${Suffix}`, `/devices${Suffix}`] => [`/api/devices${suffix}`, `/devices${suffix}`];
 
-export async function handleAuthenticatedDeviceRoute(
-  request: Request,
-  env: Env,
-  userId: string,
-  path: string,
-  method: string
-): Promise<Response | null> {
-  if (path === '/api/devices' || path === '/devices') {
-    if (method === 'GET') return handleGetDevices(request, env, userId);
-    if (method === 'POST') return handleRegisterDevice(request, env, userId);
-    if (method === 'DELETE') return handleDeleteAllDevices(request, env, userId);
-    return null;
-  }
+export const deviceRoutes = new Hono<AppEnv>();
 
-  if ((path === '/api/devices/lost-trust' || path === '/devices/lost-trust') && method === 'POST') {
-    return handleReportLostTrust(request, env, userId);
-  }
-
-  if (path === '/api/devices/authorized' || path === '/devices/authorized') {
-    if (method === 'GET') return handleGetAuthorizedDevices(request, env, userId);
-    if (method === 'DELETE') return handleRevokeAllTrustedDevices(request, env, userId);
-    return null;
-  }
-
-  const authorizedDeviceMatch = path.match(devicesPath('/authorized/([^/]+)'));
-  if (authorizedDeviceMatch && method === 'DELETE') {
-    const deviceIdentifier = decodeURIComponent(authorizedDeviceMatch[1]);
-    return handleRevokeTrustedDevice(request, env, userId, deviceIdentifier);
-  }
-
-  const permanentAuthorizedDeviceMatch = path.match(devicesPath('/authorized/([^/]+)/permanent'));
-  if (permanentAuthorizedDeviceMatch && method === 'POST') {
-    const deviceIdentifier = decodeURIComponent(permanentAuthorizedDeviceMatch[1]);
-    return handleTrustDevicePermanently(request, env, userId, deviceIdentifier);
-  }
-
-  const deleteDeviceMatch = path.match(devicesPath('/([^/]+)'));
-  if (deleteDeviceMatch && method === 'GET') {
-    const deviceIdentifier = decodeURIComponent(deleteDeviceMatch[1]);
-    return handleGetDevice(request, env, userId, deviceIdentifier);
-  }
-  if (deleteDeviceMatch && method === 'DELETE') {
-    const deviceIdentifier = decodeURIComponent(deleteDeviceMatch[1]);
-    return handleDeleteDevice(request, env, userId, deviceIdentifier);
-  }
-
-  const updateDeviceNameMatch = path.match(devicesPath('/([^/]+)/name'));
-  if (updateDeviceNameMatch && method === 'PUT') {
-    const deviceIdentifier = decodeURIComponent(updateDeviceNameMatch[1]);
-    return handleUpdateDeviceName(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierMatch = path.match(devicesPath('/identifier/([^/]+)'));
-  if (identifierMatch && method === 'GET') {
-    const deviceIdentifier = decodeURIComponent(identifierMatch[1]);
-    return handleGetDeviceByIdentifier(request, env, userId, deviceIdentifier);
-  }
-
-  const deviceKeysMatch = path.match(devicesPath('/([^/]+)/keys')) || path.match(devicesPath('/identifier/([^/]+)/keys'));
-  if (deviceKeysMatch && (method === 'PUT' || method === 'POST')) {
-    const deviceIdentifier = decodeURIComponent(deviceKeysMatch[1]);
-    return handleUpdateDeviceKeys(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierTokenMatch = path.match(devicesPath('/identifier/([^/]+)/token'));
-  if (identifierTokenMatch && (method === 'PUT' || method === 'POST')) {
-    const deviceIdentifier = decodeURIComponent(identifierTokenMatch[1]);
-    return handleUpdateDeviceToken(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierWebPushMatch = path.match(devicesPath('/identifier/([^/]+)/web-push-auth'));
-  if (identifierWebPushMatch && (method === 'PUT' || method === 'POST')) {
-    const deviceIdentifier = decodeURIComponent(identifierWebPushMatch[1]);
-    return handleUpdateDeviceWebPushAuth(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierRetrieveKeysMatch = path.match(devicesPath('/([^/]+)/retrieve-keys'));
-  if (identifierRetrieveKeysMatch && method === 'POST') {
-    const deviceIdentifier = decodeURIComponent(identifierRetrieveKeysMatch[1]);
-    return handleRetrieveDeviceKeys(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierDeactivateMatch = path.match(devicesPath('/([^/]+)/deactivate'));
-  if (identifierDeactivateMatch && (method === 'POST' || method === 'DELETE')) {
-    const deviceIdentifier = decodeURIComponent(identifierDeactivateMatch[1]);
-    return handleDeactivateDevice(request, env, userId, deviceIdentifier);
-  }
-
-  if ((path === '/api/devices/update-trust' || path === '/devices/update-trust') && method === 'POST') {
-    return handleUpdateDeviceTrust(request, env, userId);
-  }
-
-  if ((path === '/api/devices/untrust' || path === '/devices/untrust') && method === 'POST') {
-    return handleUntrustDevices(request, env, userId);
-  }
-
-  return null;
-}
+deviceRoutes.on('GET', devices(''), (c) => handleGetDevices(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('POST', devices(''), (c) => handleRegisterDevice(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('DELETE', devices(''), (c) => handleDeleteAllDevices(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('POST', devices('/lost-trust'), (c) => handleReportLostTrust(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('GET', devices('/authorized'), (c) => handleGetAuthorizedDevices(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('DELETE', devices('/authorized'), (c) => handleRevokeAllTrustedDevices(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('DELETE', devices('/authorized/:deviceId'), (c) => handleRevokeTrustedDevice(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('POST', devices('/authorized/:deviceId/permanent'), (c) => handleTrustDevicePermanently(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('GET', devices('/:deviceId'), (c) => handleGetDevice(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('DELETE', devices('/:deviceId'), (c) => handleDeleteDevice(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('PUT', devices('/:deviceId/name'), (c) => handleUpdateDeviceName(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('GET', devices('/identifier/:deviceId'), (c) => handleGetDeviceByIdentifier(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on(['PUT', 'POST'], [...devices('/:deviceId/keys'), ...devices('/identifier/:deviceId/keys')], (c) => handleUpdateDeviceKeys(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on(['PUT', 'POST'], devices('/identifier/:deviceId/token'), (c) => handleUpdateDeviceToken(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on(['PUT', 'POST'], devices('/identifier/:deviceId/web-push-auth'), (c) => handleUpdateDeviceWebPushAuth(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('POST', devices('/:deviceId/retrieve-keys'), (c) => handleRetrieveDeviceKeys(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on(['POST', 'DELETE'], devices('/:deviceId/deactivate'), (c) => handleDeactivateDevice(c.req.raw, c.env, c.get('userId'), c.req.param('deviceId')));
+deviceRoutes.on('POST', devices('/update-trust'), (c) => handleUpdateDeviceTrust(c.req.raw, c.env, c.get('userId')));
+deviceRoutes.on('POST', devices('/untrust'), (c) => handleUntrustDevices(c.req.raw, c.env, c.get('userId')));

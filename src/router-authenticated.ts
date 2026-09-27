@@ -88,7 +88,7 @@ import {
   handleUpdateAttachmentMetadata,
   handleDeleteAttachment,
 } from './handlers/attachments';
-import { handleAuthenticatedDeviceRoute } from './router-devices';
+import { deviceRoutes } from './router-devices';
 import { handleAdminRoute } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
@@ -310,11 +310,7 @@ authenticatedRoutes.on('GET', ['/api/policies', '/api/policies/*'], emptyList);
 authenticatedRoutes.on('GET', ['/api/settings/domains', '/settings/domains'], (c) => handleGetDomains(c.env, c.get('userId')));
 authenticatedRoutes.on(['PUT', 'POST'], ['/api/settings/domains', '/settings/domains'], (c) => handleUpdateDomains(c.req.raw, c.env, c.get('userId')));
 
-authenticatedRoutes.use(async (c, next) => {
-  const deviceResponse = await handleAuthenticatedDeviceRoute(c.req.raw, c.env, c.get('userId'), c.req.path, c.req.method);
-  if (deviceResponse) return deviceResponse;
-  await next();
-});
+authenticatedRoutes.route('/', deviceRoutes);
 
 authenticatedRoutes.use(async (c, next) => {
   const adminResponse = await handleAdminRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
