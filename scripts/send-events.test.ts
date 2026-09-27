@@ -84,3 +84,21 @@ test('an external Send access is attributed to nobody in the organization and th
   const count = await env.DB.prepare('SELECT count(*) AS n FROM events WHERE organization_id = ? AND type = ?').bind(org.id, EventType.SendCreatedText).first<number>('n');
   assert.equal(count, 1, "a non-member's Send never reaches the organization log");
 });
+
+test('bulk Send deletion records every Send with one membership read and one insert statement', async (t) => {
+  const { env, org, call, textSend } = await setup();
+  const ids: string[] = [];
+  for (let created = 0; created < 3; created++) ids.push((await (await call('POST', '/api/sends', textSend)).json() as { id: string }).id);
+  await env.DB.prepare('DELETE FROM events').run();
+  const prepare = env.DB.prepare.bind(env.DB);
+  const statements: string[] = [];
+  t.mock.method(env.DB, 'prepare', (query: string) => { statements.push(query); return prepare(query); });
+  assert.equal((await call('POST', '/api/sends/delete', { ids })).status, 200);
+  t.mock.restoreAll();
+  assert.equal(statements.filter(query => /from "organization_memberships"/i.test(query)).length, 1);
+  assert.equal(statements.filter(query => /insert into "events"/i.test(query)).length, 1, 'six rows fit one statement under the parameter cap');
+  const rows = await env.DB.prepare('SELECT organization_id, resource_id FROM events WHERE type = ?').bind(EventType.SendDeletedText)
+    .all<{ organization_id: string | null; resource_id: string }>();
+  assert.deepEqual(rows.results.map(row => `${row.organization_id ?? 'personal'}:${row.resource_id}`).sort(),
+    ids.flatMap(id => [`personal:${id}`, `${org.id}:${id}`]).sort());
+});

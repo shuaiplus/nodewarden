@@ -74,21 +74,22 @@ type AccountEvent = Pick<EventInput, 'type' | 'resourceType' | 'resourceId'>;
 
 // Upstream LogUserEventAsync / LogSendEventAsync: one personal row acted by the account, plus a copy for
 // every organization where it is a confirmed member. Access events pass organizationActingUserId null,
-// because the account owns the Send but did not open it.
-async function recordAccountEvent(env: Env, request: Request | null, userId: string, event: AccountEvent, organizationActingUserId?: null): Promise<void> {
+// because the account owns the Send but did not open it. Memberships are read once for every event.
+async function recordAccountEvents(env: Env, request: Request | null, userId: string, accountEvents: AccountEvent[], organizationActingUserId?: null): Promise<void> {
+  if (!accountEvents.length) return;
   try {
-    const memberships = await getOrm(env.DB).select({ orgId: organizationMemberships.orgId, status: organizationMemberships.status })
-      .from(organizationMemberships).where(eq(organizationMemberships.userId, userId));
-    await recordEvents(env, request, { userId }, [
+    const organizationIds = (await getOrm(env.DB).select({ orgId: organizationMemberships.orgId, status: organizationMemberships.status })
+      .from(organizationMemberships).where(eq(organizationMemberships.userId, userId)))
+      .filter(member => member.status === MembershipStatus.Confirmed).map(member => member.orgId);
+    await recordEvents(env, request, { userId }, accountEvents.flatMap(event => [
       { ...event, organizationId: null, userId },
-      ...memberships.filter(member => member.status === MembershipStatus.Confirmed)
-        .map(member => ({ ...event, organizationId: member.orgId, userId, actingUserId: organizationActingUserId })),
-    ]);
+      ...organizationIds.map(organizationId => ({ ...event, organizationId, userId, actingUserId: organizationActingUserId })),
+    ]));
   } catch { console.error('User event recording failed'); }
 }
 
 export async function recordUserEvent(env: Env, request: Request | null, userId: string, type: number): Promise<void> {
-  await recordAccountEvent(env, request, userId, { type });
+  await recordAccountEvents(env, request, userId, [{ type }]);
 }
 
 export type SendEventAction = 'created' | 'edited' | 'deleted' | 'accessed';
@@ -106,9 +107,15 @@ function sendEventType(send: Pick<Send, 'type' | 'authType' | 'passwordHash'>, a
 
 // ponytail: every accessor is recorded as External; attribute confirmed members once Send email
 // verification identifies who opened the Send.
-export async function recordSendEvent(env: Env, request: Request | null, send: Pick<Send, 'id' | 'userId' | 'type' | 'authType' | 'passwordHash'>, action: SendEventAction): Promise<void> {
-  await recordAccountEvent(env, request, send.userId, { type: sendEventType(send, action), resourceType: 'send', resourceId: send.id },
+type SendEventSubject = Pick<Send, 'id' | 'userId' | 'type' | 'authType' | 'passwordHash'>;
+
+export async function recordSendEvents(env: Env, request: Request | null, ownerId: string, sends: SendEventSubject[], action: SendEventAction): Promise<void> {
+  await recordAccountEvents(env, request, ownerId, sends.map(send => ({ type: sendEventType(send, action), resourceType: 'send', resourceId: send.id })),
     action === 'accessed' ? null : undefined);
+}
+
+export async function recordSendEvent(env: Env, request: Request | null, send: SendEventSubject, action: SendEventAction): Promise<void> {
+  await recordSendEvents(env, request, send.userId, [send], action);
 }
 
 export interface EventFilter {

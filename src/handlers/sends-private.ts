@@ -1,6 +1,6 @@
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { StorageService } from '../services/storage';
-import { recordSendEvent } from '../services/events';
+import { recordSendEvent, recordSendEvents } from '../services/events';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
@@ -715,8 +715,8 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     for (const send of sends) {
       notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
-      await recordSendEvent(env, request, send, 'deleted');
     }
+    await recordSendEvents(env, request, userId, sends, 'deleted');
     await writeSendAudit(storage, request, userId, 'send.delete.bulk', {
       count: sends.length,
       requestedCount: body.ids.length,
