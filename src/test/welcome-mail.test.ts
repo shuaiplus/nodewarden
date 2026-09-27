@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { inspect } from 'node:util';
 
 import type { Env } from '../types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
@@ -62,4 +63,17 @@ test('welcome mail delivery failure or missing vault origin leaves account creat
   assert.equal((await register(env, `no-origin@${MAILABLE_DOMAIN}`)).status, 200);
   assert.equal(capture.sent.length, 1);
   assert.doesNotMatch(capture.sent[0].html, /<a /);
+});
+
+test('a failed credential mirror during signup logs the failure without its bound password hash', async (t) => {
+  const env = await createTestEnv({ ALLOW_OPEN_REGISTRATION: '1' });
+  await seedUser(env);
+  await env.DB.prepare("CREATE TRIGGER fail_mirror BEFORE INSERT ON account BEGIN SELECT RAISE(ABORT, 'forced mirror failure'); END").run();
+  const errors = t.mock.method(console, 'error', () => {});
+  const email = `mirror@${MAILABLE_DOMAIN}`;
+  assert.equal((await register(env, email)).status, 500);
+  const { masterPasswordHash } = (await userRepo.getUser(env.DB, email))!;
+  const logged = errors.mock.calls.flatMap((call) => call.arguments.map((argument) => inspect(argument, { depth: 5 }))).join('\n');
+  assert.match(logged, /forced mirror failure/);
+  assert.ok(!logged.includes(masterPasswordHash));
 });

@@ -1,6 +1,6 @@
 import { EventType, recordUserEvent } from '../services/events';
 import { and, eq, sql } from 'drizzle-orm';
-import { getOrm } from '../db/client';
+import { getOrm, withoutQueryParams } from '../db/client';
 import { devices, session, userRevisions, users, webauthnCredentials } from '../db/schema';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
@@ -304,7 +304,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     if (msg.includes('unique') || msg.includes('constraint')) {
       return errorResponse('Email already registered', 409);
     }
-    console.error('Registration failed after invite reservation:', error);
+    console.error('Registration failed after invite reservation:', withoutQueryParams(error));
     throw error;
   }
 
@@ -315,7 +315,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
         console.warn('Invite used_by was not assigned after registration', { inviteCode, userId: user.id });
       }
     } catch (error) {
-      console.error('Invite used_by assignment failed after registration:', error);
+      console.error('Invite used_by assignment failed after registration:', withoutQueryParams(error));
     }
   }
 
