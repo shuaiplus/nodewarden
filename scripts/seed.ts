@@ -22,25 +22,26 @@ function walkSqliteFiles(dir: string): string[] {
   return found;
 }
 
-function resolveTarget(args: string[]): string {
-  const pathArg = args.find((arg) => !arg.startsWith('--'));
-  if (pathArg) {
-    return resolve(pathArg);
-  }
-  const localFiles = walkSqliteFiles(LOCAL_STATE_ROOT);
-  if (localFiles.length === 1) return localFiles[0];
-  if (localFiles.length === 0) {
-    throw new Error('no local D1 sqlite under .wrangler/state; pass a file path');
-  }
-  throw new Error(`multiple local D1 sqlite files, pass one:\n${localFiles.join('\n')}`);
-}
-
 const args = process.argv.slice(2);
 if (args.includes('--remote')) {
   throw new Error('refusing to seed remote D1 (drizzle-seed exceeds the 100-param cap)');
 }
 
-const target = resolveTarget(args);
+const pathArg = args.find((arg) => !arg.startsWith('--'));
+let target: string;
+if (pathArg) {
+  target = resolve(pathArg);
+} else {
+  const localFiles = walkSqliteFiles(LOCAL_STATE_ROOT);
+  if (localFiles.length === 0) {
+    throw new Error('no local D1 sqlite under .wrangler/state; pass a file path');
+  }
+  if (localFiles.length > 1) {
+    throw new Error(`multiple local D1 sqlite files, pass one:\n${localFiles.join('\n')}`);
+  }
+  target = localFiles[0];
+}
+
 const sqlite = new Database(target);
 for (const statement of schemaStatements()) {
   sqlite.exec(statement);
