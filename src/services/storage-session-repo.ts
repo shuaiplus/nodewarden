@@ -1,8 +1,9 @@
-import { and, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import { sha256 } from 'hono/utils/crypto';
 
 import { getOrm } from '../db/client';
 import { session } from '../db/schema';
+import { caseWhen } from '../db/sql';
 import type { RefreshTokenRecord } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
@@ -91,10 +92,11 @@ export async function extendRefreshTokenExpiry(db: D1Database, token: string, re
   const result = await getOrm(db)
     .update(session)
     .set({
-      expiresAt: sql`CASE
-        WHEN ${session.absoluteExpiresAt} IS NOT NULL AND ${session.absoluteExpiresAt} < ${requestedExpiresAtMs}
-        THEN ${session.absoluteExpiresAt}
-        ELSE ${requestedExpiresAtMs} END`,
+      expiresAt: caseWhen(
+        and(isNotNull(session.absoluteExpiresAt), lt(session.absoluteExpiresAt, requestedExpiresAtMs)),
+        session.absoluteExpiresAt,
+        requestedExpiresAtMs,
+      ),
       lastUsedAt: nowMs,
       updatedAt: nowMs,
     })
