@@ -134,14 +134,14 @@ async function invitedMember(env: Env, owner: User, orgId: string): Promise<{ id
   return { id: (await findMember(env, owner, orgId, email)).id, email };
 }
 
-async function postScimUser(env: Env, owner: User, orgId: string, email: string): Promise<Response> {
+async function postScimUser(env: Env, owner: User, orgId: string, email: string, body: unknown = { userName: email }): Promise<Response> {
   const scimKey = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/scim-key`, userId: owner.id });
   assert.equal(scimKey.status, 200);
   const { token } = await scimKey.json() as { token: string };
   return authedFetch(env, {
     method: 'POST',
     path: `/scim/v2/${orgId}/Users`,
-    body: { userName: email },
+    body,
     headers: { Authorization: `Bearer ${token}` },
   });
 }
@@ -717,4 +717,15 @@ test('bulk confirm and reinvite refuse a member without manageUsers, confirming 
   assert.deepEqual(refusals.map(({ status }) => status), [403, 403, 403]);
   assert.equal((await memberStatuses(env, owner, orgId))[accepted], MembershipStatus.Accepted);
   assert.equal(capture.sent.length, mailedBefore);
+});
+
+test('a malformed SCIM user payload gets a 400 SCIM error and saves no row', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const rejected = await postScimUser(env, owner, orgId, '', { userName: 42 });
+  assert.equal(rejected.status, 400);
+  const error = await rejected.json() as { schemas: string[]; status: number };
+  assert.deepEqual([error.schemas, error.status], [['urn:ietf:params:scim:api:messages:2.0:Error'], 400]);
+  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
 });

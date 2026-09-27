@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Env } from '../types';
 import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
@@ -19,6 +20,32 @@ function scimError(status: number, detail: string, headers: Record<string, strin
     status,
     detail,
   }, status, headers);
+}
+
+// IdPs send loosely typed PATCH values, so an active that is not a boolean is ignored rather than rejected.
+const scimActive = z.boolean().optional().catch(undefined);
+
+const ScimUserRequest = z.object({
+  userName: z.string().nullish(),
+  emails: z.array(z.object({ value: z.string().nullish() })).nullish(),
+  externalId: z.string().nullish(),
+  name: z.object({ formatted: z.string().nullish() }).nullish(),
+  active: scimActive,
+  Operations: z.array(z.object({ path: z.string().nullish(), value: scimActive })).nullish(),
+}).transform(({ userName, emails, externalId, name, active, Operations }) => ({
+  email: (userName || emails?.[0]?.value || '').trim().toLowerCase(),
+  externalId: externalId || null,
+  displayName: name?.formatted || '',
+  // A replaced active wins over the first PATCH operation on the active path.
+  active: active ?? Operations?.find((operation) => operation.path?.toLowerCase() === 'active')?.value,
+}));
+
+const ScimGroupRequest = z.object({ displayName: z.string().nullish(), externalId: z.string().nullish() });
+
+// SCIM payloads answer in the SCIM error format rather than Bitwarden's.
+async function readScimBody<S extends z.ZodType>(request: Request, schema: S): Promise<z.output<S> | Response> {
+  const result = schema.safeParse(await request.json().catch(() => undefined));
+  return result.success ? result.data : scimError(400, result.error.issues[0].message);
 }
 
 export async function handleScimRoute(request: Request, env: Env, path: string): Promise<Response | null> {
@@ -64,10 +91,10 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
   }
 
   if (request.method === 'POST') {
-    const body = await request.json() as Record<string, unknown>;
-    const email = extractEmail(body);
+    const body = await readScimBody(request, ScimUserRequest);
+    if (body instanceof Response) return body;
+    const { email, externalId } = body;
     if (!email) return scimError(400, 'userName is required');
-    const externalId = String(body.externalId || '') || null;
     // Upstream PostUserCommand: a known member or externalId is a conflict, so an IdP replay after a
     // lost 201 neither mails a second invite nor adds a duplicate row. Bound rows carry the account email.
     const members = await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId);
@@ -104,17 +131,18 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     await orgRepo.saveMembership(env.DB, member);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
     await publishPlatformEvent(env, { type: 'directory.applied', orgId, resource: 'user', resourceId: member.id });
-    return scimJson(scimUser(member.id, email, String((body.name as { formatted?: string } | undefined)?.formatted || ''), true, member.externalId), 201);
+    return scimJson(scimUser(member.id, email, body.displayName, true, member.externalId), 201);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && id) {
     const member = await orgRepo.getMembership(env.DB, id);
     if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
-    const body = await request.json() as Record<string, unknown>;
-    const active = extractActive(body, member.status > MembershipStatus.Revoked);
+    const body = await readScimBody(request, ScimUserRequest);
+    if (body instanceof Response) return body;
+    const active = body.active ?? member.status > MembershipStatus.Revoked;
     if (!active && member.status > MembershipStatus.Revoked) member.status = member.status - 128;
     if (active && member.status <= MembershipStatus.Revoked) member.status = member.status + 128;
-    if (body.externalId) member.externalId = String(body.externalId);
+    if (body.externalId) member.externalId = body.externalId;
     member.updatedAt = new Date().toISOString();
     await orgRepo.saveMembership(env.DB, member);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
@@ -149,14 +177,15 @@ async function handleScimGroups(request: Request, env: Env, orgId: string, id: s
     return scimJson(scimGroup(group.id, group.name, group.externalId));
   }
   if (request.method === 'POST') {
-    const body = await request.json() as Record<string, unknown>;
+    const body = await readScimBody(request, ScimGroupRequest);
+    if (body instanceof Response) return body;
     const now = new Date().toISOString();
     const group = {
       id: generateUUID(),
       orgId,
-      name: String(body.displayName || 'Group'),
+      name: body.displayName || 'Group',
       accessAll: false,
-      externalId: String(body.externalId || '') || null,
+      externalId: body.externalId || null,
       createdAt: now,
       updatedAt: now,
     };
@@ -167,9 +196,10 @@ async function handleScimGroups(request: Request, env: Env, orgId: string, id: s
   if ((request.method === 'PUT' || request.method === 'PATCH') && id) {
     const group = await orgRepo.getGroup(env.DB, id);
     if (!group || group.orgId !== orgId) return scimError(404, 'Group not found');
-    const body = await request.json() as Record<string, unknown>;
-    if (body.displayName) group.name = String(body.displayName);
-    if (body.externalId) group.externalId = String(body.externalId);
+    const body = await readScimBody(request, ScimGroupRequest);
+    if (body instanceof Response) return body;
+    if (body.displayName) group.name = body.displayName;
+    if (body.externalId) group.externalId = body.externalId;
     group.updatedAt = new Date().toISOString();
     await orgRepo.saveGroup(env.DB, group);
     return scimJson(scimGroup(group.id, group.name, group.externalId));
@@ -204,18 +234,4 @@ function scimGroup(id: string, name: string, externalId: string | null) {
     displayName: name,
     meta: { resourceType: 'Group' },
   };
-}
-
-function extractEmail(body: Record<string, unknown>): string {
-  if (body.userName) return String(body.userName).trim().toLowerCase();
-  const emails = body.emails as Array<{ value?: string }> | undefined;
-  return String(emails?.[0]?.value || '').trim().toLowerCase();
-}
-
-function extractActive(body: Record<string, unknown>, fallback: boolean): boolean {
-  if (typeof body.active === 'boolean') return body.active;
-  const operations = body.Operations as Array<{ path?: string; value?: unknown }> | undefined;
-  const activeOp = operations?.find((operation) => String(operation.path || '').toLowerCase() === 'active');
-  if (typeof activeOp?.value === 'boolean') return activeOp.value;
-  return fallback;
 }
