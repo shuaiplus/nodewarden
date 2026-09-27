@@ -9,13 +9,13 @@ import { ORG_INVITE_TTL_DAYS, verifyHs256Jwt } from '../src/utils/jwt';
 import { sanitizeForEmail } from '../src/services/mail';
 import { D1_MAX_BOUND_PARAMETERS } from './support/d1-sqlite';
 import { authedFetch, createTestEnv, seedUser, captureEmail, MAILABLE_DOMAIN, type SentEmail } from './support/env';
+import { createOrg, errorMessage, TEST_ORG_NAME } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 // Upstream OrganizationService always stores invites as Invited with no user, and only
 // AcceptOrgUserCommand (after checking the emailed token) binds the user. Without that, anyone can
 // invite and confirm an existing account and push their org policies onto it.
-const ORG_NAME = 'Acme';
 const OFFICIAL_WEB_ORIGIN = 'https://web.example.test';
 const MEMBER_KEY = '4.dGVzdA==';
 const INVITE_LINK_PATTERN = /https:\/\/\S+accept-organization\?\S+/;
@@ -54,14 +54,6 @@ function inviteToken(sent: SentEmail[], email: string): string | null {
 
 function seedMailableUser(env: Env): Promise<User> {
   return seedUser(env, { email: `${crypto.randomUUID()}@${MAILABLE_DOMAIN}` });
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  return ((await response.json()) as { error: string }).error;
-}
-
-async function createOrg(env: Env, owner: User): Promise<string> {
-  return (await createOwnedOrganization(env, owner, { name: ORG_NAME, key: MEMBER_KEY })).id;
 }
 
 function postInvite(env: Env, owner: User, orgId: string, emails: string[], headers?: HeadersInit): Promise<Response> {
@@ -208,7 +200,7 @@ test('the emailed invite token only lets the invited account accept, and confirm
   assert.equal(params.get('organizationId'), orgId);
   assert.equal(params.get('organizationUserId'), memberId);
   assert.equal(params.get('email'), invitee.email);
-  assert.equal(params.get('organizationName'), ORG_NAME);
+  assert.equal(params.get('organizationName'), TEST_ORG_NAME);
   assert.equal(params.get('initOrganization'), 'false');
   assert.equal(params.get('orgUserHasExistingUser'), 'true');
   const token = params.get('token');
@@ -269,7 +261,7 @@ test('an invite token is bound to its own row and expires, and a revoked invite 
   assert.equal(revoked.status, 200);
   const afterRevoke = await accept(env, invitee, orgId, memberId, { token: tokenFor(invitee.email) });
   assert.equal(afterRevoke.status, 400);
-  assert.equal(await errorMessage(afterRevoke), `Your access to the ${ORG_NAME} vault has been revoked.`);
+  assert.equal(await errorMessage(afterRevoke), `Your access to the ${TEST_ORG_NAME} vault has been revoked.`);
 });
 
 test('a SCIM-provisioned existing account stays Invited and cannot be confirmed without accepting', async () => {

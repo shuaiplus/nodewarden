@@ -9,30 +9,20 @@ import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { seedMember } from './support/sm';
-
-const { createOwnedOrganization } = await import('../src/handlers/organizations');
+import { byId, createCollection, createGroup, createOrg, editAccess, ENCRYPTED_FIELD, manageAccess, seedMember, type SelectionReadOnly, viewAccess } from './support/sm';
 
 // Official web's collection dialog builds its Access tab from GET /organizations/{orgId}/collections/details
 // and saves the whole list back, so a details row without users and groups made every save wipe the
 // collection's access. Upstream CollectionsController serves CollectionAccessDetailsResponseModel on
 // /details, /{id}/details (which `bw get org-collection` reads), POST and PUT, and a bare
 // SelectionReadOnlyResponseModel array on /{id}/users.
-const MEMBER_KEY = '4.dGVzdA==';
-const COLLECTION_NAME = '2.c|c|c';
+const COLLECTION_NAME = ENCRYPTED_FIELD;
 const INVITED_EMAIL = 'invitee@example.test';
 const ACCESS_DETAILS_KEYS = [
   'assigned', 'defaultUserCollectionEmail', 'externalId', 'groups', 'hidePasswords', 'id', 'manage',
   'name', 'object', 'organizationId', 'readOnly', 'type', 'unmanaged', 'users',
 ];
 const SELECTION_KEYS = ['hidePasswords', 'id', 'manage', 'readOnly'];
-
-interface Selection {
-  id: string;
-  readOnly: boolean;
-  hidePasswords: boolean;
-  manage: boolean;
-}
 
 interface AccessDetails {
   id: string;
@@ -43,20 +33,12 @@ interface AccessDetails {
   manage: boolean;
   assigned: boolean;
   unmanaged: boolean;
-  users: Selection[] | null;
-  groups: Selection[] | null;
+  users: SelectionReadOnly[] | null;
+  groups: SelectionReadOnly[] | null;
   object: string;
 }
 
-const manageAccess = (id: string): Selection => ({ id, readOnly: false, hidePasswords: false, manage: true });
-const editAccess = (id: string): Selection => ({ id, readOnly: false, hidePasswords: false, manage: false });
-const viewAccess = (id: string): Selection => ({ id, readOnly: true, hidePasswords: false, manage: false });
-const byId = (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id);
-const sorted = (selections: Selection[] | null) => [...(selections ?? [])].sort(byId);
-
-async function createOrg(env: Env, owner: User): Promise<string> {
-  return (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
-}
+const sorted = (selections: SelectionReadOnly[] | null) => [...(selections ?? [])].sort(byId);
 
 async function ownerMemberId(env: Env, owner: User, orgId: string): Promise<string> {
   return (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
@@ -66,20 +48,8 @@ function collectionsPath(orgId: string, suffix = ''): string {
   return `/api/organizations/${orgId}/collections${suffix}`;
 }
 
-async function createCollection(env: Env, actor: User, orgId: string, access: Record<string, unknown> = {}): Promise<Response> {
+async function postCollection(env: Env, actor: User, orgId: string, access: Record<string, unknown> = {}): Promise<Response> {
   return authedFetch(env, { method: 'POST', path: collectionsPath(orgId), body: { name: COLLECTION_NAME, ...access }, userId: actor.id });
-}
-
-async function createCollectionId(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await createCollection(env, owner, orgId);
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
-}
-
-async function createGroup(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/groups`, body: { name: 'Group' }, userId: owner.id });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
 }
 
 function putCollection(env: Env, actor: User, orgId: string, collectionId: string, body: Record<string, unknown>): Promise<Response> {
@@ -106,7 +76,7 @@ test('the collection dialog opens with every grant and saving it back keeps them
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const collectionId = await createCollectionId(env, owner, orgId);
+  const collectionId = await createCollection(env, owner, orgId);
   const [alice, bob] = [await seedMember(env, orgId), await seedMember(env, orgId)];
   const groupId = await createGroup(env, owner, orgId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
@@ -146,7 +116,7 @@ test('saving the dialog keeps more group grants than one statement can bind', as
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const collectionId = await createCollectionId(env, owner, orgId);
+  const collectionId = await createCollection(env, owner, orgId);
   const groupCount = Math.floor(D1_MAX_BOUND_PARAMETERS / Object.keys(getColumns(collectionGroups)).length) + 1;
   const groupIds = await Promise.all(Array.from({ length: groupCount }, () => createGroup(env, owner, orgId)));
   const grants = groupIds.map(editAccess).sort(byId);
@@ -163,7 +133,7 @@ test('saving the dialog with an empty list removes those grants and an omitted l
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const collectionId = await createCollectionId(env, owner, orgId);
+  const collectionId = await createCollection(env, owner, orgId);
   const alice = await seedMember(env, orgId);
   const groupId = await createGroup(env, owner, orgId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
@@ -179,7 +149,7 @@ test('single collection details is one object in the shape `bw get org-collectio
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const collectionId = await createCollectionId(env, owner, orgId);
+  const collectionId = await createCollection(env, owner, orgId);
   const alice = await seedMember(env, orgId);
 
   const unmanaged = await singleDetails(env, owner, orgId, collectionId);
@@ -211,7 +181,7 @@ test('create and update answer with the saved collection access details', async 
   const orgId = await createOrg(env, owner);
   const ownerId = await ownerMemberId(env, owner, orgId);
 
-  const created = await createCollection(env, owner, orgId, { users: [manageAccess(ownerId)], groups: [] });
+  const created = await postCollection(env, owner, orgId, { users: [manageAccess(ownerId)], groups: [] });
   assert.equal(created.status, 200);
   const createdBody = await created.json() as AccessDetails;
   assert.deepEqual(Object.keys(createdBody).sort(), ACCESS_DETAILS_KEYS);
@@ -230,7 +200,7 @@ test('create and update answer with the saved collection access details', async 
 
   // A creator that may not read access gets upstream's bare response: no grants and every flag false.
   const creator = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { createNewCollections: true } });
-  const bare = await createCollection(env, creator.user, orgId, { users: [editAccess(creator.memberId)] });
+  const bare = await postCollection(env, creator.user, orgId, { users: [editAccess(creator.memberId)] });
   assert.equal(bare.status, 200);
   const bareBody = await bare.json() as AccessDetails;
   assert.deepEqual(Object.keys(bareBody).sort(), ACCESS_DETAILS_KEYS);
@@ -249,7 +219,7 @@ test('access details are served only to members who may read that access', async
   const owner = await seedUser(env);
   const outsider = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const [managed, other] = [await createCollectionId(env, owner, orgId), await createCollectionId(env, owner, orgId)];
+  const [managed, other] = [await createCollection(env, owner, orgId), await createCollection(env, owner, orgId)];
   const manager = await seedMember(env, orgId);
   const editor = await seedMember(env, orgId);
   const userManager = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
@@ -286,7 +256,7 @@ test('access details are served only to members who may read that access', async
   );
 
   // Another organization's collection is not found under this one, even for its Owner.
-  const foreignCollection = await createCollectionId(env, outsider, await createOrg(env, outsider));
+  const foreignCollection = await createCollection(env, outsider, await createOrg(env, outsider));
   assert.equal(await status(owner, `/${foreignCollection}/details`), 404);
   assert.equal(await status(owner, `/${foreignCollection}/users`), 404);
 });
@@ -298,7 +268,7 @@ test('only members who manage a collection may update it', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const collectionId = await createCollectionId(env, owner, orgId);
+  const collectionId = await createCollection(env, owner, orgId);
   const manager = await seedMember(env, orgId);
   const editor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
   const collectionEditor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });

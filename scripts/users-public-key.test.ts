@@ -6,7 +6,7 @@ import * as emergencyRepo from '../src/services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../src/services/storage-emergency-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { seedMember } from './support/sm';
+import { byId, seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -115,7 +115,6 @@ test('bulk member public keys list only Accepted members of this organization, t
   assert.equal(body.object, 'list');
   // An Accepted member without keys is still listed, with a null key, as upstream.
   const expected = [[accepted, PUBLIC_KEY], [keyless, null]] as const;
-  const byId = (left: MemberPublicKey, right: MemberPublicKey) => left.id.localeCompare(right.id);
   assert.deepEqual(body.data.toSorted(byId), expected.map(([member, key]) => ({
     id: member.memberId,
     userId: member.user.id,

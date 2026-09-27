@@ -7,15 +7,12 @@ import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { createOrgInviteToken } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { seedMember } from './support/sm';
-
-const { createOwnedOrganization } = await import('../src/handlers/organizations');
+import { byId, createCollection, createGroup, createOrg, editAccess, errorMessage, manageAccess, seedMember, viewAccess } from './support/sm';
 
 // Official web's edit-member dialog loads GET /organizations/{orgId}/users/{id}?includeGroups=true
 // (UserAdminService.get) and saves the full OrganizationUserUpdateRequest. Upstream
 // OrganizationUserValidationService.CanManageRoleChange keeps Admins and Custom manageUsers
 // members from granting or touching Owner, and Custom members from granting what they lack.
-const MEMBER_KEY = '4.dGVzdA==';
 const ONLY_OWNERS = "Only an Owner can manage another Owner's account.";
 // Upstream invite still runs the v1 OrganizationService check, which words the Owner case differently.
 const ONLY_OWNERS_INVITE = "Only an Owner can configure another Owner's account.";
@@ -42,14 +39,6 @@ interface MemberDetails {
   object: string;
 }
 
-async function errorMessage(response: Response): Promise<string> {
-  return ((await response.json()) as { error: string }).error;
-}
-
-async function createOrg(env: Env, owner: User): Promise<string> {
-  return (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
-}
-
 function putMember(env: Env, actor: User, orgId: string, memberId: string, body: Record<string, unknown>): Promise<Response> {
   return authedFetch(env, { method: 'PUT', path: `/api/organizations/${orgId}/users/${memberId}`, body, userId: actor.id });
 }
@@ -69,32 +58,6 @@ async function expectRejected(response: Promise<Response>, status: number, messa
   assert.equal(settled.status, status);
   assert.equal(await errorMessage(settled), message);
 }
-
-async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/collections`, body: { name: '2.c|c|c' }, userId: owner.id });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
-}
-
-async function createGroup(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/groups`, body: { name: 'Group' }, userId: owner.id });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
-}
-
-function manageAccess(id: string) {
-  return { id, readOnly: false, hidePasswords: false, manage: true };
-}
-
-function viewAccess(id: string) {
-  return { id, readOnly: true, hidePasswords: false, manage: false };
-}
-
-function editAccess(id: string) {
-  return { id, readOnly: false, hidePasswords: false, manage: false };
-}
-
-const byId = (left: { id: string }, right: { id: string }) => left.id.localeCompare(right.id);
 
 test('an Admin can neither grant Owner nor edit or demote an Owner, on PUT or invite', async () => {
   const env = await createTestEnv();

@@ -6,8 +6,12 @@ import * as orgRepo from '../../src/services/storage-org-repo';
 import type { Env, User } from '../../src/types';
 import { authedFetch, seedUser } from './env';
 
+// The organization handlers reach cloudflare:workers, which env.ts maps only once it has run.
+const { createOwnedOrganization } = await import('../../src/handlers/organizations');
+
 // The server stores org and membership keys as sent, so any EncString-shaped value will do.
 export const TEST_ORG_KEY = '4.dGVzdA==';
+export const TEST_ORG_NAME = 'Acme';
 
 // Stored as sent; official web encrypts SM names, keys and values with the org key.
 export const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -88,7 +92,7 @@ export async function seedMember(
 export async function seedSmOrg(
   env: Env,
   createPath: string = ORG_CREATE_PATHS[0],
-  createBody: unknown = { name: 'Acme', key: TEST_ORG_KEY },
+  createBody: unknown = { name: TEST_ORG_NAME, key: TEST_ORG_KEY },
 ): Promise<SmOrg> {
   const owner = await seedUser(env);
   const created = await authedFetch(env, { method: 'POST', path: createPath, body: createBody, userId: owner.id });
@@ -96,3 +100,33 @@ export async function seedSmOrg(
   const { id: orgId } = await created.json() as { id: string };
   return { orgId, owner, admin: (await seedMember(env, orgId, { type: MembershipType.Admin })).user };
 }
+
+// An org `owner` created directly, as the create routes are covered on their own.
+export async function createOrg(env: Env, owner: User): Promise<string> {
+  return (await createOwnedOrganization(env, owner, { name: TEST_ORG_NAME, key: TEST_ORG_KEY })).id;
+}
+
+export async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {
+  return (await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/collections`, { name: ENCRYPTED_FIELD })).id;
+}
+
+export async function createGroup(env: Env, owner: User, orgId: string): Promise<string> {
+  return (await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/groups`, { name: 'Group' })).id;
+}
+
+export async function errorMessage(response: Response): Promise<string> {
+  return ((await response.json()) as { error: string }).error;
+}
+
+// One SelectionReadOnly entry, as the collection and member dialogs post and read access.
+export interface SelectionReadOnly {
+  id: string;
+  readOnly: boolean;
+  hidePasswords: boolean;
+  manage: boolean;
+}
+
+export const manageAccess = (id: string): SelectionReadOnly => ({ id, readOnly: false, hidePasswords: false, manage: true });
+export const editAccess = (id: string): SelectionReadOnly => ({ id, readOnly: false, hidePasswords: false, manage: false });
+export const viewAccess = (id: string): SelectionReadOnly => ({ id, readOnly: true, hidePasswords: false, manage: false });
+export const byId = (left: { id: string }, right: { id: string }): number => left.id.localeCompare(right.id);

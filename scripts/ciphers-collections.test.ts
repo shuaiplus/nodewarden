@@ -6,7 +6,7 @@ import { MembershipType, type CollectionAccess } from '../src/services/org-types
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { seedMember } from './support/sm';
+import { createCollection, errorMessage, seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -40,12 +40,6 @@ interface Fixture {
   collectionA: string;
   collectionB: string;
   collectionC: string;
-}
-
-async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/collections`, body: { name: '2.c|c|c' }, userId: owner.id });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
 }
 
 async function setup(): Promise<Fixture> {
@@ -175,7 +169,7 @@ test('collections_v2 refuses personal items, outsiders, hidden passwords and rea
   assert.equal((await putCollections(env, hiddenMember, cipherId, 'collections_v2', request)).status, 404);
   const readOnly = await putCollections(env, readOnlyMember, cipherId, 'collections_v2', request);
   assert.equal(readOnly.status, 400);
-  assert.equal(((await readOnly.json()) as { error: string }).error, NO_EDIT);
+  assert.equal(await errorMessage(readOnly), NO_EDIT);
   assert.equal((await putCollections(env, owner, cipherId, 'collections_v2', {})).status, 400);
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
 });
@@ -233,7 +227,7 @@ test('creating an org cipher refuses it whole unless the member can write every 
   // A 400, not a 403: official clients log out on an authenticated 403.
   const readOnlyMix = await postCipher(env, member, orgId, [collectionA, collectionB]);
   assert.equal(readOnlyMix.status, 400);
-  assert.equal(((await readOnlyMix.json()) as { error: string }).error, NO_EDIT);
+  assert.equal(await errorMessage(readOnlyMix), NO_EDIT);
   assert.equal((await postCipher(env, member, orgId, [collectionA, otherOrgCollectionId])).status, 400);
   assert.equal((await postCipher(env, owner, orgId, [collectionA, otherOrgCollectionId])).status, 400);
   // An item in no collection would be invisible to a member without full access.

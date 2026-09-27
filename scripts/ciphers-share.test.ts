@@ -4,7 +4,7 @@ import test from 'node:test';
 import { LIMITS } from '../src/config/limits';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { seedMember } from './support/sm';
+import { createCollection, errorMessage, seedMember } from './support/sm';
 import * as attachmentRepo from '../src/services/storage-attachment-repo';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
 
@@ -42,16 +42,6 @@ interface Fixture {
   owner: User;
   orgId: string;
   collectionId: string;
-}
-
-async function errorMessage(response: Response): Promise<string> {
-  return ((await response.json()) as { error: string }).error;
-}
-
-async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/collections`, body: { name: '2.c|c|c' }, userId: owner.id });
-  assert.equal(response.status, 200);
-  return ((await response.json()) as { id: string }).id;
 }
 
 async function setup(): Promise<Fixture> {
