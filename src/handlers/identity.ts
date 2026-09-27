@@ -10,7 +10,7 @@ import { Env, TokenResponse, User } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { deviceErrorResponse, identityErrorResponse, jsonResponse, normalizeJsonKeys, parseBody } from '../utils/response';
+import { deviceErrorResponse, identityErrorResponse, jsonResponse, parseBody, readFormOrJson } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { parse, serialize } from 'hono/utils/cookie';
 import { sha256 } from 'hono/utils/crypto';
@@ -96,13 +96,6 @@ const TokenRequestSchema = z.discriminatedUnion('grant_type', [
 // A grant_type outside the union answers unsupported_grant_type; every other issue is invalid_request.
 function tokenRequestError({ issues: [issue] }: z.ZodError): Response {
   return identityErrorResponse(issue.message, issue.code === 'invalid_union' ? 'unsupported_grant_type' : 'invalid_request', 400);
-}
-
-// Official clients post url-encoded forms; JSON bodies arrive with normalized keys.
-async function readTokenForm(request: Request): Promise<unknown> {
-  return (request.headers.get('content-type') || '').includes('application/x-www-form-urlencoded')
-    ? Object.fromEntries(await request.formData())
-    : normalizeJsonKeys(await request.json());
 }
 
 function identityJsonResponse(data: unknown, status: number = 200): Response {
@@ -484,7 +477,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
 
   // An unreadable payload parses as null, which the schema answers as 'Invalid request payload'.
-  const parsed = TokenRequestSchema.safeParse(await readTokenForm(request).catch(() => null));
+  const parsed = TokenRequestSchema.safeParse(await readFormOrJson(request).catch(() => null));
   if (!parsed.success) return tokenRequestError(parsed.error);
   let body = parsed.data;
   let viaSsoShim = false;
@@ -1043,7 +1036,7 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
 export async function handleRevocation(request: Request, env: Env): Promise<Response> {
   let form: unknown;
   try {
-    form = await readTokenForm(request);
+    form = await readFormOrJson(request);
   } catch {
     return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });
   }

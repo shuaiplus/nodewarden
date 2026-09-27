@@ -182,20 +182,27 @@ export function normalizeJsonKeys<T>(value: T): T {
   return normalized as T;
 }
 
-// Parses a JSON body with normalized keys, or answers 400. Scalars read as an empty object; arrays
-// pass through for the routes that take a bare list.
-async function parseJsonBody(request: Request, message = 'Invalid JSON'): Promise<object | Response> {
+// Identity calls and some older clients post url-encoded forms; JSON arrives with normalized keys.
+export async function readFormOrJson(request: Request): Promise<unknown> {
+  return request.headers.get('content-type')?.includes('application/x-www-form-urlencoded')
+    ? Object.fromEntries(await request.formData())
+    : normalizeJsonKeys(await request.json());
+}
+
+// Reads the body or answers 400. Scalars read as an empty object; arrays pass through for the routes
+// that take a bare list.
+async function readBodyObject(request: Request, message = 'Invalid JSON'): Promise<object | Response> {
   try {
-    const body: unknown = normalizeJsonKeys(await request.json());
+    const body = await readFormOrJson(request);
     return body && typeof body === 'object' ? body : {};
   } catch {
     return errorResponse(message, 400);
   }
 }
 
-// Zod request bodies. parseBody reads JSON through parseJsonBody, so the schema sees camelCase keys even
-// when official clients send PascalCase, and resolves to the schema output or to a 400 Response callers
-// return as is: `message` (default 'Invalid JSON') for unparseable JSON, otherwise the first issue's
+// Zod request bodies. parseBody reads the body through readBodyObject, so the schema sees camelCase keys
+// even when official clients send PascalCase, and resolves to the schema output or to a 400 Response callers
+// return as is: `message` (default 'Invalid JSON') for an unreadable body, otherwise the first issue's
 // message with validationErrors from bodyIssues, every issue message grouped under its dotted path ('' for
 // the body itself) as in upstream ErrorResponseModel.
 export function bodyIssues(error: z.ZodError): Record<string, string[]> {
@@ -206,7 +213,7 @@ export function bodyIssues(error: z.ZodError): Record<string, string[]> {
 }
 
 export async function parseBody<S extends z.ZodType>(request: Request, schema: S, message?: string): Promise<z.output<S> | Response> {
-  const body = await parseJsonBody(request, message);
+  const body = await readBodyObject(request, message);
   if (body instanceof Response) return body;
   const result = schema.safeParse(body);
   return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
