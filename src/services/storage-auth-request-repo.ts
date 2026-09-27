@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, max } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { authRequests } from '../db/schema';
@@ -91,7 +91,7 @@ export async function listPendingAuthRequestsByUserId(db: D1Database, userId: st
   const latest = orm
     .select({
       requestDeviceIdentifier: ar.requestDeviceIdentifier,
-      latestCreationDate: sql<string>`max(${ar.creationDate})`.as('latest_creation_date'),
+      latestCreationDate: max(ar.creationDate).as('latest_creation_date'),
     })
     .from(ar)
     .where(and(
@@ -100,7 +100,7 @@ export async function listPendingAuthRequestsByUserId(db: D1Database, userId: st
       isNull(ar.approved),
       isNull(ar.responseDate),
       isNull(ar.authenticationDate),
-      sql`${ar.creationDate} >= ${cutoff}`,
+      gte(ar.creationDate, cutoff),
     ))
     .groupBy(ar.requestDeviceIdentifier)
     .as('latest');
