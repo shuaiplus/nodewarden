@@ -51,21 +51,18 @@ function fillAssistJsonResponse(body: string): Response {
   });
 }
 
-function normalizeFilename(filename: string): string {
-  const raw = String(filename || '').trim();
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
 export function handleFillAssistManifest(): Response {
   return fillAssistJsonResponse(EMPTY_MANIFEST_BODY);
 }
 
 export function handleFillAssistForms(filename: string): Response {
-  const normalized = normalizeFilename(filename);
+  const raw = String(filename || '').trim();
+  let normalized: string;
+  try {
+    normalized = decodeURIComponent(raw);
+  } catch {
+    normalized = raw;
+  }
   if (normalized === EMPTY_FORMS_FILENAME) {
     return fillAssistJsonResponse(EMPTY_FORMS_BODY);
   }
