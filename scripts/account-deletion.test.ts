@@ -2,17 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
 
+import { createAuth } from '../src/auth';
 import { getOrm } from '../src/db/client';
 import {
   ciphers, emergencyAccess, invites, organizationMemberships, sends, smAccessTokens, smProjects,
   smSecretProjects, smSecrets, smServiceAccountProjects, smServiceAccounts, userRevisions,
 } from '../src/db/schema';
 import { deleteOrganizationAccount, deleteUserAccount } from '../src/services/account-deletion';
+import { AuthService } from '../src/services/auth';
 import { type AuditEventInput } from '../src/services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../src/services/blob-store';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env } from '../src/types';
-import { authedFetch, createTestEnv, memoryKv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
 import { seedMember } from './support/sm';
 import * as attachmentRepo from '../src/services/storage-attachment-repo';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
@@ -207,6 +209,76 @@ test('admin user deletion rejects non-admins, wrong passwords and self-deletion'
     });
     assert.equal(response.status, status);
     await assertIntact(f);
+  }
+});
+
+test('self-deletion requires the master password and refuses sole Owners and the last active administrator', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  for (const body of [{}, { masterPasswordHash: 'wrong' }, { otp: user.masterPasswordHash }]) {
+    const response = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { error: string }).error, 'User verification failed.');
+    assert.ok(await userRepo.getUserById(env.DB, user.id));
+  }
+  for (const body of [null, [], 'invalid', undefined]) {
+    const response = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body });
+    assert.equal(response.status, 400);
+    assert.ok(await userRepo.getUserById(env.DB, user.id));
+  }
+  const org = await createOwnedOrganization(env, user, { name: 'Sole Owner', key: '4.dGVzdA==' });
+  const owner = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body: { masterPasswordHash: user.masterPasswordHash } });
+  assert.equal(owner.status, 400);
+  assert.match(await owner.text(), /sole owner/);
+  assert.ok(await orgRepo.getOrganization(env.DB, org.id));
+  assert.ok(await userRepo.getUserById(env.DB, user.id));
+  const admin = await seedUser(env, { role: 'admin' });
+  const lastAdmin = await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: admin.id, body: { masterPasswordHash: admin.masterPasswordHash } });
+  assert.equal(lastAdmin.status, 400);
+  assert.equal((await lastAdmin.json() as { error: string }).error, 'You cannot delete the last instance administrator.');
+  assert.ok(await userRepo.getUserById(env.DB, admin.id));
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM audit_logs').first('n'), 0);
+});
+
+test('self-deletion transfers org items, cleans personal blobs and revokes access and refresh tokens', async () => {
+  const f = await setup();
+  const token = await new AuthService(f.env).generateAccessToken(f.target);
+  const response = await authedFetch(f.env, { method: 'DELETE', path: '/api/accounts', userId: f.target.id, body: { masterPasswordHash: f.target.masterPasswordHash } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '');
+  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
+  assert.equal(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id), null);
+  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal(f.blobs.values.has(f.personalCipher.key), false);
+  assert.equal((await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${token}` } })).status, 401);
+  const refresh = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'refresh_token', refresh_token: 'refresh-token' } });
+  assert.equal(refresh.status, 400);
+  const logged = await f.env.DB.prepare('SELECT action, target_id FROM audit_logs').first();
+  assert.deepEqual(logged, { action: 'user.account.delete', target_id: f.target.id });
+  await drainWaitUntil();
+});
+
+test('the accounts root and POST delete aliases use the same guarded deletion', async () => {
+  for (const [method, path] of [['DELETE', '/accounts'], ['POST', '/api/accounts/delete']]) {
+    const env = await createTestEnv();
+    const user = await seedUser(env);
+    const response = await authedFetch(env, { method, path, userId: user.id, body: { masterPasswordHash: user.masterPasswordHash } });
+    assert.equal(response.status, 200);
+    assert.equal(await userRepo.getUserById(env.DB, user.id), null);
+    await drainWaitUntil();
+  }
+});
+
+test('Better Auth cannot delete accounts or change email outside the vault adapter', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const options = createAuth(env).options;
+  assert.equal(options.user?.deleteUser?.enabled, false);
+  assert.equal(options.user?.changeEmail?.enabled, false);
+  for (const path of ['/api/auth/delete-user', '/api/auth/change-email']) {
+    const response = await authedFetch(env, { method: 'POST', path, userId: user.id, body: { password: user.masterPasswordHash, newEmail: 'replacement@example.test' } });
+    assert.equal(response.ok, false);
+    assert.equal((await userRepo.getUserById(env.DB, user.id))?.email, user.email);
   }
 });
 
