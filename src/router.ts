@@ -148,17 +148,8 @@ app.use(async (c, next) => {
 
   if (user.status !== 'active') return errorResponse('Account is disabled', 403);
 
-  // Bulk imports post many ciphers and attachments at once, so marked import requests skip the per-user API budget.
-  const { path, method } = c.req;
-  const isImport = c.req.raw.headers.get('X-NodeWarden-Import') === '1' && method === 'POST' && (
-    path === '/api/ciphers/import' ||
-    /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/v2$/i.test(path) ||
-    /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path)
-  );
-  if (!isImport) {
-    const budget = await new RateLimitService(c.env).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
-    if (!budget.allowed) return tooManyRequests(budget.retryAfterSeconds);
-  }
+  const budget = await new RateLimitService(c.env).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+  if (!budget.allowed) return tooManyRequests(budget.retryAfterSeconds);
 
   c.set('userId', payload.sub);
   c.set('currentUser', user);
