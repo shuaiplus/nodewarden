@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getOrm } from '../db/client';
+import { webauthnCredentials } from '../db/schema';
 import { AuthService } from '../services/auth';
 import { hashPassword } from '../services/auth-password';
 import { ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
@@ -37,8 +39,9 @@ for (const login of [false, true]) {
         current.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, current.securityStamp);
         current.totpSecret = TOTP;
         await userRepo.saveUser(env.DB, current, ['totpSecret']);
-        await env.DB.prepare("INSERT INTO webauthn_credentials (id,user_id,purpose,name,public_key,credential_id,created_at,updated_at) VALUES (?,?, 'twoFactor','current','cHVibGlj',?,?,?)")
-          .bind('current-key', user.id, 'current-key', current.createdAt, current.updatedAt).run();
+        await getOrm(env.DB).insert(webauthnCredentials).values({
+          id: 'current-key', userId: user.id, purpose: 'twoFactor', name: 'current', publicKey: 'cHVibGlj', credentialId: 'current-key', createdAt: current.createdAt, updatedAt: current.updatedAt,
+        });
         await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'current-remember', user.id, 'current-device', Date.now() + 60000);
         await sessionRepo.saveRefreshToken(env.DB, 'current-session', user.id);
       }
