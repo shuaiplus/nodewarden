@@ -75,17 +75,16 @@ export function mergeEquivalentDomainGroups(input: string[][]): string[][] {
     return root;
   }
 
-  function union(a: string, b: string): void {
-    const rootA = find(a);
-    const rootB = find(b);
-    if (rootA !== rootB) parent.set(rootB, rootA);
-  }
-
   for (const group of normalizeEquivalentDomains(input)) {
     if (group.length < 2) continue;
     const [first, ...rest] = group;
     find(first);
-    for (const domain of rest) union(first, domain);
+    // Union each domain's set into the first domain's set.
+    for (const domain of rest) {
+      const firstRoot = find(first);
+      const domainRoot = find(domain);
+      if (firstRoot !== domainRoot) parent.set(domainRoot, firstRoot);
+    }
   }
 
   const components = new Map<string, string[]>();
@@ -116,13 +115,9 @@ export function expandCustomEquivalentDomainsWithGlobals(
   ]).filter((group) => group.some((domain) => customDomains.has(domain)));
 }
 
-function createCustomDomainId(domains: string[], index: number): string {
-  return `custom:${domains.slice().sort().join('|')}:${index}`;
-}
-
 export function normalizeCustomEquivalentDomains(input: unknown): CustomEquivalentDomain[] {
   return uniqueEntries(input, CustomDomain, (rule) => groupKey(rule.domains))
-    .map(([rule, index]) => ({ ...rule, id: rule.id || createCustomDomainId(rule.domains, index) }));
+    .map(([rule, index]) => ({ ...rule, id: rule.id || `custom:${rule.domains.slice().sort().join('|')}:${index}` }));
 }
 
 export function customRulesToActiveEquivalentDomains(rules: CustomEquivalentDomain[]): string[][] {
