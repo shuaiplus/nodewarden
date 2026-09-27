@@ -1,11 +1,19 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNull, type SQLWrapper } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 
-import { chunkRows, getOrm } from '../db/client';
+import { chunkRows, getOrm, type Orm } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
+import { excluded } from '../db/sql';
 import type { Attachment } from '../types';
 import { getCipher, saveCipher } from './storage-cipher-repo';
 import { updateRevisionDate } from './storage-revision-repo';
 
+// EXISTS the user's personal (non-organization) cipher with this id: a bound value or a column of the enclosing statement.
+function ownsPersonalCipher(orm: Orm, userId: string, cipherId: SQLWrapper | string) {
+  const cipher = alias(ciphers, 'owned_cipher');
+  return exists(orm.select({ id: cipher.id }).from(cipher)
+    .where(and(eq(cipher.id, cipherId), eq(cipher.userId, userId), isNull(cipher.organizationId))));
+}
 
 export async function getAttachment(db: D1Database, id: string): Promise<Attachment | null> {
   const [row] = await getOrm(db).select().from(attachments).where(eq(attachments.id, id)).limit(1);
@@ -31,7 +39,10 @@ export async function getAttachmentForUser(db: D1Database, id: string, userId: s
 
 // The upsert as an unexecuted statement, so callers can batch it with related writes.
 export function attachmentUpsert(db: D1Database, attachment: Attachment) {
-  return getOrm(db)
+  const orm = getOrm(db);
+  const currentCipher = alias(ciphers, 'current_cipher');
+  const nextCipher = alias(ciphers, 'next_cipher');
+  return orm
     .insert(attachments)
     .values({
       id: attachment.id,
@@ -50,12 +61,10 @@ export function attachmentUpsert(db: D1Database, attachment: Attachment) {
         sizeName: attachment.sizeName,
         key: attachment.key,
       },
-      where: sql`EXISTS (
-        SELECT 1 FROM ciphers current_cipher
-        INNER JOIN ciphers next_cipher ON next_cipher.id = excluded.cipher_id
-        WHERE current_cipher.id = ${attachments.cipherId}
-          AND current_cipher.user_id = next_cipher.user_id
-      )`,
+      // Re-saving an existing id never moves the attachment onto another owner's cipher.
+      where: exists(orm.select({ id: currentCipher.id }).from(currentCipher)
+        .innerJoin(nextCipher, eq(nextCipher.id, excluded(attachments.cipherId)))
+        .where(and(eq(currentCipher.id, attachments.cipherId), eq(currentCipher.userId, nextCipher.userId)))),
     });
 }
 
@@ -68,15 +77,8 @@ export async function deleteAttachment(db: D1Database, id: string): Promise<void
 }
 
 export async function deleteAttachmentForUser(db: D1Database, id: string, userId: string): Promise<void> {
-  await getOrm(db)
-    .delete(attachments)
-    .where(and(
-      eq(attachments.id, id),
-      sql`EXISTS (
-        SELECT 1 FROM ciphers c
-        WHERE c.id = ${attachments.cipherId} AND c.user_id = ${userId} AND c.organization_id IS NULL
-      )`,
-    ));
+  const orm = getOrm(db);
+  await orm.delete(attachments).where(and(eq(attachments.id, id), ownsPersonalCipher(orm, userId, attachments.cipherId)));
 }
 
 export async function bulkDeleteAttachmentsByIds(db: D1Database, attachmentIds: string[]): Promise<void> {
@@ -144,23 +146,14 @@ export async function addAttachmentToCipherForUser(
   attachmentId: string,
   userId: string
 ): Promise<void> {
-  await getOrm(db)
+  const orm = getOrm(db);
+  await orm
     .update(attachments)
     .set({ cipherId })
     .where(and(
       eq(attachments.id, attachmentId),
-      sql`EXISTS (
-        SELECT 1 FROM ciphers target_cipher
-        WHERE target_cipher.id = ${cipherId}
-          AND target_cipher.user_id = ${userId}
-          AND target_cipher.organization_id IS NULL
-      )`,
-      sql`EXISTS (
-        SELECT 1 FROM ciphers current_cipher
-        WHERE current_cipher.id = ${attachments.cipherId}
-          AND current_cipher.user_id = ${userId}
-          AND current_cipher.organization_id IS NULL
-      )`,
+      ownsPersonalCipher(orm, userId, cipherId),
+      ownsPersonalCipher(orm, userId, attachments.cipherId),
     ));
 }
 
