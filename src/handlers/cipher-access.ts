@@ -9,8 +9,8 @@ import {
 } from '../services/org-authz';
 import type { CollectionAccess } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
-import { StorageService } from '../services/storage';
 import type { Cipher, Env } from '../types';
+import * as cipherRepo from '../services/storage-cipher-repo';
 
 export type CipherAccess = 'read' | 'edit' | 'admin-edit';
 
@@ -19,15 +19,15 @@ export type CipherAccess = 'read' | 'edit' | 'admin-edit';
 // using the same /api/ciphers and attachment routes.
 export async function loadAccessibleCipher(
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   userId: string,
   id: string,
   access: CipherAccess
 ): Promise<Cipher | null> {
-  const personal = access === 'admin-edit' ? null : await storage.getCipherForUser(id, userId);
+  const personal = access === 'admin-edit' ? null : await cipherRepo.getCipherForUser(db, id, userId);
   if (personal) return personal;
 
-  const candidate = await storage.getCipher(id);
+  const candidate = await cipherRepo.getCipher(db, id);
   if (!candidate?.organizationId) return null;
 
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, candidate.organizationId);
@@ -98,13 +98,13 @@ const CIPHER_NOT_FOUND = { ok: false, status: 404, message: 'Cipher not found' }
 // may use any collection of the org, but naming another org's collection is a 404.
 export async function planCipherCollectionChange(
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   userId: string,
   id: string,
   requested: string[],
   mode: CollectionChangeMode
 ): Promise<CollectionChange> {
-  const cipher = await storage.getCipher(id);
+  const cipher = await cipherRepo.getCipher(db, id);
   const organizationId = cipher?.organizationId;
   if (!cipher || !organizationId) return CIPHER_NOT_FOUND;
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, organizationId);
@@ -131,15 +131,15 @@ export async function planCipherCollectionChange(
 }
 
 export async function deleteAuthorizedCipher(
-  storage: StorageService,
+  db: D1Database,
   cipher: Cipher,
   userId: string
 ): Promise<void> {
   if (cipher.organizationId) {
-    await storage.deleteCipherById(cipher.id);
+    await cipherRepo.deleteCipherById(db, cipher.id);
     return;
   }
-  await storage.deleteCipher(cipher.id, userId);
+  await cipherRepo.deleteCipher(db, cipher.id, userId);
 }
 
 // Upstream separates report/export reads of the whole encrypted vault from single-item admin reads.

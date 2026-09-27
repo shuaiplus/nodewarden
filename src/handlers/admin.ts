@@ -2,10 +2,11 @@ import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
-import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
+import * as adminRepo from '../services/storage-admin-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -50,7 +51,7 @@ function buildInviteLink(request: Request, code: string): string {
 }
 
 async function writeAuditLog(
-  storage: StorageService,
+  db: D1Database,
   actorUserId: string | null,
   action: string,
   targetType: string | null,
@@ -58,7 +59,7 @@ async function writeAuditLog(
   metadata: Record<string, unknown> | null,
   request?: Request
 ): Promise<void> {
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(db, {
     actorUserId,
     action,
     targetType,
@@ -137,8 +138,7 @@ export async function handleAdminListAuditLogs(
   const from = String(url.searchParams.get('from') || '').trim() || null;
   const to = String(url.searchParams.get('to') || '').trim() || null;
 
-  const storage = new StorageService(env.DB);
-  const result = await storage.listAuditLogs({ limit, offset, category, level, q, from, to });
+  const result = await adminRepo.listAuditLogs(env.DB, { limit, offset, category, level, q, from, to });
   return jsonResponse({
     data: result.logs.map(log => ({
       id: log.id,
@@ -173,10 +173,9 @@ export async function handleAdminGetAuditLogSettings(
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  const storage = new StorageService(env.DB);
   return jsonResponse({
     object: 'auditLogSettings',
-    ...await getAuditLogSettings(storage),
+    ...await getAuditLogSettings(env.DB),
   });
 }
 
@@ -195,9 +194,8 @@ export async function handleAdminUpdateAuditLogSettings(
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
-  const storage = new StorageService(env.DB);
-  const settings = await saveAuditLogSettings(storage, normalizeAuditLogSettings(body));
-  await writeAuditLog(storage, actorUser.id, 'admin.audit.settings.update', 'auditLog', null, { ...settings }, request);
+  const settings = await saveAuditLogSettings(env.DB, normalizeAuditLogSettings(body));
+  await writeAuditLog(env.DB, actorUser.id, 'admin.audit.settings.update', 'auditLog', null, { ...settings }, request);
   return jsonResponse({
     object: 'auditLogSettings',
     ...settings,
@@ -213,9 +211,8 @@ export async function handleAdminClearAuditLogs(
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  const storage = new StorageService(env.DB);
-  const deleted = await storage.clearAuditLogs();
-  await writeAuditLog(storage, actorUser.id, 'admin.audit.clear', 'auditLog', null, {
+  const deleted = await adminRepo.clearAuditLogs(env.DB);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.audit.clear', 'auditLog', null, {
     deleted,
   }, request);
   return jsonResponse({ object: 'auditLogClear', deleted });
@@ -231,7 +228,6 @@ export async function handleAdminCreateInvite(
     return errorResponse('Forbidden', 403);
   }
 
-  const storage = new StorageService(env.DB);
   const body = await readJsonBody(request);
   const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
   if (passwordError) return passwordError;
@@ -251,8 +247,8 @@ export async function handleAdminCreateInvite(
     updatedAt: now.toISOString(),
   };
 
-  await storage.createInvite(invite);
-  await writeAuditLog(storage, actorUser.id, 'admin.invite.create', 'invite', null, {
+  await adminRepo.createInvite(env.DB, invite);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.create', 'invite', null, {
     expiresInHours,
   }, request);
 
@@ -269,10 +265,9 @@ export async function handleAdminListInvites(
     return errorResponse('Forbidden', 403);
   }
 
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   const includeInactive = url.searchParams.get('includeInactive') === 'true';
-  const invites = await storage.listInvites(includeInactive);
+  const invites = await adminRepo.listInvites(env.DB, includeInactive);
   return jsonResponse({
     data: invites.map(invite => toInviteResponse(request, invite)),
     object: 'list',
@@ -295,13 +290,12 @@ export async function handleAdminDeleteInvite(
   const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
   if (passwordError) return passwordError;
 
-  const storage = new StorageService(env.DB);
-  const deleted = await storage.deleteInvite(code);
+  const deleted = await adminRepo.deleteInvite(env.DB, code);
   if (!deleted) {
     return errorResponse('Invite not found', 404);
   }
 
-  await writeAuditLog(storage, actorUser.id, 'admin.invite.delete', 'invite', null, {
+  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete', 'invite', null, {
     code,
   }, request);
   return new Response(null, { status: 204 });
@@ -321,19 +315,18 @@ export async function handleAdminDeleteAllInvites(
   const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
   if (passwordError) return passwordError;
 
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   if (url.searchParams.get('scope') === 'invalid') {
-    const deleted = await storage.deleteInvalidInvites();
-    await writeAuditLog(storage, actorUser.id, 'admin.invite.delete_invalid', 'invite', null, {
+    const deleted = await adminRepo.deleteInvalidInvites(env.DB);
+    await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete_invalid', 'invite', null, {
       deleted,
     }, request);
 
     return jsonResponse({ deleted }, 200);
   }
 
-  const deleted = await storage.deleteAllInvites();
-  await writeAuditLog(storage, actorUser.id, 'admin.invite.delete_all', 'invite', null, {
+  const deleted = await adminRepo.deleteAllInvites(env.DB);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete_all', 'invite', null, {
     deleted,
   }, request);
 
@@ -363,8 +356,7 @@ export async function handleAdminSetUserStatus(
     return errorResponse('You cannot ban yourself', 400);
   }
 
-  const storage = new StorageService(env.DB);
-  const target = await storage.getUserById(targetUserId);
+  const target = await userRepo.getUserById(env.DB, targetUserId);
   if (!target) {
     return errorResponse('User not found', 404);
   }
@@ -404,8 +396,7 @@ export async function handleAdminDeleteUser(
   const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
   if (passwordError) return passwordError;
 
-  const storage = new StorageService(env.DB);
-  const target = await storage.getUserById(targetUserId);
+  const target = await userRepo.getUserById(env.DB, targetUserId);
   if (!target) {
     return errorResponse('User not found', 404);
   }

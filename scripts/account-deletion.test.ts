@@ -10,10 +10,14 @@ import {
 import { deleteOrganizationAccount, deleteUserAccount } from '../src/services/account-deletion';
 import { type AuditEventInput } from '../src/services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../src/services/blob-store';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, memoryKv, seedUser } from './support/env';
+import * as attachmentRepo from '../src/services/storage-attachment-repo';
+import * as cipherRepo from '../src/services/storage-cipher-repo';
+import * as revisionRepo from '../src/services/storage-revision-repo';
+import * as sessionRepo from '../src/services/storage-session-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -35,7 +39,7 @@ async function addCipher(env: Env, userId: string, organizationId: string | null
   await getOrm(env.DB).insert(ciphers).values({
     id, userId, organizationId, type: 1, name: ENCRYPTED, data: '{}', createdAt: PAST, updatedAt: PAST,
   });
-  await new StorageService(env.DB).saveAttachment({
+  await attachmentRepo.saveAttachment(env.DB, {
     id: attachmentId, cipherId: id, fileName: ENCRYPTED, size: 10, sizeName: '10 Bytes', key: ENCRYPTED,
   });
   const key = getAttachmentObjectKey(id, attachmentId);
@@ -48,7 +52,6 @@ async function setup() {
   const env = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
   const admin = await seedUser(env, { role: 'admin' });
   const target = await seedUser(env);
-  const storage = new StorageService(env.DB);
   const org = await createOwnedOrganization(env, target, { name: 'Co-owned', key: '4.dGVzdA==' });
   const successor = await seedUser(env);
   await addMember(env, org.id, successor);
@@ -62,7 +65,7 @@ async function setup() {
     createdAt: PAST, updatedAt: PAST, deletionDate: '2099-01-01T00:00:00.000Z',
   });
   await env.ATTACHMENTS_KV!.put(sendKey, 'encrypted Send');
-  await storage.saveRefreshToken('refresh-token', target.id);
+  await sessionRepo.saveRefreshToken(env.DB, 'refresh-token', target.id);
   const eaId = crypto.randomUUID();
   await getOrm(env.DB).insert(emergencyAccess).values({
     id: eaId, grantorId: successor.id, granteeId: target.id, type: 0, status: 2,
@@ -71,14 +74,14 @@ async function setup() {
   await getOrm(env.DB).insert(invites).values({
     code: crypto.randomUUID(), createdBy: target.id, expiresAt: PAST, status: 'active', createdAt: PAST, updatedAt: PAST,
   });
-  return { env, admin, target, successor, storage, org, orgCipher, personalCipher, sendKey, eaId, blobs };
+  return { env, admin, target, successor, org, orgCipher, personalCipher, sendKey, eaId, blobs };
 }
 
 async function assertIntact(f: Awaited<ReturnType<typeof setup>>) {
-  assert.ok(await f.storage.getUserById(f.target.id));
-  assert.equal((await f.storage.getCipher(f.orgCipher.id))?.userId, f.target.id);
-  assert.ok(await f.storage.getCipher(f.personalCipher.id));
-  assert.ok(await f.storage.getRefreshTokenRecord('refresh-token'));
+  assert.ok(await userRepo.getUserById(f.env.DB, f.target.id));
+  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.target.id);
+  assert.ok(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id));
+  assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'));
   assert.ok(await f.env.DB.prepare('SELECT id FROM emergency_access WHERE id = ?').bind(f.eaId).first());
   assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM audit_logs').first('count'), 0);
   assert.equal(f.blobs.values.size, 3);
@@ -96,13 +99,13 @@ test('admin user delete keeps org items with the oldest other Owner and cleans p
     body: { masterPasswordHash: f.admin.masterPasswordHash },
   });
   assert.equal(response.status, 204);
-  assert.equal((await f.storage.getCipher(f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.orgCipher.key));
   assert.equal(f.blobs.values.has(f.personalCipher.key), false);
   assert.equal(f.blobs.values.has(f.sendKey), false);
-  assert.equal(await f.storage.getUserById(f.target.id), null);
-  assert.equal(await f.storage.getCipher(f.personalCipher.id), null);
-  assert.equal(await f.storage.getRefreshTokenRecord('refresh-token'), null);
+  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
+  assert.equal(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id), null);
+  assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'), null);
   assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM emergency_access').first('count'), 0);
   assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM invites').first('count'), 0);
   const event = await f.env.DB.prepare('SELECT * FROM audit_logs').first<{ action: string; metadata: string; actor_user_id: string }>();
@@ -117,7 +120,7 @@ test('user delete falls back to the oldest confirmed member when no other Owner 
   const newer = await seedUser(f.env);
   await addMember(f.env, f.org.id, newer, 1, '2021-01-01T00:00:00.000Z');
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
-  assert.equal((await f.storage.getCipher(f.orgCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.orgCipher.key));
 });
 
@@ -175,7 +178,7 @@ test('a cipher shared after the refusal check keeps its attachment blob', async 
     return batch(statements);
   };
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
-  assert.equal((await f.storage.getCipher(f.personalCipher.id))?.userId, f.successor.id);
+  assert.equal((await cipherRepo.getCipher(f.env.DB, f.personalCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.personalCipher.key));
 });
 
@@ -189,7 +192,7 @@ test('an audit write failure rolls back user deletion and leaves every blob in p
 test('blob cleanup is best effort after commit and continues after a deletion failure', async () => {
   const f = await setup();
   f.env.ATTACHMENTS_KV!.delete = async (key) => {
-    assert.equal(await f.storage.getUserById(f.target.id), null);
+    assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
     if (key === f.personalCipher.key) throw new Error('blob unavailable');
     f.blobs.values.delete(key);
   };
@@ -245,14 +248,14 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
   const response = await authedFetch(f.env, { method: 'DELETE', path: `/api/organizations/${f.org.id}`, userId: f.target.id });
   assert.equal(response.status, 200);
   assert.equal(await orgRepo.getOrganization(f.env.DB, f.org.id), null);
-  assert.equal(await f.storage.getCipher(f.orgCipher.id), null);
+  assert.equal(await cipherRepo.getCipher(f.env.DB, f.orgCipher.id), null);
   assert.equal(f.blobs.values.has(f.orgCipher.key), false);
   assert.ok(f.blobs.values.has(f.personalCipher.key));
   assert.ok(f.blobs.values.has(f.sendKey));
-  for (const member of members) assert.ok((await f.storage.getRevisionDate(member.userId!)) > PAST);
-  assert.equal(await f.storage.getRevisionDate(otherOwner.id), PAST);
+  for (const member of members) assert.ok((await revisionRepo.getRevisionDate(f.env.DB, member.userId!)) > PAST);
+  assert.equal(await revisionRepo.getRevisionDate(f.env.DB, otherOwner.id), PAST);
   assert.ok(await orgRepo.getOrganization(f.env.DB, otherOrg.id));
-  assert.ok(await f.storage.getCipher(otherCipher.id));
+  assert.ok(await cipherRepo.getCipher(f.env.DB, otherCipher.id));
   assert.ok(f.blobs.values.has(otherCipher.key));
   for (const table of ['sm_projects', 'sm_secrets', 'sm_service_accounts', 'sm_access_tokens', 'sm_secret_projects', 'sm_service_account_projects']) {
     assert.equal(await f.env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count'), 1, table);
@@ -276,6 +279,6 @@ test('an org deletion audit failure rolls back revisions, ciphers and the org be
   await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
   await assert.rejects(deleteOrganizationAccount(f.env, f.org.id, audit), /audit failure/);
   assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
-  assert.equal(await f.storage.getRevisionDate(f.target.id), PAST);
+  assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.target.id), PAST);
   await assertIntact(f);
 });

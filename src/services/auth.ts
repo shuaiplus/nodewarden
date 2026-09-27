@@ -1,9 +1,11 @@
 import { getAccessTokenWithAccount } from './storage-secret-repo';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
-import { Env, JWTPayload, User } from '../types';
+import { Device, Env, JWTPayload, User } from '../types';
 import { createJWT, createRefreshToken, verifyJWT } from '../utils/jwt';
 import { hashPassword, verifyPassword } from './auth-password';
-import { StorageService } from './storage';
+import * as deviceRepo from './storage-device-repo';
+import * as sessionRepo from './storage-session-repo';
+import * as userRepo from './storage-user-repo';
 
 const AUTH_CONTEXT_CACHE_TTL_MS = 15 * 1000;
 
@@ -13,7 +15,7 @@ interface CachedUserEntry {
 }
 
 interface CachedDeviceEntry {
-  device: Awaited<ReturnType<StorageService['getDevice']>>;
+  device: Device | null;
   expiresAt: number;
 }
 
@@ -46,12 +48,10 @@ export type RefreshAccessTokenResult =
     };
 
 export class AuthService {
-  private storage: StorageService;
   private static userCache = new Map<string, CachedUserEntry>();
   private static deviceCache = new Map<string, CachedDeviceEntry>();
 
   constructor(private env: Env) {
-    this.storage = new StorageService(env.DB);
   }
 
   static invalidateUserCache(userId: string): void {
@@ -93,13 +93,13 @@ export class AuthService {
   private async getCachedUser(userId: string): Promise<User | null> {
     const cached = this.readCachedUser(userId);
     if (cached !== undefined) return cached;
-    const user = await this.storage.getUserById(userId);
+    const user = await userRepo.getUserById(this.env.DB, userId);
     this.writeCachedUser(userId, user);
     return user;
   }
 
   private async getFreshUser(userId: string): Promise<User | null> {
-    const user = await this.storage.getUserById(userId);
+    const user = await userRepo.getUserById(this.env.DB, userId);
     this.writeCachedUser(userId, user);
     return user;
   }
@@ -115,7 +115,7 @@ export class AuthService {
     return cached.device;
   }
 
-  private writeCachedDevice(userId: string, deviceId: string, device: Awaited<ReturnType<StorageService['getDevice']>>): void {
+  private writeCachedDevice(userId: string, deviceId: string, device: Device | null): void {
     const cacheKey = `${userId}:${deviceId}`;
     AuthService.deviceCache.set(cacheKey, {
       device,
@@ -126,13 +126,13 @@ export class AuthService {
   private async getCachedDevice(userId: string, deviceId: string) {
     const cached = this.readCachedDevice(userId, deviceId);
     if (cached !== undefined) return cached;
-    const device = await this.storage.getDevice(userId, deviceId);
+    const device = await deviceRepo.getDevice(this.env.DB, userId, deviceId);
     this.writeCachedDevice(userId, deviceId, device);
     return device;
   }
 
   private async getFreshDevice(userId: string, deviceId: string) {
-    const device = await this.storage.getDevice(userId, deviceId);
+    const device = await deviceRepo.getDevice(this.env.DB, userId, deviceId);
     this.writeCachedDevice(userId, deviceId, device);
     return device;
   }
@@ -170,7 +170,8 @@ export class AuthService {
   ): Promise<string> {
     const token = createRefreshToken();
     const now = Date.now();
-    await this.storage.saveRefreshToken(
+    await sessionRepo.saveRefreshToken(
+      this.env.DB,
       token,
       user.id,
       now + getRefreshTokenSlidingTtlMs(clientType),
@@ -240,40 +241,40 @@ export class AuthService {
 
   // Refresh access token
   async refreshAccessTokenDetailed(refreshToken: string): Promise<RefreshAccessTokenResult> {
-    const record = await this.storage.getRefreshTokenRecord(refreshToken);
+    const record = await sessionRepo.getRefreshTokenRecord(this.env.DB, refreshToken);
     if (!record?.userId) return { ok: false, reason: 'token_not_found_or_expired' };
 
-    const user = await this.storage.getUserById(record.userId);
+    const user = await userRepo.getUserById(this.env.DB, record.userId);
     if (!user) {
-      await this.storage.deleteRefreshToken(refreshToken);
+      await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
       return { ok: false, reason: 'user_missing', userId: record.userId, deviceIdentifier: record.deviceIdentifier };
     }
     if (user.status !== 'active') {
-      await this.storage.deleteRefreshToken(refreshToken);
+      await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
       return { ok: false, reason: 'user_inactive', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }
 
     if (record.securityStamp && record.securityStamp !== user.securityStamp) {
-      await this.storage.deleteRefreshToken(refreshToken);
+      await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
       return { ok: false, reason: 'security_stamp_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }
     if (!record.securityStamp) {
-      await this.storage.bindRefreshTokenSecurityStamp(refreshToken, user.securityStamp);
+      await sessionRepo.bindRefreshTokenSecurityStamp(this.env.DB, refreshToken, user.securityStamp);
     }
 
     let device: { identifier: string; sessionStamp: string } | null = null;
     if (record.deviceIdentifier) {
-      const boundDevice = await this.storage.getDevice(user.id, record.deviceIdentifier);
+      const boundDevice = await deviceRepo.getDevice(this.env.DB, user.id, record.deviceIdentifier);
       if (!boundDevice) {
-        await this.storage.deleteRefreshToken(refreshToken);
+        await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
         return { ok: false, reason: 'device_missing', userId: user.id, deviceIdentifier: record.deviceIdentifier };
       }
       if (record.deviceSessionStamp && boundDevice.sessionStamp !== record.deviceSessionStamp) {
-        await this.storage.deleteRefreshToken(refreshToken);
+        await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
         return { ok: false, reason: 'device_session_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
       }
       if (!record.deviceSessionStamp) {
-        await this.storage.bindRefreshTokenDeviceStamp(refreshToken, boundDevice.sessionStamp);
+        await sessionRepo.bindRefreshTokenDeviceStamp(this.env.DB, refreshToken, boundDevice.sessionStamp);
       }
       device = { identifier: boundDevice.deviceIdentifier, sessionStamp: boundDevice.sessionStamp };
     }
@@ -283,7 +284,7 @@ export class AuthService {
       now + getRefreshTokenSlidingTtlMs(record.clientType),
       record.absoluteExpiresAt || (now + LIMITS.auth.refreshTokenAbsoluteTtlMs)
     );
-    const extended = await this.storage.extendRefreshTokenExpiry(refreshToken, expiresAt, now);
+    const extended = await sessionRepo.extendRefreshTokenExpiry(this.env.DB, refreshToken, expiresAt, now);
     if (!extended) {
       return { ok: false, reason: 'token_not_found_or_expired', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }

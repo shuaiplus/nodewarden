@@ -4,6 +4,7 @@ import { getOrm } from '../db/client';
 import { domainSettings } from '../db/schema';
 import type { UserDomainSettings } from '../types';
 import { normalizeCustomEquivalentDomains, normalizeEquivalentDomains } from './domain-rules';
+import { updateRevisionDate } from './storage-revision-repo';
 
 function parseJsonArray<T>(raw: string | null | undefined, fallback: T[]): T[] {
   if (!raw) return fallback;
@@ -43,15 +44,14 @@ export async function saveUserDomainSettings(
   userId: string,
   equivalentDomains: string[][],
   customEquivalentDomains: UserDomainSettings['customEquivalentDomains'],
-  excludedGlobalEquivalentDomains: number[],
-  updatedAt: string
+  excludedGlobalEquivalentDomains: number[]
 ): Promise<void> {
   const values = {
     userId,
     equivalentDomains: JSON.stringify(equivalentDomains),
     customEquivalentDomains: JSON.stringify(customEquivalentDomains),
     excludedGlobalEquivalentDomains: JSON.stringify(excludedGlobalEquivalentDomains),
-    updatedAt,
+    updatedAt: new Date().toISOString(),
   };
   await getOrm(db)
     .insert(domainSettings)
@@ -65,4 +65,5 @@ export async function saveUserDomainSettings(
         updatedAt: values.updatedAt,
       },
     });
+  await updateRevisionDate(db, userId);
 }

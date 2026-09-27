@@ -1,13 +1,13 @@
 import { readMailConfig } from '../services/mail';
 import type { Env, ProfileResponse, User } from '../types';
 import { buildAccountKeys } from './user-decryption';
-import { StorageService } from '../services/storage';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { isYubiKeyEnabled } from './yubico-otp';
 import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus } from '../services/org-types';
 import { isSsoEnabled } from '../handlers/sso';
 import { profileOrganizationResponse } from './org-response';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
 
 export async function buildProfileResponse(user: User, env?: Env): Promise<ProfileResponse> {
   const organizations: any[] = [];
@@ -24,7 +24,7 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
   }
   const accountKeys = buildAccountKeys(user);
   const mail = env ? readMailConfig(env) : null;
-  const hasTwoFactorPasskey = env?.DB ? await new StorageService(env.DB).countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0 : false;
+  const hasTwoFactorPasskey = env?.DB ? await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0 : false;
 
   return {
     id: user.id,

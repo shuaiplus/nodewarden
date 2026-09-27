@@ -1,10 +1,10 @@
 import type { Env } from '../types';
-import { StorageService } from '../services/storage';
 import * as orgRepo from '../services/storage-org-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import { generateUUID } from '../utils/uuid';
 import { mailOrganizationInvites, verifyScimBearer } from './organizations';
 import { publishPlatformEvent } from '../services/queue-publisher';
+import * as userRepo from '../services/storage-user-repo';
 
 function scimJson(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -37,7 +37,6 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
 }
 
 async function handleScimUsers(request: Request, env: Env, orgId: string, id: string | null): Promise<Response> {
-  const storage = new StorageService(env.DB);
   if (request.method === 'GET' && !id) {
     const members = await orgRepo.listMembershipsByOrg(env.DB, orgId);
     const startIndex = Number(new URL(request.url).searchParams.get('startIndex') || 1);
@@ -45,7 +44,7 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     const slice = members.slice(startIndex - 1, startIndex - 1 + count);
     const resources = [];
     for (const member of slice) {
-      const user = member.userId ? await storage.getUserById(member.userId) : null;
+      const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
       resources.push(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status !== MembershipStatus.Revoked && member.status > MembershipStatus.Revoked, member.externalId));
     }
     return scimJson({
@@ -60,7 +59,7 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
   if (request.method === 'GET' && id) {
     const member = await orgRepo.getMembership(env.DB, id);
     if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
-    const user = member.userId ? await storage.getUserById(member.userId) : null;
+    const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
     return scimJson(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status > MembershipStatus.Revoked, member.externalId));
   }
 
@@ -75,7 +74,7 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     const conflict = members.some(({ item, account }) =>
       (account?.email ?? item.email)?.toLowerCase() === email || (externalId !== null && item.externalId === externalId));
     if (conflict) return scimError(409, 'User already exists.');
-    const existingUser = await storage.getUser(email);
+    const existingUser = await userRepo.getUser(env.DB, email);
     const now = new Date().toISOString();
     // Upstream PostUserCommand never binds the account: only the invitee's own accept may do that,
     // otherwise any org owner could mint a SCIM token and force an existing user into the org.
@@ -119,7 +118,7 @@ async function handleScimUsers(request: Request, env: Env, orgId: string, id: st
     member.updatedAt = new Date().toISOString();
     await orgRepo.saveMembership(env.DB, member);
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
-    const user = member.userId ? await storage.getUserById(member.userId) : null;
+    const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
     return scimJson(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status > MembershipStatus.Revoked, member.externalId));
   }
 

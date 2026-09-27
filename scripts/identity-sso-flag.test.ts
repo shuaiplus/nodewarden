@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import { hashPassword } from '../src/services/auth-password';
 import { PolicyType } from '../src/services/org-types';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { verifyJWT } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser, captureEmail, drainWaitUntil, MAILABLE_DOMAIN } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -97,7 +97,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   const result = await accepted.json() as { access_token: string };
   assert.equal((await verifyJWT(result.access_token, env.JWT_SECRET))?.sub, user.id);
 
-  await new StorageService(env.DB).saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
+  await userRepo.saveUser(env.DB, { ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
   const challenged = await exchange('valid-code-2fa');
   assert.equal(challenged.status, 400);
   const challenge = await challenged.json() as Record<string, unknown>;

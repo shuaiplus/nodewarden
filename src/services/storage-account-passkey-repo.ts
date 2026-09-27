@@ -155,7 +155,7 @@ export async function updateAccountPasskeyCounter(
   userId: string,
   credentialId: string,
   counter: number,
-  updatedAt: string
+  updatedAt = new Date().toISOString()
 ): Promise<void> {
   await getOrm(db)
     .update(webauthnCredentials)
@@ -170,7 +170,7 @@ export async function updateAccountPasskeyEncryption(
   encryptedUserKey: string,
   encryptedPublicKey: string,
   encryptedPrivateKey: string,
-  updatedAt: string
+  updatedAt = new Date().toISOString()
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(webauthnCredentials)
@@ -242,7 +242,7 @@ export async function consumeAccountPasskeyChallenge(
   challengeHash: string,
   scope: AccountPasskeyChallengeScope,
   userId: string | null,
-  nowMs: number
+  nowMs = Date.now()
 ): Promise<AccountPasskeyChallenge | null> {
   const orm = getOrm(db);
   const [row] = await orm

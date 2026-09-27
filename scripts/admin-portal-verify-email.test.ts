@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { StorageService } from '../src/services/storage';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const ADMIN = 'portal@x.io';
 
@@ -11,7 +11,6 @@ test('portal verifies listed/unlisted accounts and names the vault-admin promoti
   const listed = await seedUser(env, { email: ADMIN, emailVerified: false });
   const unlisted = await seedUser(env, { emailVerified: false });
   const auth = await signInToAdminPortal(env, ADMIN);
-  const storage = new StorageService(env.DB);
   for (const [user, label, role] of [[listed, 'Verify email and grant vault admin', 'admin'], [unlisted, 'Verify email', 'user']] as const) {
     const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
     const html = await view.text();
@@ -23,7 +22,7 @@ test('portal verifies listed/unlisted accounts and names the vault-admin promoti
     });
     assert.equal(response.status, 303);
     assert.match(response.headers.get('Location')!, /m=verified/);
-    const verified = (await storage.getUserById(user.id))!;
+    const verified = (await userRepo.getUserById(env.DB, user.id))!;
     assert.equal(verified.emailVerified, true);
     assert.equal(verified.role, role);
     const after = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
@@ -47,7 +46,7 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
   const stale = await post({ csrf: auth.csrf, confirmation: user.email });
   assert.equal(stale.status, 303);
   assert.match(stale.headers.get('Location')!, /m=reauth/);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))?.emailVerified, false);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, false);
   auth = await signInToAdminPortal(env, ADMIN);
   for (let index = 0; index < 20; index++) {
     const target = await seedUser(env, { emailVerified: false });
@@ -57,5 +56,5 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
   assert.equal((await post({ csrf: auth.csrf, confirmation: user.email })).status, 429);
   const deletion = await portalFetch(env, { method: 'POST', path: `/admin/users/delete/${user.id}`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(deletion.status, 429);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))?.emailVerified, false);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, false);
 });

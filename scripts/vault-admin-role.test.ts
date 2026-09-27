@@ -6,17 +6,17 @@ import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes, importRemoteBackupArchiveBytes } from '../src/services/backup-import';
 import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../src/services/backup-config';
 import { parseBackupSettingsEnvelope } from '../src/services/backup-settings-crypto';
-import { StorageService } from '../src/services/storage';
 import { AuthService } from '../src/services/auth';
 import { markEmailVerified, syncVaultAdminRoles } from '../src/services/vault-admin-role';
 import { createRegisterVerifyToken } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
+import * as configRepo from '../src/services/storage-config-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
 test('enabling the first verified listed account synchronizes roles and revokes cached legacy admin access', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: 'listed@x.io' });
-  const storage = new StorageService(env.DB);
   const legacy = await seedUser(env, { role: 'admin' });
   const listed = await seedUser(env, { email: 'listed@x.io', emailVerified: true, status: 'banned' });
   await syncVaultAdminRoles(env);
@@ -27,24 +27,23 @@ test('enabling the first verified listed account synchronizes roles and revokes 
   const portal = await signInToAdminPortal(env, listed.email);
   const enabled = await portalFetch(env, { method: 'POST', path: `/admin/users/${listed.id}/enable`, cookie: portal.cookie, form: { csrf: portal.csrf } });
   assert.equal(enabled.status, 303);
-  assert.equal((await storage.getUserById(listed.id))?.role, 'admin');
-  assert.equal((await storage.getUserById(legacy.id))?.role, 'user');
+  assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
+  assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
   assert.equal((await authedFetch(env, { path: '/api/admin/users', headers })).status, 403);
 });
 
 for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', 'enabled']) {
   test(`directory ${config} obeys the verified active-account guard`, async () => {
     const env = await createTestEnv();
-    const storage = new StorageService(env.DB);
     const legacy = await seedUser(env, { role: 'admin' });
     const listed = await seedUser(env, { emailVerified: config !== 'unverified', status: config === 'banned' ? 'banned' : 'active' });
     env.ADMIN_EMAILS = config === 'disabled' ? undefined : config === 'invalid' ? 'invalid' : config === 'absent' ? 'missing@x.io' : listed.email;
     await syncVaultAdminRoles(env);
-    assert.equal((await storage.getUserById(legacy.id))?.role, config === 'enabled' ? 'user' : 'admin');
-    assert.equal((await storage.getUserById(listed.id))?.role, config === 'enabled' ? 'admin' : 'user');
+    assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, config === 'enabled' ? 'user' : 'admin');
+    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, config === 'enabled' ? 'admin' : 'user');
     if (config === 'enabled') {
-      await storage.saveUser({ ...legacy, name: 'Stale role' });
-      assert.equal((await storage.getUserById(legacy.id))?.role, 'user');
+      await userRepo.saveUser(env.DB, { ...legacy, name: 'Stale role' });
+      assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
       const auditCount = await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n');
       await syncVaultAdminRoles(env);
       assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n'), auditCount);
@@ -54,7 +53,6 @@ for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', '
 
 test('only validated registration tokens verify an email; listing a claimed address later cannot promote it', async () => {
   const env = await createTestEnv({ ALLOW_OPEN_REGISTRATION: '1' });
-  const storage = new StorageService(env.DB);
   const firstEmail = 'first@x.io';
   const register = (email: string, token?: string) => authedFetch(env, {
     method: 'POST', path: '/identity/accounts/register/finish',
@@ -62,42 +60,41 @@ test('only validated registration tokens verify an email; listing a claimed addr
   });
   env.ADMIN_EMAILS = firstEmail;
   assert.equal((await register(firstEmail)).status, 200);
-  const first = (await storage.getUser(firstEmail))!;
+  const first = (await userRepo.getUser(env.DB, firstEmail))!;
   assert.equal(first.emailVerified, false);
   assert.equal(first.role, 'admin'); // First-account bootstrap remains the no-lockout fallback.
   const claimedEmail = 'claimed@x.io';
   assert.equal((await register(claimedEmail)).status, 200);
-  const claimed = (await storage.getUser(claimedEmail))!;
+  const claimed = (await userRepo.getUser(env.DB, claimedEmail))!;
   assert.equal(claimed.emailVerified, false);
   env.ADMIN_EMAILS = claimedEmail;
   await syncVaultAdminRoles(env);
-  assert.equal((await storage.getUserById(claimed.id))?.role, 'user');
+  assert.equal((await userRepo.getUserById(env.DB, claimed.id))?.role, 'user');
   const verifiedEmail = 'verified@x.io';
   env.ADMIN_EMAILS = `${claimedEmail},${verifiedEmail}`;
   const token = await createRegisterVerifyToken(env.JWT_SECRET, verifiedEmail, null);
   assert.equal((await register(verifiedEmail, token)).status, 200);
-  assert.equal((await storage.getUser(verifiedEmail))?.emailVerified, true);
-  assert.equal((await storage.getUser(verifiedEmail))?.role, 'admin');
-  assert.equal((await storage.getUserById(first.id))?.role, 'user');
-  assert.equal((await storage.getUserById(claimed.id))?.role, 'user');
+  assert.equal((await userRepo.getUser(env.DB, verifiedEmail))?.emailVerified, true);
+  assert.equal((await userRepo.getUser(env.DB, verifiedEmail))?.role, 'admin');
+  assert.equal((await userRepo.getUserById(env.DB, first.id))?.role, 'user');
+  assert.equal((await userRepo.getUserById(env.DB, claimed.id))?.role, 'user');
   const invalid = await register('wrong@x.io', token);
   assert.equal(invalid.status, 400);
-  assert.equal(await storage.getUser('wrong@x.io'), null);
+  assert.equal(await userRepo.getUser(env.DB, 'wrong@x.io'), null);
   const profile = await authedFetch(env, { path: '/api/accounts/profile', userId: claimed.id });
   assert.equal((await profile.json() as { emailVerified: boolean }).emailVerified, true);
 });
 
 test('markEmailVerified grants a listed account once and stale saves cannot clear verification', async () => {
   const env = await createTestEnv();
-  const storage = new StorageService(env.DB);
   const user = await seedUser(env, { emailVerified: false });
   env.ADMIN_EMAILS = user.email;
   await markEmailVerified(env, user.id);
-  assert.equal((await storage.getUserById(user.id))?.emailVerified, true);
-  assert.equal((await storage.getUserById(user.id))?.role, 'admin');
-  await storage.saveUser(user);
-  assert.equal((await storage.getUserById(user.id))?.emailVerified, true);
-  assert.equal((await storage.getUserById(user.id))?.role, 'admin');
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, true);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.role, 'admin');
+  await userRepo.saveUser(env.DB, user);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, true);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.role, 'admin');
   await markEmailVerified(env, user.id);
   assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n'), 1);
 });
@@ -108,12 +105,11 @@ test('role changes re-wrap live backup settings for the derived administrator', 
   const spki = Buffer.from(await crypto.subtle.exportKey('spki', publicKey)).toString('base64');
   const old = await seedUser(env, { role: 'admin', publicKey: spki });
   const listed = await seedUser(env, { publicKey: spki });
-  const storage = new StorageService(env.DB);
-  await saveBackupSettings(storage, env, getDefaultBackupSettings());
-  assert.deepEqual(parseBackupSettingsEnvelope(await storage.getConfigValue(BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [old.id]);
+  await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
+  assert.deepEqual(parseBackupSettingsEnvelope(await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [old.id]);
   env.ADMIN_EMAILS = listed.email;
   await syncVaultAdminRoles(env);
-  assert.deepEqual(parseBackupSettingsEnvelope(await storage.getConfigValue(BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [listed.id]);
+  assert.deepEqual(parseBackupSettingsEnvelope(await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [listed.id]);
 });
 
 test('local and remote backup restore preserve verified state, default legacy rows and correct imported roles', async () => {
@@ -132,10 +128,9 @@ test('local and remote backup restore preserve verified state, default legacy ro
     const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
     if (remote) await importRemoteBackupArchiveBytes(bytes, env, legacy.id, false, { loadAttachment: async () => null });
     else await importBackupArchiveBytes(bytes, env, legacy.id, false);
-    const storage = new StorageService(env.DB);
-    assert.equal((await storage.getUserById(listed.id))?.role, 'admin');
-    assert.equal((await storage.getUserById(listed.id))?.emailVerified, true);
-    assert.equal((await storage.getUserById(legacy.id))?.role, 'user');
-    assert.equal((await storage.getUserById(unverified.id))?.emailVerified, false);
+    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
+    assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
+    assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
+    assert.equal((await userRepo.getUserById(env.DB, unverified.id))?.emailVerified, false);
   }
 });

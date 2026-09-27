@@ -43,7 +43,6 @@ import {
   pruneRemoteBackupArchives,
   uploadBackupArchive,
 } from '../services/backup-uploader';
-import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { getBlobObject } from '../services/blob-store';
@@ -51,6 +50,7 @@ import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from '../du
 import { getMultipartRequestMaxBytes } from '../utils/direct-upload';
 import { verifyPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { unzipSync } from 'fflate';
+import * as configRepo from '../services/storage-config-repo';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -99,7 +99,7 @@ async function requireBackupRepairVerification(
 }
 
 async function writeAuditLog(
-  storage: StorageService,
+  db: D1Database,
   actorUserId: string | null,
   action: string,
   targetType: string | null,
@@ -107,7 +107,7 @@ async function writeAuditLog(
   metadata: Record<string, unknown> | null,
   request?: Request
 ): Promise<void> {
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(db, {
     actorUserId,
     action,
     targetType,
@@ -306,7 +306,7 @@ async function verifyUploadedBackupArchive(
 
 export async function executeConfiguredBackup(
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   actorUserId: string | null,
   trigger: 'manual' | 'scheduled',
   destinationId?: string | null,
@@ -327,12 +327,12 @@ export async function executeConfiguredBackup(
   const touchLease = async () => {
     await keepAlive?.();
   };
-  const currentSettings = await loadBackupSettings(storage, env, 'UTC');
+  const currentSettings = await loadBackupSettings(db, env, 'UTC');
   const destination = requireBackupDestination(currentSettings, destinationId);
 
   const now = new Date();
   await touchLease();
-  destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+  destination.runtime = await updateBackupDestinationRuntime(db, destination.id, (runtime) => ({
     ...runtime,
     lastAttemptAt: now.toISOString(),
     lastAttemptLocalDate: getBackupLocalDateKey(now, destination.schedule.timezone),
@@ -450,7 +450,7 @@ export async function executeConfiguredBackup(
     }
 
     await touchLease();
-    destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+    destination.runtime = await updateBackupDestinationRuntime(db, destination.id, (runtime) => ({
       ...runtime,
       lastSuccessAt: new Date().toISOString(),
       lastErrorAt: null,
@@ -461,7 +461,7 @@ export async function executeConfiguredBackup(
     }));
 
     await touchLease();
-    await writeAuditLog(storage, actorUserId, `admin.backup.remote.${trigger}`, 'backup', null, {
+    await writeAuditLog(db, actorUserId, `admin.backup.remote.${trigger}`, 'backup', null, {
       ...getBackupDestinationSummary(destination),
       provider: upload.provider,
       remotePath: upload.remotePath,
@@ -493,14 +493,14 @@ export async function executeConfiguredBackup(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Backup upload failed';
     await touchLease();
-    destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+    destination.runtime = await updateBackupDestinationRuntime(db, destination.id, (runtime) => ({
       ...runtime,
       lastErrorAt: new Date().toISOString(),
       lastErrorMessage: errorMessage,
     }));
 
     await touchLease();
-    await writeAuditLog(storage, actorUserId, `admin.backup.remote.${trigger}.failed`, 'backup', null, {
+    await writeAuditLog(db, actorUserId, `admin.backup.remote.${trigger}.failed`, 'backup', null, {
       ...getBackupDestinationSummary(destination),
       error: errorMessage,
       ...(auditMetadata || {}),
@@ -695,7 +695,7 @@ function toImportStatusCode(message: string): number {
 
 export async function importAndAuditRemoteBackupFile(
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   actorUserId: string,
   remoteFile: RemoteBackupFile,
   destination: BackupDestinationRecord,
@@ -762,7 +762,7 @@ export async function importAndAuditRemoteBackupFile(
     progress,
     restoreFileName
   );
-  await writeAuditLog(storage, result.auditActorUserId, 'admin.backup.import', 'backup', null, {
+  await writeAuditLog(db, result.auditActorUserId, 'admin.backup.import', 'backup', null, {
     users: result.result.imported.users,
     ciphers: result.result.imported.ciphers,
     attachments: result.result.imported.attachmentFiles,
@@ -825,7 +825,6 @@ async function runImportAndAudit(
   replaceExisting: boolean,
   metadata: Record<string, unknown>
 ): Promise<BackupImportExecutionResult> {
-  const storage = new StorageService(env.DB);
   const targetDeviceIdentifier = String(request.headers.get('X-NodeWarden-Acting-Device-Id') || '').trim() || null;
   const progress: BackupRestoreProgressReporter = async (event) => {
     await notifyUserBackupRestoreProgress(
@@ -847,7 +846,7 @@ async function runImportAndAudit(
     replaceExisting,
   });
   const imported = await importBackupArchiveBytes(archiveBytes, env, actorUser.id, replaceExisting, progress, fileName);
-  await writeAuditLog(storage, imported.auditActorUserId, 'admin.backup.import', 'backup', null, {
+  await writeAuditLog(env.DB, imported.auditActorUserId, 'admin.backup.import', 'backup', null, {
     users: imported.result.imported.users,
     ciphers: imported.result.imported.ciphers,
     attachments: imported.result.imported.attachmentFiles,
@@ -867,9 +866,8 @@ export async function handleGetAdminBackupSettings(request: Request, env: Env, a
   void request;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const storage = new StorageService(env.DB);
   try {
-    const settings = await loadBackupSettings(storage, env, 'UTC');
+    const settings = await loadBackupSettings(env.DB, env, 'UTC');
     return jsonResponse(redactBackupSettingsSecrets(settings));
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Backup settings could not be loaded', 409);
@@ -889,10 +887,9 @@ export async function handleUpdateAdminBackupSettings(request: Request, env: Env
   const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
   if (verificationError) return verificationError;
 
-  const storage = new StorageService(env.DB);
   let previous;
   try {
-    previous = await loadBackupSettings(storage, env, 'UTC');
+    previous = await loadBackupSettings(env.DB, env, 'UTC');
   } catch {
     previous = getDefaultBackupSettings('UTC');
   }
@@ -904,8 +901,8 @@ export async function handleUpdateAdminBackupSettings(request: Request, env: Env
     return errorResponse(error instanceof Error ? error.message : 'Backup settings are invalid', 400);
   }
 
-  await saveBackupSettings(storage, env, next);
-  await writeAuditLog(storage, actorUser.id, 'admin.backup.settings.update', 'backup', null, {
+  await saveBackupSettings(env.DB, env, next);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.update', 'backup', null, {
     destinationCount: next.destinations.length,
     scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
   }, request);
@@ -916,9 +913,8 @@ export async function handleGetAdminBackupSettingsRepairState(request: Request, 
   void request;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const storage = new StorageService(env.DB);
   try {
-    const state = await getBackupSettingsRepairState(storage, env, 'UTC');
+    const state = await getBackupSettingsRepairState(env.DB, env, 'UTC');
     return jsonResponse({
       object: 'backup-settings-repair',
       needsRepair: state.needsRepair,
@@ -942,10 +938,9 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
   const verificationError = await requireBackupRepairVerification(actorUser, body, env);
   if (verificationError) return verificationError;
 
-  const storage = new StorageService(env.DB);
   let previous;
   try {
-    previous = await loadBackupSettings(storage, env, 'UTC');
+    previous = await loadBackupSettings(env.DB, env, 'UTC');
   } catch {
     previous = getDefaultBackupSettings('UTC');
   }
@@ -957,8 +952,8 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
     return errorResponse(error instanceof Error ? error.message : 'Backup settings repair payload is invalid', 400);
   }
 
-  await repairBackupSettings(storage, env, next);
-  await writeAuditLog(storage, actorUser.id, 'admin.backup.settings.repair', 'backup', null, {
+  await repairBackupSettings(env.DB, env, next);
+  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.repair', 'backup', null, {
     destinationCount: next.destinations.length,
     scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
   }, request);
@@ -1009,9 +1004,8 @@ export async function handleRunAdminConfiguredBackup(request: Request, env: Env,
 export async function handleListAdminRemoteBackups(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const storage = new StorageService(env.DB);
   try {
-    const settings = await loadBackupSettings(storage, env, 'UTC');
+    const settings = await loadBackupSettings(env.DB, env, 'UTC');
     const url = new URL(request.url);
     const destination = requireBackupDestination(settings, url.searchParams.get('destinationId') || null);
     const listing = await listRemoteBackupEntries(destination, url.searchParams.get('path') || '');
@@ -1039,9 +1033,8 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
   const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
   if (verificationError) return verificationError;
 
-  const storage = new StorageService(env.DB);
   try {
-    const settings = await loadBackupSettings(storage, env, 'UTC');
+    const settings = await loadBackupSettings(env.DB, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
     const remoteFile = await downloadRemoteBackupFile(destination, path);
@@ -1072,9 +1065,8 @@ export async function handleInspectAdminRemoteBackup(request: Request, env: Env,
   const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
   if (verificationError) return verificationError;
 
-  const storage = new StorageService(env.DB);
   try {
-    const settings = await loadBackupSettings(storage, env, 'UTC');
+    const settings = await loadBackupSettings(env.DB, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
     const remoteFile = await downloadRemoteBackupFile(destination, path);
@@ -1104,13 +1096,12 @@ export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, 
   const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
   if (verificationError) return verificationError;
 
-  const storage = new StorageService(env.DB);
   try {
-    const settings = await loadBackupSettings(storage, env, 'UTC');
+    const settings = await loadBackupSettings(env.DB, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
     await deleteRemoteBackupFile(destination, path);
-    await writeAuditLog(storage, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
+    await writeAuditLog(env.DB, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
       ...getBackupDestinationSummary(destination),
       remotePath: path,
     }, request);
@@ -1164,7 +1155,6 @@ export async function handleRestoreAdminRemoteBackup(request: Request, env: Env,
 export async function handleAdminExportBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const storage = new StorageService(env.DB);
   const targetDeviceIdentifier = String(request.headers.get('X-NodeWarden-Acting-Device-Id') || '').trim() || null;
   let body: { includeAttachments?: boolean; masterPasswordHash?: string } | null = null;
   try {
@@ -1224,7 +1214,7 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
     return errorResponse(message, message.includes('blob missing') ? 409 : 500);
   }
 
-  await writeAuditLog(storage, actorUser.id, 'admin.backup.export', 'backup', null, {
+  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.export', 'backup', null, {
     users: archive.manifest.tableCounts.users,
     ciphers: archive.manifest.tableCounts.ciphers,
     attachments: archive.manifest.tableCounts.attachments,
@@ -1340,11 +1330,10 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
 }
 
 export async function seedDefaultBackupSettings(env: Env): Promise<void> {
-  const storage = new StorageService(env.DB);
-  const current = await storage.getConfigValue('backup.settings.v1');
+  const current = await configRepo.getConfigValue(env.DB, 'backup.settings.v1');
   if (current) {
-    await normalizeImportedBackupSettings(storage, env, 'UTC');
+    await normalizeImportedBackupSettings(env.DB, env, 'UTC');
     return;
   }
-  await saveBackupSettings(storage, env, getDefaultBackupSettings('UTC'));
+  await saveBackupSettings(env.DB, env, getDefaultBackupSettings('UTC'));
 }

@@ -1,11 +1,10 @@
 import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, getOrm } from '../db/client';
 import { sends } from '../db/schema';
 import type { Send } from '../types';
+import { updateRevisionDate } from './storage-revision-repo';
 
-type SqlChunkSize = (fixedBindCount: number) => number;
-type UpdateRevisionDate = (userId: string) => Promise<string>;
 
 function mapSendRow(row: typeof sends.$inferSelect): Send {
   return {
@@ -124,20 +123,13 @@ export async function deleteSend(db: D1Database, id: string, userId: string): Pr
   await getOrm(db).delete(sends).where(and(eq(sends.id, id), eq(sends.userId, userId)));
 }
 
-export async function getSendsByIds(
-  db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  ids: string[],
-  userId: string
-): Promise<Send[]> {
+export async function getSendsByIds(db: D1Database, ids: string[], userId: string): Promise<Send[]> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return [];
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(1);
   const out: Send[] = [];
 
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
     const rows = await orm
       .select()
       .from(sends)
@@ -148,24 +140,15 @@ export async function getSendsByIds(
   return out;
 }
 
-export async function bulkDeleteSends(
-  db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
-  ids: string[],
-  userId: string
-): Promise<string | null> {
+export async function bulkDeleteSends(db: D1Database, ids: string[], userId: string): Promise<string | null> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(1);
-
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
     await orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
   }
 
-  return updateRevisionDate(userId);
+  return updateRevisionDate(db, userId);
 }
 
 export async function getAllSends(db: D1Database, userId: string): Promise<Send[]> {

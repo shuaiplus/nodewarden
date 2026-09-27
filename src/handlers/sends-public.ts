@@ -1,5 +1,4 @@
 import { Env, SendType } from '../types';
-import { StorageService } from '../services/storage';
 import { recordSendEvent } from '../services/events';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
@@ -34,6 +33,9 @@ import {
   verifySendPassword,
   verifySendPasswordHashB64,
 } from './sends-shared';
+import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
+import * as revisionRepo from '../services/storage-revision-repo';
+import * as sendRepo from '../services/storage-send-repo';
 
 function contentDispositionAttachment(fileName: string | null | undefined): string {
   const fallback = 'send-file';
@@ -44,13 +46,12 @@ function contentDispositionAttachment(fileName: string | null | undefined): stri
 }
 
 export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const sendId = fromAccessId(accessId);
   if (!sendId) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const send = await storage.getSend(sendId);
+  const send = await sendRepo.getSend(env.DB, sendId);
   if (!send || !isSendAvailable(send)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -93,18 +94,18 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
   }
 
   if (send.type === SendType.Text) {
-    const updated = await storage.incrementSendAccessCount(send.id);
+    const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
     if (!updated) {
       return errorResponse(SEND_INACCESSIBLE_MSG, 404);
     }
     send.accessCount += 1;
-    const revisionDate = await storage.updateRevisionDate(send.userId);
+    const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
     notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
     await recordSendEvent(env, request, send, 'accessed');
   }
 
-  const creatorIdentifier = await getCreatorIdentifier(storage, send);
+  const creatorIdentifier = await getCreatorIdentifier(env.DB, send);
   return jsonResponse(sendToAccessResponse(send, creatorIdentifier));
 }
 
@@ -118,8 +119,7 @@ export async function handleAccessSendFile(
   if (!safeSecret.ok) return safeSecret.response;
   const { secret } = safeSecret;
 
-  const storage = new StorageService(env.DB);
-  const send = await resolveSendFromIdOrAccessId(storage, idOrAccessId);
+  const send = await resolveSendFromIdOrAccessId(env.DB, idOrAccessId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -167,12 +167,12 @@ export async function handleAccessSendFile(
     await sendPasswordRateLimit.clearLoginAttempts(sendPasswordLimitIpKey);
   }
 
-  const updated = await storage.incrementSendAccessCount(send.id);
+  const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
   if (!updated) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
   send.accessCount += 1;
-  const revisionDate = await storage.updateRevisionDate(send.userId);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   await recordSendEvent(env, request, send, 'accessed');
@@ -202,25 +202,24 @@ export async function handleAccessSendV2(request: Request, env: Env): Promise<Re
     return errorResponse('Unauthorized', 401);
   }
 
-  const storage = new StorageService(env.DB);
-  const send = await storage.getSend(claims.sub);
+  const send = await sendRepo.getSend(env.DB, claims.sub);
   if (!send || !isSendAvailable(send)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
   if (send.type === SendType.Text) {
-    const updated = await storage.incrementSendAccessCount(send.id);
+    const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
     if (!updated) {
       return errorResponse(SEND_INACCESSIBLE_MSG, 404);
     }
     send.accessCount += 1;
-    const revisionDate = await storage.updateRevisionDate(send.userId);
+    const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
     notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
     await recordSendEvent(env, request, send, 'accessed');
   }
 
-  const creatorIdentifier = await getCreatorIdentifier(storage, send);
+  const creatorIdentifier = await getCreatorIdentifier(env.DB, send);
   return jsonResponse(sendToAccessResponse(send, creatorIdentifier));
 }
 
@@ -238,8 +237,7 @@ export async function handleAccessSendFileV2(request: Request, env: Env, fileId:
     return errorResponse('Unauthorized', 401);
   }
 
-  const storage = new StorageService(env.DB);
-  const send = await storage.getSend(claims.sub);
+  const send = await sendRepo.getSend(env.DB, claims.sub);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -250,12 +248,12 @@ export async function handleAccessSendFileV2(request: Request, env: Env, fileId:
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const updated = await storage.incrementSendAccessCount(send.id);
+  const updated = await sendRepo.incrementSendAccessCount(env.DB, send.id);
   if (!updated) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
   send.accessCount += 1;
-  const revisionDate = await storage.updateRevisionDate(send.userId);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   await recordSendEvent(env, request, send, 'accessed');
@@ -294,8 +292,7 @@ export async function handleDownloadSendFile(
     return errorResponse('Token mismatch', 401);
   }
 
-  const storage = new StorageService(env.DB);
-  const send = await storage.getSend(sendId);
+  const send = await sendRepo.getSend(env.DB, sendId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
@@ -305,7 +302,7 @@ export async function handleDownloadSendFile(
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
-  const firstUse = await storage.consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
+  const firstUse = await attachmentTokenRepo.consumeAttachmentDownloadToken(env.DB, `send:${claims.jti}`, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -340,8 +337,7 @@ export async function issueSendAccessToken(
     return { error: jwt.response };
   }
 
-  const storage = new StorageService(env.DB);
-  const send = await resolveSendFromIdOrAccessId(storage, sendIdOrAccessId);
+  const send = await resolveSendFromIdOrAccessId(env.DB, sendIdOrAccessId);
 
   if (!send || !isSendAvailable(send)) {
     return {

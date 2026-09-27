@@ -4,9 +4,22 @@ import { getOrm } from '../db/client';
 import { session } from '../db/schema';
 import type { RefreshTokenRecord } from '../types';
 import { generateUUID } from '../utils/uuid';
+import { LIMITS } from '../config/limits';
+import { shouldRunPeriodicCleanup } from './periodic-cleanup';
 
-type RefreshTokenKeyFn = (token: string) => Promise<string>;
-type CleanupExpiredFn = (nowMs: number) => Promise<void>;
+let lastCleanupAt = 0;
+
+async function maybeCleanupExpiredRefreshTokens(db: D1Database, nowMs: number): Promise<void> {
+  if (!shouldRunPeriodicCleanup(lastCleanupAt, LIMITS.cleanup.refreshTokenCleanupIntervalMs)) return;
+  await deleteExpiredRefreshTokens(db, nowMs);
+  lastCleanupAt = nowMs;
+}
+
+// Tokens are stored as their SHA-256, so a database read never yields a usable credential.
+export async function hashedTokenKey(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
 
 function mapSession(row: typeof session.$inferSelect): RefreshTokenRecord {
   return {
@@ -24,79 +37,71 @@ function mapSession(row: typeof session.$inferSelect): RefreshTokenRecord {
 
 export async function saveRefreshToken(
   db: D1Database,
-  refreshTokenKey: RefreshTokenKeyFn,
-  maybeCleanupExpiredRefreshTokens: CleanupExpiredFn,
   token: string,
   userId: string,
-  expiresAtMs: number,
+  expiresAtMs?: number,
   deviceIdentifier?: string | null,
   deviceSessionStamp?: string | null,
   securityStamp?: string | null,
   clientType?: string | null,
   absoluteExpiresAtMs?: number | null
 ): Promise<void> {
-  await maybeCleanupExpiredRefreshTokens(Date.now());
-  const tokenKey = await refreshTokenKey(token);
   const now = Date.now();
+  await maybeCleanupExpiredRefreshTokens(db, now);
+  const tokenKey = await hashedTokenKey(token);
+  const expiresAt = expiresAtMs ?? (now + LIMITS.auth.refreshTokenDefaultSlidingTtlMs);
+  const absoluteExpiresAt = absoluteExpiresAtMs ?? (now + LIMITS.auth.refreshTokenAbsoluteTtlMs);
   await getOrm(db)
     .insert(session)
     .values({
       id: generateUUID(),
       token: tokenKey,
       userId,
-      expiresAt: expiresAtMs,
+      expiresAt,
       createdAt: now,
       updatedAt: now,
       deviceIdentifier: deviceIdentifier ?? null,
       deviceSessionStamp: deviceSessionStamp ?? null,
       securityStamp: securityStamp ?? null,
       clientType: clientType ?? null,
-      absoluteExpiresAt: absoluteExpiresAtMs ?? null,
+      absoluteExpiresAt,
       lastUsedAt: now,
     })
     .onConflictDoUpdate({
       target: session.token,
       set: {
         userId,
-        expiresAt: expiresAtMs,
+        expiresAt,
         updatedAt: now,
         deviceIdentifier: deviceIdentifier ?? null,
         deviceSessionStamp: deviceSessionStamp ?? null,
         securityStamp: securityStamp ?? null,
         clientType: clientType ?? null,
         lastUsedAt: now,
-        absoluteExpiresAt: absoluteExpiresAtMs ?? null,
+        absoluteExpiresAt,
       },
     });
 }
 
-export async function getRefreshTokenRecord(
-  db: D1Database,
-  refreshTokenKey: RefreshTokenKeyFn,
-  maybeCleanupExpiredRefreshTokens: CleanupExpiredFn,
-  deleteRefreshTokenRecord: (token: string) => Promise<void>,
-  token: string
-): Promise<RefreshTokenRecord | null> {
+export async function getRefreshTokenRecord(db: D1Database, token: string): Promise<RefreshTokenRecord | null> {
   const now = Date.now();
-  await maybeCleanupExpiredRefreshTokens(now);
-  const tokenKey = await refreshTokenKey(token);
+  await maybeCleanupExpiredRefreshTokens(db, now);
+  const tokenKey = await hashedTokenKey(token);
   const [row] = await getOrm(db).select().from(session).where(eq(session.token, tokenKey)).limit(1);
   if (!row) return null;
   if ((row.expiresAt && row.expiresAt < now) || (row.absoluteExpiresAt && row.absoluteExpiresAt < now)) {
-    await deleteRefreshTokenRecord(token);
+    await deleteRefreshToken(db, token);
     return null;
   }
   return mapSession(row);
 }
 
-export async function extendRefreshTokenExpiry(
-  db: D1Database,
-  refreshTokenKey: RefreshTokenKeyFn,
-  token: string,
-  requestedExpiresAtMs: number,
-  nowMs: number
-): Promise<boolean> {
-  const tokenKey = await refreshTokenKey(token);
+export async function getRefreshTokenUserId(db: D1Database, token: string): Promise<string | null> {
+  return (await getRefreshTokenRecord(db, token))?.userId ?? null;
+}
+
+export async function extendRefreshTokenExpiry(db: D1Database, token: string, requestedExpiresAtMs: number, nowMs = Date.now()): Promise<boolean> {
+  const tokenKey = await hashedTokenKey(token);
   const result = await getOrm(db)
     .update(session)
     .set({
@@ -118,11 +123,10 @@ export async function extendRefreshTokenExpiry(
 
 export async function bindRefreshTokenSecurityStamp(
   db: D1Database,
-  refreshTokenKey: RefreshTokenKeyFn,
   token: string,
   securityStamp: string
 ): Promise<void> {
-  const tokenKey = await refreshTokenKey(token);
+  const tokenKey = await hashedTokenKey(token);
   await getOrm(db)
     .update(session)
     .set({ securityStamp, updatedAt: Date.now() })
@@ -134,11 +138,10 @@ export async function bindRefreshTokenSecurityStamp(
 
 export async function bindRefreshTokenDeviceStamp(
   db: D1Database,
-  refreshTokenKey: RefreshTokenKeyFn,
   token: string,
   deviceSessionStamp: string
 ): Promise<void> {
-  const tokenKey = await refreshTokenKey(token);
+  const tokenKey = await hashedTokenKey(token);
   await getOrm(db)
     .update(session)
     .set({ deviceSessionStamp, updatedAt: Date.now() })
@@ -148,8 +151,8 @@ export async function bindRefreshTokenDeviceStamp(
     ));
 }
 
-export async function deleteRefreshToken(db: D1Database, refreshTokenKey: RefreshTokenKeyFn, token: string): Promise<void> {
-  const tokenKey = await refreshTokenKey(token);
+export async function deleteRefreshToken(db: D1Database, token: string): Promise<void> {
+  const tokenKey = await hashedTokenKey(token);
   const orm = getOrm(db);
   await orm.delete(session).where(eq(session.token, token));
   await orm.delete(session).where(eq(session.token, tokenKey));

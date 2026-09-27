@@ -9,7 +9,6 @@ import { DirectorySyncActor, OrganizationHub } from './durable/organization-hub'
 import type { PlatformEvent } from './services/queue-publisher';
 import * as orgRepo from './services/storage-org-repo';
 import { handleRequest } from './router';
-import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
@@ -18,6 +17,7 @@ import {
   isWebVaultHidden,
   webVaultNotFoundResponse,
 } from './web-vault-visibility';
+import { initializeDatabase } from './db/migrate';
 
 let dbInitialized = false;
 let dbInitError: string | null = null;
@@ -66,8 +66,7 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 
   if (!dbInitPromise) {
     dbInitPromise = (async () => {
-      const storage = new StorageService(env.DB);
-      await storage.initializeDatabase();
+      await initializeDatabase(env.DB);
       try {
         await syncVaultAdminRoles(env);
       } catch {

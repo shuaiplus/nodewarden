@@ -95,14 +95,15 @@ test('both recovery paths send a security notice and delivery failure never roll
 
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
 import { createPrivateKey, sign } from 'node:crypto';
-import { StorageService } from '../src/services/storage';
 import { TEST_ORIGIN } from './support/env';
+import * as passkeyRepo from '../src/services/storage-account-passkey-repo';
+import * as deviceRepo from '../src/services/storage-device-repo';
 
 test('a verified passkey grant notifies its new device', async () => {
   const capture = captureEmail();
   const env = await createTestEnv({ ...capture.overrides, ENABLE_NEW_DEVICE_VERIFICATION: 'true' });
   const user = await seedUser(env, { email: `passkey@${MAILABLE_DOMAIN}`, verifyDevices: true, createdAt: new Date(Date.now() - 2 * 86400_000).toISOString() });
-  await new StorageService(env.DB).upsertDevice(user.id, 'known-device', 'Known', 9);
+  await deviceRepo.upsertDevice(env.DB, user.id, 'known-device', 'Known', 9);
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const jwk = await crypto.subtle.exportKey('jwk', keys.privateKey);
   type CborValue = Parameters<typeof isoCBOR.encode>[0];
@@ -111,7 +112,7 @@ test('a verified passkey grant notifies its new device', async () => {
     [cose.COSEKEYS.x, Buffer.from(jwk.x!, 'base64url')], [cose.COSEKEYS.y, Buffer.from(jwk.y!, 'base64url')],
   ]));
   const credentialId = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url');
-  await new StorageService(env.DB).saveAccountPasskeyCredential({ id: crypto.randomUUID(), userId: user.id, purpose: 'login', name: 'Test key', publicKey: Buffer.from(publicKey).toString('base64url'), credentialId, counter: 0, type: 'public-key', aaGuid: null, transports: ['usb'], encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, supportsPrf: false, createdAt: old, updatedAt: old });
+  await passkeyRepo.saveAccountPasskeyCredential(env.DB, { id: crypto.randomUUID(), userId: user.id, purpose: 'login', name: 'Test key', publicKey: Buffer.from(publicKey).toString('base64url'), credentialId, counter: 0, type: 'public-key', aaGuid: null, transports: ['usb'], encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, supportsPrf: false, createdAt: old, updatedAt: old });
   const optionsResponse = await authedFetch(env, { path: '/identity/accounts/webauthn/assertion-options' });
   assert.equal(optionsResponse.status, 200);
   const { options, token } = await optionsResponse.json() as { options: { challenge: string; rpId: string }; token: string };

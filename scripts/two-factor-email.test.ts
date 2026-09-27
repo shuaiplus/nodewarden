@@ -5,9 +5,9 @@ import { createSsoEmail2faSessionToken, signHs256Jwt } from '../src/utils/jwt';
 import { hashPassword } from '../src/services/auth-password';
 import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes } from '../src/services/backup-import';
-import { StorageService } from '../src/services/storage';
 import type { Env, User } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const PASSWORD = 'client-master-password-hash';
@@ -66,13 +66,12 @@ test('setup codes bind the address, enable Email consistently, survive stale sav
   const enabled = await enable(env, user, token, FACTOR_EMAIL, code);
   assert.equal(enabled.status, 200);
   assert.deepEqual(await enabled.json(), { Email: { Enabled: true, Email: FACTOR_EMAIL }, Object: 'twoFactorEmailUpdate' });
-  const storage = new StorageService(env.DB);
-  const updated = (await storage.getUserById(user.id))!;
+  const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.twoFactorEmail, FACTOR_EMAIL);
   assert.ok(updated.totpRecoveryCode);
-  await storage.saveUser(user);
-  assert.equal((await storage.getUserById(user.id))?.twoFactorEmail, FACTOR_EMAIL);
-  assert.equal((await storage.getUserById(user.id))?.totpRecoveryCode, updated.totpRecoveryCode);
+  await userRepo.saveUser(env.DB, user);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.twoFactorEmail, FACTOR_EMAIL);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.totpRecoveryCode, updated.totpRecoveryCode);
   assert.equal((await enable(env, user, token, FACTOR_EMAIL, code)).status, 400);
   const providers = await authedFetch(env, { path: '/api/two-factor', userId: user.id });
   assert.deepEqual((await providers.json() as { Data: { Type: number }[] }).Data.map(provider => provider.Type), [1]);
@@ -86,15 +85,14 @@ test('setup codes bind the address, enable Email consistently, survive stale sav
 test('enabling Email creates a working recovery code which clears the factor', async () => {
   const { env, user, token, code } = await setup();
   assert.equal((await enable(env, user, token, FACTOR_EMAIL, code)).status, 200);
-  const storage = new StorageService(env.DB);
-  const recoveryCode = (await storage.getUserById(user.id))!.totpRecoveryCode;
+  const recoveryCode = (await userRepo.getUserById(env.DB, user.id))!.totpRecoveryCode;
   assert.ok(recoveryCode);
   const response = await authedFetch(env, { method: 'POST', path: '/identity/accounts/recover-2fa', body: { email: user.email, masterPasswordHash: PASSWORD, recoveryCode } });
   assert.equal(response.status, 200);
-  assert.equal((await storage.getUserById(user.id))?.twoFactorEmail, null);
-  const rotatedCode = (await storage.getUserById(user.id))!.totpRecoveryCode;
-  await storage.saveUser({ ...user, totpRecoveryCode: recoveryCode });
-  assert.equal((await storage.getUserById(user.id))?.totpRecoveryCode, rotatedCode);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.twoFactorEmail, null);
+  const rotatedCode = (await userRepo.getUserById(env.DB, user.id))!.totpRecoveryCode;
+  await userRepo.saveUser(env.DB, { ...user, totpRecoveryCode: recoveryCode });
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.totpRecoveryCode, rotatedCode);
   assert.notEqual(rotatedCode, recoveryCode);
   await drainWaitUntil();
 });
@@ -114,7 +112,7 @@ test('Email remains enforced with mail disabled, but settings and both removal r
       body: legacy ? { type: 1, masterPasswordHash: PASSWORD } : { userVerificationToken: current.UserVerificationToken },
     });
     assert.equal(removed.status, legacy ? 200 : 204);
-    assert.equal((await new StorageService(env.DB).getUserById(user.id))?.twoFactorEmail, null);
+    assert.equal((await userRepo.getUserById(env.DB, user.id))?.twoFactorEmail, null);
     assert.equal((await login()).status, 200);
     await drainWaitUntil();
   }
@@ -126,7 +124,7 @@ test('backup restore preserves the enrolled Email address', async () => {
   const archive = await buildBackupArchive(env, new Date(), { includeAttachments: false });
   const restored = await createTestEnv();
   await importBackupArchiveBytes(archive.bytes, restored, user.id, false);
-  assert.equal((await new StorageService(restored.DB).getUserById(user.id))?.twoFactorEmail, FACTOR_EMAIL);
+  assert.equal((await userRepo.getUserById(restored.DB, user.id))?.twoFactorEmail, FACTOR_EMAIL);
 });
 
 function passwordLogin(env: Env, user: User, extra: Record<string, string> = {}) {

@@ -1,5 +1,4 @@
 import type { Env } from '../types';
-import { StorageService } from '../services/storage';
 import {
   buildDomainsResponse,
   customRulesToActiveEquivalentDomains,
@@ -8,6 +7,7 @@ import {
   normalizeExcludedGlobalTypes,
 } from '../services/domain-rules';
 import { errorResponse, jsonResponse } from '../utils/response';
+import * as domainRulesRepo from '../services/storage-domain-rules-repo';
 
 // CONTRACT:
 // This route accepts both camelCase and PascalCase Bitwarden-compatible payloads.
@@ -33,8 +33,7 @@ async function readPayload(request: Request): Promise<Record<string, unknown>> {
 }
 
 export async function handleGetDomains(env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const settings = await storage.getUserDomainSettings(userId);
+  const settings = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
   return jsonResponse(buildDomainsResponse(
     settings.equivalentDomains,
     settings.customEquivalentDomains,
@@ -43,9 +42,8 @@ export async function handleGetDomains(env: Env, userId: string): Promise<Respon
 }
 
 export async function handleUpdateDomains(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const payload = await readPayload(request);
-  const current = await storage.getUserDomainSettings(userId);
+  const current = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
   const equivalentDomainsRaw = firstPresent(payload, [
     'equivalentDomains',
     'EquivalentDomains',
@@ -71,9 +69,9 @@ export async function handleUpdateDomains(request: Request, env: Env, userId: st
     ? current.excludedGlobalEquivalentDomains
     : normalizeExcludedGlobalTypes(excludedGlobalEquivalentDomainsRaw);
 
-  await storage.saveUserDomainSettings(userId, equivalentDomains, customEquivalentDomains, excludedGlobalEquivalentDomains);
+  await domainRulesRepo.saveUserDomainSettings(env.DB, userId, equivalentDomains, customEquivalentDomains, excludedGlobalEquivalentDomains);
 
-  const settings = await storage.getUserDomainSettings(userId);
+  const settings = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
   if (!settings) {
     return errorResponse('Domain settings unavailable', 500);
   }

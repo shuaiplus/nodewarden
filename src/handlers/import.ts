@@ -2,12 +2,13 @@ import { LIMITS } from '../config/limits';
 import { getOrm, type Orm } from '../db/client';
 import { ciphers as cipherTable, folders as folderTable } from '../db/schema';
 import { notifyUserVaultSync } from '../durable/notifications-hub';
-import { StorageService } from '../services/storage';
 import { Env, Cipher, Folder, CipherType } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
+import * as folderRepo from '../services/storage-folder-repo';
+import * as revisionRepo from '../services/storage-revision-repo';
 
 // Bitwarden client import request format
 interface CiphersImportRequest {
@@ -117,7 +118,6 @@ async function runOrmBatch(
 
 // POST /api/ciphers/import - Bitwarden client import endpoint
 export async function handleCiphersImport(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   const returnCipherMap = url.searchParams.get('returnCipherMap') === '1';
 
@@ -182,7 +182,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       cipherFolderMap.set(rel.key, folderId);
     }
   }
-  const existingFolderIds = new Set((await storage.getAllFolders(userId)).map((folder) => folder.id));
+  const existingFolderIds = new Set((await folderRepo.getAllFolders(env.DB, userId)).map((folder) => folder.id));
 
   // Create ciphers
   const cipherRows: Cipher[] = [];
@@ -332,7 +332,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   }
 
   // Update revision date
-  const revisionDate = await storage.updateRevisionDate(userId);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
 
   if (returnCipherMap) {

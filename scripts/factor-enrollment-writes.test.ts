@@ -3,8 +3,8 @@ import test from 'node:test';
 import { createHmac } from 'node:crypto';
 import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
-import { StorageService } from '../src/services/storage';
-import { authedFetch, createTestEnv, seedUser, portalFetch, signInToAdminPortal } from './support/env';
+import { authedFetch, createTestEnv, interceptStatement, seedUser, portalFetch, signInToAdminPortal } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const PASSWORD = 'enrollment-client-hash';
 const SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
@@ -17,27 +17,21 @@ function totp(): string {
 
 for (const path of ['/api/accounts/totp', '/api/two-factor/authenticator']) {
   for (const action of ['reset', 'delete'] as const) {
-    test(`pending ${path} enrollment cannot restore its mirror after account ${action}`, async (t) => {
+    test(`pending ${path} enrollment cannot restore its mirror after account ${action}`, async () => {
       const env = await createTestEnv({ ADMIN_EMAILS: 'admin@x.io' });
       const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), totpSecret: SECRET, totpRecoveryCode: 'OLD-RECOVERY' });
-      const storage = new StorageService(env.DB);
       await upsertTwoFactorSecret(env.DB, user.id, SECRET, user.totpRecoveryCode!);
       const settings = await authedFetch(env, { method: 'POST', path: '/api/two-factor/get-authenticator', userId: user.id, body: { masterPasswordHash: PASSWORD } });
       const { UserVerificationToken: userVerificationToken } = await settings.json() as { UserVerificationToken: string };
       const portal = await signInToAdminPortal(env, 'admin@x.io');
-      const saveUser = StorageService.prototype.saveUser;
       let interrupted = false;
-      t.mock.method(StorageService.prototype, 'saveUser', async function(this: StorageService, ...args: Parameters<StorageService['saveUser']>) {
-        const saved = await saveUser.apply(this, args);
-        if (args[1]?.includes('totpSecret') && args[0].totpSecret === SECRET) {
-          assert.equal(saved, true);
-          interrupted = true;
-          const response = action === 'reset'
-            ? await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: portal.cookie, form: { csrf: portal.csrf, confirmation: user.email } })
-            : await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body: { masterPasswordHash: PASSWORD } });
-          assert.equal(response.status, action === 'reset' ? 303 : 200);
-        }
-        return saved;
+      // The account row already carries the new secret; the reset or deletion lands before its mirror write.
+      interceptStatement(env, /insert into "two_factor"/i, async () => {
+        interrupted = true;
+        const response = action === 'reset'
+          ? await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: portal.cookie, form: { csrf: portal.csrf, confirmation: user.email } })
+          : await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body: { masterPasswordHash: PASSWORD } });
+        assert.equal(response.status, action === 'reset' ? 303 : 200);
       });
       const response = await authedFetch(env, {
         method: 'PUT', path, userId: user.id,
@@ -47,7 +41,7 @@ for (const path of ['/api/accounts/totp', '/api/two-factor/authenticator']) {
       assert.equal(response.status, 400, await response.clone().text());
       assert.equal(interrupted, true);
       assert.equal(await env.DB.prepare('SELECT secret FROM two_factor WHERE user_id=?').bind(user.id).first(), null);
-      const current = await storage.getUserById(user.id);
+      const current = await userRepo.getUserById(env.DB, user.id);
       if (action === 'delete') assert.equal(current, null);
       else { assert.equal(current!.totpSecret, null); assert.equal(current!.totpRecoveryCode, null); }
     });
@@ -59,7 +53,7 @@ test('a delayed TOTP mirror cannot overwrite a replacement made under the same s
   const user = await seedUser(env, { totpSecret: SECRET, totpRecoveryCode: 'RECOVERY' });
   assert.equal(await upsertTwoFactorSecret(env.DB, user.id, SECRET, 'RECOVERY', user.securityStamp), true);
   const nextSecret = 'JBSWY3DPEHPK3PXP';
-  await new StorageService(env.DB).saveUser({ ...user, totpSecret: nextSecret }, ['totpSecret']);
+  await userRepo.saveUser(env.DB, { ...user, totpSecret: nextSecret }, ['totpSecret']);
   assert.equal(await upsertTwoFactorSecret(env.DB, user.id, nextSecret, 'RECOVERY', user.securityStamp), true);
   assert.equal(await upsertTwoFactorSecret(env.DB, user.id, SECRET, 'RECOVERY', user.securityStamp), false);
   assert.equal(await env.DB.prepare('SELECT secret FROM two_factor WHERE user_id=?').bind(user.id).first('secret'), nextSecret);

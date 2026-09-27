@@ -5,7 +5,6 @@ import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoCon
 import { readMailConfig } from '../services/mail';
 import { notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, TokenResponse, User } from '../types';
-import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -38,6 +37,12 @@ import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../servic
 import { exchangeOidcCode, isSsoEnabled, userRequiresSso } from './sso';
 import { getAccessTokenWithAccount } from '../services/storage-secret-repo';
 import * as orgRepo from '../services/storage-org-repo';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
+import * as authRequestRepo from '../services/storage-auth-request-repo';
+import * as deviceRepo from '../services/storage-device-repo';
+import * as sessionRepo from '../services/storage-session-repo';
+import * as totpReplayRepo from '../services/storage-totp-replay-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -65,12 +70,12 @@ function resolveTotpSecret(userSecret: string | null): string | null {
 }
 
 async function resolveDeviceSession(
-  storage: StorageService,
+  db: D1Database,
   userId: string,
   deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
 ): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
   if (!deviceInfo.deviceIdentifier) return null;
-  const existingDevice = await storage.getDevice(userId, deviceInfo.deviceIdentifier);
+  const existingDevice = await deviceRepo.getDevice(db, userId, deviceInfo.deviceIdentifier);
   const sessionStamp = String(existingDevice?.sessionStamp || '').trim() || generateUUID();
   return { identifier: deviceInfo.deviceIdentifier, sessionStamp, isNewDevice: !existingDevice };
 }
@@ -84,20 +89,20 @@ function resolveRefreshClientType(request: Request, body: Record<string, string>
 }
 
 async function persistAndResolveDeviceSession(
-  storage: StorageService,
+  db: D1Database,
   userId: string,
   deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
 ): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
-  const candidate = await resolveDeviceSession(storage, userId, deviceInfo);
+  const candidate = await resolveDeviceSession(db, userId, deviceInfo);
   if (!candidate) return null;
-  await storage.upsertDevice(
+  await deviceRepo.upsertDevice(db,
     userId,
     candidate.identifier,
     deviceInfo.deviceName,
     deviceInfo.deviceType,
     candidate.sessionStamp
   );
-  const persisted = await storage.getDevice(userId, candidate.identifier);
+  const persisted = await deviceRepo.getDevice(db, userId, candidate.identifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
   return { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: candidate.isNewDevice };
 }
@@ -114,7 +119,7 @@ function readDevicePushToken(body: Record<string, string>): string {
 
 async function persistIdentityDevicePushToken(
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   userId: string,
   deviceSession: { identifier: string; sessionStamp: string } | null,
   deviceType: number,
@@ -124,11 +129,11 @@ async function persistIdentityDevicePushToken(
   const pushToken = readDevicePushToken(body);
   if (!pushToken) return;
 
-  const device = await storage.getDevice(userId, deviceSession.identifier);
+  const device = await deviceRepo.getDevice(db, userId, deviceSession.identifier);
   if (!device) return;
 
   const pushUuid = device.pushUuid || generateUUID();
-  await storage.updateDevicePushToken(userId, deviceSession.identifier, pushUuid, pushToken);
+  await deviceRepo.updateDevicePushToken(db, userId, deviceSession.identifier, pushUuid, pushToken);
   const registered = await registerMobilePushDevice(env, {
     userId,
     deviceIdentifier: deviceSession.identifier,
@@ -267,17 +272,17 @@ function redactEmail(email: string): string {
 async function twoFactorRequiredResponse(
   request: Request,
   env: Env,
-  storage: StorageService,
+  db: D1Database,
   user?: User,
   message: string = 'Two factor required.'
 ): Promise<Response> {
   // Match Bitwarden Identity: TwoFactorProviders2 lists enabled 2FA providers only.
   // Clients expose recovery-code entry points themselves; Android 2026.4 fails to
   // parse the challenge if an unknown recovery provider key such as "8" is included.
-  const hasTwoFactorPasskey = user ? await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0 : false;
+  const hasTwoFactorPasskey = user ? await passkeyRepo.countAccountPasskeyCredentialsByUserId(db, user.id, 'twoFactor') > 0 : false;
   const providers = user ? twoFactorProviders(user, hasTwoFactorPasskey).map(String) : [String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)];
   const webAuthnOptions = user && hasTwoFactorPasskey
-    ? await buildTwoFactorPasskeyAssertionOptions(request, env, storage, user) as Record<string, unknown> | null
+    ? await buildTwoFactorPasskeyAssertionOptions(request, env, db, user) as Record<string, unknown> | null
     : null;
   const providers2: Record<string, Record<string, unknown> | null> = {};
   for (const provider of providers) {
@@ -339,7 +344,6 @@ async function recordFailedLoginAndBuildResponse(
 
 // POST /identity/connect/token
 export async function handleToken(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const rateLimit = new RateLimitService(env.DB);
 
@@ -405,14 +409,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (continuation === null) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;
     if (continuation) {
-      user = await storage.getUserById(continuation.userId);
+      user = await userRepo.getUserById(env.DB, continuation.userId);
       if (!user || user.status !== 'active' || user.securityStamp !== continuation.securityStamp || user.email !== continuation.email) return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
       ssoContinuation = continuation;
     } else {
       const claims = await exchangeOidcCode(env, code, new URL(request.url).origin, body.code_verifier);
       if (!claims) return identityErrorResponse('SSO exchange failed', 'invalid_grant', 400);
       const linked = await orgRepo.getSsoUserByIdentifier(env.DB, claims.identifier);
-      user = linked ? await storage.getUserById(linked.userId) : null;
+      user = linked ? await userRepo.getUserById(env.DB, linked.userId) : null;
       // Adopting an existing local account by email address is only safe when the
       // provider vouches for the address; otherwise anyone who can claim that email
       // at the IdP inherits the local vault.
@@ -423,7 +427,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           400
         );
       }
-      if (!user) user = await storage.getUser(claims.email);
+      if (!user) user = await userRepo.getUser(env.DB, claims.email);
       if (!user) {
         if (String(env.SSO_SIGNUPS || '1') === '0') {
           return identityErrorResponse('SSO sign-up is disabled', 'invalid_grant', 400);
@@ -467,7 +471,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const user = await storage.getUser(email);
+    const user = await userRepo.getUser(env.DB, email);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('Username or password is incorrect. Try again', 'invalid_grant', 400);
@@ -502,7 +506,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let valid = false;
     const normalizedAuthRequestId = String(authRequestId || '').trim();
     if (normalizedAuthRequestId) {
-      const authRequest = await storage.getAuthRequestByIdForUser(normalizedAuthRequestId, user.id);
+      const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, normalizedAuthRequestId, user.id);
       valid = isAuthRequestLoginApproved(authRequest, user.id, passwordHash);
       if (valid) {
         validatedAuthRequestId = authRequest!.id;
@@ -538,7 +542,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let recoveredTwoFactor = false;
     const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
-    const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+    const hasTwoFactorPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
     const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
     if (enabledProviders.length > 0) {
       const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
@@ -550,13 +554,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       // Upstream-compatible behavior: if 2FA is required and either provider or token is missing,
       // respond with a 2FA challenge payload.
       if (!hasProvider || !hasToken) {
-        return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+        return await twoFactorRequiredResponse(request, env, env.DB, user, 'Two factor required.');
       }
 
       let passedByRememberToken = false;
       if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_REMEMBER)) {
         if (deviceInfo.deviceIdentifier) {
-          const trustedUserId = await storage.getTrustedTwoFactorDeviceTokenUserId(
+          const trustedUserId = await deviceRepo.getTrustedTwoFactorDeviceTokenUserId(env.DB,
             normalizedTwoFactorToken,
             deviceInfo.deviceIdentifier
           );
@@ -565,7 +569,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
         // Remember token missing/invalid/expired should re-enter the 2FA challenge flow.
         if (!passedByRememberToken) {
-          return await twoFactorRequiredResponse(request, env, storage, user, 'Two factor required.');
+          return await twoFactorRequiredResponse(request, env, env.DB, user, 'Two factor required.');
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
@@ -575,7 +579,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (matchedCounter == null) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
-        const consumed = await storage.consumeTotpLoginCounter(user.id, matchedCounter);
+        const consumed = await totpReplayRepo.consumeTotpLoginCounter(env.DB, user.id, matchedCounter);
         if (!consumed) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
@@ -612,7 +616,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
         try {
-          await assertTwoFactorPasskeyCredential(request, env, storage, user, deviceResponse);
+          await assertTwoFactorPasskeyCredential(request, env, env.DB, user, deviceResponse);
         } catch {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, user, Number(normalizedTwoFactorProvider));
         }
@@ -646,7 +650,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)) return deviceErrorResponse('invalid_otp');
         await markEmailVerified(env, user.id);
       } else if (await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()
-        && (!deviceInfo.deviceIdentifier || !await storage.isKnownDevice(user.id, deviceInfo.deviceIdentifier))) {
+        && (!deviceInfo.deviceIdentifier || !await deviceRepo.isKnownDevice(env.DB, user.id, deviceInfo.deviceIdentifier))) {
         notifyNewDeviceVerification(env, request, user, deviceInfo.deviceType);
         return deviceErrorResponse('required');
       }
@@ -667,20 +671,20 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
     }
     if (trustedTwoFactorTokenToReturn && deviceInfo.deviceIdentifier) {
-      await storage.saveTrustedTwoFactorDeviceToken(trustedTwoFactorTokenToReturn, user.id, deviceInfo.deviceIdentifier, Date.now() + TWO_FACTOR_REMEMBER_TTL_MS);
+      await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, trustedTwoFactorTokenToReturn, user.id, deviceInfo.deviceIdentifier, Date.now() + TWO_FACTOR_REMEMBER_TTL_MS);
     }
 
     // Persist device only after successful password + (optional) 2FA verification.
-    const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
     if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
-      await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
+      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
     }
 
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
     if (validatedAuthRequestId) {
-      await storage.markAuthRequestAuthenticated(validatedAuthRequestId);
+      await authRequestRepo.markAuthRequestAuthenticated(env.DB, validatedAuthRequestId);
     }
 
     const accessToken = await auth.generateAccessToken(user, deviceSession);
@@ -759,7 +763,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     let asserted: Awaited<ReturnType<typeof assertAccountPasskeyCredential>>;
     try {
-      asserted = await assertAccountPasskeyCredential(request, env, storage, {
+      asserted = await assertAccountPasskeyCredential(request, env, env.DB, {
         token,
         deviceResponse,
         scope: 'Authentication',
@@ -789,10 +793,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
-    const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
     if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
-      await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
+      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
     }
 
     await rateLimit.clearLoginAttempts(loginIdentifier);
@@ -891,7 +895,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const user = await storage.getUserById(uid);
+    const user = await userRepo.getUserById(env.DB, uid);
     if (!user) {
       await rateLimit.recordFailedLogin(loginIdentifier);
       return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
@@ -935,10 +939,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     // Persist device only after successful client credential verification.
-    const deviceSession = await persistAndResolveDeviceSession(storage, user.id, deviceInfo);
+    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
     if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
     if (deviceSession) {
-      await persistIdentityDevicePushToken(env, storage, user.id, deviceSession, deviceInfo.deviceType, body);
+      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
     }
 
     // Successful login - clear failed attempts
@@ -1142,7 +1146,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     const { accessToken, user, device } = result;
     if (device?.identifier) {
-      await storage.touchDeviceLastSeen(user.id, device.identifier);
+      await deviceRepo.touchDeviceLastSeen(env.DB, user.id, device.identifier);
     }
     const accountKeys = buildAccountKeys(user);
     const userDecryptionOptions = buildUserDecryptionOptions(user);
@@ -1181,7 +1185,6 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
 // POST /identity/accounts/prelogin
 export async function handlePrelogin(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
 
   let body: { email?: string };
   try {
@@ -1195,7 +1198,7 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
     return errorResponse('Email is required', 400);
   }
 
-  const user = await storage.getUser(email);
+  const user = await userRepo.getUser(env.DB, email);
 
   // Return default KDF settings even if user doesn't exist (to prevent user enumeration)
   const kdfType = user?.kdfType ?? 0;
@@ -1212,7 +1215,6 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
 // Best-effort OAuth token revocation endpoint.
 // RFC 7009 allows returning 200 even if token is unknown.
 export async function handleRevocation(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   let body: Record<string, string>;
   const contentType = request.headers.get('content-type') || '';
   try {
@@ -1232,7 +1234,7 @@ export async function handleRevocation(request: Request, env: Env): Promise<Resp
       : ''
   );
   if (token) {
-    await storage.deleteRefreshToken(token);
+    await sessionRepo.deleteRefreshToken(env.DB, token);
   }
 
   const baseResponse = new Response(null, {

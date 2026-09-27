@@ -2,35 +2,24 @@ import { lt } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { totpLoginReplays } from '../db/schema';
+import { shouldRunPeriodicCleanup } from './periodic-cleanup';
 
-type ShouldRunPeriodicCleanup = (lastRunAt: number, intervalMs: number) => boolean;
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+const MARKER_TTL_MS = 5 * 60 * 1000;
+let lastCleanupAt = 0;
 
-export async function consumeTotpLoginCounter(
-  db: D1Database,
-  shouldRunPeriodicCleanup: ShouldRunPeriodicCleanup,
-  lastCleanupAt: number,
-  cleanupIntervalMs: number,
-  userId: string,
-  timeCounter: number,
-  consumedAtMs: number,
-  markerTtlMs: number
-): Promise<{ consumed: boolean; cleanedUpAt: number | null }> {
+// Records a TOTP time step as used for the user; false when that step was already consumed.
+export async function consumeTotpLoginCounter(db: D1Database, userId: string, timeCounter: number, consumedAtMs = Date.now()): Promise<boolean> {
+  if (!Number.isSafeInteger(timeCounter) || timeCounter < 0) return false;
   const orm = getOrm(db);
-  let cleanedUpAt: number | null = null;
-
-  if (shouldRunPeriodicCleanup(lastCleanupAt, cleanupIntervalMs)) {
-    await orm.delete(totpLoginReplays).where(lt(totpLoginReplays.consumedAt, consumedAtMs - markerTtlMs));
-    cleanedUpAt = consumedAtMs;
+  if (shouldRunPeriodicCleanup(lastCleanupAt, CLEANUP_INTERVAL_MS)) {
+    await orm.delete(totpLoginReplays).where(lt(totpLoginReplays.consumedAt, consumedAtMs - MARKER_TTL_MS));
+    lastCleanupAt = consumedAtMs;
   }
-
   const result = await orm
     .insert(totpLoginReplays)
     .values({ userId, timeCounter, consumedAt: consumedAtMs })
     .onConflictDoNothing({ target: [totpLoginReplays.userId, totpLoginReplays.timeCounter] })
     .run();
-
-  return {
-    consumed: (result.meta.changes ?? 0) > 0,
-    cleanedUpAt,
-  };
+  return (result.meta.changes ?? 0) > 0;
 }

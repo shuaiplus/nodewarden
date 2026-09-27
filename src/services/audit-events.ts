@@ -3,7 +3,8 @@ import { getOrm } from '../db/client';
 import { auditLogs } from '../db/schema';
 import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
-import { StorageService } from './storage';
+import * as adminRepo from './storage-admin-repo';
+import * as configRepo from './storage-config-repo';
 
 export type AuditLogCategory = 'auth' | 'security' | 'device' | 'data' | 'system';
 export type AuditLogLevel = 'info' | 'warn' | 'error' | 'security';
@@ -145,8 +146,8 @@ function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unk
   return clean;
 }
 
-export async function getAuditLogSettings(storage: StorageService): Promise<AuditLogSettings> {
-  const raw = await storage.getConfigValue(AUDIT_LOG_SETTINGS_KEY);
+export async function getAuditLogSettings(db: D1Database): Promise<AuditLogSettings> {
+  const raw = await configRepo.getConfigValue(db, AUDIT_LOG_SETTINGS_KEY);
   if (!raw) return { ...DEFAULT_AUDIT_LOG_SETTINGS };
   try {
     return normalizeAuditLogSettings(JSON.parse(raw));
@@ -155,30 +156,30 @@ export async function getAuditLogSettings(storage: StorageService): Promise<Audi
   }
 }
 
-export async function saveAuditLogSettings(storage: StorageService, settings: AuditLogSettings): Promise<AuditLogSettings> {
+export async function saveAuditLogSettings(db: D1Database, settings: AuditLogSettings): Promise<AuditLogSettings> {
   const normalized = normalizeAuditLogSettings(settings);
-  await storage.setConfigValue(AUDIT_LOG_SETTINGS_KEY, JSON.stringify(normalized));
-  await applyAuditLogRetention(storage, normalized);
+  await configRepo.setConfigValue(db, AUDIT_LOG_SETTINGS_KEY, JSON.stringify(normalized));
+  await applyAuditLogRetention(db, normalized);
   return normalized;
 }
 
-export async function applyAuditLogRetention(storage: StorageService, settings?: AuditLogSettings): Promise<void> {
-  const current = settings || await getAuditLogSettings(storage);
+export async function applyAuditLogRetention(db: D1Database, settings?: AuditLogSettings): Promise<void> {
+  const current = settings || await getAuditLogSettings(db);
   if (current.retentionDays) {
     const before = new Date(Date.now() - current.retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    await storage.pruneAuditLogs(before);
+    await adminRepo.pruneAuditLogs(db, before);
   }
   if (current.maxEntries) {
-    await storage.pruneAuditLogsToMax(current.maxEntries);
+    await adminRepo.pruneAuditLogsToMax(db, current.maxEntries);
   }
 }
 
-async function maybePruneAuditLogs(storage: StorageService): Promise<void> {
+async function maybePruneAuditLogs(db: D1Database): Promise<void> {
   const now = Date.now();
   if (now - lastAuditCleanupAt < AUDIT_CLEANUP_INTERVAL_MS) return;
   if (Math.random() > AUDIT_CLEANUP_PROBABILITY) return;
   lastAuditCleanupAt = now;
-  await applyAuditLogRetention(storage);
+  await applyAuditLogRetention(db);
 }
 
 export function auditEventStatement(db: D1Database, event: AuditEventInput, guard: SQL = sql`1`) {
@@ -196,15 +197,15 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
   `);
 }
 
-export async function writeAuditEvent(storage: StorageService, event: AuditEventInput): Promise<void> {
+export async function writeAuditEvent(db: D1Database, event: AuditEventInput): Promise<void> {
   try {
-    await auditEventStatement(storage.db, event);
-    await maybePruneAuditLogs(storage);
+    await auditEventStatement(db, event);
+    await maybePruneAuditLogs(db);
   } catch (error) {
     console.error('audit log write failed', error);
   }
 }
 
 export async function safeWriteAuditEvent(env: Env, event: AuditEventInput): Promise<void> {
-  await writeAuditEvent(new StorageService(env.DB), event);
+  await writeAuditEvent(env.DB, event);
 }

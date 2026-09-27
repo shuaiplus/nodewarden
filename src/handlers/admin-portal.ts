@@ -25,11 +25,13 @@ import { readMailConfig, EMAIL_PATTERN } from '../services/mail';
 import { runInBackground, notifyMail } from '../services/mail-notify';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, auditEventStatement } from '../services/audit-events';
-import { StorageService } from '../services/storage';
 import { webVaultNotFoundResponse } from '../web-vault-visibility';
 import { constantTimeEquals } from '../utils/api-key';
 import { html } from '../utils/html';
 import { portalPage, portalRedirect, loginPage, LOGIN_MESSAGES, portalNavigation, portalFields, deleteForm, portalPagination, userStatusForm, verifyEmailForm, removeTwoFactorForm } from '../views/admin-portal';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
+import * as configRepo from '../services/storage-config-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 const forbidden = () => portalPage('Forbidden', html`<p>This request is not allowed.</p>`, 403);
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
@@ -46,7 +48,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     if (!checkPortalRequest(request)) { console.warn('Rejected administrator request'); return forbidden(); }
     const url = new URL(request.url);
     const path = url.pathname;
-    const audit = (action: string, email?: string) => writeAuditEvent(new StorageService(env.DB), {
+    const audit = (action: string, email?: string) => writeAuditEvent(env.DB, {
       action, category: 'security', level: 'security', actorUserId: null,
       metadata: { ...auditRequestMetadata(request), ...(email ? { adminEmail: email } : {}) },
     });
@@ -123,8 +125,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     if (userPath) {
       const deleting = userPath[1] === 'delete';
       if (request.method !== (userPath[1] === 'view' ? 'GET' : 'POST')) return methodNotAllowed();
-      const storage = new StorageService(env.DB);
-      const user = await storage.getUserById(decodeURIComponent(userPath[2]));
+      const user = await userRepo.getUserById(env.DB, decodeURIComponent(userPath[2]));
       if (!user) return portalPage('Not found', html`<p>User not found.</p>`, 404);
       const viewPath = '/admin/users/view/' + encodeURIComponent(user.id);
       let refusal = '';
@@ -150,14 +151,14 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
         if (check) return check;
         await markEmailVerified(env, user.id);
-        await writeAuditEvent(storage, {
+        await writeAuditEvent(env.DB, {
           action: 'admin.portal.user.email_verified', category: 'security', level: 'security', actorUserId: null,
           targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) },
         });
         return portalRedirect(viewPath + '?m=verified');
       }
       if (userPath[1] === 'remove-2fa') {
-        const passkeys = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+        const passkeys = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor');
         if (!twoFactorProviders(user, passkeys > 0).length) return portalRedirect(viewPath + '?m=nothing-to-reset');
         const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
         if (check) return check;
@@ -177,7 +178,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const [personalItems, memberships, passkeys] = await Promise.all([
         countPersonalCiphers(env.DB, user.id),
         env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
-        storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'),
+        passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'),
       ]);
       const providers = twoFactorProviders(user, passkeys > 0);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
@@ -214,10 +215,9 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (request.method !== 'GET') return methodNotAllowed();
       const counts = await env.DB.prepare('SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM organizations) AS organizations').first<{ users: number; organizations: number }>();
       const mail = readMailConfig(env);
-      const storage = new StorageService(env.DB);
       const [events, pushId, pushKey, yubico] = await Promise.all([
         listAuditLogs(env.DB, { actionPrefix: 'admin.portal.', limit: LIMITS.admin.recentAuditEvents, offset: 0 }),
-        storage.getConfigValue('push.installation.id'), storage.getConfigValue('push.installation.key'), getYubicoCredentials(env.DB),
+        configRepo.getConfigValue(env.DB, 'push.installation.id'), configRepo.getConfigValue(env.DB, 'push.installation.key'), getYubicoCredentials(env.DB),
       ]);
       const settings: Array<[string, string | number]> = [
         ['Users', counts?.users ?? 0], ['Organizations', counts?.organizations ?? 0], ['Administrators', directory.admins.size],

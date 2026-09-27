@@ -4,10 +4,12 @@ import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
-import { StorageService } from '../services/storage';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
+import * as deviceRepo from '../services/storage-device-repo';
+import * as sessionRepo from '../services/storage-session-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 const PERMANENT_TRUST_EXPIRES_AT_MS = Date.UTC(2099, 11, 31, 23, 59, 59);
 
@@ -141,14 +143,13 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
   const type = parseDeviceType(body.type ?? body.Type ?? body.deviceType ?? body.DeviceType);
   if (!identifier || type == null) return errorResponse('Device identifier and type are required', 400);
 
-  const storage = new StorageService(env.DB);
-  await storage.upsertDevice(userId, identifier, name, type, undefined, parseKeysBody(body));
+  await deviceRepo.upsertDevice(env.DB, userId, identifier, name, type, undefined, parseKeysBody(body));
 
   const pushToken = String(body.pushToken ?? body.PushToken ?? '').trim();
   if (pushToken) {
-    const device = await storage.getDevice(userId, identifier);
+    const device = await deviceRepo.getDevice(env.DB, userId, identifier);
     const pushUuid = device?.pushUuid || generateUUID();
-    const updated = await storage.updateDevicePushToken(userId, identifier, pushUuid, pushToken);
+    const updated = await deviceRepo.updateDevicePushToken(env.DB, userId, identifier, pushUuid, pushToken);
     if (updated) {
       await registerMobilePushDevice(env, {
         userId,
@@ -160,9 +161,9 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
     }
   }
 
-  const device = await storage.getDevice(userId, identifier);
+  const device = await deviceRepo.getDevice(env.DB, userId, identifier);
   if (!device) return errorResponse('Device registration failed', 500);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.register',
     category: 'device',
@@ -187,8 +188,7 @@ export async function handleReportLostTrust(request: Request, env: Env, userId: 
   );
   if (!deviceInfo.deviceIdentifier) return errorResponse('Please provide a device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.lost_trust',
     category: 'device',
@@ -209,22 +209,20 @@ export async function handleReportLostTrust(request: Request, env: Env, userId: 
 // - X-Request-Email: base64url(email) without padding
 // - X-Device-Identifier: client device identifier
 export async function handleKnownDevice(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const { email, deviceIdentifier } = readKnownDeviceProbe(request);
 
   if (!email || !deviceIdentifier) {
     return jsonResponse(false);
   }
 
-  const known = await storage.isKnownDeviceByEmail(email, deviceIdentifier);
+  const known = await deviceRepo.isKnownDeviceByEmail(env.DB, email, deviceIdentifier);
   return jsonResponse(known);
 }
 
 // GET /api/devices
 export async function handleGetDevices(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const devices = await storage.getDevicesByUserId(userId);
+  const devices = await deviceRepo.getDevicesByUserId(env.DB, userId);
 
   return jsonResponse({
     data: devices.map((device) => buildDeviceResponse(device)),
@@ -244,8 +242,7 @@ export async function handleGetDeviceByIdentifier(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -267,10 +264,9 @@ export async function handleGetDevice(
 // Returns known devices together with active 2FA remember-token expiry.
 export async function handleGetAuthorizedDevices(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
   const [devices, trusted, onlineDeviceIdentifiers] = await Promise.all([
-    storage.getDevicesByUserId(userId),
-    storage.getTrustedDeviceTokenSummariesByUserId(userId),
+    deviceRepo.getDevicesByUserId(env.DB, userId),
+    deviceRepo.getTrustedDeviceTokenSummariesByUserId(env.DB, userId),
     getOnlineUserDevices(env, userId),
   ]);
   const onlineSet = new Set(onlineDeviceIdentifiers);
@@ -335,8 +331,7 @@ export async function handleGetAuthorizedDevices(request: Request, env: Env, use
 // DELETE /api/devices/authorized
 export async function handleRevokeAllTrustedDevices(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const removed = await storage.deleteTrustedTwoFactorTokensByUserId(userId);
+  const removed = await deviceRepo.deleteTrustedTwoFactorTokensByUserId(env.DB, userId);
   return jsonResponse({ success: true, removed });
 }
 
@@ -351,9 +346,8 @@ export async function handleRevokeTrustedDevice(
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const removed = await storage.deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await writeAuditEvent(storage, {
+  const removed = await deviceRepo.deleteTrustedTwoFactorTokensByDevice(env.DB, userId, normalized);
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.trust.revoke',
     category: 'device',
@@ -377,10 +371,9 @@ export async function handleTrustDevicePermanently(
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const updated = await storage.updateTrustedTwoFactorTokensExpiryByDevice(userId, normalized, PERMANENT_TRUST_EXPIRES_AT_MS);
+  const updated = await deviceRepo.updateTrustedTwoFactorTokensExpiryByDevice(env.DB, userId, normalized, PERMANENT_TRUST_EXPIRES_AT_MS);
   if (!updated) return errorResponse('Device is not currently trusted', 409);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.trust.permanent',
     category: 'device',
@@ -408,17 +401,16 @@ export async function handleDeleteDevice(
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
-  await storage.deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await storage.deleteRefreshTokensByDevice(userId, normalized);
-  const deleted = await storage.deleteDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
+  await deviceRepo.deleteTrustedTwoFactorTokensByDevice(env.DB, userId, normalized);
+  await sessionRepo.deleteRefreshTokensByDevice(env.DB, userId, normalized);
+  const deleted = await deviceRepo.deleteDevice(env.DB, userId, normalized);
   if (deleted) {
     await unregisterMobilePushDevice(env, device?.pushUuid);
     AuthService.invalidateDeviceCache(userId, normalized);
     notifyUserLogout(env, userId, normalized);
   }
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.delete',
     category: 'device',
@@ -444,13 +436,12 @@ export async function handleUpdateDeviceName(
   const name = parseDeviceName(body?.name);
   if (!name) return errorResponse('Device name is required', 400);
 
-  const storage = new StorageService(env.DB);
-  const updated = await storage.updateDeviceName(userId, normalized, name);
+  const updated = await deviceRepo.updateDeviceName(env.DB, userId, normalized, name);
   if (!updated) return errorResponse('Device not found', 404);
 
-  const device = await storage.getDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) return errorResponse('Device not found', 404);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.name.update',
     category: 'device',
@@ -464,8 +455,7 @@ export async function handleUpdateDeviceName(
 
 // DELETE /api/devices
 export async function handleDeleteAllDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let masterPasswordHash = '';
@@ -487,15 +477,15 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
   const originalSecurityStamp = user.securityStamp;
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, ['securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
+  if (!await userRepo.saveUser(env.DB, user, ['securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
   const [removedTrusted, removedSessions, removedDevices] = await Promise.all([
-    storage.deleteTrustedTwoFactorTokensByUserId(userId),
-    storage.deleteRefreshTokensByUserId(userId),
-    storage.deleteDevicesByUserId(userId),
+    deviceRepo.deleteTrustedTwoFactorTokensByUserId(env.DB, userId),
+    sessionRepo.deleteRefreshTokensByUserId(env.DB, userId),
+    deviceRepo.deleteDevicesByUserId(env.DB, userId),
   ]);
   AuthService.invalidateUserCache(userId);
   notifyUserLogout(env, userId, null);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.delete_all',
     category: 'device',
@@ -518,18 +508,17 @@ export async function handleUpdateDeviceKeys(
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
   const body = await readJsonBody(request);
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
 
-  const updated = await storage.updateDeviceKeys(userId, normalized, parseKeysBody(body, device));
+  const updated = await deviceRepo.updateDeviceKeys(env.DB, userId, normalized, parseKeysBody(body, device));
   if (!updated) {
     return errorResponse('Device not found', 404);
   }
 
-  const nextDevice = await storage.getDevice(userId, normalized);
+  const nextDevice = await deviceRepo.getDevice(env.DB, userId, normalized);
   return jsonResponse(buildDeviceResponse(nextDevice || device));
 }
 
@@ -540,7 +529,6 @@ export async function handleUpdateDeviceTrust(
   userId: string
 ): Promise<Response> {
   const body = await readJsonBody(request);
-  const storage = new StorageService(env.DB);
   const currentDeviceIdentifier =
     normalizeIdentifier(request.headers.get('Device-Identifier')) ||
     normalizeIdentifier(request.headers.get('X-Device-Identifier'));
@@ -557,7 +545,7 @@ export async function handleUpdateDeviceTrust(
   if (currentDeviceIdentifier && body?.currentDevice) {
     updates.push({
       deviceIdentifier: currentDeviceIdentifier,
-      keys: parseKeysBody(body.currentDevice, await storage.getDevice(userId, currentDeviceIdentifier) || undefined),
+      keys: parseKeysBody(body.currentDevice, await deviceRepo.getDevice(env.DB, userId, currentDeviceIdentifier) || undefined),
     });
   }
 
@@ -567,14 +555,14 @@ export async function handleUpdateDeviceTrust(
       if (!deviceIdentifier) continue;
       updates.push({
         deviceIdentifier,
-        keys: parseKeysBody(item, await storage.getDevice(userId, deviceIdentifier) || undefined),
+        keys: parseKeysBody(item, await deviceRepo.getDevice(env.DB, userId, deviceIdentifier) || undefined),
       });
     }
   }
 
   let updatedCount = 0;
   for (const update of updates) {
-    const ok = await storage.updateDeviceKeys(userId, update.deviceIdentifier, update.keys);
+    const ok = await deviceRepo.updateDeviceKeys(env.DB, userId, update.deviceIdentifier, update.keys);
     if (ok) updatedCount++;
   }
 
@@ -588,14 +576,13 @@ export async function handleUntrustDevices(
   userId: string
 ): Promise<Response> {
   const body = await readJsonBody(request);
-  const storage = new StorageService(env.DB);
   const devices = Array.isArray(body?.devices) ? body.devices.map((id: unknown) => normalizeIdentifier(String(id))) : [];
-  const removed = await storage.clearDeviceKeys(userId, devices);
+  const removed = await deviceRepo.clearDeviceKeys(env.DB, userId, devices);
   for (const deviceIdentifier of devices) {
     if (!deviceIdentifier) continue;
-    await storage.deleteTrustedTwoFactorTokensByDevice(userId, deviceIdentifier);
+    await deviceRepo.deleteTrustedTwoFactorTokensByDevice(env.DB, userId, deviceIdentifier);
   }
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.trust.revoke_batch',
     category: 'device',
@@ -618,8 +605,7 @@ export async function handleRetrieveDeviceKeys(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
@@ -638,17 +624,16 @@ export async function handleDeactivateDevice(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
-  await storage.deleteTrustedTwoFactorTokensByDevice(userId, normalized);
-  await storage.deleteRefreshTokensByDevice(userId, normalized);
-  const deleted = await storage.deleteDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
+  await deviceRepo.deleteTrustedTwoFactorTokensByDevice(env.DB, userId, normalized);
+  await sessionRepo.deleteRefreshTokensByDevice(env.DB, userId, normalized);
+  const deleted = await deviceRepo.deleteDevice(env.DB, userId, normalized);
   if (deleted) {
     await unregisterMobilePushDevice(env, device?.pushUuid);
     AuthService.invalidateDeviceCache(userId, normalized);
     notifyUserLogout(env, userId, normalized);
   }
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: userId,
     action: 'device.deactivate',
     category: 'device',
@@ -675,12 +660,11 @@ export async function handleUpdateDeviceToken(
   const pushToken = String(body?.pushToken ?? body?.PushToken ?? '').trim();
   if (!pushToken) return errorResponse('Invalid push token', 400);
 
-  const storage = new StorageService(env.DB);
-  const device = await storage.getDevice(userId, normalized);
+  const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) return errorResponse('Device not found', 404);
 
   const pushUuid = device.pushUuid || generateUUID();
-  const updated = await storage.updateDevicePushToken(userId, normalized, pushUuid, pushToken);
+  const updated = await deviceRepo.updateDevicePushToken(env.DB, userId, normalized, pushUuid, pushToken);
   if (updated) {
     await registerMobilePushDevice(env, {
       userId,
@@ -719,8 +703,7 @@ export async function handleClearDeviceToken(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const storage = new StorageService(env.DB);
-  const cleared = await storage.clearDevicePushToken(userId, normalized);
+  const cleared = await deviceRepo.clearDevicePushToken(env.DB, userId, normalized);
   if (cleared?.pushUuid) {
     await unregisterMobilePushDevice(env, cleared.pushUuid);
   }

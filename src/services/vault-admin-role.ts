@@ -3,7 +3,6 @@ import { parseAdminDirectory } from './admin-portal-auth';
 import { AuthService } from './auth';
 import { writeAuditEvent } from './audit-events';
 import { normalizeImportedBackupSettings } from './backup-config';
-import { StorageService } from './storage';
 
 export async function syncVaultAdminRoles(env: Env): Promise<void> {
   const directory = parseAdminDirectory(env);
@@ -17,15 +16,14 @@ export async function syncVaultAdminRoles(env: Env): Promise<void> {
     RETURNING id, role
   `).bind(JSON.stringify([...directory.admins.keys()]), new Date().toISOString()).all<{ id: string; role: string }>();
   if (!changed.results.length) return;
-  const storage = new StorageService(env.DB);
   for (const user of changed.results) {
     AuthService.invalidateUserCache(user.id);
-    await writeAuditEvent(storage, {
+    await writeAuditEvent(env.DB, {
       action: 'admin.vault_role.sync', category: 'security', level: 'security', actorUserId: null,
       targetType: 'user', targetId: user.id, metadata: { role: user.role },
     });
   }
-  await normalizeImportedBackupSettings(storage, env);
+  await normalizeImportedBackupSettings(env.DB, env);
 }
 
 export async function markEmailVerified(env: Env, userId: string): Promise<void> {

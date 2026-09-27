@@ -1,35 +1,24 @@
 import { lt } from 'drizzle-orm';
 
+import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
 import { usedAttachmentDownloadTokens } from '../db/schema';
+import { shouldRunPeriodicCleanup } from './periodic-cleanup';
 
-type ShouldRunPeriodicCleanup = (lastRunAt: number, intervalMs: number) => boolean;
+let lastCleanupAt = 0;
 
-export async function consumeAttachmentDownloadToken(
-  db: D1Database,
-  shouldRunPeriodicCleanup: ShouldRunPeriodicCleanup,
-  lastCleanupAt: number,
-  cleanupIntervalMs: number,
-  jti: string,
-  expUnixSeconds: number
-): Promise<{ consumed: boolean; cleanedUpAt: number | null }> {
+// Marks a download token JTI as used; true only on first use.
+export async function consumeAttachmentDownloadToken(db: D1Database, jti: string, expUnixSeconds: number): Promise<boolean> {
   const orm = getOrm(db);
   const nowMs = Date.now();
-  let cleanedUpAt: number | null = null;
-
-  if (shouldRunPeriodicCleanup(lastCleanupAt, cleanupIntervalMs)) {
+  if (shouldRunPeriodicCleanup(lastCleanupAt, LIMITS.cleanup.attachmentTokenCleanupIntervalMs)) {
     await orm.delete(usedAttachmentDownloadTokens).where(lt(usedAttachmentDownloadTokens.expiresAt, nowMs));
-    cleanedUpAt = nowMs;
+    lastCleanupAt = nowMs;
   }
-
   const result = await orm
     .insert(usedAttachmentDownloadTokens)
     .values({ jti, expiresAt: expUnixSeconds * 1000 })
     .onConflictDoNothing({ target: usedAttachmentDownloadTokens.jti })
     .run();
-
-  return {
-    consumed: (result.meta.changes ?? 0) > 0,
-    cleanedUpAt,
-  };
+  return (result.meta.changes ?? 0) > 0;
 }

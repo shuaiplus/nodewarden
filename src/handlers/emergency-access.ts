@@ -1,5 +1,4 @@
 import type { Env, User } from '../types';
-import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -14,6 +13,9 @@ import { parseMasterPasswordUpdate } from './accounts';
 import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
+import * as attachmentRepo from '../services/storage-attachment-repo';
+import * as sessionRepo from '../services/storage-session-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 function asNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -30,8 +32,8 @@ function emergencyJson(record: emergencyRepo.EmergencyAccessRecord) {
   };
 }
 
-async function userSummary(storage: StorageService, userId: string | null, email: string | null) {
-  const user = userId ? await storage.getUserById(userId) : email ? await storage.getUser(email) : null;
+async function userSummary(db: D1Database, userId: string | null, email: string | null) {
+  const user = userId ? await userRepo.getUserById(db, userId) : email ? await userRepo.getUser(db, email) : null;
   return {
     id: user?.id || null,
     email: user?.email || email,
@@ -40,8 +42,8 @@ async function userSummary(storage: StorageService, userId: string | null, email
   };
 }
 
-async function granteeDetails(storage: StorageService, record: emergencyRepo.EmergencyAccessRecord) {
-  const user = await userSummary(storage, record.granteeId, record.email);
+async function granteeDetails(db: D1Database, record: emergencyRepo.EmergencyAccessRecord) {
+  const user = await userSummary(db, record.granteeId, record.email);
   return {
     ...emergencyJson(record),
     granteeId: user.id,
@@ -52,8 +54,8 @@ async function granteeDetails(storage: StorageService, record: emergencyRepo.Eme
   };
 }
 
-async function grantorDetails(storage: StorageService, record: emergencyRepo.EmergencyAccessRecord) {
-  const user = await userSummary(storage, record.grantorId, null);
+async function grantorDetails(db: D1Database, record: emergencyRepo.EmergencyAccessRecord) {
+  const user = await userSummary(db, record.grantorId, null);
   return {
     ...emergencyJson(record),
     grantorId: user.id,
@@ -91,9 +93,8 @@ type EmergencyAccessNotice = 'emergencyAccessAccepted' | 'emergencyAccessConfirm
   | 'emergencyAccessApproved' | 'emergencyAccessRejected' | 'emergencyAccessTimedOut' | 'emergencyAccessReminder';
 
 async function sendEmergencyAccessNotice(env: Env, record: emergencyRepo.EmergencyAccessRecord, name: EmergencyAccessNotice, recipient: 'grantor' | 'grantee', daysLeft = record.waitTimeDays): Promise<void> {
-  const storage = new StorageService(env.DB);
   const [grantor, grantee] = await Promise.all([
-    storage.getUserById(record.grantorId), record.granteeId ? storage.getUserById(record.granteeId) : null,
+    userRepo.getUserById(env.DB, record.grantorId), record.granteeId ? userRepo.getUserById(env.DB, record.granteeId) : null,
   ]);
   if (!grantor || !grantee) return;
   const [to, other] = recipient === 'grantor' ? [grantor, grantee] : [grantee, grantor];
@@ -113,18 +114,17 @@ export async function handleEmergencyAccessRoute(
 ): Promise<Response | null> {
   const normalized = path.replace(/^\/api/, '');
   if (!normalized.startsWith('/emergency-access')) return null;
-  const storage = new StorageService(env.DB);
 
   if (normalized === '/emergency-access/trusted' && method === 'GET') {
     const rows = await emergencyRepo.listByGrantor(env.DB, user.id);
     const data = [];
-    for (const row of rows) data.push(await granteeDetails(storage, row));
+    for (const row of rows) data.push(await granteeDetails(env.DB, row));
     return jsonResponse({ data, object: 'list', continuationToken: null });
   }
   if (normalized === '/emergency-access/granted' && method === 'GET') {
     const rows = await emergencyRepo.listByGrantee(env.DB, user.id);
     const data = [];
-    for (const row of rows) data.push(await grantorDetails(storage, row));
+    for (const row of rows) data.push(await grantorDetails(env.DB, row));
     return jsonResponse({ data, object: 'list', continuationToken: null });
   }
   if (normalized === '/emergency-access/invite' && method === 'POST') {
@@ -134,7 +134,7 @@ export async function handleEmergencyAccessRoute(
     if (email === user.email.toLowerCase()) return errorResponse('Cannot invite yourself', 400);
     const existing = await emergencyRepo.findInvite(env.DB, user.id, email);
     if (existing) return errorResponse('User already invited', 400);
-    const grantee = await storage.getUser(email);
+    const grantee = await userRepo.getUser(env.DB, email);
     const now = new Date().toISOString();
     const record: emergencyRepo.EmergencyAccessRecord = {
       id: generateUUID(),
@@ -167,7 +167,7 @@ export async function handleEmergencyAccessRoute(
 
   if (!action && method === 'GET') {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
-    return jsonResponse(await granteeDetails(storage, record));
+    return jsonResponse(await granteeDetails(env.DB, record));
   }
   if ((method === 'PUT' || method === 'POST') && !action) {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
@@ -194,7 +194,7 @@ export async function handleEmergencyAccessRoute(
     if (!check.ok) return errorResponse(check.message, check.status, check.headers);
     if (outcome.kind === 'sent') return new Response(null, { status: 200 });
     if (record.email) {
-      const grantee = await storage.getUser(record.email);
+      const grantee = await userRepo.getUser(env.DB, record.email);
       if (grantee && record.status === EmergencyAccessStatus.Invited) {
         record.granteeId = grantee.id;
         record.status = EmergencyAccessStatus.Accepted;
@@ -284,7 +284,7 @@ export async function handleEmergencyAccessRoute(
   if (action === 'view' && method === 'POST') {
     if (!canAct(record, user.id, EmergencyAccessType.View)) return errorResponse('Emergency access not valid', 400);
     const ciphers = await cipherRepo.getAllCiphers(env.DB, record.grantorId);
-    const attachments = await storage.getAttachmentsByCipherIds(ciphers.map((cipher) => cipher.id));
+    const attachments = await attachmentRepo.getAttachmentsByCipherIds(env.DB, ciphers.map((cipher) => cipher.id));
     return jsonResponse({
       ciphers: ciphers.map((cipher) => cipherToResponse(cipher, attachments.get(cipher.id) || [])),
       keyEncrypted: record.keyEncrypted,
@@ -293,7 +293,7 @@ export async function handleEmergencyAccessRoute(
   }
   if (action === 'takeover' && method === 'POST') {
     if (!canAct(record, user.id, EmergencyAccessType.Takeover)) return errorResponse('Emergency access not valid', 400);
-    const grantor = await storage.getUserById(record.grantorId);
+    const grantor = await userRepo.getUserById(env.DB, record.grantorId);
     if (!grantor) return errorResponse('Grantor user not found', 404);
     return jsonResponse({
       kdf: grantor.kdfType,
@@ -308,7 +308,7 @@ export async function handleEmergencyAccessRoute(
   }
   if (action === 'password' && method === 'POST') {
     if (!canAct(record, user.id, EmergencyAccessType.Takeover)) return errorResponse('Emergency access not valid', 400);
-    const grantor = await storage.getUserById(record.grantorId);
+    const grantor = await userRepo.getUserById(env.DB, record.grantorId);
     if (!grantor) return errorResponse('Grantor user not found', 404);
     let body: unknown;
     try {
@@ -324,10 +324,10 @@ export async function handleEmergencyAccessRoute(
     const originalSecurityStamp = grantor.securityStamp;
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
-    if (!await storage.saveUser(grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
+    if (!await userRepo.saveUser(env.DB, grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
     AuthService.invalidateUserCache(grantor.id);
     if (!await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash, grantor.securityStamp)) return errorResponse('User verification failed.', 400);
-    await storage.deleteRefreshTokensByUserId(grantor.id);
+    await sessionRepo.deleteRefreshTokensByUserId(env.DB, grantor.id);
     return new Response(null, { status: 200 });
   }
   if (action === 'policies' && method === 'GET') {

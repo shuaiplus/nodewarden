@@ -13,7 +13,6 @@ import {
   ensureRemoteRestoreCandidate,
 } from '../services/backup-uploader';
 import { getBlobObject } from '../services/blob-store';
-import { StorageService } from '../services/storage';
 import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from './notifications-hub';
 import {
   executeConfiguredBackup,
@@ -151,7 +150,6 @@ export class BackupTransferRunner {
 
     try {
       await this.touchJob(token);
-      const storage = new StorageService(this.env.DB);
       const progress = actorUserId
         ? async (event: {
           operation: 'backup-remote-run';
@@ -174,7 +172,7 @@ export class BackupTransferRunner {
 
       const result = await executeConfiguredBackup(
         this.env,
-        storage,
+        this.env.DB,
         actorUserId,
         trigger,
         body.destinationId || null,
@@ -182,7 +180,7 @@ export class BackupTransferRunner {
         progress,
         body.auditMetadata || null
       );
-      const settings = await loadBackupSettings(storage, this.env, 'UTC');
+      const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
 
       return new Response(JSON.stringify({
         object: 'backup-runner-result',
@@ -212,12 +210,11 @@ export class BackupTransferRunner {
     const failures: Array<{ destinationId: string; error: string }> = [];
     try {
       await this.touchJob(token);
-      const storage = new StorageService(this.env.DB);
       let scanStartMs = Date.now();
 
       while (true) {
         await this.touchJob(token);
-        const settings = await loadBackupSettings(storage, this.env, 'UTC');
+        const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
         const now = new Date();
         const dueDestinations = settings.destinations.filter((destination) =>
           isBackupDueNow(destination, now, BACKUP_SCHEDULER_WINDOW_MINUTES)
@@ -234,7 +231,7 @@ export class BackupTransferRunner {
           try {
             await executeConfiguredBackup(
               this.env,
-              storage,
+              this.env.DB,
               null,
               'scheduled',
               destination.id,
@@ -289,8 +286,7 @@ export class BackupTransferRunner {
 
     try {
       await this.touchJob(token);
-      const storage = new StorageService(this.env.DB);
-      const settings = await loadBackupSettings(storage, this.env, 'UTC');
+      const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
       const destination = requireBackupDestination(settings, body.destinationId || null);
       const path = ensureRemoteRestoreCandidate(String(body.path || ''));
       const restoreFileNameFromPath = path.split('/').pop() || path;
@@ -320,7 +316,7 @@ export class BackupTransferRunner {
 
       const result = await importAndAuditRemoteBackupFile(
         this.env,
-        storage,
+        this.env.DB,
         actorUserId,
         remoteFile,
         destination,

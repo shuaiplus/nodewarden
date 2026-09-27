@@ -1,6 +1,5 @@
 import { deviceTypeName } from '../utils/device';
 import type { AuthRequestRecord, AuthRequestType, Env } from '../types';
-import { StorageService } from '../services/storage';
 import { generateUUID } from '../utils/uuid';
 import { readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
 import { errorResponse, jsonResponse } from '../utils/response';
@@ -8,6 +7,9 @@ import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { LIMITS } from '../config/limits';
+import * as authRequestRepo from '../services/storage-auth-request-repo';
+import * as deviceRepo from '../services/storage-device-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 const AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK = 0;
 const AUTH_REQUEST_TYPE_UNLOCK = 1;
@@ -137,7 +139,6 @@ function isSupportedAuthRequestType(value: number): value is AuthRequestType {
 }
 
 export async function handleCreateAuthRequest(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
@@ -164,12 +165,12 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
     return errorResponse('Invalid auth request type.', 400);
   }
 
-  const user = await storage.getUser(email);
+  const user = await userRepo.getUser(env.DB, email);
   if (!user || user.status !== 'active') {
     return errorResponse('User or known device not found.', 400);
   }
 
-  await storage.pruneExpiredAuthRequests();
+  await authRequestRepo.pruneExpiredAuthRequests(env.DB);
   const now = new Date().toISOString();
   const authRequest: AuthRequestRecord = {
     id: generateUUID(),
@@ -190,7 +191,7 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
     responseDate: null,
     authenticationDate: null,
   };
-  await storage.createAuthRequest(authRequest);
+  await authRequestRepo.createAuthRequest(env.DB, authRequest);
   notifyUserAuthRequest(env, user.id, authRequest.id, deviceInfo.deviceIdentifier);
   return jsonResponse(toAuthRequestResponse(request, authRequest));
 }
@@ -201,7 +202,6 @@ export async function handleCreateAdminAuthRequest(
   userId: string,
   userEmail: string
 ): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
@@ -230,12 +230,12 @@ export async function handleCreateAdminAuthRequest(
   const rateLimitResponse = await enforceAuthRequestCreateRateLimit(request, env, email, deviceInfo.deviceIdentifier);
   if (rateLimitResponse) return rateLimitResponse;
 
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user || user.status !== 'active') {
     return errorResponse('User not found.', 404);
   }
 
-  await storage.pruneExpiredAuthRequests();
+  await authRequestRepo.pruneExpiredAuthRequests(env.DB);
   const now = new Date().toISOString();
   const authRequest: AuthRequestRecord = {
     id: generateUUID(),
@@ -256,23 +256,21 @@ export async function handleCreateAdminAuthRequest(
     responseDate: null,
     authenticationDate: null,
   };
-  await storage.createAuthRequest(authRequest);
+  await authRequestRepo.createAuthRequest(env.DB, authRequest);
   notifyUserAuthRequest(env, user.id, authRequest.id, deviceInfo.deviceIdentifier);
   return jsonResponse(toAuthRequestResponse(request, authRequest));
 }
 
 export async function handleGetAuthRequest(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const authRequest = await storage.getAuthRequestByIdForUser(id, userId);
+  const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, id, userId);
   if (!authRequest || authRequest.userId !== userId) return errorResponse('Not found', 404);
   return jsonResponse(toAuthRequestResponse(request, authRequest));
 }
 
 export async function handleGetAuthRequestResponse(request: Request, env: Env, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   const accessCode = normalizeText(url.searchParams.get('code'), 25);
-  const authRequest = await storage.getAuthRequestById(id);
+  const authRequest = await authRequestRepo.getAuthRequestById(env.DB, id);
   if (!authRequest || authRequest.accessCode !== accessCode || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
   }
@@ -280,28 +278,25 @@ export async function handleGetAuthRequestResponse(request: Request, env: Env, i
 }
 
 export async function handleListAuthRequests(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const authRequests = await storage.listAuthRequestsByUserId(userId);
+  const authRequests = await authRequestRepo.listAuthRequestsByUserId(env.DB, userId);
   return jsonResponse(listResponse(authRequests.map((authRequest) => toAuthRequestResponse(request, authRequest))));
 }
 
 export async function handleListPendingAuthRequests(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  await storage.pruneExpiredAuthRequests();
-  const authRequests = await storage.listPendingAuthRequestsByUserId(userId);
+  await authRequestRepo.pruneExpiredAuthRequests(env.DB);
+  const authRequests = await authRequestRepo.listPendingAuthRequestsByUserId(env.DB, userId);
   const rows = await Promise.all(authRequests.map(async (authRequest) => {
-    const device = await storage.getDevice(userId, authRequest.requestDeviceIdentifier);
+    const device = await deviceRepo.getDevice(env.DB, userId, authRequest.requestDeviceIdentifier);
     return toAuthRequestResponse(request, authRequest, device?.deviceIdentifier ?? authRequest.requestDeviceIdentifier);
   }));
   return jsonResponse(listResponse(rows));
 }
 
 export async function handleUpdateAuthRequest(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const body = await readJsonBody(request);
   if (!body) return errorResponse('Invalid request payload', 400);
 
-  const authRequest = await storage.getAuthRequestByIdForUser(id, userId);
+  const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, id, userId);
   if (!authRequest || authRequest.userId !== userId || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
   }
@@ -309,7 +304,7 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
     return errorResponse('Auth request has already been answered.', 409);
   }
 
-  const latestForUser = await storage.listPendingAuthRequestsByUserId(userId);
+  const latestForUser = await authRequestRepo.listPendingAuthRequestsByUserId(env.DB, userId);
   const latestForDevice = latestForUser.find((item) => item.requestDeviceIdentifier === authRequest.requestDeviceIdentifier);
   if (latestForDevice?.id !== authRequest.id) {
     return errorResponse('This request is no longer valid. Make sure to approve the most recent request.', 400);
@@ -329,14 +324,14 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
     return errorResponse('Encrypted key is not a valid encrypted string.', 400);
   }
 
-  const updated = await storage.updateAuthRequestResponse(id, userId, {
+  const updated = await authRequestRepo.updateAuthRequestResponse(env.DB, id, userId, {
     approved,
     responseDeviceIdentifier,
     key,
     masterPasswordHash: null,
   });
   if (!updated) return errorResponse('Auth request has already been answered.', 409);
-  const updatedRequest = await storage.getAuthRequestByIdForUser(id, userId);
+  const updatedRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, id, userId);
   // Match Bitwarden upstream behavior: only approval wakes the originating anonymous
   // client. Denials are not pushed to avoid leaking that a login attempt was rejected.
   if (approved) {

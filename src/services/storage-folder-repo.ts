@@ -1,8 +1,9 @@
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, getOrm } from '../db/client';
 import { ciphers, folders } from '../db/schema';
 import type { Folder } from '../types';
+import { updateRevisionDate } from './storage-revision-repo';
 
 function mapFolderRow(row: typeof folders.$inferSelect): Folder {
   return {
@@ -73,23 +74,15 @@ export async function clearFolderFromCiphers(
     ));
 }
 
-export async function bulkDeleteFolders(
-  db: D1Database,
-  userId: string,
-  ids: string[],
-  sqlChunkSize: (fixedBindCount: number, bindCountPerItem?: number) => number,
-  updateRevisionDate: (userId: string) => Promise<string>
-): Promise<string | null> {
+export async function bulkDeleteFolders(db: D1Database, ids: string[], userId: string): Promise<string | null> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
 
   const orm = getOrm(db);
   const now = new Date().toISOString();
-  const chunkSize = sqlChunkSize(2, 3);
   const statements = [];
 
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 3, 2)) {
     const inList = sql.join(chunk.map((id) => sql`${id}`), sql`, `);
     statements.push(
       orm
@@ -109,7 +102,7 @@ export async function bulkDeleteFolders(
   }
 
   await orm.batch(statements as [typeof statements[0], ...typeof statements]);
-  return updateRevisionDate(userId);
+  return updateRevisionDate(db, userId);
 }
 
 export async function getAllFolders(db: D1Database, userId: string): Promise<Folder[]> {

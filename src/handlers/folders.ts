@@ -5,12 +5,13 @@ import {
   notifyUserFolderUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import * as folderRepo from '../services/storage-folder-repo';
+import * as revisionRepo from '../services/storage-revision-repo';
 
 function notifyVaultSyncForRequest(
   request: Request,
@@ -22,13 +23,13 @@ function notifyVaultSyncForRequest(
 }
 
 async function writeFolderAudit(
-  storage: StorageService,
+  db: D1Database,
   request: Request,
   userId: string,
   action: string,
   metadata: Record<string, unknown>
 ): Promise<void> {
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(db, {
     actorUserId: userId,
     action,
     category: 'data',
@@ -55,19 +56,18 @@ function folderToResponse(folder: Folder): FolderResponse {
 
 // GET /api/folders
 export async function handleGetFolders(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   const pagination = parsePagination(url);
 
   let folders: Folder[];
   let continuationToken: string | null = null;
   if (pagination) {
-    const pageRows = await storage.getFoldersPage(userId, pagination.limit + 1, pagination.offset);
+    const pageRows = await folderRepo.getFoldersPage(env.DB, userId, pagination.limit + 1, pagination.offset);
     const hasNext = pageRows.length > pagination.limit;
     folders = hasNext ? pageRows.slice(0, pagination.limit) : pageRows;
     continuationToken = hasNext ? encodeContinuationToken(pagination.offset + folders.length) : null;
   } else {
-    folders = await storage.getAllFolders(userId);
+    folders = await folderRepo.getAllFolders(env.DB, userId);
   }
 
   return jsonResponse({
@@ -79,8 +79,7 @@ export async function handleGetFolders(request: Request, env: Env, userId: strin
 
 // GET /api/folders/:id
 export async function handleGetFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const folder = await storage.getFolderForUser(id, userId);
+  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -91,7 +90,6 @@ export async function handleGetFolder(request: Request, env: Env, userId: string
 
 // POST /api/folders
 export async function handleCreateFolder(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
 
   let body: { name?: string };
   try {
@@ -113,8 +111,8 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
     updatedAt: now,
   };
 
-  await storage.saveFolder(folder);
-  const revisionDate = await storage.updateRevisionDate(userId);
+  await folderRepo.saveFolder(env.DB, folder);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyUserFolderCreate(env, {
     userId,
@@ -128,8 +126,7 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
 
 // PUT /api/folders/:id
 export async function handleUpdateFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const folder = await storage.getFolderForUser(id, userId);
+  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -147,8 +144,8 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
   }
   folder.updatedAt = new Date().toISOString();
 
-  await storage.saveFolder(folder);
-  const revisionDate = await storage.updateRevisionDate(userId);
+  await folderRepo.saveFolder(env.DB, folder);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyUserFolderUpdate(env, {
     userId,
@@ -162,16 +159,15 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
 
 // DELETE /api/folders/:id
 export async function handleDeleteFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const folder = await storage.getFolderForUser(id, userId);
+  const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
   }
 
-  await storage.clearFolderFromCiphers(userId, id);
-  await storage.deleteFolder(id, userId);
-  const revisionDate = await storage.updateRevisionDate(userId);
+  await folderRepo.clearFolderFromCiphers(env.DB, userId, id);
+  await folderRepo.deleteFolder(env.DB, id, userId);
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyUserFolderDelete(env, {
     userId,
@@ -179,7 +175,7 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
     revisionDate,
     contextId: readActingDeviceIdentifier(request),
   });
-  await writeFolderAudit(storage, request, userId, 'folder.delete', {
+  await writeFolderAudit(env.DB, request, userId, 'folder.delete', {
     id,
   });
 
@@ -188,7 +184,6 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
 
 // POST /api/folders/delete
 export async function handleBulkDeleteFolders(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
 
   let body: { ids?: string[] };
   try {
@@ -204,11 +199,11 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
 
   const folders = (
     await Promise.all(ids.map(async (id) => {
-      const folder = await storage.getFolderForUser(id, userId);
+      const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
       return folder;
     }))
   ).filter((folder): folder is Folder => !!folder);
-  const revisionDate = await storage.bulkDeleteFolders(ids, userId);
+  const revisionDate = await folderRepo.bulkDeleteFolders(env.DB, ids, userId);
   if (revisionDate) {
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     for (const folder of folders) {
@@ -219,7 +214,7 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
         contextId: readActingDeviceIdentifier(request),
       });
     }
-    await writeFolderAudit(storage, request, userId, 'folder.delete.bulk', {
+    await writeFolderAudit(env.DB, request, userId, 'folder.delete.bulk', {
       count: ids.length,
     });
   }

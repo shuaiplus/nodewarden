@@ -4,13 +4,13 @@ import { getOrm } from '../db/client';
 import { attachments, ciphers, emergencyAccess, sends, session, users } from '../db/schema';
 import type { Env } from '../types';
 import { AuthService } from './auth';
-import { StorageService } from './storage';
 import { normalizeImportedBackupSettings } from './backup-config';
 import { syncVaultAdminRoles } from './vault-admin-role';
 import { auditEventStatement, writeAuditEvent, type AuditEventInput } from './audit-events';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from './blob-store';
 import { deleteCiphersByOrganization, reassignOrganizationCiphers } from './storage-cipher-repo';
 import { bumpOrgMemberRevisions, deleteOrganization } from './storage-org-repo';
+import * as userRepo from './storage-user-repo';
 
 export type DeleteUserAccountResult =
   | { kind: 'deleted' }
@@ -46,7 +46,6 @@ function lastActiveAdmin(userId: string) {
 export type SetUserStatusResult = { kind: 'updated' | 'unchanged' | 'not-found' | 'last-vault-admin' };
 
 export async function setUserStatus(env: Env, userId: string, next: 'active' | 'banned', audit: AuditEventInput): Promise<SetUserStatusResult> {
-  const storage = new StorageService(env.DB);
   const orm = getOrm(env.DB);
   let changed: boolean;
   if (next === 'banned') {
@@ -63,9 +62,9 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
     const updated = await orm.update(users).set({ status: 'active', updatedAt: new Date().toISOString() })
       .where(and(eq(users.id, userId), eq(users.status, 'banned'))).returning({ id: users.id });
     changed = updated.length > 0;
-    if (changed) await writeAuditEvent(storage, audit);
+    if (changed) await writeAuditEvent(env.DB, audit);
   }
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return { kind: 'not-found' };
   if (!changed) return { kind: user.status === next ? 'unchanged' : 'last-vault-admin' };
   AuthService.invalidateUserCache(userId);
@@ -75,7 +74,7 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
   } else {
     await syncVaultAdminRoles(env);
   }
-  if (user.role === 'admin') await normalizeImportedBackupSettings(storage, env);
+  if (user.role === 'admin') await normalizeImportedBackupSettings(env.DB, env);
   return { kind: 'updated' };
 }
 

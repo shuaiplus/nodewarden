@@ -3,10 +3,11 @@ import test from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import * as attachmentRepo from '../src/services/storage-attachment-repo';
+import * as cipherRepo from '../src/services/storage-cipher-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -97,7 +98,7 @@ async function createPersonalCipher(env: Env, user: User): Promise<string> {
 
 async function addAttachment(env: Env, cipherId: string): Promise<string> {
   const attachmentId = crypto.randomUUID();
-  await new StorageService(env.DB).saveAttachment({
+  await attachmentRepo.saveAttachment(env.DB, {
     id: attachmentId, cipherId, fileName: USER_ENCRYPTED, size: ATTACHMENT_SIZE, sizeName: `${ATTACHMENT_SIZE} Bytes`, key: USER_ENCRYPTED,
   });
   return attachmentId;
@@ -135,7 +136,7 @@ function shareMany(
 }
 
 async function storedOrganizationId(env: Env, cipherId: string): Promise<string | null> {
-  return (await new StorageService(env.DB).getCipher(cipherId))?.organizationId ?? null;
+  return (await cipherRepo.getCipher(env.DB, cipherId))?.organizationId ?? null;
 }
 
 async function syncedCipherIds(env: Env, user: User): Promise<string[]> {

@@ -1,13 +1,11 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, getOrm } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
 import type { Attachment, Cipher } from '../types';
+import { getCipher, saveCipher } from './storage-cipher-repo';
+import { updateRevisionDate } from './storage-revision-repo';
 
-type SqlChunkSize = (fixedBindCount: number) => number;
-type GetCipher = (id: string) => Promise<Cipher | null>;
-type SaveCipher = (cipher: Cipher) => Promise<void>;
-type UpdateRevisionDate = (userId: string) => Promise<string>;
 
 function mapAttachment(row: typeof attachments.$inferSelect): Attachment {
   return {
@@ -92,18 +90,11 @@ export async function deleteAttachmentForUser(db: D1Database, id: string, userId
     ));
 }
 
-export async function bulkDeleteAttachmentsByIds(
-  db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  attachmentIds: string[]
-): Promise<void> {
+export async function bulkDeleteAttachmentsByIds(db: D1Database, attachmentIds: string[]): Promise<void> {
   const uniqueIds = [...new Set(attachmentIds.map((id) => String(id || '').trim()).filter(Boolean))];
   if (!uniqueIds.length) return;
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(0);
-
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1)) {
     await orm.delete(attachments).where(inArray(attachments.id, chunk));
   }
 }
@@ -113,19 +104,12 @@ export async function getAttachmentsByCipher(db: D1Database, cipherId: string): 
   return rows.map(mapAttachment);
 }
 
-export async function getAttachmentsByCipherIds(
-  db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  cipherIds: string[]
-): Promise<Map<string, Attachment[]>> {
+export async function getAttachmentsByCipherIds(db: D1Database, cipherIds: string[]): Promise<Map<string, Attachment[]>> {
   const grouped = new Map<string, Attachment[]>();
   const uniqueCipherIds = [...new Set(cipherIds)];
   if (!uniqueCipherIds.length) return grouped;
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(0);
-
-  for (let offset = 0; offset < uniqueCipherIds.length; offset += chunkSize) {
-    const chunk = uniqueCipherIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueCipherIds, 1)) {
     const rows = await orm.select().from(attachments).where(inArray(attachments.cipherId, chunk));
     for (const item of rows.map(mapAttachment)) {
       const list = grouped.get(item.cipherId);
@@ -195,16 +179,11 @@ export async function deleteAllAttachmentsByCipher(db: D1Database, cipherId: str
   await getOrm(db).delete(attachments).where(eq(attachments.cipherId, cipherId));
 }
 
-export async function updateCipherRevisionDate(
-  getCipherById: GetCipher,
-  saveCipherRecord: SaveCipher,
-  updateRevisionDate: UpdateRevisionDate,
-  cipherId: string
-): Promise<{ userId: string; revisionDate: string } | null> {
-  const cipher = await getCipherById(cipherId);
+export async function updateCipherRevisionDate(db: D1Database, cipherId: string): Promise<{ userId: string; revisionDate: string } | null> {
+  const cipher = await getCipher(db, cipherId);
   if (!cipher) return null;
   cipher.updatedAt = new Date().toISOString();
-  await saveCipherRecord(cipher);
-  const revisionDate = await updateRevisionDate(cipher.userId);
+  await saveCipher(db, cipher);
+  const revisionDate = await updateRevisionDate(db, cipher.userId);
   return { userId: cipher.userId, revisionDate };
 }

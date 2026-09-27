@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { StorageService } from '../src/services/storage';
 import * as emergencyRepo from '../src/services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../src/services/storage-emergency-repo';
 import { AuthService } from '../src/services/auth';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 // Web 2026.9 (clients e8bc60e5ba) finishes an emergency takeover with only the nested
 // authenticationData/unlockData body. The grantee sees success either way, so a server that
@@ -100,7 +100,7 @@ test('the web 2026.9 nested takeover body lets the grantor log in with the new p
   const login = await passwordLogin(env, grantor.email, NEW_MASTER_PASSWORD_HASH);
   assert.equal(login.status, 200);
   assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
-  const stored = await new StorageService(env.DB).getUserById(grantor.id);
+  const stored = await userRepo.getUserById(env.DB, grantor.id);
   assert.equal(await credentialPassword(env, grantor.id), stored?.masterPasswordHash);
 });
 
@@ -146,7 +146,7 @@ test('an incomplete, mismatched or unauthorized takeover is rejected and leaves 
     assert.equal(response.status, 400, JSON.stringify({ body, userId }));
   }
 
-  const stored = await new StorageService(env.DB).getUserById(grantor.id);
+  const stored = await userRepo.getUserById(env.DB, grantor.id);
   assert.equal(stored?.masterPasswordHash, grantor.masterPasswordHash);
   assert.equal(stored?.key, grantor.key);
   assert.equal(stored?.securityStamp, grantor.securityStamp);

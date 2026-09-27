@@ -2,10 +2,11 @@ import { registerHooks } from 'node:module';
 
 import { LIMITS } from '../../src/config/limits';
 import { AuthService } from '../../src/services/auth';
-import { StorageService } from '../../src/services/storage';
 import type { Env, User } from '../../src/types';
 import { waitUntil } from './cloudflare-workers';
 import { createSqliteD1 } from './d1-sqlite';
+import { initializeDatabase } from '../../src/db/migrate';
+import * as userRepo from '../../src/services/storage-user-repo';
 
 export const TEST_ORIGIN = 'https://vault.example.test';
 // Cloudflare always sets CF-Connecting-IP, and public routes refuse to rate-limit without it.
@@ -44,10 +45,10 @@ registerHooks({
 });
 const { default: worker } = await import('../../src/index');
 
-// src/index.ts and StorageService bootstrap storage once per isolate. Run that bootstrap now on
+// src/index.ts bootstraps storage once per isolate. Run that bootstrap now on
 // a throwaway database so it never re-runs on a test database, where it would promote
 // whichever user was seeded first to admin.
-await new StorageService(await createSqliteD1()).initializeDatabase();
+await initializeDatabase(await createSqliteD1());
 
 const executionContext = { waitUntil, passThroughOnException: () => {} } as unknown as ExecutionContext;
 
@@ -112,7 +113,7 @@ export async function seedUser(env: Env, overrides: Partial<User> = {}): Promise
     updatedAt: now,
     ...overrides,
   };
-  await new StorageService(env.DB).createUser(user);
+  await userRepo.createUser(env.DB, user);
   return user;
 }
 
@@ -131,7 +132,7 @@ export interface WorkerRequest {
 export async function authedFetch(env: Env, { method = 'GET', path, body, userId, headers }: WorkerRequest): Promise<Response> {
   const requestHeaders = new Headers({ 'CF-Connecting-IP': TEST_CLIENT_IP });
   if (userId) {
-    const user = await new StorageService(env.DB).getUserById(userId);
+    const user = await userRepo.getUserById(env.DB, userId);
     if (!user) throw new Error(`authedFetch: no user ${userId}`);
     requestHeaders.set('Authorization', `Bearer ${await new AuthService(env).generateAccessToken(user)}`);
   }
@@ -180,4 +181,24 @@ export async function signInToAdminPortal(env: Env, email: string): Promise<{ co
   if (directory.kind !== 'enabled' || !directory.admins.has(email)) throw new Error('Test administrator is not configured');
   const session = await createAdminSession(env, email, directory.admins.get(email)!);
   return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
+}
+
+// Runs `before` right before the first statement matching `pattern` executes, so a test can slip a
+// competing request into the window between a handler's read and its guarded write.
+export function interceptStatement(env: Env, pattern: RegExp, before: () => Promise<void>): void {
+  const prepare = env.DB.prepare.bind(env.DB);
+  let pending = true;
+  const wrap = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, {
+    get(target, property) {
+      const value = Reflect.get(target, property);
+      if (property === 'bind') return (...values: unknown[]) => wrap(target.bind(...values));
+      if (typeof value !== 'function') return value;
+      if (!['run', 'first', 'all', 'raw'].includes(String(property))) return value.bind(target);
+      return async (...args: unknown[]) => {
+        if (pending) { pending = false; await before(); }
+        return value.apply(target, args);
+      };
+    },
+  });
+  env.DB.prepare = (query: string) => pattern.test(query) ? wrap(prepare(query)) : prepare(query);
 }

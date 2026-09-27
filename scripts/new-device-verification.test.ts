@@ -8,9 +8,10 @@ import { hashPassword } from '../src/services/auth-password';
 import { buildBackupArchive } from '../src/services/backup-archive';
 import { importBackupArchiveBytes } from '../src/services/backup-import';
 import { readMailConfig } from '../src/services/mail';
-import { StorageService } from '../src/services/storage';
 import type { Env, User } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
+import * as deviceRepo from '../src/services/storage-device-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const PASSWORD = 'client-master-password-hash';
 const OLD = new Date(Date.now() - 2 * 86400_000).toISOString();
@@ -21,14 +22,13 @@ async function setup(overrides: Partial<User> = {}, envOverrides: Partial<Env> =
   const mail = captureEmail();
   const env = await createTestEnv({ ...mail.overrides, ENABLE_NEW_DEVICE_VERIFICATION: 'true', DISABLE_EMAIL_NEW_DEVICE: 'true', ...envOverrides });
   const user = await seedUser(env, { email: `ndv@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(PASSWORD), createdAt: OLD, verifyDevices: true, emailVerified: false, ...overrides });
-  const storage = new StorageService(env.DB);
-  await storage.upsertDevice(user.id, 'known-device', 'Known device', 9);
+  await deviceRepo.upsertDevice(env.DB, user.id, 'known-device', 'Known device', 9);
   const login = (extra: Record<string, string> = {}) => authedFetch(env, {
     method: 'POST', path: '/identity/connect/token',
     body: { grant_type: 'password', username: user.email, password: PASSWORD, deviceIdentifier: 'new-device', deviceType: '9', ...extra },
   });
   const code = () => String(mail.sent.filter(message => String(message.subject).includes('sign-in code')).at(-1)?.text).match(/\b\d{6}\b/)![0];
-  return { env, user, storage, login, mail, code };
+  return { env, user, login, mail, code };
 }
 
 test('new-device OTP uses exact errors, sends in the background, verifies email and rejects same-device replay', async () => {
@@ -36,17 +36,17 @@ test('new-device OTP uses exact errors, sends in the background, verifies email 
   const required = await f.login({ sso: '1', deviceIdentifier: '' });
   assert.equal(required.status, 400);
   assert.deepEqual(await required.json(), REQUIRED);
-  assert.equal(await f.storage.isKnownDevice(f.user.id, 'new-device'), false);
+  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), false);
   await drainWaitUntil();
   assert.equal(f.mail.sent.length, 1);
   assert.equal(f.mail.sent[0].to, f.user.email);
   assert.match(String(f.mail.sent[0].text), /Consider enabling two-step login/);
   const wrong = await f.login({ newDeviceOtp: f.code() === '000000' ? '111111' : '000000' });
   assert.deepEqual(await wrong.json(), INVALID);
-  assert.equal(await f.storage.isKnownDevice(f.user.id, 'new-device'), false);
+  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), false);
   assert.equal((await f.login({ newDeviceOtp: f.code() })).status, 200);
-  assert.equal(await f.storage.isKnownDevice(f.user.id, 'new-device'), true);
-  assert.equal((await f.storage.getUserById(f.user.id))?.emailVerified, true);
+  assert.equal(await deviceRepo.isKnownDevice(f.env.DB, f.user.id, 'new-device'), true);
+  assert.equal((await userRepo.getUserById(f.env.DB, f.user.id))?.emailVerified, true);
   const replay = await f.login({ newDeviceOtp: f.code() });
   assert.deepEqual(await replay.json(), INVALID);
   await drainWaitUntil();
@@ -149,12 +149,11 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   const env = await createTestEnv();
   const registered = await authedFetch(env, { method: 'POST', path: '/identity/accounts/register/finish', body: { email: 'first@x.io', masterPasswordHash: PASSWORD, key: '2.key|key|key', encryptedPrivateKey: '2.private|private|private', publicKey: 'public' } });
   assert.equal(registered.status, 200);
-  const storage = new StorageService(env.DB);
-  const user = (await storage.getUser('first@x.io'))!;
+  const user = (await userRepo.getUser(env.DB, 'first@x.io'))!;
   assert.equal(user.verifyDevices, true);
   await env.DB.prepare('UPDATE users SET verify_devices=0 WHERE id=?').bind(user.id).run();
   await ensureStorageSchema(env.DB);
-  assert.equal((await storage.getUserById(user.id))?.verifyDevices, false);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.verifyDevices, false);
   const archive = await buildBackupArchive(env, new Date(), { includeAttachments: false });
   const files = unzipSync(archive.bytes);
   const db = JSON.parse(new TextDecoder().decode(files['db.json']));
@@ -164,7 +163,7 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   const restored = await createTestEnv();
   await importBackupArchiveBytes(zipSync(files), restored, user.id, false);
   await ensureStorageSchema(restored.DB);
-  assert.equal((await new StorageService(restored.DB).getUserById(user.id))?.verifyDevices, false);
+  assert.equal((await userRepo.getUserById(restored.DB, user.id))?.verifyDevices, false);
   assert.equal(await restored.DB.prepare("SELECT value FROM config WHERE key='migration.verify-devices-on'").first('value'), '1');
   await drainWaitUntil();
 });

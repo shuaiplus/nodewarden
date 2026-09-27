@@ -5,10 +5,11 @@ import {
   notifyUserSendUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { LIMITS } from '../config/limits';
+import * as sendRepo from '../services/storage-send-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 export const SEND_INACCESSIBLE_MSG = 'Send does not exist or is no longer available';
 const SEND_PASSWORD_ITERATIONS = 100_000;
@@ -135,15 +136,15 @@ function isLikelyUuid(value: string): boolean {
   return /^[a-f0-9-]{36}$/i.test(value);
 }
 
-export async function resolveSendFromIdOrAccessId(storage: StorageService, idOrAccessId: string): Promise<Send | null> {
+export async function resolveSendFromIdOrAccessId(db: D1Database, idOrAccessId: string): Promise<Send | null> {
   if (isLikelyUuid(idOrAccessId)) {
-    const send = await storage.getSend(idOrAccessId);
+    const send = await sendRepo.getSend(db, idOrAccessId);
     if (send) return send;
   }
 
   const sendId = fromAccessId(idOrAccessId);
   if (!sendId) return null;
-  return storage.getSend(sendId);
+  return sendRepo.getSend(db, sendId);
 }
 
 export function formatSize(bytes: number): string {
@@ -432,9 +433,9 @@ export function sendToAccessResponse(send: Send, creatorIdentifier: string | nul
   };
 }
 
-export async function getCreatorIdentifier(storage: StorageService, send: Send): Promise<string | null> {
+export async function getCreatorIdentifier(db: D1Database, send: Send): Promise<string | null> {
   if (send.hideEmail) return null;
-  const owner = await storage.getUserById(send.userId);
+  const owner = await userRepo.getUserById(db, send.userId);
   return owner?.email ?? null;
 }
 

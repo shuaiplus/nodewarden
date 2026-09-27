@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { StorageService } from '../src/services/storage';
 import { sha256Base64Url } from '../src/utils/account-passkeys';
 import { createDeleteRecoverToken, signHs256Jwt } from '../src/utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
+import * as sessionRepo from '../src/services/storage-session-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const requestPath = '/api/accounts/delete-recover';
@@ -43,7 +44,7 @@ test('deletion recovery conceals account existence and status and puts all token
   const deleted = await authedFetch(f.env, { method: 'POST', path: tokenPath, body });
   assert.equal(deleted.status, 200);
   assert.equal(await deleted.text(), '');
-  assert.equal(await new StorageService(f.env.DB).getUserById(f.active.id), null);
+  assert.equal(await userRepo.getUserById(f.env.DB, f.active.id), null);
   const replay = await authedFetch(f.env, { method: 'POST', path: tokenPath, body });
   assert.equal(replay.status, 400);
   assert.equal((await replay.json() as { error: string }).error, 'Invalid token.');
@@ -110,8 +111,7 @@ test('sole Owners and the last administrator remain protected, and the sixth req
 test('a mid-flight security-stamp change prevents self or recovery deletion without touching account data', async () => {
   for (const recover of [false, true]) {
     const f = await setup();
-    const storage = new StorageService(f.env.DB);
-    await storage.saveRefreshToken('existing-session', f.active.id);
+    await sessionRepo.saveRefreshToken(f.env.DB, 'existing-session', f.active.id);
     const token = await createDeleteRecoverToken(f.env, f.active);
     const batch = f.env.DB.batch.bind(f.env.DB);
     const newStamp = crypto.randomUUID();
@@ -124,8 +124,8 @@ test('a mid-flight security-stamp change prevents self or recovery deletion with
       body: recover ? { userId: f.active.id, token } : { masterPasswordHash: f.active.masterPasswordHash },
     });
     assert.equal(response.status, recover ? 400 : 404);
-    assert.equal((await storage.getUserById(f.active.id))?.securityStamp, newStamp);
-    assert.ok(await storage.getRefreshTokenRecord('existing-session'));
+    assert.equal((await userRepo.getUserById(f.env.DB, f.active.id))?.securityStamp, newStamp);
+    assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'existing-session'));
     assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS n FROM audit_logs').first('n'), 0);
   }
 });

@@ -1,7 +1,6 @@
 import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
-import { StorageService } from '../services/storage';
 import { EventType, recordEvents } from '../services/events';
 import { AuthService } from '../services/auth';
 import {
@@ -57,6 +56,7 @@ import {
   configuredVaultOrigin,
   sendMail,
 } from '../services/mail';
+import * as userRepo from '../services/storage-user-repo';
 
 // Official clients always wrap a member's org key with that member's RSA public key (EncString
 // types 3-6). Any other type, such as a symmetric type 2, leaves the member unable to decrypt.
@@ -671,7 +671,7 @@ export async function handleGetMember(request: Request, env: Env, userId: string
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const account = membership.userId ? await new StorageService(env.DB).getUserById(membership.userId) : null;
+  const account = membership.userId ? await userRepo.getUserById(env.DB, membership.userId) : null;
   const type = clientMembershipType(membership.type);
   const collections = await orgRepo.listMemberCollectionAccess(env.DB, membership);
   const includeGroups = new URL(request.url).searchParams.get('includeGroups') === 'true';
@@ -1242,7 +1242,7 @@ export async function handleGetPlans(): Promise<Response> {
 async function verifyMasterPassword(env: Env, userId: string, body: Record<string, unknown>): Promise<Response | null> {
   const secret = asString(readBody(body, ['masterPasswordHash', 'MasterPasswordHash', 'secret', 'Secret']));
   if (!secret) return errorResponse('masterPasswordHash is required', 400);
-  const user = await new StorageService(env.DB).getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   const valid = await new AuthService(env).verifyPassword(secret, user.masterPasswordHash, user.email);
   return valid ? null : errorResponse('Invalid password', 400);

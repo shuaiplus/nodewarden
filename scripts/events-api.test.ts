@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createTestEnv, authedFetch, seedUser } from './support/env';
 import { EventType, recordEvents, pruneEvents } from '../src/services/events';
-import { StorageService } from '../src/services/storage';
 import { saveAuditLogSettings } from '../src/services/audit-events';
 import { EMPTY_PERMISSIONS } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { LIMITS } from '../src/config/limits';
+import * as cipherRepo from '../src/services/storage-cipher-repo';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
@@ -25,7 +25,7 @@ async function member(env: Env, orgId: string, user: User, accessEventLogs: bool
 }
 async function cipher(env: Env, owner: User, orgId: string | null) {
   const id = crypto.randomUUID();
-  await new StorageService(env.DB).saveCipher({ id, userId: owner.id, organizationId: orgId, type: 1, folderId: null, name: ENC, notes: null, favorite: false, data: '{}', key: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), deletedAt: null });
+  await cipherRepo.saveCipher(env.DB, { id, userId: owner.id, organizationId: orgId, type: 1, folderId: null, name: ENC, notes: null, favorite: false, data: '{}', key: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), deletedAt: null });
   return id;
 }
 const count = (env: Env) => env.DB.prepare('SELECT count(*) AS n FROM events').first<number>('n');
@@ -193,19 +193,18 @@ test('event cleanup reuses audit retention and deletes at most 1000 rows using r
 
 test('a row-cap audit setting never lets one account flood out another organization history', async () => {
   const { env, owner, org } = await setup();
-  const storage = new StorageService(env.DB);
   const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
   await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 5 }, () => ({ type: 1600, organizationId: org.id })));
   await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(10)).run();
   const outsider = await seedUser(env);
   await recordEvents(env, null, { userId: outsider.id }, Array.from({ length: 1005 }, () => ({ type: EventType.UserClientExportedVault, organizationId: null, userId: outsider.id })));
-  await saveAuditLogSettings(storage, { retentionDays: null, maxEntries: 1000 });
+  await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: 1000 });
   await pruneEvents(env);
   assert.equal(await count(env), 1010, 'recent rows are kept whatever their volume');
   await env.DB.prepare('UPDATE events SET recorded_at=? WHERE organization_id=?').bind(daysAgo(91), org.id).run();
   await pruneEvents(env);
   assert.equal(await count(env), 1005, 'row-cap mode still expires events at the default retention age');
-  await saveAuditLogSettings(storage, { retentionDays: null, maxEntries: null });
+  await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: null });
   await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(4000)).run();
   await pruneEvents(env);
   assert.equal(await count(env), 1005, 'disabled retention keeps every event');
@@ -225,7 +224,7 @@ test('committed server changes survive event-store failure, while client uploads
   assert.equal(password.status, 200);
   const deleted = await authedFetch(env, { method: 'DELETE', path: `/api/ciphers/${id}`, userId: owner.id });
   assert.equal(deleted.status, 200);
-  assert.ok((await new StorageService(env.DB).getCipher(id))?.deletedAt);
+  assert.ok((await cipherRepo.getCipher(env.DB, id))?.deletedAt);
   const collected = await authedFetch(env, { method: 'POST', path: '/events/collect', userId: owner.id,
     body: [{ type: 1007, date: new Date().toISOString() }] });
   assert.equal(collected.status, 500);

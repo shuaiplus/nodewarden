@@ -5,11 +5,11 @@ import { createHmac } from 'node:crypto';
 import { LIMITS } from '../src/config/limits';
 import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
-import { StorageService } from '../src/services/storage';
 import type { Env, User } from '../src/types';
 import { sha256Base64Url } from '../src/utils/account-passkeys';
 import { signHs256Jwt, verifyHs256Jwt } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const PASSWORD = 'client-master-password-hash';
 const TOTP = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
@@ -38,7 +38,7 @@ test('official authenticator DELETE verifies its key-bound token and clears the 
   const disabled = await request(TOTP);
   assert.equal(disabled.status, 204);
   assert.equal(await disabled.text(), '');
-  const updated = (await new StorageService(env.DB).getUserById(user.id))!;
+  const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.yubikeyKey1, PUBLIC_ID);
   assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM two_factor WHERE user_id = ?').bind(user.id).first('n'), 0);
@@ -76,7 +76,7 @@ test('official YubiKey token-only enable/disable keeps TOTP; legacy password dis
     body: { userVerificationToken: token, type: 0 },
   });
   assert.equal(disabled.status, 204);
-  const updated = (await new StorageService(env.DB).getUserById(user.id))!;
+  const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.yubikeyKey1, null);
   assert.equal(updated.totpSecret, TOTP);
   assert.equal(updated.securityStamp, user.securityStamp);
@@ -84,7 +84,7 @@ test('official YubiKey token-only enable/disable keeps TOTP; legacy password dis
     method: 'POST', path: '/api/two-factor/disable', userId: user.id, body: { type: 0, secret: PASSWORD },
   });
   assert.equal(legacy.status, 200);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))!.totpSecret, null);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))!.totpSecret, null);
 });
 
 test('provider tokens are scoped to a user, provider, current stamp and finite 30-minute expiry', async () => {
@@ -137,5 +137,5 @@ test('provider tokens are scoped to a user, provider, current stamp and finite 3
   assert.equal(changed.status, 200);
   const stale = await authedFetch(env, { method: 'DELETE', path: '/api/two-factor/yubikey', userId: user.id, body: { userVerificationToken: yubikey.UserVerificationToken } });
   assert.equal(stale.status, 400);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))!.yubikeyKey1, PUBLIC_ID);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))!.yubikeyKey1, PUBLIC_ID);
 });

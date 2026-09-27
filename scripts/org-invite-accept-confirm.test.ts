@@ -3,7 +3,6 @@ import test, { type TestContext } from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
 import { MembershipStatus } from '../src/services/org-types';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { ORG_INVITE_TTL_DAYS, verifyHs256Jwt } from '../src/utils/jwt';

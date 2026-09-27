@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
-import { StorageService } from '../src/services/storage';
 import * as emergencyRepo from '../src/services/storage-emergency-repo';
 import { EmergencyAccessStatus as Status } from '../src/services/storage-emergency-repo';
 import type { Env, User } from '../src/types';
 import { createEmergencyAccessInviteToken, createRegisterVerifyToken, signHs256Jwt } from '../src/utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser, type SentEmail } from './support/env';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } = await import('../src/handlers/emergency-access');
 
@@ -124,7 +124,7 @@ test('EA finish-signup still needs open registration and leaves the invitation p
   f.env.ALLOW_OPEN_REGISTRATION = '1';
   assert.equal((await finish()).status, 200);
   assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, id))?.status, Status.Invited);
-  const user = await new StorageService(f.env.DB).getUser(email);
+  const user = await userRepo.getUser(f.env.DB, email);
   assert.ok(user);
   assert.equal((await action(f.env, user, id, 'accept', { token })).status, 200);
 });
@@ -140,7 +140,7 @@ test('EA no-mail or no-vault-origin fallback still auto-accepts existing users',
 
 test('EA transitions mail each affected party once and sanitize names with an email fallback', async () => {
   const f = await setup();
-  await new StorageService(f.env.DB).saveUser({ ...f.grantee, name: null });
+  await userRepo.saveUser(f.env.DB, { ...f.grantee, name: null });
   const record = await invited(f);
   const token = inviteParams(f.sent[0]).get('token');
   f.sent.length = 0;

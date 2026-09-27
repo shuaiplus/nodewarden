@@ -1,8 +1,10 @@
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 
 import { BASELINE_MIGRATION_SQL } from './baseline';
 import { getOrm } from './client';
 import { users } from './schema';
+import { ensurePushInstallationCredentials } from '../services/push-relay';
+import { getConfigValue, setConfigValue } from '../services/storage-config-repo';
 
 export function schemaStatements(sql: string = BASELINE_MIGRATION_SQL): string[] {
   return sql
@@ -65,4 +67,45 @@ export async function ensureStorageSchema(db: D1Database): Promise<void> {
     await executeSchemaStatement(db, statement);
   }
   await ensureAdminUserExists(db);
+}
+
+const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
+// Bump this whenever src/db/schema.ts changes or a migration is added (data-only --custom ones too).
+// Existing D1 installs rerun ensureStorageSchema() only when this differs from config.schema.version.
+export const STORAGE_SCHEMA_VERSION = '2026-09-27-event-history';
+const REQUIRED_SCHEMA_TABLES = [
+  'events',
+  'webauthn_credentials',
+  'webauthn_challenges',
+  'auth_requests',
+  'totp_login_replays',
+  'organizations',
+  'organization_memberships',
+  'collections',
+  'sm_secrets',
+  'emergency_access',
+] as const;
+let schemaVerified = false;
+
+async function hasRequiredSchemaTables(db: D1Database): Promise<boolean> {
+  const rows = await getOrm(db).all(sql`
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name IN (${sql.join(REQUIRED_SCHEMA_TABLES.map((name) => sql`${name}`), sql`, `)})
+  `) as Array<{ name: string }>;
+  const found = new Set(rows.map((row) => row.name));
+  return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
+}
+
+// Runs once per isolate: replays the idempotent schema when the recorded version differs or a
+// required table is missing, then makes sure push credentials exist.
+export async function initializeDatabase(db: D1Database): Promise<void> {
+  if (schemaVerified) return;
+  await getOrm(db).run(sql`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  const schemaVersion = await getConfigValue(db, STORAGE_SCHEMA_VERSION_KEY);
+  if (schemaVersion !== STORAGE_SCHEMA_VERSION || !(await hasRequiredSchemaTables(db))) {
+    await ensureStorageSchema(db);
+    await setConfigValue(db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);
+  }
+  await ensurePushInstallationCredentials(db);
+  schemaVerified = true;
 }

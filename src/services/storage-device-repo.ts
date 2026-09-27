@@ -4,9 +4,10 @@ import { getOrm } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
 import type { Device, TrustedDeviceTokenSummary, User } from '../types';
 import { generateUUID } from '../utils/uuid';
+import { hashedTokenKey } from './storage-session-repo';
+import { getUser } from './storage-user-repo';
 
-type GetUserByEmail = (email: string) => Promise<User | null>;
-type TrustedTokenKeyFn = (token: string) => Promise<string>;
+const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function mapDeviceRow(row: typeof devices.$inferSelect): Device {
   return {
@@ -33,7 +34,6 @@ function deviceKey(userId: string, deviceIdentifier: string) {
 
 export async function upsertDevice(
   db: D1Database,
-  getDeviceById: (userId: string, deviceIdentifier: string) => Promise<Device | null>,
   userId: string,
   deviceIdentifier: string,
   name: string,
@@ -46,7 +46,7 @@ export async function upsertDevice(
   }
 ): Promise<void> {
   const now = new Date().toISOString();
-  const existingDevice = await getDeviceById(userId, deviceIdentifier);
+  const existingDevice = await getDevice(db, userId, deviceIdentifier);
   const effectiveSessionStamp = String(sessionStamp || '').trim() || existingDevice?.sessionStamp || '';
   const effectiveName = String(name || '').trim() || String(existingDevice?.name || '').trim();
   const effectivePushUuid = String(existingDevice?.pushUuid || '').trim() || generateUUID();
@@ -181,15 +181,10 @@ export async function isKnownDevice(db: D1Database, userId: string, deviceIdenti
   return !!row;
 }
 
-export async function isKnownDeviceByEmail(
-  getUserByEmail: GetUserByEmail,
-  isKnownDeviceForUser: (userId: string, deviceIdentifier: string) => Promise<boolean>,
-  email: string,
-  deviceIdentifier: string
-): Promise<boolean> {
-  const user = await getUserByEmail(email);
+export async function isKnownDeviceByEmail(db: D1Database, email: string, deviceIdentifier: string): Promise<boolean> {
+  const user = await getUser(db, email);
   if (!user) return false;
-  return isKnownDeviceForUser(user.id, deviceIdentifier);
+  return isKnownDevice(db, user.id, deviceIdentifier);
 }
 
 export async function getDevicesByUserId(db: D1Database, userId: string): Promise<Device[]> {
@@ -346,13 +341,12 @@ export async function updateTrustedTwoFactorTokensExpiryByDevice(
 
 export async function saveTrustedTwoFactorDeviceToken(
   db: D1Database,
-  trustedTokenKey: TrustedTokenKeyFn,
   token: string,
   userId: string,
   deviceIdentifier: string,
-  expiresAtMs: number
+  expiresAtMs = Date.now() + TWO_FACTOR_REMEMBER_TTL_MS
 ): Promise<void> {
-  const tokenKey = await trustedTokenKey(token);
+  const tokenKey = await hashedTokenKey(token);
   await deleteExpiredTrustedTokens(db, Date.now());
   await getOrm(db)
     .insert(trustedTwoFactorDeviceTokens)
@@ -365,12 +359,11 @@ export async function saveTrustedTwoFactorDeviceToken(
 
 export async function getTrustedTwoFactorDeviceTokenUserId(
   db: D1Database,
-  trustedTokenKey: TrustedTokenKeyFn,
   token: string,
   deviceIdentifier: string
 ): Promise<string | null> {
   const now = Date.now();
-  const tokenKey = await trustedTokenKey(token);
+  const tokenKey = await hashedTokenKey(token);
   const [row] = await getOrm(db)
     .select({
       userId: trustedTwoFactorDeviceTokens.userId,

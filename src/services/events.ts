@@ -5,7 +5,6 @@ import { SendAuthType, SendType, type Env, type Send } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
 import { MembershipStatus } from './org-types';
-import { StorageService } from './storage';
 
 export const EventType = {
   UserLoggedIn: 1000, UserChangedPassword: 1001, UserUpdated2fa: 1002, UserDisabled2fa: 1003,
@@ -201,7 +200,7 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
 // row-cap mode bounds only audit_logs and events then keep the default retention age. Retention
 // switched off keeps events too.
 export async function pruneEvents(env: Env): Promise<void> {
-  const { retentionDays, maxEntries } = await getAuditLogSettings(new StorageService(env.DB));
+  const { retentionDays, maxEntries } = await getAuditLogSettings(env.DB);
   const days = retentionDays ?? (maxEntries ? DEFAULT_AUDIT_LOG_SETTINGS.retentionDays : null);
   if (!days) return;
   await env.DB.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE recorded_at < ? ORDER BY recorded_at,id LIMIT 1000)')

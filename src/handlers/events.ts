@@ -5,10 +5,10 @@ import type { Env, User } from '../types';
 import { errorResponse } from '../utils/response';
 import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMember } from '../services/org-authz';
 import * as orgRepo from '../services/storage-org-repo';
-import { StorageService } from '../services/storage';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
 import { LIMITS } from '../config/limits';
 import { RateLimitService } from '../services/ratelimit';
+import * as cipherRepo from '../services/storage-cipher-repo';
 
 const CLIENT_CIPHER_TYPES = new Set([
   ...Array.from({ length: 8 }, (_, i) => 1107 + i),
@@ -93,7 +93,7 @@ export async function handleEventRoute(request: Request, env: Env, user: User, p
   const cipherPath = path.match(/^\/api\/ciphers\/([a-f0-9-]+)\/events$/i);
   if (cipherPath) {
     if (method !== 'GET') return errorResponse('Method not allowed', 405);
-    const cipher = await new StorageService(env.DB).getCipher(cipherPath[1]);
+    const cipher = await cipherRepo.getCipher(env.DB, cipherPath[1]);
     if (!cipher) return errorResponse('Not found', 404);
     if (cipher.organizationId) {
       if (!canAccessEventLogs(await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, cipher.organizationId))) return errorResponse('Not found', 404);

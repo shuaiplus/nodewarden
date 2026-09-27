@@ -1,8 +1,9 @@
 import { and, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 
-import { getOrm } from '../db/client';
+import { chunkRows, getOrm } from '../db/client';
 import { ciphers } from '../db/schema';
 import type { Cipher } from '../types';
+import { updateRevisionDate } from './storage-revision-repo';
 
 function normalizeOptionalId(value: unknown): string | null {
   if (value == null) return null;
@@ -10,8 +11,6 @@ function normalizeOptionalId(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
-type SqlChunkSize = (fixedBindCount: number) => number;
-type UpdateRevisionDate = (userId: string) => Promise<string>;
 
 const CIPHER_SCALAR_DATA_KEYS = new Set([
   'id',
@@ -188,30 +187,24 @@ async function chunkedUpdate(
   db: D1Database,
   ids: string[],
   userId: string,
-  sqlChunkSize: SqlChunkSize,
   fixedBinds: number,
   set: Record<string, unknown>,
-  extraWhere: ReturnType<typeof and> | undefined,
-  updateRevisionDate: UpdateRevisionDate
+  extraWhere: ReturnType<typeof and> | undefined
 ): Promise<string | null> {
   const uniqueIds = sanitizeIds(ids);
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(fixedBinds);
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1, fixedBinds)) {
     await orm
       .update(ciphers)
       .set(set)
       .where(and(personalVault(userId), inArray(ciphers.id, chunk), extraWhere));
   }
-  return updateRevisionDate(userId);
+  return updateRevisionDate(db, userId);
 }
 
 export async function bulkSoftDeleteCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   userId: string
 ): Promise<string | null> {
@@ -220,22 +213,18 @@ export async function bulkSoftDeleteCiphers(
     db,
     ids,
     userId,
-    sqlChunkSize,
     3,
     {
       deletedAt: now,
       updatedAt: now,
       data: sql`json_remove(${ciphers.data}, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')`,
     },
-    undefined,
-    updateRevisionDate
+    undefined
   );
 }
 
 export async function bulkRestoreCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   userId: string
 ): Promise<string | null> {
@@ -244,34 +233,28 @@ export async function bulkRestoreCiphers(
     db,
     ids,
     userId,
-    sqlChunkSize,
     2,
     {
       deletedAt: null,
       updatedAt: now,
       data: sql`json_remove(${ciphers.data}, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')`,
     },
-    undefined,
-    updateRevisionDate
+    undefined
   );
 }
 
 export async function bulkDeleteCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   userId: string
 ): Promise<string | null> {
   const uniqueIds = sanitizeIds(ids);
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(1);
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
     await orm.delete(ciphers).where(and(personalVault(userId), inArray(ciphers.id, chunk)));
   }
-  return updateRevisionDate(userId);
+  return updateRevisionDate(db, userId);
 }
 
 export async function getAllCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
@@ -315,17 +298,14 @@ export async function getCiphersPage(
 
 export async function getCiphersByIds(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
   ids: string[],
   userId: string
 ): Promise<Cipher[]> {
   const uniqueIds = sanitizeIds(ids);
   if (!uniqueIds.length) return [];
   const orm = getOrm(db);
-  const chunkSize = sqlChunkSize(1);
   const out: Cipher[] = [];
-  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
-    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
     const rows = await orm
       .select()
       .from(ciphers)
@@ -342,8 +322,6 @@ export async function getCiphersByIds(
 
 export async function bulkMoveCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   folderId: string | null,
   userId: string
@@ -353,22 +331,18 @@ export async function bulkMoveCiphers(
     db,
     ids,
     userId,
-    sqlChunkSize,
     3,
     {
       folderId: normalizeOptionalId(folderId),
       updatedAt: now,
       data: sql`json_remove(${ciphers.data}, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')`,
     },
-    undefined,
-    updateRevisionDate
+    undefined
   );
 }
 
 export async function bulkArchiveCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   userId: string
 ): Promise<string | null> {
@@ -377,7 +351,6 @@ export async function bulkArchiveCiphers(
     db,
     ids,
     userId,
-    sqlChunkSize,
     3,
     {
       archivedAt: now,
@@ -388,15 +361,12 @@ export async function bulkArchiveCiphers(
       isNull(ciphers.deletedAt),
       sql`json_extract(${ciphers.data}, '$.deletedAt') is null`,
       sql`json_extract(${ciphers.data}, '$.deletedDate') is null`,
-    ),
-    updateRevisionDate
+    )
   );
 }
 
 export async function bulkUnarchiveCiphers(
   db: D1Database,
-  sqlChunkSize: SqlChunkSize,
-  updateRevisionDate: UpdateRevisionDate,
   ids: string[],
   userId: string
 ): Promise<string | null> {
@@ -405,15 +375,13 @@ export async function bulkUnarchiveCiphers(
     db,
     ids,
     userId,
-    sqlChunkSize,
     2,
     {
       archivedAt: null,
       updatedAt: now,
       data: sql`json_remove(${ciphers.data}, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')`,
     },
-    undefined,
-    updateRevisionDate
+    undefined
   );
 }
 

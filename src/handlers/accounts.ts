@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
-import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { isAuthRequestLoginApproved } from '../services/storage-auth-request-repo';
 import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
@@ -41,6 +40,14 @@ import {
   initializeYubicoCredentialsOnce,
   replaceYubicoCredentials,
 } from '../services/yubico-config';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
+import * as adminRepo from '../services/storage-admin-repo';
+import * as authRequestRepo from '../services/storage-auth-request-repo';
+import * as configRepo from '../services/storage-config-repo';
+import * as revisionRepo from '../services/storage-revision-repo';
+import * as sessionRepo from '../services/storage-session-repo';
+import * as totpReplayRepo from '../services/storage-totp-replay-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
 const TWO_FACTOR_PROVIDER_EMAIL = 1;
@@ -298,7 +305,6 @@ function keysResponse(user: User): Record<string, unknown> {
 // - First user becomes admin.
 // - Any subsequent user must provide a valid inviteCode.
 export async function handleRegister(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
 
   const unsafe = jwtSecretUnsafeReason(env);
   if (unsafe) {
@@ -385,17 +391,17 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     updatedAt: now,
   };
 
-  const userCount = await storage.getUserCount();
+  const userCount = await userRepo.getUserCount(env.DB);
   if (userCount === 0) {
     user.role = 'admin';
-    const created = await storage.createFirstUser(user);
+    const created = await userRepo.createFirstUser(env.DB, user);
     if (!created) {
       return errorResponse('Registration is temporarily unavailable, retry once', 409);
     }
     AuthService.invalidateUserCache(user.id);
     if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
-    await storage.setRegistered();
-    await writeAuditEvent(storage, {
+    await configRepo.setRegistered(env.DB);
+    await writeAuditEvent(env.DB, {
       actorUserId: user.id,
       action: 'user.register.first_admin',
       targetType: 'user',
@@ -406,7 +412,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     });
     notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
     await syncVaultAdminRoles(env);
-    return registerSuccessResponse((await storage.getUserById(user.id))!.role);
+    return registerSuccessResponse((await userRepo.getUserById(env.DB, user.id))!.role);
   }
 
   if (!inviteCode && !isOpenRegistrationEnabled(env)) {
@@ -414,18 +420,18 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   }
 
   if (inviteCode) {
-    const inviteMarked = await storage.markInviteUsed(inviteCode, user.id);
+    const inviteMarked = await adminRepo.markInviteUsed(env.DB, inviteCode, user.id);
     if (!inviteMarked) {
       return errorResponse('Invite code is invalid or expired', 403);
     }
   }
 
   try {
-    await storage.createUser(user);
+    await userRepo.createUser(env.DB, user);
     AuthService.invalidateUserCache(user.id);
     if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
   } catch (error) {
-    if (inviteCode) await storage.revertInviteUsed(inviteCode, user.id);
+    if (inviteCode) await adminRepo.revertInviteUsed(env.DB, inviteCode, user.id);
     let cause = error;
     while (cause instanceof Error && cause.cause) cause = cause.cause;
     const msg = (cause instanceof Error ? cause.message : String(cause)).toLowerCase();
@@ -438,7 +444,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
   if (inviteCode) {
     try {
-      const assigned = await storage.assignInviteUsedBy(inviteCode, user.id);
+      const assigned = await adminRepo.assignInviteUsedBy(env.DB, inviteCode, user.id);
       if (!assigned) {
         console.warn('Invite used_by was not assigned after registration', { inviteCode, userId: user.id });
       }
@@ -447,7 +453,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     }
   }
 
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: inviteCode ? 'user.register.invite' : 'user.register.open',
     targetType: 'user',
@@ -459,7 +465,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
   notifyMail(env, user.email, 'welcome', { name: user.name || user.email, vaultOrigin: configuredVaultOrigin(request, env) });
   await syncVaultAdminRoles(env);
-  return registerSuccessResponse((await storage.getUserById(user.id))!.role);
+  return registerSuccessResponse((await userRepo.getUserById(env.DB, user.id))!.role);
 }
 
 function registerSuccessResponse(role: User['role']): Response {
@@ -488,15 +494,14 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
   const name = String(body.name || '').trim() || null;
   if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
 
-  const storage = new StorageService(env.DB);
-  const userCount = await storage.getUserCount();
+  const userCount = await userRepo.getUserCount(env.DB);
   if (userCount > 0 && !isOpenRegistrationEnabled(env)) {
     return errorResponse('Registration is invite-only', 403);
   }
 
   if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
   runInBackground('register-verification', async () => {
-    if (isReservedDocumentationEmail(email) || await storage.getUser(email)) return;
+    if (isReservedDocumentationEmail(email) || await userRepo.getUser(env.DB, email)) return;
     const token = await createRegisterVerifyToken(env.JWT_SECRET, email, name);
     await sendMail(env, email, 'registerVerification', { vaultOrigin: registerVerifyVaultOrigin(request, env), email, token });
   });
@@ -515,7 +520,6 @@ export async function handleRegisterFinish(request: Request, env: Env): Promise<
 
 // POST /api/accounts/password-hint
 export async function handleGetPasswordHint(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier) {
     return errorResponse('Client IP is required', 403);
@@ -582,7 +586,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
   if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
   if (mail.kind === 'enabled') {
     runInBackground('password-hint', async () => {
-      const user = await storage.getUser(email);
+      const user = await userRepo.getUser(env.DB, email);
       if (!user || user.status !== 'active') return;
       const hint = normalizeMasterPasswordHint(user.masterPasswordHint);
       if (hint) await sendMail(env, user.email, 'passwordHint', { hint });
@@ -590,7 +594,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     });
     return jsonResponse({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
   }
-  const user = await storage.getUser(email);
+  const user = await userRepo.getUser(env.DB, email);
   const hint = user?.status === 'active' ? normalizeMasterPasswordHint(user.masterPasswordHint) : null;
   return jsonResponse({
     object: 'passwordHint',
@@ -601,7 +605,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
 
 // DELETE /api/accounts; POST /api/accounts/delete
 export async function handleDeleteAccount(request: Request, env: Env, userId: string): Promise<Response> {
-  const user = await new StorageService(env.DB).getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try {
@@ -628,8 +632,7 @@ export async function handleDeleteAccount(request: Request, env: Env, userId: st
 }
 
 export async function handleEmailToken(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
@@ -641,7 +644,7 @@ export async function handleEmailToken(request: Request, env: Env, userId: strin
   if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
   const target = { purpose: 'email-change' as const, subject: user.id, binding: `${user.securityStamp}:${email}` };
   let outcome: MailOutcome;
-  if (await storage.getUser(email)) {
+  if (await userRepo.getUser(env.DB, email)) {
     outcome = await spendEmailOtpIssueBudget(env, target)
       ? await sendMail(env, user.email, 'emailChangeAlreadyExists', {})
       : { kind: 'throttled', retryAfterSeconds: 3600 - Math.floor(Date.now() / 1000) % 3600 };
@@ -653,8 +656,7 @@ export async function handleEmailToken(request: Request, env: Env, userId: strin
 }
 
 export async function handleChangeEmail(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
@@ -711,7 +713,7 @@ export async function handleDeleteRecover(request: Request, env: Env): Promise<R
   const origin = configuredVaultOrigin(request, env);
   if (readMailConfig(env).kind !== 'enabled' || !origin) return errorResponse('Email sending is not configured', 503);
   runInBackground('delete-recover', async () => {
-    const user = await new StorageService(env.DB).getUser(email);
+    const user = await userRepo.getUser(env.DB, email);
     if (!user || user.status !== 'active') return;
     const token = await createDeleteRecoverToken(env, user);
     const params = new URLSearchParams({ userId: user.id, token, email: user.email });
@@ -726,7 +728,7 @@ export async function handleDeleteRecoverToken(request: Request, env: Env): Prom
   try { body = await readRequestBody(request); } catch { return invalid(); }
   const userId = readBodyString(body, ['userId', 'UserId']);
   const token = readBodyString(body, ['token', 'Token']);
-  const user = userId ? await new StorageService(env.DB).getUserById(userId) : null;
+  const user = userId ? await userRepo.getUserById(env.DB, userId) : null;
   if (!user || user.status !== 'active' || !await verifyDeleteRecoverToken(env, user, token)) return invalid();
   const result = await deleteUserAccount(env, user.id, {
     actorUserId: null, action: 'user.account.delete_recover', category: 'security', level: 'security',
@@ -742,16 +744,14 @@ export async function handleDeleteRecoverToken(request: Request, env: Env): Prom
 // GET /api/accounts/profile
 export async function handleGetProfile(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   return jsonResponse(await buildProfileResponse(user, env));
 }
 
 // PUT /api/accounts/profile
 export async function handleUpdateProfile(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: {
@@ -770,8 +770,8 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
 
   user.masterPasswordHint = masterPasswordHint;
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, ['masterPasswordHint'])) return errorResponse('User verification failed.', 400);
-  await writeAuditEvent(storage, {
+  if (!await userRepo.saveUser(env.DB, user, ['masterPasswordHint'])) return errorResponse('User verification failed.', 400);
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'account.profile.update',
     category: 'security',
@@ -790,8 +790,7 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
 // PUT/POST /api/accounts/verify-devices
 // Preferences are editable while opt-in new-device verification is active.
 export async function handleSetVerifyDevices(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   const mail = readMailConfig(env);
   if (mail.kind !== 'enabled' || !mail.newDeviceVerification) return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
@@ -801,10 +800,10 @@ export async function handleSetVerifyDevices(request: Request, env: Env, userId:
   const verifyDevices = body.verifyDevices ?? body.VerifyDevices;
   if (typeof verifyDevices !== 'boolean') return errorResponse('verifyDevices must be true or false', 400);
   user.verifyDevices = verifyDevices;
-  if (!await storage.saveUser(user, ['verifyDevices'])) return errorResponse('User verification failed.', 400);
-  await storage.updateRevisionDate(user.id);
+  if (!await userRepo.saveUser(env.DB, user, ['verifyDevices'])) return errorResponse('User verification failed.', 400);
+  await revisionRepo.updateRevisionDate(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
-  await writeAuditEvent(storage, { actorUserId: user.id, action: 'account.verify_devices.update', category: 'security', level: 'security', targetType: 'user', targetId: user.id, metadata: { verifyDevices, ...auditRequestMetadata(request) } });
+  await writeAuditEvent(env.DB, { actorUserId: user.id, action: 'account.verify_devices.update', category: 'security', level: 'security', targetType: 'user', targetId: user.id, metadata: { verifyDevices, ...auditRequestMetadata(request) } });
   return new Response(null, { status: 200 });
 }
 
@@ -815,13 +814,12 @@ export async function handleResendNewDeviceOtp(request: Request, env: Env): Prom
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
   if (mail.newDeviceVerification) runInBackground('new-device-resend', async () => {
-    const storage = new StorageService(env.DB);
     const email = readBodyString(body, ['email', 'Email']).trim().toLowerCase();
-    const user = email ? await storage.getUser(email) : null;
+    const user = email ? await userRepo.getUser(env.DB, email) : null;
     if (!user || user.status !== 'active' || !user.verifyDevices
       || !(Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000)) return;
     if (!await verifyUserSecret(new AuthService(env), user, readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash']))) return;
-    const hasPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+    const hasPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
     if (twoFactorProviders(user, hasPasskey).length || !await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()) return;
     const device = readAuthRequestDeviceInfo({ deviceType: readBodyString(body, ['deviceType', 'DeviceType']) }, request);
     notifyNewDeviceVerification(env, request, user, device.deviceType);
@@ -832,8 +830,7 @@ export async function handleResendNewDeviceOtp(request: Request, env: Env): Prom
 // GET /api/accounts/keys
 export async function handleGetKeys(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
 
   if (!user) {
     return errorResponse('User not found', 404);
@@ -846,16 +843,15 @@ export async function handleGetKeys(request: Request, env: Env, userId: string):
 // wrap keys for another account (emergency access and org member confirm) with it, so any
 // logged-in caller may read it.
 export async function handleGetUserPublicKey(env: Env, id: string): Promise<Response> {
-  const user = await new StorageService(env.DB).getUserById(id);
+  const user = await userRepo.getUserById(env.DB, id);
   if (!user?.publicKey) return errorResponse('Resource not found.', 404);
   return jsonResponse({ userId: user.id, publicKey: user.publicKey, object: 'userKey' });
 }
 
 // POST /api/accounts/keys
 export async function handleSetKeys(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
 
   if (!user) {
     return errorResponse('User not found', 404);
@@ -895,12 +891,12 @@ export async function handleSetKeys(request: Request, env: Env, userId: string):
   if (body.publicKey) user.publicKey = body.publicKey;
   user.updatedAt = new Date().toISOString();
 
-  if (!await storage.saveUser(user, [
+  if (!await userRepo.saveUser(env.DB, user, [
     ...(body.key ? ['key' as const] : []),
     ...(body.encryptedPrivateKey ? ['privateKey' as const] : []),
     ...(body.publicKey ? ['publicKey' as const] : []),
   ])) return errorResponse('User verification failed.', 400);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'account.keys.update',
     category: 'security',
@@ -920,9 +916,8 @@ export async function handleSetKeys(request: Request, env: Env, userId: string):
 
 // POST/PUT /api/accounts/password
 export async function handleChangePassword(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: {
@@ -987,7 +982,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const originalSecurityStamp = user.securityStamp;
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, [
+  if (!await userRepo.saveUser(env.DB, user, [
     'masterPasswordHash', 'key', 'securityStamp',
     ...(nextPrivateKey ? ['privateKey' as const] : []),
     ...(nextPublicKey ? ['publicKey' as const] : []),
@@ -995,9 +990,9 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   ], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
   AuthService.invalidateUserCache(user.id);
   if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
-  await storage.deleteRefreshTokensByUserId(user.id);
+  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
   await recordUserEvent(env, request, user.id, EventType.UserChangedPassword);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'user.password.change',
     targetType: 'user',
@@ -1013,8 +1008,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
 // GET /api/accounts/totp
 export async function handleGetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   return jsonResponse({
@@ -1063,8 +1057,7 @@ function deviceVerificationSettingsResponse(): Record<string, unknown> {
   return { isDeviceVerificationSectionEnabled: false, unknownDeviceVerificationEnabled: false, object: 'deviceVerificationSettings' };
 }
 
-async function yubiKeySettingsResponse(storage: StorageService, env: Env, user: User): Promise<Record<string, unknown>> {
-  void storage;
+async function yubiKeySettingsResponse(env: Env, user: User): Promise<Record<string, unknown>> {
   const credentials = await getYubicoCredentials(env.DB);
   const canManageCredentials = user.role === 'admin' && user.status === 'active';
   return {
@@ -1083,11 +1076,10 @@ async function yubiKeySettingsResponse(storage: StorageService, env: Env, user: 
 // GET /api/two-factor
 export async function handleGetTwoFactorProviders(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+  const hasTwoFactorPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
   const data = twoFactorProviders(user, hasTwoFactorPasskey).map(type => twoFactorProviderResponse(type, true));
 
   return jsonResponse({
@@ -1099,9 +1091,8 @@ export async function handleGetTwoFactorProviders(request: Request, env: Env, us
 
 // POST /api/two-factor/get-authenticator
 export async function handleGetTwoFactorAuthenticator(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1122,9 +1113,8 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
 
 // POST /api/two-factor/get-yubikey
 export async function handleGetTwoFactorYubiKey(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1139,7 +1129,7 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   if (!verified) return errorResponse('User verification failed.', 400);
 
   return jsonResponse({
-    ...await yubiKeySettingsResponse(storage, env, user),
+    ...await yubiKeySettingsResponse(env, user),
     UserVerificationToken: await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY),
   });
 }
@@ -1151,14 +1141,13 @@ export async function handleSendTwoFactorEmailLogin(request: Request, env: Env):
   const body = Object.fromEntries(Object.entries(raw).map(([name, value]) => [name.toLowerCase(), value]));
   if (['email', 'authrequestid', 'authrequestaccesscode', 'ssoemail2fasessiontoken', 'masterpasswordhash'].some(name => body[name] != null && typeof body[name] !== 'string')) return rejected();
   const email = readBodyString(body, ['email']).trim().toLowerCase();
-  const storage = new StorageService(env.DB);
-  const user = email ? await storage.getUser(email) : null;
+  const user = email ? await userRepo.getUser(env.DB, email) : null;
   if (!user || user.status !== 'active' || !user.twoFactorEmail) return rejected();
   const accessCode = readBodyString(body, ['authrequestaccesscode']).trim();
   const sessionToken = readBodyString(body, ['ssoemail2fasessiontoken']).trim();
   let verified: boolean;
   if (accessCode) {
-    const authRequest = await storage.getAuthRequestByIdForUser(readBodyString(body, ['authrequestid']), user.id);
+    const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, readBodyString(body, ['authrequestid']), user.id);
     verified = isAuthRequestLoginApproved(authRequest, user.id, accessCode);
   } else if (sessionToken) {
     verified = await verifySsoEmail2faSessionToken(env, user, sessionToken);
@@ -1189,7 +1178,7 @@ async function verifyEmailTwoFactorUser(env: Env, user: User, body: Record<strin
 }
 
 export async function handleGetTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
-  const user = await new StorageService(env.DB).getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
@@ -1199,7 +1188,7 @@ export async function handleGetTwoFactorEmail(request: Request, env: Env, userId
 }
 
 export async function handleSendTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
-  const user = await new StorageService(env.DB).getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
@@ -1215,8 +1204,7 @@ export async function handleSendTwoFactorEmail(request: Request, env: Env, userI
 }
 
 export async function handlePutTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   let body: Record<string, unknown>;
   try { body = await readRequestBody(request); } catch { return errorResponse('Invalid JSON', 400); }
@@ -1230,10 +1218,10 @@ export async function handlePutTwoFactorEmail(request: Request, env: Env, userId
   const changed = await env.DB.prepare("UPDATE users SET two_factor_email = ?, totp_recovery_code = COALESCE(NULLIF(totp_recovery_code, ''), ?), updated_at = ? WHERE id = ? AND security_stamp = ? RETURNING id")
     .bind(email, createRecoveryCode(), new Date().toISOString(), user.id, user.securityStamp).first();
   if (!changed) return errorResponse('User verification failed.', 400);
-  await storage.updateRevisionDate(user.id);
+  await revisionRepo.updateRevisionDate(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
   if (user.twoFactorEmail !== email) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id, action: 'account.two_factor.email.enable', category: 'security', level: 'security',
     targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
   });
@@ -1243,8 +1231,7 @@ export async function handlePutTwoFactorEmail(request: Request, env: Env, userId
 // POST /api/two-factor/get-device-verification-settings
 export async function handleGetDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   return jsonResponse(deviceVerificationSettingsResponse());
 }
@@ -1256,8 +1243,7 @@ export async function handlePutDeviceVerificationSettings(request: Request, env:
 
 // PUT/POST /api/two-factor/authenticator
 export async function handlePutTwoFactorAuthenticator(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1278,7 +1264,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   }
   if (!isTotpEnabled(key)) return errorResponse('Invalid TOTP secret', 400);
   const matchedCounter = await findMatchingTotpCounter(key, token);
-  if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
+  if (matchedCounter == null || !await totpReplayRepo.consumeTotpLoginCounter(env.DB, user.id, matchedCounter)) {
     return errorResponse('Invalid token.', 400);
   }
 
@@ -1287,12 +1273,12 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
+  if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
   if (!await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
-  await storage.deleteRefreshTokensByUserId(user.id);
+  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
   if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'account.totp.enable',
     category: 'security',
@@ -1307,9 +1293,8 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
 
 // PUT/POST /api/two-factor/yubikey
 export async function handlePutTwoFactorYubiKey(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1370,11 +1355,11 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'])) return errorResponse('User verification failed.', 400);
-  await storage.deleteRefreshTokensByUserId(user.id);
+  if (!await userRepo.saveUser(env.DB, user, ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'])) return errorResponse('User verification failed.', 400);
+  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
   if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'account.yubikey.enable',
     category: 'security',
@@ -1384,14 +1369,13 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse({ ...await yubiKeySettingsResponse(storage, env, user), Object: 'twoFactorYubiKeyUpdate' });
+  return jsonResponse({ ...await yubiKeySettingsResponse(env, user), Object: 'twoFactorYubiKeyUpdate' });
 }
 
 // PUT/POST /api/two-factor/yubikey/config
 export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
   if (user.role !== 'admin' || user.status !== 'active') return errorResponse('Forbidden', 403);
 
@@ -1411,7 +1395,7 @@ export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env
   if (!clientId || !secretKey) return errorResponse('Yubico Client ID and Secret Key are required.', 400);
 
   await replaceYubicoCredentials(env.DB, { clientId, secretKey });
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: 'system.yubico.credentials.update',
     category: 'security',
@@ -1421,14 +1405,13 @@ export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+  return jsonResponse(await yubiKeySettingsResponse(env, user));
 }
 
 // POST /api/two-factor/yubikey/bootstrap
 export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1469,7 +1452,7 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
     credentials = initialized.credentials;
   }
 
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: user.role === 'admin'
       ? 'system.yubico.credentials.reconfigure'
@@ -1481,14 +1464,13 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+  return jsonResponse(await yubiKeySettingsResponse(env, user));
 }
 
 // DELETE /api/two-factor/authenticator and PUT/POST /api/two-factor/disable
 export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string, routeType?: number): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, unknown>;
@@ -1511,7 +1493,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     || await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  const wasEnabled = twoFactorProviders(user, type === TWO_FACTOR_PROVIDER_WEBAUTHN && await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0).some(provider => provider === type);
+  const wasEnabled = twoFactorProviders(user, type === TWO_FACTOR_PROVIDER_WEBAUTHN && await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0).some(provider => provider === type);
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
     user.totpSecret = null;
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
@@ -1523,7 +1505,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     user.yubikeyNfc = false;
   }
   user.updatedAt = new Date().toISOString();
-  if (!await storage.saveUser(user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? ['totpSecret']
+  if (!await userRepo.saveUser(env.DB, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? ['totpSecret']
     : type === TWO_FACTOR_PROVIDER_YUBIKEY ? ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'] : [])) return errorResponse('User verification failed.', 400);
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) await deleteTwoFactorSecret(env.DB, user.id);
   if (type === TWO_FACTOR_PROVIDER_EMAIL) {
@@ -1533,10 +1515,10 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
     await env.DB.prepare("DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)").bind(user.id, user.id, user.securityStamp).run();
   }
-  await storage.deleteRefreshTokensByUserId(user.id);
+  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
   if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: type === TWO_FACTOR_PROVIDER_AUTHENTICATOR
       ? 'account.totp.disable'
@@ -1552,7 +1534,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     metadata: auditRequestMetadata(request),
   });
 
-  await storage.updateRevisionDate(user.id);
+  await revisionRepo.updateRevisionDate(env.DB, user.id);
   return routeType === undefined ? jsonResponse(twoFactorProviderResponse(type, false)) : new Response(null, { status: 204 });
 }
 
@@ -1560,9 +1542,8 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 // enable: { enabled: true, secret: "...", token: "123456", masterPasswordHash?: "...", userVerificationToken?: "..." }
 // disable: { enabled: false, masterPasswordHash: "..." }
 export async function handleSetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: {
@@ -1599,7 +1580,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
       return errorResponse('User verification failed.', 400);
     }
     const matchedCounter = await findMatchingTotpCounter(normalizedSecret, body.token);
-    if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
+    if (matchedCounter == null || !await totpReplayRepo.consumeTotpLoginCounter(env.DB, user.id, matchedCounter)) {
       return errorResponse('Invalid TOTP token', 400);
     }
     const factorChanged = user.totpSecret !== normalizedSecret;
@@ -1607,12 +1588,12 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
     if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
     user.updatedAt = new Date().toISOString();
-    if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
+    if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
     if (!await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
-    await storage.deleteRefreshTokensByUserId(user.id);
+    await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
     AuthService.invalidateUserCache(user.id);
     if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-    await writeAuditEvent(storage, {
+    await writeAuditEvent(env.DB, {
       actorUserId: user.id,
       action: 'account.totp.enable',
       category: 'security',
@@ -1634,12 +1615,12 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     const wasEnabled = !!user.totpSecret;
     user.totpSecret = null;
     user.updatedAt = new Date().toISOString();
-    if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
+    if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
     await deleteTwoFactorSecret(env.DB, user.id);
-    await storage.deleteRefreshTokensByUserId(user.id);
+    await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
     AuthService.invalidateUserCache(user.id);
     if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
-    await writeAuditEvent(storage, {
+    await writeAuditEvent(env.DB, {
       actorUserId: user.id,
       action: 'account.totp.disable',
       category: 'security',
@@ -1656,9 +1637,8 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
 
 // POST /api/accounts/totp/recovery-code
 export async function handleGetTotpRecoveryCode(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, string | undefined>;
@@ -1693,7 +1673,6 @@ export async function handleGetTotpRecoveryCode(request: Request, env: Env, user
 // POST /identity/accounts/recover-2fa
 // Disable TOTP by recovery code + password, then rotate recovery code.
 export async function handleRecoverTwoFactor(request: Request, env: Env): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const rateLimit = new RateLimitService(env.DB);
 
@@ -1731,7 +1710,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
     return errorResponse('Email, masterPasswordHash and recoveryCode are required', 400);
   }
 
-  const user = await storage.getUser(email);
+  const user = await userRepo.getUser(env.DB, email);
   if (!user || user.status !== 'active') {
     await rateLimit.recordFailedLogin(recoverLimitKey);
     return errorResponse('Invalid credentials or recovery code', 400);
@@ -1784,8 +1763,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
 // GET /api/accounts/revision-date
 export async function handleGetRevisionDate(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
-  const storage = new StorageService(env.DB);
-  const revisionDate = await storage.getRevisionDate(userId);
+  const revisionDate = await revisionRepo.getRevisionDate(env.DB, userId);
 
   // Return as milliseconds timestamp (Bitwarden format)
   const timestamp = new Date(revisionDate).getTime();
@@ -1816,19 +1794,17 @@ export async function handleSetUserKeyId(request: Request, env: Env, userId: str
     return errorResponse('UserKeyId is not a valid key id.', 400);
   }
 
-  const storage = new StorageService(env.DB);
-  if (!await storage.setUserKeyIdIfUnset(userId, userKeyId)) {
+  if (!await userRepo.setUserKeyIdIfUnset(env.DB, userId, userKeyId)) {
     return errorResponse('User key id is already set.', 400);
   }
-  await storage.updateRevisionDate(userId);
+  await revisionRepo.updateRevisionDate(env.DB, userId);
   return new Response(null, { status: 200 });
 }
 
 // POST /api/accounts/verify-password
 export async function handleVerifyPassword(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
 
   if (!user) {
     return errorResponse('User not found', 404);
@@ -1867,9 +1843,8 @@ export async function handleRotateApiKey(request: Request, env: Env, userId: str
 }
 
 async function apiKey(request: Request, env: Env, userId: string, rotate: boolean): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
   let body: Record<string, string | undefined>;
@@ -1901,11 +1876,11 @@ async function apiKey(request: Request, env: Env, userId: string, rotate: boolea
   if (rotate || !user.apiKey) {
     user.apiKey = randomStringAlphanum(LIMITS.auth.clientSecretLength);
     user.updatedAt = new Date().toISOString();
-    if (!await storage.saveUser(user, ['apiKey'])) return errorResponse('User verification failed.', 400);
+    if (!await userRepo.saveUser(env.DB, user, ['apiKey'])) return errorResponse('User verification failed.', 400);
     AuthService.invalidateUserCache(user.id);
     auditAction = rotate ? 'account.api_key.rotate' : 'account.api_key.create';
   }
-  await writeAuditEvent(storage, {
+  await writeAuditEvent(env.DB, {
     actorUserId: user.id,
     action: auditAction,
     category: 'security',

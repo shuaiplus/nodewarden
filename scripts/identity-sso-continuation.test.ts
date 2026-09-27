@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import type { User } from '../src/types';
-import { StorageService } from '../src/services/storage';
 import { verifyJWT } from '../src/utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
+import * as deviceRepo from '../src/services/storage-device-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const TOTP_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const VERIFIER = 'verified-pkce-context-'.repeat(3);
@@ -120,7 +121,7 @@ test('disabled, stamp-changed and email-reassigned accounts cannot resume verifi
 test('only one concurrent SSO completion can create sessions with a reusable remember factor', async t => {
   const f = await setup(t);
   await f.challenge();
-  await new StorageService(f.env.DB).saveTrustedTwoFactorDeviceToken('existing-remember-token', f.user.id, DEVICE, Date.now() + 60_000);
+  await deviceRepo.saveTrustedTwoFactorDeviceToken(f.env.DB, 'existing-remember-token', f.user.id, DEVICE, Date.now() + 60_000);
   const responses = await Promise.all(Array.from({ length: 2 }, () => f.login({ twoFactorProvider: '5', twoFactorToken: 'existing-remember-token' })));
   assert.deepEqual(responses.map(response => response.status).sort(), [200, 400]);
   assert.deepEqual(await f.counts(), { sessions: 1, remembered: 1, devices: 1 });
@@ -141,7 +142,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   });
   const factors = { twoFactorProvider: '8', twoFactorToken: RECOVERY };
   assert.equal((await f.login(factors)).status, 400);
-  const stored = await new StorageService(f.env.DB).getUserById(f.user.id);
+  const stored = await userRepo.getUserById(f.env.DB, f.user.id);
   assert.equal(stored!.securityStamp, f.user.securityStamp);
   assert.equal(stored!.totpSecret, TOTP_SECRET);
   assert.equal(stored!.totpRecoveryCode, RECOVERY);
@@ -150,7 +151,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   await f.env.DB.prepare("UPDATE verification SET value = json_set(value, '$.consumed', 0) WHERE identifier = 'sso-continuation'").run();
   const response = await f.login(factors);
   assert.equal(response.status, 200);
-  const finalUser = (await new StorageService(f.env.DB).getUserById(f.user.id))!;
+  const finalUser = (await userRepo.getUserById(f.env.DB, f.user.id))!;
   assert.notEqual(finalUser.securityStamp, f.user.securityStamp);
   assert.equal(finalUser.totpSecret, null);
   assert.equal((await verifyJWT((await response.json() as any).access_token, f.env.JWT_SECRET))?.sstamp, finalUser.securityStamp);
@@ -192,6 +193,6 @@ test('verified SSO is exempt from new-device verification on an old opted-in acc
   const f = await setup(t, { totpSecret: null, verifyDevices: true, createdAt: new Date(Date.now() - 2 * 86400_000).toISOString() });
   f.env.ENABLE_NEW_DEVICE_VERIFICATION = 'true';
   f.env.DISABLE_EMAIL_NEW_DEVICE = 'true';
-  await new StorageService(f.env.DB).upsertDevice(f.user.id, 'known-device', 'Known', 9);
+  await deviceRepo.upsertDevice(f.env.DB, f.user.id, 'known-device', 'Known', 9);
   assert.equal((await f.login()).status, 200);
 });

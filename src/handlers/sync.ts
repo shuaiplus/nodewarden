@@ -1,5 +1,4 @@
 import { Env, SyncResponse, CipherResponse, FolderResponse, ProfileResponse } from '../types';
-import { StorageService } from '../services/storage';
 import { errorResponse } from '../utils/response';
 import { cipherToResponse, isCipherResponseSyncCompatible, shouldPreserveRepairableCipherUris } from './ciphers';
 import { sendToResponse } from './sends';
@@ -14,6 +13,14 @@ import { buildProfileResponse } from '../utils/profile-response';
 import * as orgRepo from '../services/storage-org-repo';
 import { canViewCipher, hasFullCollectionAccess, resolveCollectionPermission } from '../services/org-authz';
 import { policyResponse } from '../utils/org-response';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
+import * as attachmentRepo from '../services/storage-attachment-repo';
+import * as cipherRepo from '../services/storage-cipher-repo';
+import * as domainRulesRepo from '../services/storage-domain-rules-repo';
+import * as folderRepo from '../services/storage-folder-repo';
+import * as revisionRepo from '../services/storage-revision-repo';
+import * as sendRepo from '../services/storage-send-repo';
+import * as userRepo from '../services/storage-user-repo';
 
 // CONTRACT:
 // /api/sync reuses cipherToResponse() as the single cipher response shaper.
@@ -49,7 +56,6 @@ async function writeSyncCache(cacheRequest: Request, response: Response): Promis
 
 // GET /api/sync
 export async function handleSync(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
   const url = new URL(request.url);
   const excludeDomainsParam = url.searchParams.get('excludeDomains');
   const excludeDomains = excludeDomainsParam !== null && /^(1|true|yes)$/i.test(excludeDomainsParam);
@@ -60,8 +66,8 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   // Read the revision before the user row: writers change the row first and bump the
   // revision second, so a body cached under a revision can never predate that revision.
   const [revisionDate, accountPasskeys] = await Promise.all([
-    storage.getRevisionDate(userId),
-    storage.getAccountPasskeyCredentialsByUserId(userId),
+    revisionRepo.getRevisionDate(env.DB, userId),
+    passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId),
   ]);
   const accountPasskeyCacheTag = accountPasskeys
     .map((credential) => [
@@ -77,21 +83,21 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return cachedResponse;
   }
 
-  const user = await storage.getUserById(userId);
+  const user = await userRepo.getUserById(env.DB, userId);
   if (!user) {
     return errorResponse('User not found', 404);
   }
 
   const [ciphers, folders, sends, personalAttachments, domainSettings, orgCiphersForAttachments] = await Promise.all([
-    storage.getAllCiphers(userId),
-    storage.getAllFolders(userId),
-    excludeSends ? Promise.resolve([]) : storage.getAllSends(userId),
-    storage.getAttachmentsByUserId(userId),
-    excludeDomains ? Promise.resolve(null) : storage.getUserDomainSettings(userId),
+    cipherRepo.getAllCiphers(env.DB, userId),
+    folderRepo.getAllFolders(env.DB, userId),
+    excludeSends ? Promise.resolve([]) : sendRepo.getAllSends(env.DB, userId),
+    attachmentRepo.getAttachmentsByUserId(env.DB, userId),
+    excludeDomains ? Promise.resolve(null) : domainRulesRepo.getUserDomainSettings(env.DB, userId),
     orgRepo.listAccessibleOrgCiphers(env.DB, userId),
   ]);
   const attachmentsByCipher = new Map(personalAttachments);
-  const extraAttachmentMap = await storage.getAttachmentsByCipherIds(orgCiphersForAttachments.map((cipher) => cipher.id));
+  const extraAttachmentMap = await attachmentRepo.getAttachmentsByCipherIds(env.DB, orgCiphersForAttachments.map((cipher) => cipher.id));
   for (const [cipherId, attachments] of extraAttachmentMap.entries()) {
     attachmentsByCipher.set(cipherId, attachments);
   }

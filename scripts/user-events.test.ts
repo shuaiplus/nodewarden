@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authedFetch, createTestEnv, drainWaitUntil, seedUser } from './support/env';
 import { hashPassword } from '../src/services/auth-password';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const PASSWORD = 'event-test-password';
 const KEY = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -44,7 +44,7 @@ test('client export events fan out only to confirmed organizations and factor fa
   assert.equal(rows.results.filter(row => row.organization_id === null).length, 2);
   assert.ok(rows.results.every(row => row.type === 1006 || row.type === 1007));
   assert.ok(!rows.results.some(row => row.organization_id === acceptedOrg.id));
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))!.totpSecret, user.totpSecret);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))!.totpSecret, user.totpSecret);
 });
 
 test('a backdated client export keeps its date only on the personal row', async () => {

@@ -4,9 +4,12 @@ import test from 'node:test';
 import { AuthService } from '../src/services/auth';
 import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
-import { StorageService } from '../src/services/storage';
 import type { Env, User } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, portalFetch, seedUser, signInToAdminPortal } from './support/env';
+import * as sessionRepo from '../src/services/storage-session-repo';
+import * as passkeyRepo from '../src/services/storage-account-passkey-repo';
+import * as deviceRepo from '../src/services/storage-device-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const ADMIN = 'portal@x.io';
 const TOTP = 'JBSWY3DPEHPK3PXP';
@@ -25,19 +28,18 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   const env = await createTestEnv({ ...mail.overrides, ADMIN_EMAILS: ADMIN });
   const auth = await signInToAdminPortal(env, ADMIN);
   const user = await seedUser(env, { email: `factor@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP, totpRecoveryCode: 'RECOVERY', twoFactorEmail: `factor-2fa@${MAILABLE_DOMAIN}`, yubikeyKey1: '', yubikeyKey2: 'cccccccccccc' });
-  const storage = new StorageService(env.DB);
   const loginPasskey = await passkey(env, user, 'login');
   await passkey(env, user, 'twoFactor');
   await upsertTwoFactorSecret(env.DB, user.id, TOTP, 'RECOVERY');
-  await storage.saveTrustedTwoFactorDeviceToken('old-remember', user.id, 'device', Date.now() + 60000);
-  await storage.saveRefreshToken('old-session', user.id);
+  await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'old-remember', user.id, 'device', Date.now() + 60000);
+  await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
   const oldJwt = await new AuthService(env).generateAccessToken(user);
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
   assert.match(await view.text(), /Authenticator, Email, YubiKey, WebAuthn/);
   const response = await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(response.status, 303);
   assert.match(response.headers.get('Location')!, /m=two-factor-reset/);
-  const updated = (await storage.getUserById(user.id))!;
+  const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.totpRecoveryCode, null);
   assert.equal(updated.twoFactorEmail, null);
@@ -46,7 +48,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   for (const table of ['two_factor', 'trusted_two_factor_device_tokens', 'session']) {
     assert.equal(await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id=?`).bind(user.id).first('n'), 0);
   }
-  assert.deepEqual((await storage.getAccountPasskeyCredentialsByUserId(user.id)).map(key => key.id), [loginPasskey]);
+  assert.deepEqual((await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map(key => key.id), [loginPasskey]);
   assert.equal((await authedFetch(env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } })).status, 401);
   await drainWaitUntil();
   assert.equal(mail.sent.length, 1);
@@ -56,7 +58,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   assert.equal(audit?.actor_user_id, null);
   assert.equal(JSON.parse(audit!.metadata).adminEmail, ADMIN);
 
-  await storage.saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
+  await userRepo.saveUser(env.DB, { ...updated, totpSecret: TOTP }, ['totpSecret']);
   const remembered = await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password: PASSWORD, deviceIdentifier: 'device', twoFactorProvider: '5', twoFactorToken: 'old-remember' } });
   assert.equal(remembered.status, 400);
   assert.deepEqual((await remembered.json() as { TwoFactorProviders: string[] }).TwoFactorProviders, ['0']);
@@ -76,7 +78,7 @@ test('nothing-to-reset leaves account, audit, budgets and mail untouched', async
   assert.equal(response.status, 303);
   assert.match(response.headers.get('Location')!, /m=nothing-to-reset/);
   assert.equal(batch.mock.callCount(), 0);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))?.securityStamp, user.securityStamp);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
   assert.equal(await env.DB.prepare('SELECT count(*) AS n FROM audit_logs').first('n'), 0);
   assert.equal(await env.DB.prepare('SELECT count(*) AS n FROM rate_limit_buckets').first('n'), before);
   await drainWaitUntil();
@@ -102,7 +104,7 @@ test('reset refuses missing CSRF, wrong email, stale step-up and the 21st sensit
   }
   await env.DB.prepare('UPDATE users SET totp_secret=? WHERE id=?').bind(TOTP, user.id).run();
   assert.equal((await post({ csrf: auth.csrf, confirmation: user.email })).status, 429);
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))?.totpSecret, TOTP);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.totpSecret, TOTP);
   await drainWaitUntil();
 });
 
@@ -114,7 +116,7 @@ test('an audit failure rolls back a reset before any notification', async () => 
   await env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT,'audit failure'); END").run();
   const response = await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
   assert.equal(response.status, 500);
-  const updated = (await new StorageService(env.DB).getUserById(user.id))!;
+  const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.totpSecret, TOTP);
   assert.equal(updated.securityStamp, user.securityStamp);
   await drainWaitUntil();

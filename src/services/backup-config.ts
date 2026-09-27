@@ -1,5 +1,4 @@
 import type { Env, User } from '../types';
-import { StorageService } from './storage';
 import {
   type BackupSettingsPortableEnvelope,
   decryptBackupSettingsRuntime,
@@ -24,6 +23,8 @@ import {
   createDefaultBackupScheduleConfig,
   createDefaultBackupSettings as createSharedDefaultBackupSettings,
 } from '../../shared/backup-schema';
+import * as configRepo from './storage-config-repo';
+import * as userRepo from './storage-user-repo';
 
 export const BACKUP_SETTINGS_CONFIG_KEY = 'backup.settings.v1';
 const BACKUP_RUNTIME_CONFIG_KEY = 'backup.runtime.v1';
@@ -531,8 +532,8 @@ function serializeRuntimeState(settings: BackupSettings): string {
   });
 }
 
-async function loadBackupRuntimeStates(storage: StorageService): Promise<Map<string, BackupRuntimeState>> {
-  const raw = await storage.getConfigValue(BACKUP_RUNTIME_CONFIG_KEY);
+async function loadBackupRuntimeStates(db: D1Database): Promise<Map<string, BackupRuntimeState>> {
+  const raw = await configRepo.getConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY);
   if (!raw) return new Map();
   try {
     const parsed = JSON.parse(raw) as { destinations?: Record<string, unknown> };
@@ -645,21 +646,21 @@ export function redactBackupSettingsSecrets(settings: BackupSettings): BackupSet
   };
 }
 
-export async function loadBackupSettings(storage: StorageService, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettings> {
-  const raw = await storage.getConfigValue(BACKUP_SETTINGS_CONFIG_KEY);
+export async function loadBackupSettings(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettings> {
+  const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   const mergeRuntime = async (settings: BackupSettings): Promise<BackupSettings> => (
-    mergeRuntimeStates(settings, await loadBackupRuntimeStates(storage))
+    mergeRuntimeStates(settings, await loadBackupRuntimeStates(db))
   );
   if (!raw) {
     const settings = getDefaultBackupSettings(fallbackTimezone);
-    await saveBackupSettings(storage, env, settings);
+    await saveBackupSettings(db, env, settings);
     return mergeRuntime(settings);
   }
 
   const envelope = parseBackupSettingsEnvelope(raw);
   if (!envelope) {
     const settings = parseBackupSettings(raw, fallbackTimezone);
-    await saveBackupSettings(storage, env, settings);
+    await saveBackupSettings(db, env, settings);
     return mergeRuntime(settings);
   }
 
@@ -671,40 +672,40 @@ export async function loadBackupSettings(storage: StorageService, env: Env, fall
   }
 }
 
-export async function saveBackupSettings(storage: StorageService, env: Env, settings: BackupSettings): Promise<void> {
-  const users = await storage.getAllUsers();
+export async function saveBackupSettings(db: D1Database, env: Env, settings: BackupSettings): Promise<void> {
+  const users = await userRepo.getAllUsers(db);
   const encrypted = await encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
-  await storage.setConfigValue(BACKUP_SETTINGS_CONFIG_KEY, encrypted);
-  await saveBackupRuntimeStates(storage, settings);
+  await configRepo.setConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY, encrypted);
+  await saveBackupRuntimeStates(db, settings);
 }
 
-export async function saveBackupRuntimeStates(storage: StorageService, settings: BackupSettings): Promise<void> {
-  await storage.setConfigValue(BACKUP_RUNTIME_CONFIG_KEY, serializeRuntimeState(settings));
+export async function saveBackupRuntimeStates(db: D1Database, settings: BackupSettings): Promise<void> {
+  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, serializeRuntimeState(settings));
 }
 
 export async function updateBackupDestinationRuntime(
-  storage: StorageService,
+  db: D1Database,
   destinationId: string,
   mutator: (runtime: BackupRuntimeState) => BackupRuntimeState
 ): Promise<BackupRuntimeState> {
-  const runtimes = await loadBackupRuntimeStates(storage);
+  const runtimes = await loadBackupRuntimeStates(db);
   const current = runtimes.get(destinationId) || normalizeRuntime(null);
   const next = normalizeRuntime(mutator(current));
   runtimes.set(destinationId, next);
-  await storage.setConfigValue(BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
+  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
     version: 1,
     destinations: Object.fromEntries(runtimes.entries()),
   }));
   return next;
 }
 
-export async function normalizeImportedBackupSettings(storage: StorageService, env: Env, fallbackTimezone: string = 'UTC'): Promise<void> {
-  const raw = await storage.getConfigValue(BACKUP_SETTINGS_CONFIG_KEY);
+export async function normalizeImportedBackupSettings(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<void> {
+  const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   if (!raw) return;
-  const users = await storage.getAllUsers();
+  const users = await userRepo.getAllUsers(db);
   const normalized = await normalizeImportedBackupSettingsValue(raw, env, users, fallbackTimezone);
   if (normalized !== null) {
-    await storage.setConfigValue(BACKUP_SETTINGS_CONFIG_KEY, normalized);
+    await configRepo.setConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY, normalized);
   }
 }
 
@@ -730,18 +731,18 @@ export async function normalizeImportedBackupSettingsValue(
   return encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
 }
 
-export async function getBackupSettingsRepairState(storage: StorageService, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettingsRepairState> {
-  const raw = await storage.getConfigValue(BACKUP_SETTINGS_CONFIG_KEY);
+export async function getBackupSettingsRepairState(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettingsRepairState> {
+  const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   if (!raw) {
     const settings = getDefaultBackupSettings(fallbackTimezone);
-    await saveBackupSettings(storage, env, settings);
+    await saveBackupSettings(db, env, settings);
     return { needsRepair: false, portable: null };
   }
 
   const envelope = parseBackupSettingsEnvelope(raw);
   if (!envelope) {
     const settings = parseBackupSettings(raw, fallbackTimezone);
-    await saveBackupSettings(storage, env, settings);
+    await saveBackupSettings(db, env, settings);
     return { needsRepair: false, portable: null };
   }
 
@@ -756,8 +757,8 @@ export async function getBackupSettingsRepairState(storage: StorageService, env:
   }
 }
 
-export async function repairBackupSettings(storage: StorageService, env: Env, settings: BackupSettings): Promise<void> {
-  await saveBackupSettings(storage, env, settings);
+export async function repairBackupSettings(db: D1Database, env: Env, settings: BackupSettings): Promise<void> {
+  await saveBackupSettings(db, env, settings);
 }
 
 export function findBackupDestination(

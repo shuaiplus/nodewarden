@@ -3,10 +3,11 @@ import test from 'node:test';
 
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
 
-import { StorageService } from '../src/services/storage';
 import { AuthService } from '../src/services/auth';
 import type { Env, User } from '../src/types';
-import { authedFetch, createTestEnv, seedUser, portalFetch, signInToAdminPortal } from './support/env';
+import { authedFetch, createTestEnv, interceptStatement, seedUser, portalFetch, signInToAdminPortal } from './support/env';
+import * as passkeyRepo from '../src/services/storage-account-passkey-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 // Official web enrolls a two-step-login key by PUTting the deviceResponse built in
 // putTwoFactorWebAuthn (clients web-v2026.9.0 default-two-factor-api.service.ts): base64url ids
@@ -167,30 +168,25 @@ test('a WebAuthn enrollment without an attestation object in either casing is re
 });
 
 for (const action of ['reset', 'delete'] as const) {
-  test(`pending WebAuthn enrollment cannot write after account ${action}`, async (t) => {
+  test(`pending WebAuthn enrollment cannot write after account ${action}`, async () => {
     const enrollment = await officialEnrollment();
     const { env, user } = enrollment;
     env.ADMIN_EMAILS = 'admin@x.io';
-    const storage = new StorageService(env.DB);
-    await storage.saveUser({ ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
+    await userRepo.saveUser(env.DB, { ...user, totpSecret: 'JBSWY3DPEHPK3PXP' }, ['totpSecret']);
     const portal = await signInToAdminPortal(env, 'admin@x.io');
-    const saveCredential = StorageService.prototype.saveAccountPasskeyCredential;
     let interrupted = false;
-    t.mock.method(StorageService.prototype, 'saveAccountPasskeyCredential', async function(this: StorageService, ...args: Parameters<StorageService['saveAccountPasskeyCredential']>) {
-      assert.equal(args[1], user.securityStamp);
-      assert.equal(args[0].purpose, 'twoFactor');
+    interceptStatement(env, /insert into "webauthn_credentials"/i, async () => {
       interrupted = true;
       const response = action === 'reset'
         ? await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: portal.cookie, form: { csrf: portal.csrf, confirmation: user.email } })
         : await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH } });
       assert.equal(response.status, action === 'reset' ? 303 : 200);
-      return saveCredential.apply(this, args);
     });
     const result = await putWebAuthn(enrollment, enrollment.deviceResponse);
     assert.equal(result.status, 400);
     assert.equal(interrupted, true);
-    assert.equal(await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor'), 0);
-    const current = await storage.getUserById(user.id);
+    assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 0);
+    const current = await userRepo.getUserById(env.DB, user.id);
     if (action === 'delete') assert.equal(current, null);
     else { assert.equal(current!.totpSecret, null); assert.equal(current!.totpRecoveryCode, null); }
   });

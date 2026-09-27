@@ -42,10 +42,10 @@ import { handlePublicUploadSendFile } from './handlers/sends';
 import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
 import { createAuth } from './auth';
-import { StorageService } from './services/storage';
 import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
+import * as userRepo from './services/storage-user-repo';
 
 type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
@@ -285,8 +285,7 @@ export async function buildWebBootstrapResponse(env: Env): Promise<WebBootstrapR
       : secret.length < LIMITS.auth.jwtSecretMinLength
           ? 'too_short'
           : null;
-  const storage = new StorageService(env.DB);
-  const userCount = await storage.getUserCount();
+  const userCount = await userRepo.getUserCount(env.DB);
 
   return {
     defaultKdfIterations: LIMITS.auth.defaultKdfIterations,

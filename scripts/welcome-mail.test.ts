@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { StorageService } from '../src/services/storage';
 import type { Env } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
+import * as adminRepo from '../src/services/storage-admin-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const ENCRYPTED = '2.YQ==|Yg==|Yw==';
 
@@ -19,14 +20,13 @@ async function register(env: Env, email: string, extra: Record<string, unknown> 
 test('first administrator, invite-code signup and open signup each receive one welcome mail', async () => {
   const capture = captureEmail();
   const env = await createTestEnv(capture.overrides);
-  const storage = new StorageService(env.DB);
   const firstEmail = `first@${MAILABLE_DOMAIN}`;
   const first = await register(env, firstEmail);
   assert.equal(first.status, 200);
   assert.equal((await first.json() as { role: string }).role, 'admin');
-  const admin = await storage.getUser(firstEmail);
+  const admin = await userRepo.getUser(env.DB, firstEmail);
   assert.ok(admin);
-  await storage.createInvite({ code: 'welcome-invite', createdBy: admin.id, usedBy: null, status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() });
+  await adminRepo.createInvite(env.DB, { code: 'welcome-invite', createdBy: admin.id, usedBy: null, status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() });
   const invitedEmail = `invited@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, invitedEmail, { inviteCode: 'welcome-invite' }, '/api/accounts/register')).status, 200);
   env.ALLOW_OPEN_REGISTRATION = '1';
@@ -56,7 +56,7 @@ test('welcome mail delivery failure or missing vault origin leaves account creat
   const env = await createTestEnv({ ...capture.overrides, EMAIL: failingEmail('E_RECIPIENT_SUPPRESSED'), ALLOW_OPEN_REGISTRATION: '1' });
   const email = `failure@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 200);
-  assert.ok(await new StorageService(env.DB).getUser(email));
+  assert.ok(await userRepo.getUser(env.DB, email));
   env.EMAIL = capture.overrides.EMAIL;
   env.WEB_VAULT_ORIGINS = undefined;
   assert.equal((await register(env, `no-origin@${MAILABLE_DOMAIN}`)).status, 200);

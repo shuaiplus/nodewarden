@@ -4,11 +4,14 @@ import test from 'node:test';
 import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
-import { StorageService } from '../src/services/storage';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { twoFactorClearStatements } from '../src/services/two-factor-providers';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import * as passkeyRepo from '../src/services/storage-account-passkey-repo';
+import * as deviceRepo from '../src/services/storage-device-repo';
+import * as sessionRepo from '../src/services/storage-session-repo';
+import * as userRepo from '../src/services/storage-user-repo';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -85,12 +88,11 @@ for (const loginRecovery of [false, true]) {
       masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP,
       totpRecoveryCode: RECOVERY, yubikeyKey1: 'cccccccccccc',
     });
-    const storage = new StorageService(env.DB);
     const loginPasskey = await seedPasskey(env, user, 'login');
     await seedPasskey(env, user, 'twoFactor');
     await upsertTwoFactorSecret(env.DB, user.id, TOTP, RECOVERY);
-    await storage.saveRefreshToken('old-session', user.id);
-    await storage.saveTrustedTwoFactorDeviceToken('remember-before-recovery', user.id, 'device', Date.now() + 60000);
+    await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
+    await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'remember-before-recovery', user.id, 'device', Date.now() + 60000);
     const response = await authedFetch(env, {
       method: 'POST', path: loginRecovery ? '/identity/connect/token' : '/identity/accounts/recover-2fa',
       body: loginRecovery
@@ -98,7 +100,7 @@ for (const loginRecovery of [false, true]) {
         : { email: user.email, masterPasswordHash: PASSWORD, recoveryCode: RECOVERY },
     });
     assert.equal(response.status, 200);
-    const updated = (await storage.getUserById(user.id))!;
+    const updated = (await userRepo.getUserById(env.DB, user.id))!;
     assert.equal(updated.totpSecret, null);
     assert.equal(updated.yubikeyKey1, null);
     assert.notEqual(updated.totpRecoveryCode, RECOVERY);
@@ -106,11 +108,11 @@ for (const loginRecovery of [false, true]) {
     for (const table of ['two_factor', 'trusted_two_factor_device_tokens']) {
       assert.equal(await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).bind(user.id).first('n'), 0);
     }
-    assert.equal(await storage.getRefreshTokenUserId('old-session'), null);
+    assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'old-session'), null);
     assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id = ?').bind(user.id).first('n'), loginRecovery ? 1 : 0);
-    assert.deepEqual((await storage.getAccountPasskeyCredentialsByUserId(user.id)).map(key => key.id), [loginPasskey]);
+    assert.deepEqual((await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map(key => key.id), [loginPasskey]);
     // Enrolling a new factor must not revive a remember token issued before recovery.
-    await storage.saveUser({ ...updated, totpSecret: TOTP }, ['totpSecret']);
+    await userRepo.saveUser(env.DB, { ...updated, totpSecret: TOTP }, ['totpSecret']);
     const remembered = await authedFetch(env, {
       method: 'POST', path: '/identity/connect/token',
       body: { grant_type: 'password', username: user.email, password: PASSWORD, deviceIdentifier: 'device', twoFactorProvider: '5', twoFactorToken: 'remember-before-recovery' },
@@ -128,7 +130,7 @@ test('a failed clear batch leaves credentials and security stamp intact', async 
     ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
     env.DB.prepare('SELECT * FROM missing_table'),
   ]));
-  assert.equal((await new StorageService(env.DB).getUserById(user.id))?.securityStamp, user.securityStamp);
+  assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
   assert.equal(await env.DB.prepare('SELECT secret FROM two_factor WHERE user_id = ?').bind(user.id).first('secret'), TOTP);
 });
 
