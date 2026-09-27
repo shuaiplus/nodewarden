@@ -398,6 +398,9 @@ export async function handleAuthenticatedRoute(
     if (subPath === '/collections_v2' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'member');
     if (subPath === '/collections-admin' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'admin');
     if (subPath === '/admin' && method === 'GET') return handleGetCipherAdmin(request, env, userId, cipherId);
+    if (subPath === '/admin' && method === 'PUT') return handleUpdateCipher(request, env, userId, cipherId, true);
+    if (subPath === '/admin' && method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId, true);
+    if (subPath === '/delete-admin' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId, true);
     if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
     if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
     if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);

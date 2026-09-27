@@ -12,7 +12,7 @@ import * as orgRepo from '../services/storage-org-repo';
 import { StorageService } from '../services/storage';
 import type { Cipher, Env } from '../types';
 
-export type CipherAccess = 'read' | 'edit';
+export type CipherAccess = 'read' | 'edit' | 'admin-edit';
 
 // Personal rows come from getCipherForUser (organization_id IS NULL). Org
 // rows fall through to membership + collection ACL so official clients keep
@@ -24,7 +24,7 @@ export async function loadAccessibleCipher(
   id: string,
   access: CipherAccess
 ): Promise<Cipher | null> {
-  const personal = await storage.getCipherForUser(id, userId);
+  const personal = access === 'admin-edit' ? null : await storage.getCipherForUser(id, userId);
   if (personal) return personal;
 
   const candidate = await storage.getCipher(id);
@@ -34,11 +34,13 @@ export async function loadAccessibleCipher(
   if (!isActiveMember(member)) return null;
 
   const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, candidate.organizationId);
-  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, candidate.id);
+  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, candidate.id, access === 'admin-edit' ? candidate.organizationId : undefined);
   const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
-  const allowed = access === 'read'
-    ? hasFullCollectionAccess(member) || canViewCipher(member, collectionIds, assignedMap)
-    : canEditCipher(member, collectionIds, assignedMap);
+  const allowed = access === 'admin-edit'
+    ? resolvePermissions(member).editAnyCollection
+    : access === 'read'
+      ? hasFullCollectionAccess(member) || canViewCipher(member, collectionIds, assignedMap)
+      : canEditCipher(member, collectionIds, assignedMap);
   if (!allowed) return null;
 
   (candidate as { collectionIds?: string[] }).collectionIds = collectionIds;

@@ -905,9 +905,8 @@ export async function handleGetCipherAdmin(request: Request, env: Env, userId: s
   const storage = new StorageService(env.DB);
   const cipher = await storage.getCipher(id);
   if (!cipher?.organizationId || !await canReadOrganizationCiphers(env, userId, cipher.organizationId, 'admin')) return errorResponse('Not found', 404);
-  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, id);
-  const orgCollections = new Set((await orgRepo.listCollectionsByOrg(env.DB, cipher.organizationId)).map(collection => collection.id));
-  return jsonResponse(organizationCipherResponse(request, { ...cipher, collectionIds: collectionIds.filter(collectionId => orgCollections.has(collectionId)) }, await storage.getAttachmentsByCipher(id)));
+  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, id, cipher.organizationId);
+  return jsonResponse(organizationCipherResponse(request, { ...cipher, collectionIds }, await storage.getAttachmentsByCipher(id)));
 }
 
 // GET /api/ciphers
@@ -1151,9 +1150,9 @@ function mergeFullCipherUpdate(existingCipher: Cipher, cipherData: any, preserve
 }
 
 // PUT /api/ciphers/:id
-export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+export async function handleUpdateCipher(request: Request, env: Env, userId: string, id: string, asAdmin = false): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const existingCipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  const existingCipher = await loadAccessibleCipher(env, storage, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!existingCipher) return errorResponse('Cipher not found', 404);
 
   let body: any;
@@ -1178,6 +1177,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const merged = mergeFullCipherUpdate(existingCipher, cipherData, preserveRevisionDate);
   if (!merged.ok) return errorResponse(merged.message, 400);
   const cipher = merged.cipher;
+  if (asAdmin) cipher.collectionIds = existingCipher.collectionIds;
 
   // Prevent referencing a folder owned by another user.
   if (cipher.folderId) {
@@ -1194,7 +1194,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const responseOptions = cipherResponseOptionsForRequest(request);
 
   return jsonResponse(
-    cipherToResponse(cipher, attachments, responseOptions)
+    asAdmin ? { ...organizationCipherResponse(request, cipher, attachments), object: 'cipherMini' } : cipherToResponse(cipher, attachments, responseOptions)
   );
 }
 
@@ -1370,9 +1370,9 @@ export async function handleUpdateCipherCollections(
 }
 
 // DELETE /api/ciphers/:id
-export async function handleDeleteCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+export async function handleDeleteCipher(request: Request, env: Env, userId: string, id: string, asAdmin = false): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Soft delete
@@ -1389,7 +1389,7 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
     folderId: cipher.folderId ?? null,
   });
 
-  return jsonResponse(
+  return asAdmin ? new Response(null, { status: 200 }) : jsonResponse(
     cipherToResponse(cipher, [], cipherResponseOptionsForRequest(request))
   );
 }
@@ -1423,9 +1423,9 @@ export async function handleDeleteCipherCompat(request: Request, env: Env, userI
 }
 
 // DELETE /api/ciphers/:id (permanent)
-export async function handlePermanentDeleteCipher(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+export async function handlePermanentDeleteCipher(request: Request, env: Env, userId: string, id: string, asAdmin = false): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
+  const cipher = await loadAccessibleCipher(env, storage, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
   // Delete all attachments first

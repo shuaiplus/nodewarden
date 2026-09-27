@@ -699,11 +699,12 @@ export async function shareCiphers(
   await orm.batch(statements as [typeof statements[0], ...typeof statements]);
 }
 
-export async function listCipherCollectionIds(db: D1Database, cipherId: string): Promise<string[]> {
+export async function listCipherCollectionIds(db: D1Database, cipherId: string, orgId?: string): Promise<string[]> {
   const rows = await getOrm(db)
     .select({ collectionId: cipherCollections.collectionId })
     .from(cipherCollections)
-    .where(eq(cipherCollections.cipherId, cipherId));
+    .innerJoin(collections, eq(collections.id, cipherCollections.collectionId))
+    .where(and(eq(cipherCollections.cipherId, cipherId), orgId ? eq(collections.orgId, orgId) : undefined));
   return rows.map((row) => row.collectionId);
 }
 
