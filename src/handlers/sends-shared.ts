@@ -1,8 +1,7 @@
 import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
-import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
+import { Send, SendAuthType, SendResponse, SendType } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
-import { readEnvConfig } from '../config/env';
 import { bytesToBase64Url } from '../utils/passkey';
 import * as sendRepo from '../services/storage-send-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -215,11 +214,6 @@ export function verifySendPasswordHashB64(send: Send, passwordHashB64: string): 
 
 export function hasEmailAuth(send: Send): boolean {
   return send.authType === SendAuthType.Email;
-}
-
-export function getSafeJwtSecret(env: Env): { ok: true; secret: string } | { ok: false; response: Response } {
-  const jwtSecret = readEnvConfig(env).JWT_SECRET;
-  return jwtSecret.kind === 'safe' ? { ok: true, secret: jwtSecret.secret } : { ok: false, response: errorResponse('Server configuration error', 500) };
 }
 
 export function extractBearerToken(request: Request): string | null {

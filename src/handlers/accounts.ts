@@ -18,7 +18,6 @@ import { z } from 'zod';
 import { bodyIssues, errorResponse, jsonResponse, parseBody, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
-import { jwtSecretUnsafeReason } from '../router-public';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
 import { Secret } from 'otpauth';
 import { findMatchingTotpCounter, isTotpEnabled, normalizeTotpSecret } from '../utils/totp';
@@ -214,14 +213,6 @@ function keysResponse(user: User): Record<string, unknown> {
 // - Any subsequent user must provide a valid inviteCode.
 export async function handleRegister(request: Request, env: Env): Promise<Response> {
 
-  const unsafe = jwtSecretUnsafeReason(env);
-  if (unsafe) {
-    const message = unsafe === 'missing'
-      ? 'JWT_SECRET is not set'
-      : 'JWT_SECRET must be at least 32 characters';
-    return errorResponse(message, 400);
-  }
-
   const parsed = await parseBody(request, RegisterSchema);
   if (parsed instanceof Response) return parsed;
   const { email, name, masterPasswordHash, key, privateKey, publicKey, inviteCode, masterPasswordHint } = parsed;
@@ -365,10 +356,6 @@ function registerSuccessResponse(role: User['role']): Response {
 }
 
 export async function handleRegisterSendVerificationEmail(request: Request, env: Env): Promise<Response> {
-  const unsafe = jwtSecretUnsafeReason(env);
-  if (unsafe) {
-    return errorResponse(unsafe === 'missing' ? 'JWT_SECRET is not set' : 'JWT_SECRET must be at least 32 characters', 400);
-  }
 
   const body = await parseBody(request, z.object({ email: emailAddress('Invalid email address'), name: trimmed }));
   if (body instanceof Response) return body;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
-import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
+import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { LIMITS } from '../config/limits';
@@ -246,9 +246,7 @@ async function saveSendAndNotify(request: Request, env: Env, send: Send, action:
 
 // The file arrives in a second request authorised by a short-lived upload token bound to this Send.
 async function sendFileUploadResponse(request: Request, env: Env, send: Send, fileId: string): Promise<Response> {
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) return errorResponse('Server configuration error', 500);
-  const uploadToken = await createSendFileUploadToken(send.userId, send.id, fileId, jwtSecret);
+  const uploadToken = await createSendFileUploadToken(send.userId, send.id, fileId, env.JWT_SECRET);
   return jsonResponse({
     fileUploadType: 1,
     object: 'send-fileUpload',
@@ -323,17 +321,13 @@ export async function handlePublicUploadSendFile(
   sendId: string,
   fileId: string
 ): Promise<Response> {
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) {
-    return errorResponse('Server configuration error', 500);
-  }
 
   const token = new URL(request.url).searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
   }
 
-  const claims = await verifySendFileUploadToken(token, jwtSecret);
+  const claims = await verifySendFileUploadToken(token, env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }

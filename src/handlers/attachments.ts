@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
-import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
+import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { sanitizeDownloadContentType } from '../utils/content-type';
 import {
@@ -183,11 +183,7 @@ export async function handleCreateAttachment(
     ? await cipherRepo.getCipher(env.DB, cipherId)
     : await cipherRepo.getCipherForUser(env.DB, cipherId, userId);
   const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipherId);
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) {
-    return errorResponse('Server configuration error', 500);
-  }
-  const uploadToken = await createAttachmentUploadToken(userId, cipherId, attachmentId, jwtSecret);
+  const uploadToken = await createAttachmentUploadToken(userId, cipherId, attachmentId, env.JWT_SECRET);
   const usePresign = shouldPresignUpload(fileSize, env);
   const url = usePresign
     ? await createR2PresignedPutUrl(env, getAttachmentObjectKey(cipherId, attachmentId))
@@ -231,17 +227,13 @@ export async function handlePublicUploadAttachment(
   cipherId: string,
   attachmentId: string
 ): Promise<Response> {
-  const jwtSecret = getSafeJwtSecret(env);
-  if (!jwtSecret) {
-    return errorResponse('Server configuration error', 500);
-  }
 
   const token = new URL(request.url).searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
   }
 
-  const claims = await verifyAttachmentUploadToken(token, jwtSecret);
+  const claims = await verifyAttachmentUploadToken(token, env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -341,8 +333,6 @@ export async function handlePublicDownloadAttachment(
   cipherId: string,
   attachmentId: string
 ): Promise<Response> {
-  const secret = getSafeJwtSecret(env);
-  if (!secret) return errorResponse('Server configuration error', 500);
 
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
@@ -352,7 +342,7 @@ export async function handlePublicDownloadAttachment(
   }
 
   // Verify token
-  const claims = await verifyFileDownloadToken(token, secret);
+  const claims = await verifyFileDownloadToken(token, env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }

@@ -16,7 +16,6 @@ import { parse, serialize } from 'hono/utils/cookie';
 import { sha256 } from 'hono/utils/crypto';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
-import { getSafeJwtSecret } from '../utils/direct-upload';
 import { readAuthRequestDeviceInfo, deviceTypeName, type AuthRequestDeviceInfo } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { generateUUID, isUUID } from '../utils/uuid';
@@ -823,11 +822,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         await rateLimit.recordFailedLogin(loginIdentifier);
         return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_client', 400);
       }
-      const secret = getSafeJwtSecret(env);
-      if (!secret) return identityErrorResponse('Server misconfigured', 'server_error', 500);
       await rateLimit.clearLoginAttempts(loginIdentifier);
       const now = Math.floor(Date.now() / 1000);
-      const accessToken = await signHs256Jwt({ iss: 'nodewarden', iat: now, nbf: now, exp: now + LIMITS.auth.smAccessTokenTtlSeconds, sub: token.serviceAccountId, type: 'ServiceAccount', organization: token.orgId, client_id: token.id, scope: ['api.secrets'] }, secret);
+      const accessToken = await signHs256Jwt({ iss: 'nodewarden', iat: now, nbf: now, exp: now + LIMITS.auth.smAccessTokenTtlSeconds, sub: token.serviceAccountId, type: 'ServiceAccount', organization: token.orgId, client_id: token.id, scope: ['api.secrets'] }, env.JWT_SECRET);
       return identityJsonResponse({ access_token: accessToken, expires_in: LIMITS.auth.smAccessTokenTtlSeconds, token_type: 'Bearer', scope: 'api.secrets', encrypted_payload: token.encryptedPayload });
     }
     const parmValid = checkClientCredentialsParam(clientId, clientSecret, scope);

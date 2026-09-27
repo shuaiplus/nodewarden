@@ -20,7 +20,6 @@ import {
   extractBearerToken,
   fromAccessId,
   getCreatorIdentifier,
-  getSafeJwtSecret,
   hasEmailAuth,
   isSendAvailable,
   parseStoredSendData,
@@ -75,14 +74,12 @@ async function authorizeSendByPassword(request: Request, env: Env, send: Send): 
 
 // Resolves the available Send named by the bearer send-access token, or the rejection to answer with.
 async function authorizeSendByToken(request: Request, env: Env): Promise<{ secret: string; send: Send } | Response> {
-  const jwt = getSafeJwtSecret(env);
-  if (!jwt.ok) return jwt.response;
   const token = extractBearerToken(request);
-  const claims = token ? await verifySendAccessToken(token, jwt.secret) : null;
+  const claims = token ? await verifySendAccessToken(token, env.JWT_SECRET) : null;
   if (!claims) return errorResponse('Unauthorized', 401);
   const send = await sendRepo.getSend(env.DB, claims.sub);
   if (!send || !isSendAvailable(send)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
-  return { secret: jwt.secret, send };
+  return { secret: env.JWT_SECRET, send };
 }
 
 // Counts one access against the Send's limit, then tells the owner's devices and the event log.
@@ -128,8 +125,6 @@ export async function handleAccessSendFile(
   idOrAccessId: string,
   fileId: string
 ): Promise<Response> {
-  const safeSecret = getSafeJwtSecret(env);
-  if (!safeSecret.ok) return safeSecret.response;
 
   const send = await resolveSendFromIdOrAccessId(env.DB, idOrAccessId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
@@ -142,7 +137,7 @@ export async function handleAccessSendFile(
   const touched = await touchSendAccess(request, env, send);
   if (touched) return touched;
 
-  return sendFileDownloadResponse(request, send, fileId, safeSecret.secret);
+  return sendFileDownloadResponse(request, send, fileId, env.JWT_SECRET);
 }
 
 export async function handleAccessSendV2(request: Request, env: Env): Promise<Response> {
@@ -178,8 +173,6 @@ export async function handleDownloadSendFile(
   sendId: string,
   fileId: string
 ): Promise<Response> {
-  const jwt = getSafeJwtSecret(env);
-  if (!jwt.ok) return jwt.response;
 
   const url = new URL(request.url);
   const token = url.searchParams.get('t') || url.searchParams.get('token');
@@ -187,7 +180,7 @@ export async function handleDownloadSendFile(
     return errorResponse('Token required', 401);
   }
 
-  const claims = await verifySendFileDownloadToken(token, jwt.secret);
+  const claims = await verifySendFileDownloadToken(token, env.JWT_SECRET);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -234,10 +227,6 @@ export async function issueSendAccessToken(
   rateLimit?: RateLimitService,
   clientIdentifier?: string
 ): Promise<{ token: string } | { error: Response }> {
-  const jwt = getSafeJwtSecret(env);
-  if (!jwt.ok) {
-    return { error: jwt.response };
-  }
 
   const send = await resolveSendFromIdOrAccessId(env.DB, sendIdOrAccessId);
 
@@ -326,6 +315,6 @@ export async function issueSendAccessToken(
     }
   }
 
-  const token = await createSendAccessToken(send.id, jwt.secret);
+  const token = await createSendAccessToken(send.id, env.JWT_SECRET);
   return { token };
 }

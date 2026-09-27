@@ -1,5 +1,3 @@
-import { readEnvConfig } from '../config/env';
-import { Env } from '../types';
 import { errorResponse } from './response';
 
 export interface DirectUploadPayload {
@@ -26,11 +24,6 @@ export function buildDirectUploadUrl(request: Request, path: string, token: stri
   const expiresAt = '2099-12-31T23:59:59Z';
   const origin = new URL(request.url).origin;
   return `${origin}${path}?sv=${encodeURIComponent(version)}&se=${encodeURIComponent(expiresAt)}&token=${encodeURIComponent(token)}`;
-}
-
-export function getSafeJwtSecret(env: Env): string | null {
-  const jwtSecret = readEnvConfig(env).JWT_SECRET;
-  return jwtSecret.kind === 'safe' ? jwtSecret.secret : null;
 }
 
 export function getMultipartRequestMaxBytes(maxFileSize: number): number {
