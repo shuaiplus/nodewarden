@@ -5,14 +5,14 @@ import type { Env, User } from '../types';
 import { issueEmailOtp } from './email-otp';
 import { deviceTypeName } from '../utils/device';
 import { sendMail } from './mail';
-import type { TemplateName, TemplateModel } from './mail-templates';
+import type { TemplateName, TemplateArgs } from './mail-templates';
 
 export function runInBackground(label: string, task: () => Promise<unknown>): void {
   waitUntil(Promise.resolve().then(task).catch(() => console.error('Background task failed', { label })));
 }
 
-export function notifyMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): void {
-  runInBackground(name, () => sendMail(env, to, name, model));
+export function notifyMail<N extends TemplateName>(env: Env, to: string, name: N, ...model: TemplateArgs<N>): void {
+  runInBackground(name, () => sendMail(env, to, name, ...model));
 }
 
 export function notifyFailedTwoFactor(env: Env, request: Request, user: { email: string }, provider: number): void {

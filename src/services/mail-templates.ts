@@ -7,7 +7,7 @@ export type MailContent = { subject: string; paragraphs: string[]; action?: { la
 export const MAIL_TEMPLATES = {
   emailChangeAlreadyExists: {
     throttle: 'user',
-    render: (_model: Record<string, never>): MailContent => ({
+    render: (): MailContent => ({
       subject: 'Your NodeWarden email change request',
       paragraphs: ['The requested email address is already used by another account.', 'Your account email has not changed. Request a different address to continue.'],
     }),
@@ -52,7 +52,7 @@ export const MAIL_TEMPLATES = {
   },
   noPasswordHint: {
     throttle: 'user',
-    render: (_model: Record<string, never>): MailContent => ({ subject: 'Your NodeWarden password hint', paragraphs: ['No master password hint is saved for your account.', 'NodeWarden cannot recover your master password.'] }),
+    render: (): MailContent => ({ subject: 'Your NodeWarden password hint', paragraphs: ['No master password hint is saved for your account.', 'NodeWarden cannot recover your master password.'] }),
   },
   twoFactorRecovered: {
     throttle: 'exempt',
@@ -187,7 +187,8 @@ export const MAIL_TEMPLATES = {
   },
 } satisfies Record<string, { throttle: 'user' | 'exempt'; render: (model: never) => MailContent }>;
 export type TemplateName = keyof typeof MAIL_TEMPLATES;
-export type TemplateModel<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>[0];
+// A template's render parameters; templates that need no data take none.
+export type TemplateArgs<N extends TemplateName> = Parameters<(typeof MAIL_TEMPLATES)[N]['render']>;
 
 export function renderMail(content: MailContent): { subject: string; text: string; html: string } {
   const subject = content.subject.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);

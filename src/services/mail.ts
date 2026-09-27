@@ -3,7 +3,7 @@ import { EMAIL_PATTERN, MailSettings } from '../config/env';
 import { RateLimitService } from './ratelimit';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import type { Env } from '../types';
-import { MAIL_TEMPLATES, renderMail, type TemplateName, type TemplateModel, type MailContent } from './mail-templates';
+import { MAIL_TEMPLATES, renderMail, type TemplateName, type TemplateArgs, type MailContent } from './mail-templates';
 import {
   getConfiguredWebVaultOrigins,
   isConfiguredWebVaultOrigin,
@@ -34,7 +34,7 @@ export function readMailConfig(env: Pick<Env, 'EMAIL' | 'EMAIL_FROM' | 'EMAIL_FR
     newDeviceNotices: !DISABLE_EMAIL_NEW_DEVICE, newDeviceVerification: ENABLE_NEW_DEVICE_VERIFICATION };
 }
 
-export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, model: TemplateModel<N>): Promise<MailOutcome> {
+export async function sendMail<N extends TemplateName>(env: Env, to: string, name: N, ...model: TemplateArgs<N>): Promise<MailOutcome> {
   const config = readMailConfig(env);
   if (config.kind !== 'enabled') return config;
   const log = (outcome: MailOutcome) => {
@@ -51,8 +51,8 @@ export async function sendMail<N extends TemplateName>(env: Env, to: string, nam
       const recipient = await limiter.consumeStrictBudgetWithWindow(`mail-rcpt:${await sha256Base64Url(to.toLowerCase())}`, LIMITS.mail.perRecipientPerHour, 3600);
       if (!recipient.allowed) return log({ kind: 'throttled', retryAfterSeconds: recipient.retryAfterSeconds ?? 3600 });
     }
-    const render = MAIL_TEMPLATES[name].render as (model: TemplateModel<N>) => MailContent;
-    await config.binding.send({ to, from: config.from, ...renderMail(render(model)), headers: { 'Auto-Submitted': 'auto-generated' } });
+    const render = MAIL_TEMPLATES[name].render as (...model: TemplateArgs<N>) => MailContent;
+    await config.binding.send({ to, from: config.from, ...renderMail(render(...model)), headers: { 'Auto-Submitted': 'auto-generated' } });
     return { kind: 'sent' };
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^E_[A-Z_]+$/.test(error.code) ? error.code : 'E_NODEWARDEN_SEND';

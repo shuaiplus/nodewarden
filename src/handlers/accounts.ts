@@ -440,7 +440,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
       if (!user || user.status !== 'active') return;
       const hint = user.masterPasswordHint?.trim();
       if (hint) await sendMail(env, user.email, 'passwordHint', { hint });
-      else await sendMail(env, user.email, 'noPasswordHint', {});
+      else await sendMail(env, user.email, 'noPasswordHint');
     });
     return jsonResponse({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
   }
@@ -490,7 +490,7 @@ export async function handleEmailToken(request: Request, env: Env, userId: strin
   let outcome: MailOutcome;
   if (await userRepo.getUser(env.DB, email)) {
     outcome = await spendEmailOtpIssueBudget(env, target)
-      ? await sendMail(env, user.email, 'emailChangeAlreadyExists', {})
+      ? await sendMail(env, user.email, 'emailChangeAlreadyExists')
       : { kind: 'throttled', retryAfterSeconds: 3600 - Math.floor(Date.now() / 1000) % 3600 };
   } else {
     outcome = await issueEmailOtp(env, target, code => sendMail(env, email, 'verificationCode', { code, reason: 'email-change' }));

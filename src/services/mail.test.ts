@@ -79,7 +79,7 @@ test('defuses addresses, domains and links in text that another user chose', () 
 import { html } from 'hono/html';
 import { toSafeUrl } from '../utils/html';
 import { sendMail, mailStatusCheck } from './mail';
-import { MAIL_TEMPLATES, renderMail, type MailContent, type TemplateName, type TemplateModel } from './mail-templates';
+import { MAIL_TEMPLATES, renderMail, type MailContent, type TemplateName, type TemplateArgs } from './mail-templates';
 import type { Env } from '../types';
 
 test('shared HTML escapes nested content and links reject unsafe protocols', () => {
@@ -167,9 +167,10 @@ test('every mail template escapes and sanitizes untrusted text without tokens in
     emergencyAccessApproved: { name: hostile }, emergencyAccessRejected: { name: hostile }, emergencyAccessTimedOut: { name: hostile }, emergencyAccessReminder: { name: hostile, daysLeft: 1 },
     organizationUserAccepted: { organizationName: hostile, memberName: hostile },
     organizationUserConfirmed: { organizationName: hostile, vaultOrigin }, welcome: { name: hostile, vaultOrigin },
-  } satisfies { [N in TemplateName]: TemplateModel<N> };
+  } satisfies { [N in TemplateName]: TemplateArgs<N> extends [infer Model] ? Model : Record<string, never> };
   for (const name of Object.keys(models) as TemplateName[]) {
-    const render = MAIL_TEMPLATES[name].render as (model: TemplateModel<TemplateName>) => import('./mail-templates').MailContent;
+    // Parameterless templates ignore the empty model handed to them here.
+    const render = MAIL_TEMPLATES[name].render as (model: unknown) => import('./mail-templates').MailContent;
     const content = render(models[name]);
     const rendered = renderMail(content);
     assert.ok(rendered.subject.length <= 100, name);
