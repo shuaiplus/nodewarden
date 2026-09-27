@@ -13,7 +13,7 @@ import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
 import { getSafeJwtSecret } from '../utils/direct-upload';
-import { readAuthRequestDeviceInfo, deviceTypeName } from '../utils/device';
+import { readAuthRequestDeviceInfo, deviceTypeName, type AuthRequestDeviceInfo } from '../utils/device';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { issueSendAccessToken } from './sends';
@@ -69,11 +69,9 @@ function resolveTotpSecret(userSecret: string | null): string | null {
   return null;
 }
 
-async function resolveDeviceSession(
-  db: D1Database,
-  userId: string,
-  deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
-): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
+type DeviceSession = { identifier: string; sessionStamp: string; isNewDevice: boolean };
+
+async function resolveDeviceSession(db: D1Database, userId: string, deviceInfo: AuthRequestDeviceInfo): Promise<DeviceSession | null> {
   if (!deviceInfo.deviceIdentifier) return null;
   const existingDevice = await deviceRepo.getDevice(db, userId, deviceInfo.deviceIdentifier);
   const sessionStamp = String(existingDevice?.sessionStamp || '').trim() || generateUUID();
@@ -88,23 +86,30 @@ function resolveRefreshClientType(request: Request, body: Record<string, string>
   return clientId || 'other';
 }
 
-async function persistAndResolveDeviceSession(
-  db: D1Database,
-  userId: string,
-  deviceInfo: ReturnType<typeof readAuthRequestDeviceInfo>
-): Promise<{ identifier: string; sessionStamp: string; isNewDevice: boolean } | null> {
-  const candidate = await resolveDeviceSession(db, userId, deviceInfo);
+// Persists the device once every factor passed, then mails the new-device notice and registers
+// any push token the client sent along.
+async function persistLoginDevice(
+  env: Env,
+  request: Request,
+  user: User,
+  deviceInfo: AuthRequestDeviceInfo,
+  body: Record<string, string>
+): Promise<DeviceSession | null> {
+  const candidate = await resolveDeviceSession(env.DB, user.id, deviceInfo);
   if (!candidate) return null;
-  await deviceRepo.upsertDevice(db,
-    userId,
+  await deviceRepo.upsertDevice(env.DB,
+    user.id,
     candidate.identifier,
     deviceInfo.deviceName,
     deviceInfo.deviceType,
     candidate.sessionStamp
   );
-  const persisted = await deviceRepo.getDevice(db, userId, candidate.identifier);
+  const persisted = await deviceRepo.getDevice(env.DB, user.id, candidate.identifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
-  return { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: candidate.isNewDevice };
+  const deviceSession = { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: candidate.isNewDevice };
+  if (deviceSession.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
+  await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
+  return deviceSession;
 }
 
 function notifyNewDevice(env: Env, request: Request, user: User, type: number): void {
@@ -335,6 +340,115 @@ async function recordFailedLoginAndBuildResponse(
   return identityErrorResponse(message, 'invalid_grant', 400);
 }
 
+// Answers the lockout before any user lookup so a locked address leaks nothing about the account.
+async function loginLockoutResponse(rateLimit: RateLimitService, loginIdentifier: string): Promise<Response | null> {
+  const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
+  if (loginCheck.allowed) return null;
+  return identityErrorResponse(
+    `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
+    'TooManyRequests',
+    429
+  );
+}
+
+// A rejected login leaves the user event and the audit row; the caller applies the rate limit.
+async function recordLoginFailure(
+  env: Env,
+  request: Request,
+  user: User,
+  grantType: string,
+  deviceIdentifier: string | null,
+  action: string
+): Promise<void> {
+  await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
+  await safeWriteAuditEvent(env, {
+    actorUserId: user.id,
+    action,
+    category: 'auth',
+    level: 'warn',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: { grantType, deviceIdentifier, ...auditRequestMetadata(request) },
+  });
+}
+
+interface TokenResponseExtras {
+  // Password grant: the remember-device token minted for this login.
+  twoFactorToken?: string;
+  // Password grant approved through an auth request: the key the approving device wrapped.
+  key?: string | null;
+  // Passkey grant: proves user verification to the settings that require it.
+  userVerificationToken?: string;
+  prfOption?: Parameters<typeof buildUserDecryptionOptions>[1];
+}
+
+// Every grant answers with the same TokenResponse. The optional fields keep their positions so the
+// JSON stays byte-for-byte what official clients parsed per grant before.
+function tokenResponse(request: Request, user: User, accessToken: string, refreshToken: string, extras: TokenResponseExtras = {}): Response {
+  const accountKeys = buildAccountKeys(user);
+  const userDecryptionOptions = buildUserDecryptionOptions(user, extras.prfOption);
+  const webSession = shouldUseWebSession(request);
+  const response: TokenResponse = {
+    access_token: accessToken,
+    expires_in: LIMITS.auth.accessTokenTtlSeconds,
+    token_type: 'Bearer',
+    ...(webSession ? { web_session: true } : { refresh_token: refreshToken }),
+    ...(extras.twoFactorToken ? { TwoFactorToken: extras.twoFactorToken } : {}),
+    Key: extras.key || user.key,
+    PrivateKey: user.privateKey,
+    AccountKeys: accountKeys,
+    accountKeys: accountKeys,
+    Kdf: user.kdfType,
+    KdfIterations: user.kdfIterations,
+    KdfMemory: user.kdfMemory,
+    KdfParallelism: user.kdfParallelism,
+    ForcePasswordReset: false,
+    ResetMasterPassword: false,
+    MasterPasswordPolicy: masterPasswordPolicyResponse(),
+    ApiUseKeyConnector: false,
+    scope: 'api offline_access',
+    unofficialServer: true,
+    ...(extras.userVerificationToken === undefined
+      ? {}
+      : { UserVerificationToken: extras.userVerificationToken, userVerificationToken: extras.userVerificationToken }),
+    UserDecryptionOptions: userDecryptionOptions,
+    userDecryptionOptions: userDecryptionOptions,
+  };
+  const baseResponse = identityJsonResponse(response);
+  return webSession ? withWebRefreshCookie(request, baseResponse, refreshToken) : baseResponse;
+}
+
+// Password, passkey and API-key logins mint the same session pair and leave the same trail.
+async function completeLogin(
+  request: Request,
+  env: Env,
+  login: { user: User; body: Record<string, string>; deviceInfo: AuthRequestDeviceInfo; deviceSession: DeviceSession | null; grantType: string },
+  extras: TokenResponseExtras = {},
+  audit = { action: 'auth.login.success', targetType: 'user', targetId: login.user.id }
+): Promise<Response> {
+  const { user, body, deviceInfo, deviceSession, grantType } = login;
+  const auth = new AuthService(env);
+  const accessToken = await auth.generateAccessToken(user, deviceSession);
+  const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
+  await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
+  await safeWriteAuditEvent(env, {
+    actorUserId: user.id,
+    action: audit.action,
+    category: 'auth',
+    level: 'info',
+    targetType: audit.targetType,
+    targetId: audit.targetId,
+    metadata: {
+      grantType,
+      webSession: shouldUseWebSession(request),
+      deviceIdentifier: deviceSession?.identifier ?? deviceInfo.deviceIdentifier,
+      deviceType: deviceInfo.deviceType,
+      ...auditRequestMetadata(request),
+    },
+  });
+  return tokenResponse(request, user, accessToken, refreshToken, extras);
+}
+
 // POST /identity/connect/token
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const auth = new AuthService(env);
@@ -455,14 +569,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, email);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
-    const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
-    if (!loginCheck.allowed) {
-      return identityErrorResponse(
-        `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
-        'TooManyRequests',
-        429
-      );
-    }
+    const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
+    if (locked) return locked;
 
     const user = await userRepo.getUser(env.DB, email);
     if (!user) {
@@ -471,20 +579,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
-      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
-      await safeWriteAuditEvent(env, {
-        actorUserId: user.id,
-        action: 'auth.login.failed.user_inactive',
-        category: 'auth',
-        level: 'warn',
-        targetType: 'user',
-        targetId: user.id,
-        metadata: {
-          grantType,
-          deviceIdentifier: deviceInfo.deviceIdentifier,
-          ...auditRequestMetadata(request),
-        },
-      });
+      await recordLoginFailure(env, request, user, grantType, deviceInfo.deviceIdentifier, 'auth.login.failed.user_inactive');
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
     }
     if (ssoContinuation && (user.id !== ssoContinuation.userId || user.securityStamp !== ssoContinuation.securityStamp || user.email !== ssoContinuation.email)) return identityErrorResponse('SSO sign-in is no longer valid', 'invalid_grant', 400);
@@ -509,20 +604,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       valid = viaSsoShim || await auth.verifyPassword(passwordHash, user.masterPasswordHash, user.email);
     }
     if (!valid) {
-      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
-      await safeWriteAuditEvent(env, {
-        actorUserId: user.id,
-        action: normalizedAuthRequestId ? 'auth.login.failed.bad_auth_request' : 'auth.login.failed.bad_password',
-        category: 'auth',
-        level: 'warn',
-        targetType: 'user',
-        targetId: user.id,
-        metadata: {
-          grantType,
-          deviceIdentifier: deviceInfo.deviceIdentifier,
-          ...auditRequestMetadata(request),
-        },
-      });
+      await recordLoginFailure(env, request, user, grantType, deviceInfo.deviceIdentifier,
+        normalizedAuthRequestId ? 'auth.login.failed.bad_auth_request' : 'auth.login.failed.bad_password');
       return recordFailedLoginAndBuildResponse(
         rateLimit,
         loginIdentifier,
@@ -668,11 +751,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     // Persist device only after successful password + (optional) 2FA verification.
-    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
-    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
-    if (deviceSession) {
-      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
-    }
+    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
 
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
@@ -680,67 +759,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       await authRequestRepo.markAuthRequestAuthenticated(env.DB, validatedAuthRequestId);
     }
 
-    const accessToken = await auth.generateAccessToken(user, deviceSession);
-    const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
-    const accountKeys = buildAccountKeys(user);
-    const userDecryptionOptions = buildUserDecryptionOptions(user);
-    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
-    await safeWriteAuditEvent(env, {
-      actorUserId: user.id,
-      action: 'auth.login.success',
-      category: 'auth',
-      level: 'info',
-      targetType: 'user',
-      targetId: user.id,
-      metadata: {
-        grantType,
-        webSession: shouldUseWebSession(request),
-        deviceIdentifier: deviceSession?.identifier ?? deviceInfo.deviceIdentifier,
-        deviceType: deviceInfo.deviceType,
-        ...auditRequestMetadata(request),
-      },
-    });
-
-    const response: TokenResponse = {
-      access_token: accessToken,
-      expires_in: LIMITS.auth.accessTokenTtlSeconds,
-      token_type: 'Bearer',
-      ...(shouldUseWebSession(request) ? { web_session: true } : { refresh_token: refreshToken }),
-      ...(trustedTwoFactorTokenToReturn ? { TwoFactorToken: trustedTwoFactorTokenToReturn } : {}),
-      Key: authRequestLoginKey || user.key,
-      PrivateKey: user.privateKey,
-      AccountKeys: accountKeys,
-      accountKeys: accountKeys,
-      Kdf: user.kdfType,
-      KdfIterations: user.kdfIterations,
-      KdfMemory: user.kdfMemory,
-      KdfParallelism: user.kdfParallelism,
-      ForcePasswordReset: false,
-      ResetMasterPassword: false,
-      MasterPasswordPolicy: masterPasswordPolicyResponse(),
-      ApiUseKeyConnector: false,
-      scope: 'api offline_access',
-      unofficialServer: true,
-      UserDecryptionOptions: userDecryptionOptions,
-      userDecryptionOptions: userDecryptionOptions,
-    };
-
-    const baseResponse = identityJsonResponse(response);
-    return shouldUseWebSession(request)
-      ? withWebRefreshCookie(request, baseResponse, refreshToken)
-      : baseResponse;
+    return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType },
+      { twoFactorToken: trustedTwoFactorTokenToReturn, key: authRequestLoginKey });
 
   } else if (grantType === 'webauthn') {
     const token = String(body.token || '').trim();
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, token || 'missing-token');
-    const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
-    if (!loginCheck.allowed) {
-      return identityErrorResponse(
-        `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
-        'TooManyRequests',
-        429
-      );
-    }
+    const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
+    if (locked) return locked;
 
     let deviceResponse: unknown = body.deviceResponse;
     if (typeof deviceResponse === 'string') {
@@ -786,66 +812,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
-    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
-    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
-    if (deviceSession) {
-      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
-    }
+    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
 
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
-    const accessToken = await auth.generateAccessToken(user, deviceSession);
-    const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
     const userVerificationToken = await createPasskeyUserVerificationToken(env, user.id, 'backup.settings.repair');
-    const accountKeys = buildAccountKeys(user);
-    const webAuthnPrfOption = buildAccountPasskeyTokenUserDecryptionOption(credential);
-    const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOption);
-    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
-    await safeWriteAuditEvent(env, {
-      actorUserId: user.id,
-      action: 'auth.passkey.login.success',
-      category: 'auth',
-      level: 'info',
-      targetType: 'accountPasskey',
-      targetId: credential.id,
-      metadata: {
-        grantType,
-        webSession: shouldUseWebSession(request),
-        deviceIdentifier: deviceSession?.identifier ?? deviceInfo.deviceIdentifier,
-        deviceType: deviceInfo.deviceType,
-        ...auditRequestMetadata(request),
-      },
-    });
-
-    const response: TokenResponse = {
-      access_token: accessToken,
-      expires_in: LIMITS.auth.accessTokenTtlSeconds,
-      token_type: 'Bearer',
-      ...(shouldUseWebSession(request) ? { web_session: true } : { refresh_token: refreshToken }),
-      Key: user.key,
-      PrivateKey: user.privateKey,
-      AccountKeys: accountKeys,
-      accountKeys: accountKeys,
-      Kdf: user.kdfType,
-      KdfIterations: user.kdfIterations,
-      KdfMemory: user.kdfMemory,
-      KdfParallelism: user.kdfParallelism,
-      ForcePasswordReset: false,
-      ResetMasterPassword: false,
-      MasterPasswordPolicy: masterPasswordPolicyResponse(),
-      ApiUseKeyConnector: false,
-      scope: 'api offline_access',
-      unofficialServer: true,
-      UserVerificationToken: userVerificationToken,
-      userVerificationToken,
-      UserDecryptionOptions: userDecryptionOptions,
-      userDecryptionOptions: userDecryptionOptions,
-    };
-
-    const baseResponse = identityJsonResponse(response);
-    return shouldUseWebSession(request)
-      ? withWebRefreshCookie(request, baseResponse, refreshToken)
-      : baseResponse;
+    return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType },
+      { userVerificationToken, prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
+      { action: 'auth.passkey.login.success', targetType: 'accountPasskey', targetId: credential.id });
 
   } else if (grantType === 'client_credentials') {
     // Login with client credentials
@@ -879,14 +853,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, uid);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
-    const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
-    if (!loginCheck.allowed) {
-      return identityErrorResponse(
-        `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
-        'TooManyRequests',
-        429
-      );
-    }
+    const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
+    if (locked) return locked;
 
     const user = await userRepo.getUserById(env.DB, uid);
     if (!user) {
@@ -895,100 +863,23 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
-      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
-      await safeWriteAuditEvent(env, {
-        actorUserId: user.id,
-        action: 'auth.login.failed.user_inactive',
-        category: 'auth',
-        level: 'warn',
-        targetType: 'user',
-        targetId: user.id,
-        metadata: {
-          grantType,
-          deviceIdentifier: deviceInfo.deviceIdentifier,
-          ...auditRequestMetadata(request),
-        },
-      });
+      await recordLoginFailure(env, request, user, grantType, deviceInfo.deviceIdentifier, 'auth.login.failed.user_inactive');
       return identityErrorResponse('Account is disabled', 'invalid_grant', 400);
     }
 
     if (!user.apiKey || !(await verifyApiKey(clientSecret, user.apiKey))) {
       await rateLimit.recordFailedLogin(loginIdentifier);
-      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
-      await safeWriteAuditEvent(env, {
-        actorUserId: user.id,
-        action: 'auth.login.failed.bad_api_key',
-        category: 'auth',
-        level: 'warn',
-        targetType: 'user',
-        targetId: user.id,
-        metadata: {
-          grantType,
-          deviceIdentifier: deviceInfo.deviceIdentifier,
-          ...auditRequestMetadata(request),
-        },
-      });
+      await recordLoginFailure(env, request, user, grantType, deviceInfo.deviceIdentifier, 'auth.login.failed.bad_api_key');
       return identityErrorResponse('ClientId or clientSecret is incorrect. Try again', 'invalid_grant', 400);
     }
 
     // Persist device only after successful client credential verification.
-    const deviceSession = await persistAndResolveDeviceSession(env.DB, user.id, deviceInfo);
-    if (deviceSession?.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
-    if (deviceSession) {
-      await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
-    }
+    const deviceSession = await persistLoginDevice(env, request, user, deviceInfo, body);
 
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
-    const accessToken = await auth.generateAccessToken(user, deviceSession);
-    const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
-    const accountKeys = buildAccountKeys(user);
-    const userDecryptionOptions = buildUserDecryptionOptions(user);
-    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
-    await safeWriteAuditEvent(env, {
-      actorUserId: user.id,
-      action: 'auth.login.success',
-      category: 'auth',
-      level: 'info',
-      targetType: 'user',
-      targetId: user.id,
-      metadata: {
-        grantType,
-        webSession: shouldUseWebSession(request),
-        deviceIdentifier: deviceSession?.identifier ?? deviceInfo.deviceIdentifier,
-        deviceType: deviceInfo.deviceType,
-        ...auditRequestMetadata(request),
-      },
-    });
-
-    const response: TokenResponse = {
-      access_token: accessToken,
-      expires_in: LIMITS.auth.accessTokenTtlSeconds,
-      token_type: 'Bearer',
-      ...(shouldUseWebSession(request) ? { web_session: true } : { refresh_token: refreshToken }),
-      Key: user.key,
-      PrivateKey: user.privateKey,
-      AccountKeys: accountKeys,
-      accountKeys: accountKeys,
-      Kdf: user.kdfType,
-      KdfIterations: user.kdfIterations,
-      KdfMemory: user.kdfMemory,
-      KdfParallelism: user.kdfParallelism,
-      ForcePasswordReset: false,
-      ResetMasterPassword: false,
-      MasterPasswordPolicy: masterPasswordPolicyResponse(),
-      ApiUseKeyConnector: false,
-      scope: 'api offline_access',
-      unofficialServer: true,
-      UserDecryptionOptions: userDecryptionOptions,
-      userDecryptionOptions: userDecryptionOptions,
-    };
-
-    const baseResponse = identityJsonResponse(response);
-    return shouldUseWebSession(request)
-      ? withWebRefreshCookie(request, baseResponse, refreshToken)
-      : baseResponse;
+    return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType });
 
   } else if (grantType === 'send_access') {
     const sendAccessLimit = await rateLimit.consumeBudget(`${clientIdentifier}:public`, LIMITS.rateLimit.publicRequestsPerMinute);
@@ -1141,36 +1032,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (device?.identifier) {
       await deviceRepo.touchDeviceLastSeen(env.DB, user.id, device.identifier);
     }
-    const accountKeys = buildAccountKeys(user);
-    const userDecryptionOptions = buildUserDecryptionOptions(user);
-
-    const response: TokenResponse = {
-      access_token: accessToken,
-      expires_in: LIMITS.auth.accessTokenTtlSeconds,
-      token_type: 'Bearer',
-      ...(shouldUseWebSession(request) ? { web_session: true } : { refresh_token: refreshToken }),
-      Key: user.key,
-      PrivateKey: user.privateKey,
-      AccountKeys: accountKeys,
-      accountKeys: accountKeys,
-      Kdf: user.kdfType,
-      KdfIterations: user.kdfIterations,
-      KdfMemory: user.kdfMemory,
-      KdfParallelism: user.kdfParallelism,
-      ForcePasswordReset: false,
-      ResetMasterPassword: false,
-      MasterPasswordPolicy: masterPasswordPolicyResponse(),
-      ApiUseKeyConnector: false,
-      scope: 'api offline_access',
-      unofficialServer: true,
-      UserDecryptionOptions: userDecryptionOptions,
-      userDecryptionOptions: userDecryptionOptions,
-    };
-
-    const baseResponse = identityJsonResponse(response);
-    return shouldUseWebSession(request)
-      ? withWebRefreshCookie(request, baseResponse, refreshToken)
-      : baseResponse;
+    return tokenResponse(request, user, accessToken, refreshToken);
   }
 
   return identityErrorResponse('Unsupported grant type', 'unsupported_grant_type', 400);
