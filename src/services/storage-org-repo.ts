@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { and, asc, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
 
@@ -34,6 +35,7 @@ import {
   type MembershipRecord,
   type OrganizationRecord,
   type PolicyRecord,
+  jsonText,
   parsePermissions,
 } from './org-types';
 
@@ -68,19 +70,16 @@ function mapGroup(row: typeof orgGroups.$inferSelect): GroupRecord {
   };
 }
 
+// A stored JSON object column; any other JSON value reads as empty.
+const storedObject = z.record(z.string(), z.unknown()).catch({});
+
 function mapPolicy(row: typeof orgPolicies.$inferSelect): PolicyRecord {
-  let data: Record<string, unknown> = {};
-  try {
-    data = JSON.parse(row.data || '{}') as Record<string, unknown>;
-  } catch {
-    data = {};
-  }
   return {
     id: row.id,
     orgId: row.orgId,
     type: Number(row.type),
     enabled: !!row.enabled,
-    data,
+    data: jsonText.pipe(storedObject).catch({}).parse(row.data),
     updatedAt: row.updatedAt,
   };
 }
@@ -724,14 +723,11 @@ function mapOrgCipherRow(
   orgId: string,
   collectionIds: string[]
 ): Cipher | null {
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = JSON.parse(String(row.data || '{}')) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  // Unparseable cipher data skips the row rather than serving it without its encrypted fields.
+  const parsed = jsonText.pipe(storedObject).safeParse(row.data || '{}');
+  if (!parsed.success) return null;
   return {
-    ...(parsed as unknown as Cipher),
+    ...(parsed.data as Cipher),
     id: row.id,
     userId: row.userId || userId,
     organizationId: row.organizationId || orgId,

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { collections, organizations } from '../db/schema';
 export const MembershipStatus = {
   Revoked: -1,
@@ -29,35 +30,39 @@ export const PolicyType = {
   ResetPassword: 8,
 } as const;
 
-export interface OrgPermissions {
-  accessEventLogs: boolean;
-  accessImportExport: boolean;
-  accessReports: boolean;
-  createNewCollections: boolean;
-  editAnyCollection: boolean;
-  deleteAnyCollection: boolean;
-  manageGroups: boolean;
-  managePolicies: boolean;
-  manageSso: boolean;
-  manageUsers: boolean;
-  manageResetPassword: boolean;
-  manageScim: boolean;
-}
+// A flag that is absent or not a boolean reads as not granted, in request bodies and stored rows alike.
+const grant = z.boolean().catch(false);
+const permissionFlags = z.object({
+  accessEventLogs: grant,
+  accessImportExport: grant,
+  accessReports: grant,
+  createNewCollections: grant,
+  editAnyCollection: grant,
+  deleteAnyCollection: grant,
+  manageGroups: grant,
+  managePolicies: grant,
+  manageSso: grant,
+  manageUsers: grant,
+  manageResetPassword: grant,
+  manageScim: grant,
+});
 
-export const EMPTY_PERMISSIONS: OrgPermissions = {
-  accessEventLogs: false,
-  accessImportExport: false,
-  accessReports: false,
-  createNewCollections: false,
-  editAnyCollection: false,
-  deleteAnyCollection: false,
-  manageGroups: false,
-  managePolicies: false,
-  manageSso: false,
-  manageUsers: false,
-  manageResetPassword: false,
-  manageScim: false,
-};
+// Custom-role permissions: unknown keys are dropped and anything other than an object grants nothing.
+export const OrgPermissions = permissionFlags.catch(() => permissionFlags.parse({}));
+export type OrgPermissions = z.output<typeof OrgPermissions>;
+
+export const EMPTY_PERMISSIONS: OrgPermissions = OrgPermissions.parse({});
+
+// JSON text as a schema input, so stored columns and uploaded files parse through .pipe()/.catch()
+// instead of a try/catch around JSON.parse. Unparseable text is an issue, never a throw.
+export const jsonText = z.string().transform((text, context): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    context.issues.push({ code: 'custom', message: 'Invalid JSON', input: text });
+    return z.NEVER;
+  }
+});
 
 export type OrganizationRecord = typeof organizations.$inferSelect;
 
@@ -124,14 +129,9 @@ export function clientMembershipType(type: number): number {
   return type === MembershipType.Manager ? MembershipType.Custom : type;
 }
 
+// A stored row whose JSON does not parse holds no permissions.
 export function parsePermissions(raw: string | null | undefined): OrgPermissions | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<OrgPermissions>;
-    return { ...EMPTY_PERMISSIONS, ...parsed };
-  } catch {
-    return null;
-  }
+  return jsonText.pipe(OrgPermissions).safeParse(raw).data ?? null;
 }
 
 export function isConfirmedVisible(status: number): boolean {
