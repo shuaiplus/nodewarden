@@ -86,7 +86,7 @@ export function applySecurityHeaders(request: Request, response: Response): Resp
 }
 
 // JSON response helper
-export function jsonResponse(data: any, status: number = 200, headers: Record<string, string> = {}): Response {
+export function jsonResponse(data: unknown, status: number = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
