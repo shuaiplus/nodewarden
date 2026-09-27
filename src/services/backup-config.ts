@@ -5,6 +5,7 @@ import {
   type BackupSettingsPortableEnvelope,
   decryptBackupSettingsRuntime,
   encryptBackupSettingsEnvelope,
+  isPlainObject,
   parseBackupSettingsEnvelope,
 } from './backup-settings-crypto';
 import {
@@ -46,10 +47,6 @@ export type {
 export interface BackupSettingsRepairState {
   needsRepair: boolean;
   portable: BackupSettingsPortableEnvelope | null;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function asTrimmedString(value: unknown): string {

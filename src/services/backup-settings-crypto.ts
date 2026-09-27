@@ -43,7 +43,7 @@ export interface BackupSettingsEnvelopeV2 {
   portable: BackupSettingsPortableEnvelope;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
