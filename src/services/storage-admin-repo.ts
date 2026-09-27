@@ -1,8 +1,9 @@
-import { and, desc, eq, gt, inArray, isNull, like, lt, lte, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, like, lt, lte, ne, or, placeholder } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
 import { auditLogs, invites, users } from '../db/schema';
+import { coalesce, likeEscaped, lower } from '../db/sql';
 import type { AuditLog, Invite } from '../types';
 
 export interface AuditLogListOptions {
@@ -139,7 +140,7 @@ export async function pruneAuditLogsToMax(db: D1Database, maxEntries: number): P
   const keep = Math.max(1, Math.floor(maxEntries));
   const orm = getOrm(db);
   const overflow = orm.select({ id: auditLogs.id }).from(auditLogs).orderBy(desc(auditLogs.createdAt))
-    .limit(sql.placeholder('unbounded')).offset(keep);
+    .limit(placeholder('unbounded')).offset(keep);
   const result = await orm.delete(auditLogs).where(inArray(auditLogs.id, overflow)).run({ unbounded: -1 });
   return Number(result.meta.changes ?? 0);
 }
@@ -155,20 +156,20 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
   const actor = alias(users, 'actor');
   const target = alias(users, 'target');
   const filters = [];
-  if (options.actionPrefix) filters.push(sql`${auditLogs.action} LIKE ${options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'} ESCAPE '\\'`);
-  if (options.from) filters.push(sql`${auditLogs.createdAt} >= ${options.from}`);
-  if (options.to) filters.push(sql`${auditLogs.createdAt} <= ${options.to}`);
+  if (options.actionPrefix) filters.push(likeEscaped(auditLogs.action, options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'));
+  if (options.from) filters.push(gte(auditLogs.createdAt, options.from));
+  if (options.to) filters.push(lte(auditLogs.createdAt, options.to));
   if (options.category) filters.push(eq(auditLogs.category, options.category));
   if (options.level) filters.push(eq(auditLogs.level, options.level));
   if (options.q) {
     const likePattern = `%${options.q.toLowerCase().slice(0, 48)}%`;
     filters.push(or(
-      like(sql`lower(${auditLogs.action})`, likePattern),
-      like(sql`lower(coalesce(${auditLogs.actorUserId}, ''))`, likePattern),
-      like(sql`lower(coalesce(${auditLogs.targetType}, ''))`, likePattern),
-      like(sql`lower(coalesce(${auditLogs.targetId}, ''))`, likePattern),
-      like(sql`lower(coalesce(${actor.email}, ''))`, likePattern),
-      like(sql`lower(coalesce(${target.email}, ''))`, likePattern),
+      like(lower(auditLogs.action), likePattern),
+      like(lower(coalesce(auditLogs.actorUserId, '')), likePattern),
+      like(lower(coalesce(auditLogs.targetType, '')), likePattern),
+      like(lower(coalesce(auditLogs.targetId, '')), likePattern),
+      like(lower(coalesce(actor.email, '')), likePattern),
+      like(lower(coalesce(target.email, '')), likePattern),
     ));
   }
 
