@@ -1,5 +1,9 @@
+import { and, eq, lt } from 'drizzle-orm';
+
 import { twoFactorClearStatements } from './two-factor-providers';
 import { readEnvConfig } from '../config/env';
+import { getOrm } from '../db/client';
+import { verification } from '../db/schema';
 import type { Env, User } from '../types';
 import { constantTimeEquals, hashApiKey } from '../utils/api-key';
 import { readAuthRequestDeviceInfo } from '../utils/device';
@@ -28,20 +32,25 @@ export async function ssoContinuationContext(env: Env, request: Request, body: R
 
 // Missing permits the first IdP exchange; an expired, consumed or mismatched row never does.
 export async function getSsoContinuation(env: Env, context: SsoContinuationContext): Promise<SsoContinuation | null | undefined> {
-  const row = await env.DB.prepare('SELECT value, expires_at FROM verification WHERE id = ? AND identifier = ?').bind(context.id, PURPOSE).first<{ value: string; expires_at: number }>();
+  const row = await getOrm(env.DB).select({ value: verification.value, expiresAt: verification.expiresAt }).from(verification)
+    .where(and(eq(verification.id, context.id), eq(verification.identifier, PURPOSE))).get();
   if (!row) return undefined;
   const value = JSON.parse(row.value) as SsoContinuation & { consumed: boolean; expiresAt: number };
-  if (row.expires_at <= Date.now() || !(value.expiresAt > Date.now()) || value.consumed || !constantTimeEquals(value.binding, context.binding)) return null;
+  if (row.expiresAt <= Date.now() || !(value.expiresAt > Date.now()) || value.consumed || !constantTimeEquals(value.binding, context.binding)) return null;
   return { ...context, userId: value.userId, email: value.email, securityStamp: value.securityStamp };
 }
 
 export async function saveSsoContinuation(env: Env, context: SsoContinuationContext, user: User): Promise<SsoContinuation | null> {
   const now = Date.now();
   const value = { ...context, userId: user.id, email: user.email, securityStamp: user.securityStamp };
-  const [, result] = await env.DB.batch([
+  const orm = getOrm(env.DB);
+  const [, result] = await orm.batch([
     // Better Auth globally deletes expired verification rows, so keep tombstones beyond the logical login window.
-    env.DB.prepare('DELETE FROM verification WHERE identifier = ? AND expires_at < ?').bind(PURPOSE, now),
-    env.DB.prepare('INSERT INTO verification (id, identifier, value, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').bind(context.id, PURPOSE, JSON.stringify({ ...value, consumed: false, expiresAt: now + TTL_MS }), now + TOMBSTONE_TTL_MS, now, now),
+    orm.delete(verification).where(and(eq(verification.identifier, PURPOSE), lt(verification.expiresAt, now))),
+    orm.insert(verification).values({
+      id: context.id, identifier: PURPOSE, value: JSON.stringify({ ...value, consumed: false, expiresAt: now + TTL_MS }),
+      expiresAt: now + TOMBSTONE_TTL_MS, createdAt: now, updatedAt: now,
+    }).onConflictDoNothing({ target: verification.id }),
   ]);
   return result.meta.changes ? value : null;
 }
