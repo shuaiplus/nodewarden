@@ -47,10 +47,6 @@ export interface RemoteBackupFilePutOptions {
   contentType?: string;
 }
 
-function isBackupArchiveName(name: string): boolean {
-  return /\.zip$/i.test(String(name || '').trim());
-}
-
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -105,25 +101,6 @@ function sortRemoteItems(items: RemoteBackupItem[]): RemoteBackupItem[] {
   });
 }
 
-function decodeXmlText(value: string): string {
-  return value.replace(/&(amp|lt|gt|quot|#39);/g, (_match, entity) => {
-    switch (entity) {
-      case 'amp':
-        return '&';
-      case 'lt':
-        return '<';
-      case 'gt':
-        return '>';
-      case 'quot':
-        return '"';
-      case '#39':
-        return "'";
-      default:
-        return _match;
-    }
-  });
-}
-
 function parseHttpDate(value: string): string | null {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
@@ -142,31 +119,15 @@ function extractXmlBlocks(xml: string, tagName: string): string[] {
 function extractXmlFirst(xml: string, tagName: string): string | null {
   const pattern = new RegExp(`<(?:[^:>]+:)?${tagName}\\b[^>]*>([\\s\\S]*?)</(?:[^:>]+:)?${tagName}>`, 'i');
   const match = xml.match(pattern);
-  return match?.[1] ? decodeXmlText(match[1].trim()) : null;
+  // Decode XML's predefined entities; any other reference stays as written.
+  return match?.[1]
+    ? match[1].trim().replace(/&(amp|lt|gt|quot|#39);/g, (_match, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[entity]!)
+    : null;
 }
 
 function toBasicAuthHeader(username: string, password: string): string {
   const token = btoa(`${username}:${password}`);
   return `Basic ${token}`;
-}
-
-function ensureDestinationConfigReady(destination: BackupDestinationRecord): void {
-  if (destination.type === 'webdav') {
-    const config = destination.destination as WebDavBackupDestination;
-    if (!String(config.baseUrl || '').trim()) throw new Error('WebDAV server URL is required');
-    normalizeBackupEndpointUrl(String(config.baseUrl || '').trim(), 'WebDAV server URL');
-    if (!String(config.username || '').trim()) throw new Error('WebDAV username is required');
-    if (!String(config.password || '')) throw new Error('WebDAV password is required');
-    return;
-  }
-  if (destination.type === 's3') {
-    const config = destination.destination as S3BackupDestination;
-    if (!String(config.endpoint || '').trim()) throw new Error('S3 endpoint is required');
-    normalizeBackupEndpointUrl(String(config.endpoint || '').trim(), 'S3 endpoint');
-    if (!String(config.bucket || '').trim()) throw new Error('S3 bucket is required');
-    if (!String(config.accessKeyId || '').trim()) throw new Error('S3 access key is required');
-    if (!String(config.secretAccessKey || '')) throw new Error('S3 secret key is required');
-  }
 }
 
 function buildWebDavUrl(baseUrl: string, relativePath: string): string {
@@ -177,49 +138,6 @@ function buildWebDavUrl(baseUrl: string, relativePath: string): string {
 
 function webDavFullPath(config: WebDavBackupDestination, relativePath: string): string {
   return buildJoinedPath(config.remotePath, normalizeRelativePath(relativePath));
-}
-
-async function ensureWebDavDirectory(baseUrl: string, directoryPath: string, authHeader: string): Promise<void> {
-  const segments = trimSlashes(directoryPath).split('/').filter(Boolean);
-  let current = '';
-  for (const segment of segments) {
-    current = buildJoinedPath(current, segment);
-    const url = buildWebDavUrl(baseUrl, current);
-    const response = await fetch(url, {
-      method: 'MKCOL',
-      headers: {
-        Authorization: authHeader,
-      },
-    });
-    if ([200, 201, 204, 405].includes(response.status)) continue;
-    throw new Error(`WebDAV directory creation failed: ${response.status}`);
-  }
-}
-
-async function ensureWebDavDirectoryCached(
-  baseUrl: string,
-  directoryPath: string,
-  authHeader: string,
-  ensuredDirectories: Set<string>
-): Promise<void> {
-  const segments = trimSlashes(directoryPath).split('/').filter(Boolean);
-  let current = '';
-  for (const segment of segments) {
-    current = buildJoinedPath(current, segment);
-    if (ensuredDirectories.has(current)) continue;
-    const url = buildWebDavUrl(baseUrl, current);
-    const response = await fetch(url, {
-      method: 'MKCOL',
-      headers: {
-        Authorization: authHeader,
-      },
-    });
-    if ([200, 201, 204, 405].includes(response.status)) {
-      ensuredDirectories.add(current);
-      continue;
-    }
-    throw new Error(`WebDAV directory creation failed: ${response.status}`);
-  }
 }
 
 async function putToWebDav(
@@ -234,10 +152,24 @@ async function putToWebDav(
   const remoteDir = parentPath(remoteFilePath);
 
   if (remoteDir) {
-    if (ensuredDirectories) {
-      await ensureWebDavDirectoryCached(config.baseUrl, remoteDir, authHeader, ensuredDirectories);
-    } else {
-      await ensureWebDavDirectory(config.baseUrl, remoteDir, authHeader);
+    // Create each parent collection in turn; a transfer session remembers the ones already created.
+    const segments = trimSlashes(remoteDir).split('/').filter(Boolean);
+    let current = '';
+    for (const segment of segments) {
+      current = buildJoinedPath(current, segment);
+      if (ensuredDirectories?.has(current)) continue;
+      const url = buildWebDavUrl(config.baseUrl, current);
+      const response = await fetch(url, {
+        method: 'MKCOL',
+        headers: {
+          Authorization: authHeader,
+        },
+      });
+      if ([200, 201, 204, 405].includes(response.status)) {
+        ensuredDirectories?.add(current);
+        continue;
+      }
+      throw new Error(`WebDAV directory creation failed: ${response.status}`);
     }
   }
 
@@ -254,132 +186,6 @@ async function putToWebDav(
   if (!response.ok) {
     throw new Error(`WebDAV upload failed: ${response.status}`);
   }
-}
-
-async function uploadToWebDav(config: WebDavBackupDestination, archive: Uint8Array, fileName: string): Promise<BackupUploadResult> {
-  await putToWebDav(config, fileName, archive, { contentType: 'application/zip' });
-  return {
-    provider: 'webdav',
-    remotePath: buildJoinedPath(config.remotePath, fileName),
-  };
-}
-
-function parseWebDavResponsePath(baseUrl: string, href: string): string {
-  const base = new URL(baseUrl);
-  const target = new URL(href, base);
-  const basePath = trimSlashes(decodeURIComponent(base.pathname));
-  const entryPath = trimSlashes(decodeURIComponent(target.pathname));
-  if (!basePath) return entryPath;
-  if (entryPath === basePath) return '';
-  return entryPath.startsWith(`${basePath}/`) ? entryPath.slice(basePath.length + 1) : entryPath;
-}
-
-async function listWebDavEntries(config: WebDavBackupDestination, relativePath: string): Promise<RemoteBackupListResult> {
-  const currentPath = normalizeRelativePath(relativePath);
-  const targetFullPath = webDavFullPath(config, currentPath);
-  const authHeader = toBasicAuthHeader(config.username, config.password);
-  const response = await fetch(buildWebDavUrl(config.baseUrl, targetFullPath), {
-    method: 'PROPFIND',
-    headers: {
-      Authorization: authHeader,
-      Depth: '1',
-      'Content-Type': 'application/xml; charset=utf-8',
-    },
-    body: `<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><resourcetype/><getcontentlength/><getlastmodified/></prop></propfind>`,
-  });
-  if (response.status === 404) {
-    return {
-      provider: 'webdav',
-      currentPath,
-      parentPath: parentPath(currentPath),
-      items: [],
-    };
-  }
-  if (!response.ok) {
-    throw new Error(`WebDAV listing failed: ${response.status}`);
-  }
-
-  const xml = await response.text();
-  const rootFullPath = trimSlashes(config.remotePath);
-  const items: RemoteBackupItem[] = [];
-  for (const block of extractXmlBlocks(xml, 'response')) {
-    const href = extractXmlFirst(block, 'href');
-    if (!href) continue;
-    const fullPath = trimSlashes(parseWebDavResponsePath(config.baseUrl, href));
-    if (!fullPath) continue;
-    if (fullPath === targetFullPath) continue;
-    if (rootFullPath && !(fullPath === rootFullPath || fullPath.startsWith(`${rootFullPath}/`))) continue;
-    const relative = rootFullPath
-      ? fullPath === rootFullPath
-        ? ''
-        : fullPath.slice(rootFullPath.length + 1)
-      : fullPath;
-    if (!relative) continue;
-    const directParent = parentPath(relative);
-    if ((directParent || '') !== currentPath) continue;
-
-    const resourceTypeBlock = extractXmlFirst(block, 'resourcetype') || '';
-    const isDirectory = /<(?:[^:>]+:)?collection\b/i.test(resourceTypeBlock);
-    const sizeRaw = extractXmlFirst(block, 'getcontentlength');
-    const modifiedAtRaw = extractXmlFirst(block, 'getlastmodified');
-    items.push({
-      path: relative,
-      name: basename(relative) || relative,
-      isDirectory,
-      size: !isDirectory && sizeRaw && Number.isFinite(Number(sizeRaw)) ? Number(sizeRaw) : null,
-      modifiedAt: modifiedAtRaw ? parseHttpDate(modifiedAtRaw) : null,
-    });
-  }
-
-  return {
-    provider: 'webdav',
-    currentPath,
-    parentPath: parentPath(currentPath),
-    items: sortRemoteItems(items),
-  };
-}
-
-async function downloadFromWebDav(config: WebDavBackupDestination, relativePath: string): Promise<RemoteBackupFile> {
-  const normalized = normalizeRelativePath(relativePath);
-  if (!normalized || normalized.endsWith('/')) {
-    throw new Error('Please select a backup file');
-  }
-  const authHeader = toBasicAuthHeader(config.username, config.password);
-  const remotePath = webDavFullPath(config, normalized);
-  const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
-    method: 'GET',
-    headers: {
-      Authorization: authHeader,
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`WebDAV download failed: ${response.status}`);
-  }
-  return {
-    provider: 'webdav',
-    remotePath: normalized,
-    fileName: basename(normalized) || 'backup.zip',
-    contentType: String(response.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip',
-    bytes: new Uint8Array(await response.arrayBuffer()),
-  };
-}
-
-async function deleteFromWebDav(config: WebDavBackupDestination, relativePath: string): Promise<void> {
-  const authHeader = toBasicAuthHeader(config.username, config.password);
-  const remotePath = webDavFullPath(config, relativePath);
-  const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
-    method: 'DELETE',
-    headers: {
-      Authorization: authHeader,
-    },
-  });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`WebDAV delete failed: ${response.status}`);
-  }
-}
-
-async function existsInWebDav(config: WebDavBackupDestination, relativePath: string): Promise<boolean> {
-  return (await statWebDavFile(config, relativePath)) !== null;
 }
 
 async function statWebDavFile(config: WebDavBackupDestination, relativePath: string): Promise<RemoteBackupFileStat | null> {
@@ -404,18 +210,15 @@ async function statWebDavFile(config: WebDavBackupDestination, relativePath: str
   };
 }
 
-function isBucketHostedS3Endpoint(endpoint: URL, bucket: string): boolean {
-  const hostname = endpoint.hostname.toLowerCase();
-  const bucketName = bucket.trim().toLowerCase();
-  return !!bucketName && (hostname === bucketName || hostname.startsWith(`${bucketName}.`));
-}
-
 function s3BucketBaseUrl(config: S3BackupDestination): URL {
   const endpoint = new URL(config.endpoint.replace(/\/+$/, ''));
   const bucket = config.bucket.trim();
 
   if (config.addressingStyle === 'virtual-hosted-style') {
-    if (isBucketHostedS3Endpoint(endpoint, bucket)) return endpoint;
+    // An endpoint whose host already starts with the bucket is used as is.
+    const hostname = endpoint.hostname.toLowerCase();
+    const bucketName = bucket.toLowerCase();
+    if (!!bucketName && (hostname === bucketName || hostname.startsWith(`${bucketName}.`))) return endpoint;
     endpoint.hostname = `${bucket}.${endpoint.hostname}`;
     return endpoint;
   }
@@ -454,140 +257,6 @@ async function signedS3Request(
   return client.fetch(url, { method, headers, body });
 }
 
-async function putToS3(
-  config: S3BackupDestination,
-  relativePath: string,
-  bytes: Uint8Array,
-  options: RemoteBackupFilePutOptions = {}
-): Promise<void> {
-  const objectKey = normalizeS3ObjectKey(config, relativePath);
-  const url = s3ObjectUrl(config, objectKey);
-  const response = await signedS3Request(config, 'PUT', url, bytes, options.contentType);
-
-  if (!response.ok) {
-    throw new Error(`S3 upload failed: ${response.status}`);
-  }
-}
-
-async function uploadToS3(config: S3BackupDestination, archive: Uint8Array, fileName: string): Promise<BackupUploadResult> {
-  await putToS3(config, fileName, archive, { contentType: 'application/zip' });
-  return {
-    provider: 's3',
-    remotePath: normalizeS3ObjectKey(config, fileName),
-  };
-}
-
-async function listS3Entries(config: S3BackupDestination, relativePath: string): Promise<RemoteBackupListResult> {
-  const currentPath = normalizeRelativePath(relativePath);
-  const targetPrefixBase = normalizeS3ObjectKey(config, currentPath);
-  const targetPrefix = trimSlashes(targetPrefixBase) ? `${trimSlashes(targetPrefixBase)}/` : '';
-  const rootPrefix = trimSlashes(config.rootPath);
-  const items: RemoteBackupItem[] = [];
-  let continuationToken = '';
-
-  do {
-    const url = s3BucketBaseUrl(config);
-    url.searchParams.set('list-type', '2');
-    url.searchParams.set('delimiter', '/');
-    if (targetPrefix) url.searchParams.set('prefix', targetPrefix);
-    if (continuationToken) url.searchParams.set('continuation-token', continuationToken);
-
-    const response = await signedS3Request(config, 'GET', url);
-    if (!response.ok) {
-      throw new Error(`S3 listing failed: ${response.status}`);
-    }
-
-    const xml = await response.text();
-
-    for (const prefix of extractXmlBlocks(xml, 'CommonPrefixes')) {
-      const fullPrefix = trimSlashes(extractXmlFirst(prefix, 'Prefix') || '');
-      if (!fullPrefix) continue;
-      const relative = rootPrefix
-        ? fullPrefix === rootPrefix
-          ? ''
-          : fullPrefix.startsWith(`${rootPrefix}/`)
-            ? fullPrefix.slice(rootPrefix.length + 1)
-            : ''
-        : fullPrefix;
-      const normalizedRelative = trimSlashes(relative);
-      if (!normalizedRelative) continue;
-      const itemPath = normalizedRelative.replace(/\/+$/, '');
-      if ((parentPath(itemPath) || '') !== currentPath) continue;
-      items.push({
-        path: itemPath,
-        name: basename(itemPath) || itemPath,
-        isDirectory: true,
-        size: null,
-        modifiedAt: null,
-      });
-    }
-
-    for (const content of extractXmlBlocks(xml, 'Contents')) {
-      const fullKey = trimSlashes(extractXmlFirst(content, 'Key') || '');
-      if (!fullKey || (targetPrefix && fullKey === trimSlashes(targetPrefix))) continue;
-      const relative = rootPrefix
-        ? fullKey.startsWith(`${rootPrefix}/`)
-          ? fullKey.slice(rootPrefix.length + 1)
-          : ''
-        : fullKey;
-      const normalizedRelative = trimSlashes(relative);
-      if (!normalizedRelative || (parentPath(normalizedRelative) || '') !== currentPath) continue;
-      items.push({
-        path: normalizedRelative,
-        name: basename(normalizedRelative) || normalizedRelative,
-        isDirectory: false,
-        size: Number(extractXmlFirst(content, 'Size') || 0) || null,
-        modifiedAt: parseHttpDate(extractXmlFirst(content, 'LastModified') || '') || null,
-      });
-    }
-
-    continuationToken = extractXmlFirst(xml, 'NextContinuationToken') || '';
-  } while (continuationToken);
-
-  const deduped = new Map<string, RemoteBackupItem>();
-  for (const item of items) deduped.set(`${item.isDirectory ? 'd' : 'f'}:${item.path}`, item);
-
-  return {
-    provider: 's3',
-    currentPath,
-    parentPath: parentPath(currentPath),
-    items: sortRemoteItems(Array.from(deduped.values())),
-  };
-}
-
-async function downloadFromS3(config: S3BackupDestination, relativePath: string): Promise<RemoteBackupFile> {
-  const normalized = normalizeRelativePath(relativePath);
-  if (!normalized || normalized.endsWith('/')) {
-    throw new Error('Please select a backup file');
-  }
-  const objectKey = normalizeS3ObjectKey(config, normalized);
-  const url = s3ObjectUrl(config, objectKey);
-  const response = await signedS3Request(config, 'GET', url);
-  if (!response.ok) {
-    throw new Error(`S3 download failed: ${response.status}`);
-  }
-  return {
-    provider: 's3',
-    remotePath: normalized,
-    fileName: basename(normalized) || 'backup.zip',
-    contentType: String(response.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip',
-    bytes: new Uint8Array(await response.arrayBuffer()),
-  };
-}
-
-async function deleteFromS3(config: S3BackupDestination, relativePath: string): Promise<void> {
-  const objectKey = normalizeS3ObjectKey(config, relativePath);
-  const url = s3ObjectUrl(config, objectKey);
-  const response = await signedS3Request(config, 'DELETE', url);
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`S3 delete failed: ${response.status}`);
-  }
-}
-
-async function existsInS3(config: S3BackupDestination, relativePath: string): Promise<boolean> {
-  return (await statS3File(config, relativePath)) !== null;
-}
-
 async function statS3File(config: S3BackupDestination, relativePath: string): Promise<RemoteBackupFileStat | null> {
   const objectKey = normalizeS3ObjectKey(config, relativePath);
   const url = s3ObjectUrl(config, objectKey);
@@ -608,7 +277,6 @@ async function statS3File(config: S3BackupDestination, relativePath: string): Pr
 interface ConfiguredDestinationAdapter {
   provider: 'webdav' | 's3';
   config: WebDavBackupDestination | S3BackupDestination;
-  upload: (config: WebDavBackupDestination | S3BackupDestination, archive: Uint8Array, fileName: string) => Promise<BackupUploadResult>;
   putFile: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string, bytes: Uint8Array, options?: RemoteBackupFilePutOptions) => Promise<void>;
   list: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupListResult>;
   download: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupFile>;
@@ -628,34 +296,266 @@ export interface RemoteBackupTransferSession {
   stat(relativePath: string): Promise<RemoteBackupFileStat | null>;
 }
 
+// Every transfer re-checks the destination first, including the SSRF policy on its endpoint.
 function resolveConfiguredDestinationAdapter(
   destination: BackupDestinationRecord
 ): ConfiguredDestinationAdapter {
-  ensureDestinationConfigReady(destination);
-
   if (destination.type === 'webdav') {
+    const webdav = destination.destination as WebDavBackupDestination;
+    if (!String(webdav.baseUrl || '').trim()) throw new Error('WebDAV server URL is required');
+    normalizeBackupEndpointUrl(String(webdav.baseUrl || '').trim(), 'WebDAV server URL');
+    if (!String(webdav.username || '').trim()) throw new Error('WebDAV username is required');
+    if (!String(webdav.password || '')) throw new Error('WebDAV password is required');
     return {
       provider: 'webdav',
-      config: destination.destination as WebDavBackupDestination,
-      upload: (config, archive, fileName) => uploadToWebDav(config as WebDavBackupDestination, archive, fileName),
+      config: webdav,
       putFile: (config, relativePath, bytes, options) => putToWebDav(config as WebDavBackupDestination, relativePath, bytes, options),
-      list: (config, relativePath) => listWebDavEntries(config as WebDavBackupDestination, relativePath),
-      download: (config, relativePath) => downloadFromWebDav(config as WebDavBackupDestination, relativePath),
-      deleteFile: (config, relativePath) => deleteFromWebDav(config as WebDavBackupDestination, relativePath),
-      exists: (config, relativePath) => existsInWebDav(config as WebDavBackupDestination, relativePath),
+      list: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as WebDavBackupDestination;
+        const currentPath = normalizeRelativePath(relativePath);
+        const targetFullPath = webDavFullPath(config, currentPath);
+        const authHeader = toBasicAuthHeader(config.username, config.password);
+        const response = await fetch(buildWebDavUrl(config.baseUrl, targetFullPath), {
+          method: 'PROPFIND',
+          headers: {
+            Authorization: authHeader,
+            Depth: '1',
+            'Content-Type': 'application/xml; charset=utf-8',
+          },
+          body: `<?xml version="1.0" encoding="utf-8"?><propfind xmlns="DAV:"><prop><resourcetype/><getcontentlength/><getlastmodified/></prop></propfind>`,
+        });
+        if (response.status === 404) {
+          return {
+            provider: 'webdav',
+            currentPath,
+            parentPath: parentPath(currentPath),
+            items: [],
+          };
+        }
+        if (!response.ok) {
+          throw new Error(`WebDAV listing failed: ${response.status}`);
+        }
+
+        const xml = await response.text();
+        const rootFullPath = trimSlashes(config.remotePath);
+        const items: RemoteBackupItem[] = [];
+        for (const block of extractXmlBlocks(xml, 'response')) {
+          const href = extractXmlFirst(block, 'href');
+          if (!href) continue;
+          // An href is a URL or an absolute path: resolve it against the server URL, then drop the server's own path.
+          const base = new URL(config.baseUrl);
+          const target = new URL(href, base);
+          const basePath = trimSlashes(decodeURIComponent(base.pathname));
+          const entryPath = trimSlashes(decodeURIComponent(target.pathname));
+          const serverRelativePath = !basePath
+            ? entryPath
+            : entryPath === basePath
+              ? ''
+              : entryPath.startsWith(`${basePath}/`) ? entryPath.slice(basePath.length + 1) : entryPath;
+          const fullPath = trimSlashes(serverRelativePath);
+          if (!fullPath) continue;
+          if (fullPath === targetFullPath) continue;
+          if (rootFullPath && !(fullPath === rootFullPath || fullPath.startsWith(`${rootFullPath}/`))) continue;
+          const relative = rootFullPath
+            ? fullPath === rootFullPath
+              ? ''
+              : fullPath.slice(rootFullPath.length + 1)
+            : fullPath;
+          if (!relative) continue;
+          const directParent = parentPath(relative);
+          if ((directParent || '') !== currentPath) continue;
+
+          const resourceTypeBlock = extractXmlFirst(block, 'resourcetype') || '';
+          const isDirectory = /<(?:[^:>]+:)?collection\b/i.test(resourceTypeBlock);
+          const sizeRaw = extractXmlFirst(block, 'getcontentlength');
+          const modifiedAtRaw = extractXmlFirst(block, 'getlastmodified');
+          items.push({
+            path: relative,
+            name: basename(relative) || relative,
+            isDirectory,
+            size: !isDirectory && sizeRaw && Number.isFinite(Number(sizeRaw)) ? Number(sizeRaw) : null,
+            modifiedAt: modifiedAtRaw ? parseHttpDate(modifiedAtRaw) : null,
+          });
+        }
+
+        return {
+          provider: 'webdav',
+          currentPath,
+          parentPath: parentPath(currentPath),
+          items: sortRemoteItems(items),
+        };
+      },
+      download: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as WebDavBackupDestination;
+        const normalized = normalizeRelativePath(relativePath);
+        if (!normalized || normalized.endsWith('/')) {
+          throw new Error('Please select a backup file');
+        }
+        const authHeader = toBasicAuthHeader(config.username, config.password);
+        const remotePath = webDavFullPath(config, normalized);
+        const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
+          method: 'GET',
+          headers: {
+            Authorization: authHeader,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`WebDAV download failed: ${response.status}`);
+        }
+        return {
+          provider: 'webdav',
+          remotePath: normalized,
+          fileName: basename(normalized) || 'backup.zip',
+          contentType: String(response.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip',
+          bytes: new Uint8Array(await response.arrayBuffer()),
+        };
+      },
+      deleteFile: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as WebDavBackupDestination;
+        const authHeader = toBasicAuthHeader(config.username, config.password);
+        const remotePath = webDavFullPath(config, relativePath);
+        const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
+          method: 'DELETE',
+          headers: {
+            Authorization: authHeader,
+          },
+        });
+        if (!response.ok && response.status !== 404) {
+          throw new Error(`WebDAV delete failed: ${response.status}`);
+        }
+      },
+      exists: async (config, relativePath) => (await statWebDavFile(config as WebDavBackupDestination, relativePath)) !== null,
       stat: (config, relativePath) => statWebDavFile(config as WebDavBackupDestination, relativePath),
     };
   }
   if (destination.type === 's3') {
+    const s3 = destination.destination as S3BackupDestination;
+    if (!String(s3.endpoint || '').trim()) throw new Error('S3 endpoint is required');
+    normalizeBackupEndpointUrl(String(s3.endpoint || '').trim(), 'S3 endpoint');
+    if (!String(s3.bucket || '').trim()) throw new Error('S3 bucket is required');
+    if (!String(s3.accessKeyId || '').trim()) throw new Error('S3 access key is required');
+    if (!String(s3.secretAccessKey || '')) throw new Error('S3 secret key is required');
     return {
       provider: 's3',
-      config: destination.destination as S3BackupDestination,
-      upload: (config, archive, fileName) => uploadToS3(config as S3BackupDestination, archive, fileName),
-      putFile: (config, relativePath, bytes, options) => putToS3(config as S3BackupDestination, relativePath, bytes, options),
-      list: (config, relativePath) => listS3Entries(config as S3BackupDestination, relativePath),
-      download: (config, relativePath) => downloadFromS3(config as S3BackupDestination, relativePath),
-      deleteFile: (config, relativePath) => deleteFromS3(config as S3BackupDestination, relativePath),
-      exists: (config, relativePath) => existsInS3(config as S3BackupDestination, relativePath),
+      config: s3,
+      putFile: async (destinationConfig, relativePath, bytes, options = {}) => {
+        const config = destinationConfig as S3BackupDestination;
+        const objectKey = normalizeS3ObjectKey(config, relativePath);
+        const url = s3ObjectUrl(config, objectKey);
+        const response = await signedS3Request(config, 'PUT', url, bytes, options.contentType);
+
+        if (!response.ok) {
+          throw new Error(`S3 upload failed: ${response.status}`);
+        }
+      },
+      list: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as S3BackupDestination;
+        const currentPath = normalizeRelativePath(relativePath);
+        const targetPrefixBase = normalizeS3ObjectKey(config, currentPath);
+        const targetPrefix = trimSlashes(targetPrefixBase) ? `${trimSlashes(targetPrefixBase)}/` : '';
+        const rootPrefix = trimSlashes(config.rootPath);
+        const items: RemoteBackupItem[] = [];
+        let continuationToken = '';
+
+        do {
+          const url = s3BucketBaseUrl(config);
+          url.searchParams.set('list-type', '2');
+          url.searchParams.set('delimiter', '/');
+          if (targetPrefix) url.searchParams.set('prefix', targetPrefix);
+          if (continuationToken) url.searchParams.set('continuation-token', continuationToken);
+
+          const response = await signedS3Request(config, 'GET', url);
+          if (!response.ok) {
+            throw new Error(`S3 listing failed: ${response.status}`);
+          }
+
+          const xml = await response.text();
+
+          for (const prefix of extractXmlBlocks(xml, 'CommonPrefixes')) {
+            const fullPrefix = trimSlashes(extractXmlFirst(prefix, 'Prefix') || '');
+            if (!fullPrefix) continue;
+            const relative = rootPrefix
+              ? fullPrefix === rootPrefix
+                ? ''
+                : fullPrefix.startsWith(`${rootPrefix}/`)
+                  ? fullPrefix.slice(rootPrefix.length + 1)
+                  : ''
+              : fullPrefix;
+            const normalizedRelative = trimSlashes(relative);
+            if (!normalizedRelative) continue;
+            const itemPath = normalizedRelative.replace(/\/+$/, '');
+            if ((parentPath(itemPath) || '') !== currentPath) continue;
+            items.push({
+              path: itemPath,
+              name: basename(itemPath) || itemPath,
+              isDirectory: true,
+              size: null,
+              modifiedAt: null,
+            });
+          }
+
+          for (const content of extractXmlBlocks(xml, 'Contents')) {
+            const fullKey = trimSlashes(extractXmlFirst(content, 'Key') || '');
+            if (!fullKey || (targetPrefix && fullKey === trimSlashes(targetPrefix))) continue;
+            const relative = rootPrefix
+              ? fullKey.startsWith(`${rootPrefix}/`)
+                ? fullKey.slice(rootPrefix.length + 1)
+                : ''
+              : fullKey;
+            const normalizedRelative = trimSlashes(relative);
+            if (!normalizedRelative || (parentPath(normalizedRelative) || '') !== currentPath) continue;
+            items.push({
+              path: normalizedRelative,
+              name: basename(normalizedRelative) || normalizedRelative,
+              isDirectory: false,
+              size: Number(extractXmlFirst(content, 'Size') || 0) || null,
+              modifiedAt: parseHttpDate(extractXmlFirst(content, 'LastModified') || '') || null,
+            });
+          }
+
+          continuationToken = extractXmlFirst(xml, 'NextContinuationToken') || '';
+        } while (continuationToken);
+
+        const deduped = new Map<string, RemoteBackupItem>();
+        for (const item of items) deduped.set(`${item.isDirectory ? 'd' : 'f'}:${item.path}`, item);
+
+        return {
+          provider: 's3',
+          currentPath,
+          parentPath: parentPath(currentPath),
+          items: sortRemoteItems(Array.from(deduped.values())),
+        };
+      },
+      download: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as S3BackupDestination;
+        const normalized = normalizeRelativePath(relativePath);
+        if (!normalized || normalized.endsWith('/')) {
+          throw new Error('Please select a backup file');
+        }
+        const objectKey = normalizeS3ObjectKey(config, normalized);
+        const url = s3ObjectUrl(config, objectKey);
+        const response = await signedS3Request(config, 'GET', url);
+        if (!response.ok) {
+          throw new Error(`S3 download failed: ${response.status}`);
+        }
+        return {
+          provider: 's3',
+          remotePath: normalized,
+          fileName: basename(normalized) || 'backup.zip',
+          contentType: String(response.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip',
+          bytes: new Uint8Array(await response.arrayBuffer()),
+        };
+      },
+      deleteFile: async (destinationConfig, relativePath) => {
+        const config = destinationConfig as S3BackupDestination;
+        const objectKey = normalizeS3ObjectKey(config, relativePath);
+        const url = s3ObjectUrl(config, objectKey);
+        const response = await signedS3Request(config, 'DELETE', url);
+        if (!response.ok && response.status !== 404) {
+          throw new Error(`S3 delete failed: ${response.status}`);
+        }
+      },
+      exists: async (config, relativePath) => (await statS3File(config as S3BackupDestination, relativePath)) !== null,
       stat: (config, relativePath) => statS3File(config as S3BackupDestination, relativePath),
     };
   }
@@ -732,18 +632,6 @@ export async function uploadRemoteBackupFile(
   await createRemoteBackupTransferSession(destination).putFile(normalized, bytes, options);
 }
 
-function compareBackupItemsByRecency(a: RemoteBackupItem, b: RemoteBackupItem, preferredFileName?: string): number {
-  if (preferredFileName) {
-    const aPreferred = a.name === preferredFileName ? 1 : 0;
-    const bPreferred = b.name === preferredFileName ? 1 : 0;
-    if (aPreferred !== bPreferred) return bPreferred - aPreferred;
-  }
-  const aTime = a.modifiedAt ? new Date(a.modifiedAt).getTime() : 0;
-  const bTime = b.modifiedAt ? new Date(b.modifiedAt).getTime() : 0;
-  if (aTime !== bTime) return bTime - aTime;
-  return b.name.localeCompare(a.name, 'en');
-}
-
 export async function pruneRemoteBackupArchives(
   destination: BackupDestinationRecord,
   retentionCount: number | null,
@@ -752,9 +640,20 @@ export async function pruneRemoteBackupArchives(
   if (retentionCount === null) return 0;
   const adapter = resolveConfiguredDestinationAdapter(destination);
   const listing = await adapter.list(adapter.config, '');
+  // The archive just uploaded ranks first so retention never deletes it, then newer archives, then by name.
   const backupFiles = listing.items
-    .filter((item) => !item.isDirectory && isBackupArchiveName(item.name))
-    .sort((a, b) => compareBackupItemsByRecency(a, b, preferredFileName));
+    .filter((item) => !item.isDirectory && /\.zip$/i.test(String(item.name || '').trim()))
+    .sort((a, b) => {
+      if (preferredFileName) {
+        const aPreferred = a.name === preferredFileName ? 1 : 0;
+        const bPreferred = b.name === preferredFileName ? 1 : 0;
+        if (aPreferred !== bPreferred) return bPreferred - aPreferred;
+      }
+      const aTime = a.modifiedAt ? new Date(a.modifiedAt).getTime() : 0;
+      const bTime = b.modifiedAt ? new Date(b.modifiedAt).getTime() : 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return b.name.localeCompare(a.name, 'en');
+    });
   if (backupFiles.length <= retentionCount) return 0;
   for (const item of backupFiles.slice(retentionCount)) {
     await adapter.deleteFile(adapter.config, item.path);
