@@ -1,7 +1,7 @@
 import { EventType, recordUserEvent } from '../services/events';
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrm } from '../db/client';
-import { devices, session, userRevisions, users } from '../db/schema';
+import { devices, session, userRevisions, users, webauthnCredentials } from '../db/schema';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
@@ -1249,11 +1249,13 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   if (!await userRepo.saveUser(env.DB, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? ['totpSecret']
     : type === TWO_FACTOR_PROVIDER_YUBIKEY ? ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'] : [])) return errorResponse('User verification failed.', 400);
   if (type === TWO_FACTOR_PROVIDER_EMAIL) {
-    const updated = await env.DB.prepare('UPDATE users SET two_factor_email = NULL WHERE id = ? AND security_stamp = ? RETURNING id').bind(user.id, user.securityStamp).first();
+    const [updated] = await getOrm(env.DB).update(users).set({ twoFactorEmail: null })
+      .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp))).returning({ id: users.id });
     if (!updated) return errorResponse('User verification failed.', 400);
   }
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
-    await env.DB.prepare("DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)").bind(user.id, user.id, user.securityStamp).run();
+    await getOrm(env.DB).delete(webauthnCredentials).where(and(eq(webauthnCredentials.userId, user.id), eq(webauthnCredentials.purpose, 'twoFactor'),
+      sql`EXISTS (SELECT 1 FROM users WHERE id = ${user.id} AND security_stamp = ${user.securityStamp})`));
   }
   await finalizeTwoFactorChange(request, env, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? 'account.totp.disable' : type === TWO_FACTOR_PROVIDER_EMAIL ? 'account.two_factor.email.disable' : type === TWO_FACTOR_PROVIDER_YUBIKEY ? 'account.yubikey.disable' : 'account.webauthn_2fa.disable', wasEnabled ? EventType.UserDisabled2fa : null);
 
