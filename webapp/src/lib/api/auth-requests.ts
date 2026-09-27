@@ -1,5 +1,5 @@
 import { base64ToBytes, concatBytes, encryptBwRsa, hkdfExpand, toBufferSource } from '@/lib/crypto';
-import { EFFLongWordList } from '@/lib/fingerprint-wordlist';
+import { EFFLongWordList } from '@/lib/eff-word-list';
 import { t } from '@/lib/i18n';
 import type { AuthRequest, ListResponse, SessionState } from '@/lib/types';
 import type { AuthedFetch } from './shared';
