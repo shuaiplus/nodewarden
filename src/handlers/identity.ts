@@ -105,29 +105,7 @@ function identityJsonResponse(data: unknown, status: number = 200): Response {
   return jsonResponse(data, status, { 'Cache-Control': 'no-store', Pragma: 'no-cache' });
 }
 
-function resolveTotpSecret(userSecret: string | null): string | null {
-  if (userSecret && isTotpEnabled(userSecret)) {
-    return userSecret;
-  }
-  return null;
-}
-
 type DeviceSession = { identifier: string; sessionStamp: string; isNewDevice: boolean };
-
-async function resolveDeviceSession(db: D1Database, userId: string, deviceInfo: AuthRequestDeviceInfo): Promise<DeviceSession | null> {
-  if (!deviceInfo.deviceIdentifier) return null;
-  const existingDevice = await deviceRepo.getDevice(db, userId, deviceInfo.deviceIdentifier);
-  const sessionStamp = String(existingDevice?.sessionStamp || '').trim() || generateUUID();
-  return { identifier: deviceInfo.deviceIdentifier, sessionStamp, isNewDevice: !existingDevice };
-}
-
-function resolveRefreshClientType(request: Request, body: TokenForm): string {
-  if (shouldUseWebSession(request)) return 'web';
-  const clientId = (body.client_id ?? '').toLowerCase();
-  if (clientId === 'mobile') return 'mobile';
-  if (clientId === 'browser' || clientId === 'desktop' || clientId === 'cli') return clientId;
-  return clientId || 'other';
-}
 
 // Persists the device once every factor passed, then mails the new-device notice and registers
 // any push token the client sent along.
@@ -138,61 +116,50 @@ async function persistLoginDevice(
   deviceInfo: AuthRequestDeviceInfo,
   body: TokenForm
 ): Promise<DeviceSession | null> {
-  const candidate = await resolveDeviceSession(env.DB, user.id, deviceInfo);
-  if (!candidate) return null;
+  const deviceIdentifier = deviceInfo.deviceIdentifier;
+  if (!deviceIdentifier) return null;
+  const existingDevice = await deviceRepo.getDevice(env.DB, user.id, deviceIdentifier);
   await deviceRepo.upsertDevice(env.DB,
     user.id,
-    candidate.identifier,
+    deviceIdentifier,
     deviceInfo.deviceName,
     deviceInfo.deviceType,
-    candidate.sessionStamp
+    String(existingDevice?.sessionStamp || '').trim() || generateUUID()
   );
-  const persisted = await deviceRepo.getDevice(env.DB, user.id, candidate.identifier);
+  const persisted = await deviceRepo.getDevice(env.DB, user.id, deviceIdentifier);
   if (!persisted?.sessionStamp) throw new Error('Failed to persist device session');
-  const deviceSession = { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: candidate.isNewDevice };
-  if (deviceSession.isNewDevice) notifyNewDevice(env, request, user, deviceInfo.deviceType);
-  await persistIdentityDevicePushToken(env, env.DB, user.id, deviceSession, deviceInfo.deviceType, body);
-  return deviceSession;
-}
+  const deviceSession = { identifier: persisted.deviceIdentifier, sessionStamp: persisted.sessionStamp, isNewDevice: !existingDevice };
+  if (deviceSession.isNewDevice) {
+    const mailConfig = readMailConfig(env);
+    const skipNotice = mailConfig.kind !== 'enabled' || !mailConfig.newDeviceNotices
+      || Date.now() - Date.parse(user.createdAt) < LIMITS.mail.newDeviceMinAccountAgeSeconds * 1000;
+    if (!skipNotice) {
+      notifyMail(env, user.email, 'newDeviceLogin', { device: deviceTypeName(deviceInfo.deviceType), time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
+    }
+  }
 
-function notifyNewDevice(env: Env, request: Request, user: User, type: number): void {
-  const config = readMailConfig(env);
-  if (config.kind !== 'enabled' || !config.newDeviceNotices || Date.now() - Date.parse(user.createdAt) < LIMITS.mail.newDeviceMinAccountAgeSeconds * 1000) return;
-  notifyMail(env, user.email, 'newDeviceLogin', { device: deviceTypeName(type), time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
-}
-
-async function persistIdentityDevicePushToken(
-  env: Env,
-  db: D1Database,
-  userId: string,
-  deviceSession: { identifier: string; sessionStamp: string } | null,
-  deviceType: number,
-  body: TokenForm
-): Promise<void> {
-  if (!deviceSession) return;
   const pushToken = body.devicePushToken || body.device_push_token;
-  if (!pushToken) return;
-
-  const device = await deviceRepo.getDevice(db, userId, deviceSession.identifier);
-  if (!device) return;
-
-  const pushUuid = device.pushUuid || generateUUID();
-  await deviceRepo.updateDevicePushToken(db, userId, deviceSession.identifier, pushUuid, pushToken);
-  const registered = await registerMobilePushDevice(env, {
-    userId,
-    deviceIdentifier: deviceSession.identifier,
-    type: device.type || deviceType,
-    pushUuid,
-    pushToken,
-  });
-  console.info('Mobile push token updated from identity token request', {
-    userId,
-    deviceIdentifier: deviceSession.identifier,
-    deviceType: device.type || deviceType,
-    pushUuid,
-    pushTokenLength: pushToken.length,
-    relayRegistered: registered,
-  });
+  const device = pushToken ? await deviceRepo.getDevice(env.DB, user.id, deviceSession.identifier) : null;
+  if (pushToken && device) {
+    const pushUuid = device.pushUuid || generateUUID();
+    await deviceRepo.updateDevicePushToken(env.DB, user.id, deviceSession.identifier, pushUuid, pushToken);
+    const registered = await registerMobilePushDevice(env, {
+      userId: user.id,
+      deviceIdentifier: deviceSession.identifier,
+      type: device.type || deviceInfo.deviceType,
+      pushUuid,
+      pushToken,
+    });
+    console.info('Mobile push token updated from identity token request', {
+      userId: user.id,
+      deviceIdentifier: deviceSession.identifier,
+      deviceType: device.type || deviceInfo.deviceType,
+      pushUuid,
+      pushTokenLength: pushToken.length,
+      relayRegistered: registered,
+    });
+  }
+  return deviceSession;
 }
 
 function shouldUseWebSession(request: Request): boolean {
@@ -220,38 +187,6 @@ function withWebRefreshCookie(request: Request, response: Response, refreshToken
   });
 }
 
-function buildPreloginResponse(
-  email: string,
-  kdfType: number,
-  kdfIterations: number,
-  kdfMemory: number | null,
-  kdfParallelism: number | null
-): Record<string, unknown> {
-  return {
-    kdf: kdfType,
-    kdfIterations,
-    kdfMemory,
-    kdfParallelism,
-    // Current official servers expose the consolidated KDF model alongside
-    // the legacy flat fields. Keep both shapes while clients migrate.
-    kdfSettings: {
-      kdfType,
-      iterations: kdfIterations,
-      memory: kdfMemory,
-      parallelism: kdfParallelism,
-    },
-    salt: null,
-    // Preserve the historic NodeWarden aliases for older integrations.
-    KdfSettings: {
-      KdfType: kdfType,
-      Iterations: kdfIterations,
-      Memory: kdfMemory,
-      Parallelism: kdfParallelism,
-    },
-    Salt: email.toLowerCase(),
-  };
-}
-
 function masterPasswordPolicyResponse(): TokenResponse['MasterPasswordPolicy'] {
   return {
     minComplexity: 0,
@@ -264,12 +199,6 @@ function masterPasswordPolicyResponse(): TokenResponse['MasterPasswordPolicy'] {
     Object: 'masterPasswordPolicy',
     object: 'masterPasswordPolicy',
   };
-}
-
-function redactEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  const visible = local.length <= 2 ? 0 : local.length <= 4 ? 1 : 2;
-  return `${local.slice(0, visible)}${'*'.repeat(local.length - visible)}@${domain}`;
 }
 
 async function twoFactorRequiredResponse(
@@ -289,13 +218,16 @@ async function twoFactorRequiredResponse(
     : null;
   const providers2: Record<string, Record<string, unknown> | null> = {};
   for (const provider of providers) {
-    providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)
-      ? { Nfc: user?.yubikeyNfc ?? false }
-      : provider === String(TWO_FACTOR_PROVIDER_EMAIL) && user?.twoFactorEmail
-        ? { Email: redactEmail(user.twoFactorEmail) }
-        : provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions
-          ? webAuthnOptions
-          : null;
+    if (provider === String(TWO_FACTOR_PROVIDER_YUBIKEY)) {
+      providers2[provider] = { Nfc: user?.yubikeyNfc ?? false };
+    } else if (provider === String(TWO_FACTOR_PROVIDER_EMAIL) && user?.twoFactorEmail) {
+      // The challenge shows the email with all but its first zero to two local-part characters masked.
+      const [local, domain] = user.twoFactorEmail.split('@');
+      const visible = local.length <= 2 ? 0 : local.length <= 4 ? 1 : 2;
+      providers2[provider] = { Email: `${local.slice(0, visible)}${'*'.repeat(local.length - visible)}@${domain}` };
+    } else {
+      providers2[provider] = provider === String(TWO_FACTOR_PROVIDER_WEBAUTHN) && webAuthnOptions ? webAuthnOptions : null;
+    }
   }
   const customResponse = {
     TwoFactorProviders: providers,
@@ -434,7 +366,8 @@ async function completeLogin(
   const { user, body, deviceInfo, deviceSession, grantType } = login;
   const auth = new AuthService(env);
   const accessToken = await auth.generateAccessToken(user, deviceSession);
-  const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
+  // The client type picks the refresh token's sliding lifetime; web sessions are marked by their header.
+  const refreshToken = await auth.generateRefreshToken(user, deviceSession, shouldUseWebSession(request) ? 'web' : (body.client_id ?? '').toLowerCase() || 'other');
   await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
   await safeWriteAuditEvent(env, {
     actorUserId: user.id,
@@ -601,7 +534,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     // Optional 2FA: enabled by any supported per-user provider.
     let trustedTwoFactorTokenToReturn: string | undefined;
     let recoveredTwoFactor = false;
-    const effectiveTotpSecret = resolveTotpSecret(user.totpSecret);
+    const effectiveTotpSecret = user.totpSecret && isTotpEnabled(user.totpSecret) ? user.totpSecret : null;
     const effectiveYubiKeyPublicIds = userYubiKeyPublicIds(user);
     const hasTwoFactorPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
     const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
@@ -1030,7 +963,29 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
   const kdfMemory = user?.kdfMemory ?? null;
   const kdfParallelism = user?.kdfParallelism ?? null;
 
-  return identityJsonResponse(buildPreloginResponse(email, kdfType, kdfIterations, kdfMemory, kdfParallelism));
+  return identityJsonResponse({
+    kdf: kdfType,
+    kdfIterations,
+    kdfMemory,
+    kdfParallelism,
+    // Current official servers expose the consolidated KDF model alongside
+    // the legacy flat fields. Keep both shapes while clients migrate.
+    kdfSettings: {
+      kdfType,
+      iterations: kdfIterations,
+      memory: kdfMemory,
+      parallelism: kdfParallelism,
+    },
+    salt: null,
+    // Preserve the historic NodeWarden aliases for older integrations.
+    KdfSettings: {
+      KdfType: kdfType,
+      Iterations: kdfIterations,
+      Memory: kdfMemory,
+      Parallelism: kdfParallelism,
+    },
+    Salt: email.toLowerCase(),
+  });
 }
 
 // POST /identity/connect/revocation
