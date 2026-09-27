@@ -5,16 +5,13 @@ import { webauthnChallenges, webauthnCredentials } from '../db/schema';
 import type { AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential } from '../types';
 import { normalizeTransports } from '../utils/account-passkeys';
 
-function parseTransports(value: string | null): string[] | null {
-  if (!value) return null;
-  try {
-    return normalizeTransports(JSON.parse(value));
-  } catch {
-    return null;
-  }
-}
-
 function mapCredentialRow(row: typeof webauthnCredentials.$inferSelect): AccountPasskeyCredential {
+  let transports: string[] | null = null;
+  try {
+    if (row.transports) transports = normalizeTransports(JSON.parse(row.transports));
+  } catch {
+    // Unreadable stored transports read as none.
+  }
   return {
     id: row.id,
     userId: row.userId,
@@ -25,24 +22,13 @@ function mapCredentialRow(row: typeof webauthnCredentials.$inferSelect): Account
     counter: Number(row.counter || 0),
     type: row.type ?? null,
     aaGuid: row.aaGuid ?? null,
-    transports: parseTransports(row.transports),
+    transports,
     encryptedUserKey: row.encryptedUserKey ?? null,
     encryptedPublicKey: row.encryptedPublicKey ?? null,
     encryptedPrivateKey: row.encryptedPrivateKey ?? null,
     supportsPrf: !!row.supportsPrf,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-  };
-}
-
-function mapChallengeRow(row: typeof webauthnChallenges.$inferSelect): AccountPasskeyChallenge {
-  return {
-    challengeHash: row.challengeHash,
-    scope: row.scope as AccountPasskeyChallengeScope,
-    userId: row.userId ?? null,
-    expiresAt: Number(row.expiresAt || 0),
-    usedAt: row.usedAt == null ? null : Number(row.usedAt),
-    createdAt: Number(row.createdAt || 0),
   };
 }
 
@@ -250,7 +236,14 @@ export async function consumeAccountPasskeyChallenge(
     .where(and(eq(webauthnChallenges.challengeHash, challengeHash), eq(webauthnChallenges.scope, scope)))
     .limit(1);
   if (!row) return null;
-  const challenge = mapChallengeRow(row);
+  const challenge: AccountPasskeyChallenge = {
+    challengeHash: row.challengeHash,
+    scope: row.scope as AccountPasskeyChallengeScope,
+    userId: row.userId ?? null,
+    expiresAt: Number(row.expiresAt || 0),
+    usedAt: row.usedAt == null ? null : Number(row.usedAt),
+    createdAt: Number(row.createdAt || 0),
+  };
   if (challenge.usedAt != null || challenge.expiresAt < nowMs) return null;
   if (userId !== null && challenge.userId !== userId) return null;
   if (userId === null && challenge.userId !== null) return null;
