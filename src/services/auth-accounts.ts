@@ -1,6 +1,7 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { account, users } from '../db/schema';
+import { bound, excluded } from '../db/sql';
 import { generateUUID } from '../utils/uuid';
 
 // Copies the credential from the users row (at most one: id is its key) only while that row still holds
@@ -9,14 +10,14 @@ export function credentialAccountStatement(db: D1Database, userId: string, passw
   const now = Date.now();
   const orm = getOrm(db);
   return orm.insert(account).select(orm.select({
-    id: sql`${generateUUID()}`.as('id'), accountId: users.id, providerId: sql`'credential'`.as('provider_id'), userId: users.id,
-    password: users.masterPasswordHash, createdAt: sql`${now}`.as('created_at'), updatedAt: sql`${now}`.as('updated_at'),
+    id: bound(generateUUID()).as('id'), accountId: users.id, providerId: bound('credential').as('provider_id'), userId: users.id,
+    password: users.masterPasswordHash, createdAt: bound(now).as('created_at'), updatedAt: bound(now).as('updated_at'),
   }).from(users).where(and(
     eq(users.id, userId), eq(users.masterPasswordHash, passwordHash),
     securityStamp === undefined ? undefined : eq(users.securityStamp, securityStamp),
   ))).onConflictDoUpdate({
     target: [account.providerId, account.accountId],
-    set: { password: sql`excluded.password`, updatedAt: sql`excluded.updated_at` },
+    set: { password: excluded(account.password), updatedAt: excluded(account.updatedAt) },
   });
 }
 
