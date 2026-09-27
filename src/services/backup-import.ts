@@ -2,7 +2,7 @@ import { syncVaultAdminRoles } from './vault-admin-role';
 import { and, count, eq, getColumns, getTableName, TableAliasProxyHandler } from 'drizzle-orm';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import { getOrm, type Orm } from '../db/client';
+import { getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
 import { attachments, ciphers, config, domainSettings, folders, sends, userRevisions, users, webauthnCredentials } from '../db/schema';
 import type { Env, User } from '../types';
@@ -85,44 +85,9 @@ export interface BackupImportExecutionResult {
   auditActorUserId: string | null;
 }
 
-async function getTableCreateSql(db: D1Database, table: BackupTableName): Promise<string> {
-  const [row] = await getOrm(db).select({ sql: sqliteMaster.sql }).from(sqliteMaster)
-    .where(and(eq(sqliteMaster.type, 'table'), eq(sqliteMaster.name, table))).limit(1);
-  const createSql = String(row?.sql || '').trim();
-  if (!createSql) {
-    throw new Error(`Restore shadow schema is missing table definition for ${table}`);
-  }
-  return createSql;
-}
-
-function buildShadowTableCreateSql(createSql: string, table: BackupTableName): string {
-  const tablePattern = new RegExp(`^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`, 'i');
-  let next = createSql.replace(tablePattern, `CREATE TABLE "${shadowTableName(table)}"`);
-  if (next === createSql) {
-    throw new Error(`Restore shadow schema could not rewrite CREATE TABLE statement for ${table}`);
-  }
-  for (const currentTable of BACKUP_TABLE_NAMES) {
-    const referencePattern = new RegExp(`\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`, 'gi');
-    next = next.replace(
-      referencePattern,
-      `REFERENCES "${shadowTableName(currentTable)}"`
-    );
-  }
-  return next;
-}
-
 async function resetRestoreArtifacts(db: D1Database): Promise<void> {
   // eslint-disable-next-line nodewarden/no-raw-sql -- shadow tables are DDL copies made at runtime, outside the drizzle schema
   await db.batch(BACKUP_TABLE_NAMES.slice().reverse().map((table) => db.prepare(`DROP TABLE IF EXISTS ${shadowTableName(table)}`)));
-}
-
-async function createShadowTables(db: D1Database): Promise<void> {
-  const createStatements: string[] = [];
-  for (const table of BACKUP_TABLE_NAMES) {
-    createStatements.push(buildShadowTableCreateSql(await getTableCreateSql(db, table), table));
-  }
-  // eslint-disable-next-line nodewarden/no-raw-sql -- shadow DDL is rewritten at runtime from the live tables' sqlite_master text
-  await db.batch(createStatements.map((statement) => db.prepare(statement)));
 }
 
 async function validateShadowTableCounts(
@@ -137,43 +102,6 @@ async function validateShadowTableCounts(
       throw new Error(`Restore shadow validation failed for ${table}: expected ${expected}, received ${actual}`);
     }
   }));
-}
-
-// Copies by column name, not SELECT *: a live table's physical column order can differ from its
-// schema order (users does), so a positional copy under drizzle's column list would misplace values.
-function copyFromShadow<T extends SQLiteTable>(orm: Orm, table: T) {
-  return orm.insert(table).select(orm.select().from(shadowTable(table)));
-}
-
-async function swapShadowTablesIntoPlace(db: D1Database): Promise<void> {
-  const orm = getOrm(db);
-  // Commit by replacing live table contents from validated shadow tables.
-  // This avoids D1 schema-rename edge cases while keeping current data intact
-  // until the final batch succeeds.
-  const statements = [
-    ...buildResetImportTargetStatements(orm),
-    ...BACKUP_TABLE_NAMES.map((table) => copyFromShadow(orm, BACKUP_TABLES[table])),
-  ];
-  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
-}
-
-async function ensureImportTargetIsFresh(db: D1Database): Promise<void> {
-  const orm = getOrm(db);
-  const counts = await Promise.all([
-    orm.select({ count: count() }).from(ciphers),
-    orm.select({ count: count() }).from(folders),
-    orm.select({ count: count() }).from(attachments),
-    orm.select({ count: count() }).from(sends),
-  ]);
-  const total = counts.reduce((sum, rows) => sum + Number(rows[0]?.count || 0), 0);
-  if (total > 0) {
-    throw new Error('Backup import requires a fresh instance with no vault or send data');
-  }
-}
-
-function buildResetImportTargetStatements(orm: Orm) {
-  return [attachments, ciphers, folders, webauthnCredentials, domainSettings, userRevisions, users, config]
-    .map((table) => orm.delete(table));
 }
 
 async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
@@ -244,10 +172,6 @@ function cloneRows(rows: SqlRow[]): SqlRow[] {
   return rows.map((row) => ({ ...row }));
 }
 
-function normalizeAccountPasskeyPurpose(value: unknown): 'login' | 'twoFactor' {
-  return value == null ? 'login' : String(value).trim() === 'twoFactor' ? 'twoFactor' : 'login';
-}
-
 function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
   let replaced = false;
   const nextRows = rows.map((row) => {
@@ -259,147 +183,6 @@ function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
     nextRows.push({ key, value });
   }
   return nextRows;
-}
-
-async function prepareImportedConfigRows(
-  env: Env,
-  configRows: SqlRow[],
-  userRows: SqlRow[]
-): Promise<SqlRow[]> {
-  let nextConfigRows = cloneRows(configRows).filter(
-    (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY
-  );
-  const rawBackupSettings = nextConfigRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
-  const normalizedBackupSettings = await normalizeImportedBackupSettingsValue(
-    typeof rawBackupSettings?.value === 'string' ? rawBackupSettings.value : null,
-    env,
-    userRows.map((row) => ({
-      id: String(row.id || '').trim(),
-      publicKey: typeof row.public_key === 'string' ? row.public_key : null,
-      role: String(row.role || '').trim() as User['role'],
-      status: String(row.status || '').trim() as User['status'],
-    })),
-    'UTC'
-  );
-  if (normalizedBackupSettings !== null) {
-    nextConfigRows = upsertConfigRow(nextConfigRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
-  }
-  nextConfigRows = upsertConfigRow(nextConfigRows, 'registered', 'true');
-  // Imported preferences must survive a later baseline replay, including archives without this marker.
-  nextConfigRows = upsertConfigRow(nextConfigRows, 'migration.verify-devices-on', '1');
-  return nextConfigRows;
-}
-
-async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['db'], env: Env): Promise<BackupPayload['db']> {
-  const preparedDb: BackupPayload['db'] = {
-    config: await prepareImportedConfigRows(env, payload.config, payload.users),
-    users: cloneRows(payload.users).map((row) => ({
-      ...row,
-      email_verified: row.email_verified ?? 1,
-      verify_devices: row.verify_devices ?? 0,
-      yubikey_nfc: row.yubikey_nfc ?? 0,
-    })),
-    domain_settings: cloneRows(payload.domain_settings),
-    user_revisions: cloneRows(payload.user_revisions),
-    webauthn_credentials: cloneRows(payload.webauthn_credentials).map((row) => ({
-      ...row,
-      purpose: normalizeAccountPasskeyPurpose(row.purpose),
-    })),
-    folders: cloneRows(payload.folders),
-    ciphers: cloneRows(payload.ciphers).map((row) => ({
-      ...row,
-      archived_at: row.archived_at ?? null,
-    })),
-    attachments: cloneRows(payload.attachments),
-  };
-  await importBackupRows(db, preparedDb);
-  return preparedDb;
-}
-
-function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: Record<string, Uint8Array>): PreparedBackupImportPayload {
-  const storageKind = getBlobStorageKind(env);
-  if (storageKind === 'r2') {
-    return {
-      payload,
-      skipped: {
-        reason: null,
-        attachments: 0,
-        items: [],
-      },
-    };
-  }
-
-  if (storageKind === null) {
-    const skippedItems = payload.db.attachments.map((row) => {
-      const cipherId = String(row.cipher_id || '').trim();
-      const attachmentId = String(row.id || '').trim();
-      return {
-        kind: 'attachment' as const,
-        path: `attachments/${cipherId}/${attachmentId}.bin`,
-        sizeBytes: Number(row.size || 0) || 0,
-      };
-    });
-
-    const result = {
-      payload: {
-        ...payload,
-        db: {
-          ...payload.db,
-          attachments: [],
-        },
-      },
-      skipped: {
-        reason: skippedItems.length ? BLOB_STORAGE_UNAVAILABLE_SKIP_REASON : null,
-        attachments: skippedItems.length,
-        items: skippedItems,
-      },
-    };
-    return result;
-  }
-
-  const oversizedAttachmentPaths = new Set<string>();
-  const skippedItems: BackupImportSkipSummary['items'] = [];
-
-  for (const entry of Object.keys(files)) {
-    if (!entry.endsWith('.bin')) continue;
-    const sizeBytes = files[entry].byteLength;
-    if (sizeBytes <= KV_MAX_OBJECT_BYTES) continue;
-    if (entry.startsWith('attachments/')) {
-      oversizedAttachmentPaths.add(entry);
-      skippedItems.push({ kind: 'attachment', path: entry, sizeBytes });
-    }
-  }
-
-  const nextAttachments = payload.db.attachments.filter((row) => {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) return false;
-    return !oversizedAttachmentPaths.has(`attachments/${cipherId}/${attachmentId}.bin`);
-  });
-
-  const nextPayload: BackupPayload = {
-    ...payload,
-    db: {
-      ...payload.db,
-      attachments: nextAttachments,
-    },
-  };
-
-  const needsKvBlobStorage = nextAttachments.length > 0;
-
-  if (needsKvBlobStorage && !env.ATTACHMENTS_KV) {
-    throw new Error('Backup restore requires ATTACHMENTS_KV when using KV blob storage');
-  }
-
-  const result = {
-    payload: nextPayload,
-    skipped: {
-      reason: skippedItems.length ? KV_BLOB_SKIP_REASON : null,
-      attachments: skippedItems.length,
-      items: skippedItems,
-    },
-  };
-  return result;
 }
 
 // Writes archive rows into a table's shadow copy: one statement per row, one batch per table. Only the
@@ -426,223 +209,10 @@ async function restoreRows(db: D1Database, table: BackupTableName, columns: read
   }
 }
 
-async function restoreBlobFiles(env: Env, db: BackupPayload['db'], files: Record<string, Uint8Array>): Promise<AttachmentRestoreResult> {
-  const restoredAttachments: SqlRow[] = [];
-  const skippedItems: BackupImportSkipSummary['items'] = [];
-
-  for (const row of db.attachments) {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) continue;
-    const key = `attachments/${cipherId}/${attachmentId}.bin`;
-    const bytes = files[key];
-    if (!bytes) {
-      skippedItems.push({
-        kind: 'attachment',
-        path: key,
-        sizeBytes: Number(row.size || 0) || 0,
-      });
-      continue;
-    }
-    try {
-      await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
-        size: bytes.byteLength,
-        contentType: 'application/octet-stream',
-      });
-      restoredAttachments.push(row);
-    } catch {
-      skippedItems.push({
-        kind: 'attachment',
-        path: key,
-        sizeBytes: bytes.byteLength,
-      });
-    }
-  }
-
-  return {
-    imported: restoredAttachments.length,
-    restoredAttachments,
-    skipped: {
-      reason: skippedItems.length ? ATTACHMENT_RESTORE_FAILED_REASON : null,
-      attachments: skippedItems.length,
-      items: skippedItems,
-    },
-  };
-}
-
 function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
   return new Map(manifest.attachmentBlobs
     .filter(({ cipherId, attachmentId, blobName }) => cipherId && attachmentId && isSafeBackupAttachmentBlobName(blobName))
     .map((item) => [`${item.cipherId}/${item.attachmentId}`, item]));
-}
-
-async function prepareRemoteAttachmentPayload(
-  env: Env,
-  payload: BackupPayload,
-  files: Record<string, Uint8Array>
-): Promise<PreparedBackupImportPayload> {
-  const manifestLookup = buildAttachmentBlobLookup(payload.manifest);
-  const storageKind = getBlobStorageKind(env);
-  const nextAttachments: SqlRow[] = [];
-  const skippedItems: BackupImportSkipSummary['items'] = [];
-
-  for (const row of payload.db.attachments) {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    const lookupKey = `${cipherId}/${attachmentId}`;
-    const ref = manifestLookup.get(lookupKey);
-    const sizeBytes = ref?.sizeBytes || Number(row.size || 0) || 0;
-    const path = ref ? `attachments/${ref.blobName}` : `attachments/${lookupKey}`;
-    const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
-
-    if (files[inlinePath]) {
-      nextAttachments.push(row);
-      continue;
-    }
-    if (!ref) {
-      skippedItems.push({ kind: 'attachment', path, sizeBytes });
-      continue;
-    }
-    if (storageKind === 'kv' && sizeBytes > KV_MAX_OBJECT_BYTES) {
-      skippedItems.push({ kind: 'attachment', path, sizeBytes });
-      continue;
-    }
-    if (storageKind === null) {
-      skippedItems.push({ kind: 'attachment', path, sizeBytes });
-      continue;
-    }
-    nextAttachments.push(row);
-  }
-
-  const result = {
-    payload: {
-      ...payload,
-      db: {
-        ...payload.db,
-        attachments: nextAttachments,
-      },
-    },
-    skipped: {
-      reason: skippedItems.length ? 'Some remote attachments were unavailable and were skipped' : null,
-      attachments: skippedItems.length,
-      items: skippedItems,
-    },
-  };
-  return result;
-}
-
-// Drops the staged rows of attachments whose blobs could not be restored.
-async function removeAttachmentRows(db: D1Database, attachmentRows: SqlRow[]): Promise<void> {
-  const orm = getOrm(db);
-  const staged = shadowTable(attachments);
-  const statements = attachmentRows.flatMap((row) => {
-    const attachmentId = String(row.id || '').trim();
-    const cipherId = String(row.cipher_id || '').trim();
-    return attachmentId && cipherId ? [orm.delete(staged).where(and(eq(staged.id, attachmentId), eq(staged.cipherId, cipherId)))] : [];
-  });
-  if (!statements.length) return;
-  await orm.batch(statements as [typeof statements[0], ...typeof statements]);
-}
-
-async function restoreRemoteAttachmentFiles(
-  env: Env,
-  payload: BackupPayload,
-  files: Record<string, Uint8Array>,
-  source: RemoteAttachmentSource
-): Promise<{
-  imported: number;
-  skipped: BackupImportSkipSummary;
-  restoredAttachments: SqlRow[];
-}> {
-  const manifestLookup = buildAttachmentBlobLookup(payload.manifest);
-  const restoredAttachments: SqlRow[] = [];
-  const skippedItems: BackupImportSkipSummary['items'] = [];
-
-  for (const row of payload.db.attachments) {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
-    const ref = manifestLookup.get(`${cipherId}/${attachmentId}`);
-    if (!ref && !files[inlinePath]) {
-      skippedItems.push({
-        kind: 'attachment',
-        path: `attachments/${cipherId}/${attachmentId}`,
-        sizeBytes: Number(row.size || 0) || 0,
-      });
-      continue;
-    }
-    const bytes = files[inlinePath] || (ref ? await source.loadAttachment(ref.blobName) : null);
-    if (!bytes) {
-      skippedItems.push({
-        kind: 'attachment',
-        path: ref ? `attachments/${ref.blobName}` : inlinePath,
-        sizeBytes: ref?.sizeBytes || Number(row.size || 0) || 0,
-      });
-      continue;
-    }
-    try {
-      await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
-        size: bytes.byteLength,
-        contentType: 'application/octet-stream',
-      });
-      restoredAttachments.push(row);
-    } catch {
-      skippedItems.push({
-        kind: 'attachment',
-        path: ref ? `attachments/${ref.blobName}` : inlinePath,
-        sizeBytes: bytes.byteLength,
-      });
-    }
-  }
-
-  return {
-    imported: restoredAttachments.length,
-    restoredAttachments,
-    skipped: {
-      reason: skippedItems.length ? ATTACHMENT_RESTORE_FAILED_REASON : null,
-      attachments: skippedItems.length,
-      items: skippedItems,
-    },
-  };
-}
-
-async function cleanupOrphanedBlobFiles(env: Env, beforeKeys: Set<string>, afterKeys: Set<string>): Promise<void> {
-  const staleKeys = Array.from(beforeKeys).filter((key) => !afterKeys.has(key));
-  for (const key of staleKeys) {
-    await deleteBlobObject(env, key);
-  }
-}
-
-async function importBackupRows(db: D1Database, payload: BackupPayload['db']): Promise<void> {
-  await restoreRows(db, 'config', ['key', 'value'], payload.config, true);
-  await restoreRows(
-    db,
-    'users',
-    ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
-    payload.users
-  );
-  await restoreRows(db, 'user_revisions', ['user_id', 'revision_date'], payload.user_revisions, true);
-  await restoreRows(
-    db,
-    'domain_settings',
-    ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'],
-    payload.domain_settings,
-    true
-  );
-  await restoreRows(
-    db,
-    'webauthn_credentials',
-    ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'],
-    payload.webauthn_credentials
-  );
-  await restoreRows(db, 'folders', ['id', 'user_id', 'name', 'created_at', 'updated_at'], payload.folders);
-  await restoreRows(
-    db,
-    'ciphers',
-    ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
-    payload.ciphers
-  );
-  await restoreRows(db, 'attachments', ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], payload.attachments);
 }
 
 export async function importBackupArchiveBytes(
@@ -660,11 +230,137 @@ export async function importBackupArchiveBytes(
   const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: !!source });
   let prepared: PreparedBackupImportPayload;
   if (source) {
-    prepared = await prepareRemoteAttachmentPayload(env, parsed.payload, parsed.files);
+    const manifestLookup = buildAttachmentBlobLookup(parsed.payload.manifest);
+    const storageKind = getBlobStorageKind(env);
+    const nextAttachments: SqlRow[] = [];
+    const skippedItems: BackupImportSkipSummary['items'] = [];
+
+    for (const row of parsed.payload.db.attachments) {
+      const cipherId = String(row.cipher_id || '').trim();
+      const attachmentId = String(row.id || '').trim();
+      const lookupKey = `${cipherId}/${attachmentId}`;
+      const ref = manifestLookup.get(lookupKey);
+      const sizeBytes = ref?.sizeBytes || Number(row.size || 0) || 0;
+      const path = ref ? `attachments/${ref.blobName}` : `attachments/${lookupKey}`;
+      const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
+
+      if (parsed.files[inlinePath]) {
+        nextAttachments.push(row);
+        continue;
+      }
+      if (!ref) {
+        skippedItems.push({ kind: 'attachment', path, sizeBytes });
+        continue;
+      }
+      if (storageKind === 'kv' && sizeBytes > KV_MAX_OBJECT_BYTES) {
+        skippedItems.push({ kind: 'attachment', path, sizeBytes });
+        continue;
+      }
+      if (storageKind === null) {
+        skippedItems.push({ kind: 'attachment', path, sizeBytes });
+        continue;
+      }
+      nextAttachments.push(row);
+    }
+
+    prepared = {
+      payload: {
+        ...parsed.payload,
+        db: {
+          ...parsed.payload.db,
+          attachments: nextAttachments,
+        },
+      },
+      skipped: {
+        reason: skippedItems.length ? 'Some remote attachments were unavailable and were skipped' : null,
+        attachments: skippedItems.length,
+        items: skippedItems,
+      },
+    };
     validateBackupPayloadContents(prepared.payload, parsed.files, { allowExternalAttachmentBlobs: true });
   } else {
     validateBackupPayloadContents(parsed.payload, parsed.files);
-    prepared = prepareImportPayloadForTarget(env, parsed.payload, parsed.files);
+    // Fit the attachments to this instance's blob storage: R2 takes every blob, KV only blobs within
+    // its object size limit, and without storage every attachment row is skipped.
+    const storageKind = getBlobStorageKind(env);
+    if (storageKind === 'r2') {
+      prepared = {
+        payload: parsed.payload,
+        skipped: {
+          reason: null,
+          attachments: 0,
+          items: [],
+        },
+      };
+    } else if (storageKind === null) {
+      const skippedItems = parsed.payload.db.attachments.map((row) => {
+        const cipherId = String(row.cipher_id || '').trim();
+        const attachmentId = String(row.id || '').trim();
+        return {
+          kind: 'attachment' as const,
+          path: `attachments/${cipherId}/${attachmentId}.bin`,
+          sizeBytes: Number(row.size || 0) || 0,
+        };
+      });
+
+      prepared = {
+        payload: {
+          ...parsed.payload,
+          db: {
+            ...parsed.payload.db,
+            attachments: [],
+          },
+        },
+        skipped: {
+          reason: skippedItems.length ? BLOB_STORAGE_UNAVAILABLE_SKIP_REASON : null,
+          attachments: skippedItems.length,
+          items: skippedItems,
+        },
+      };
+    } else {
+      const oversizedAttachmentPaths = new Set<string>();
+      const skippedItems: BackupImportSkipSummary['items'] = [];
+
+      for (const entry of Object.keys(parsed.files)) {
+        if (!entry.endsWith('.bin')) continue;
+        const sizeBytes = parsed.files[entry].byteLength;
+        if (sizeBytes <= KV_MAX_OBJECT_BYTES) continue;
+        if (entry.startsWith('attachments/')) {
+          oversizedAttachmentPaths.add(entry);
+          skippedItems.push({ kind: 'attachment', path: entry, sizeBytes });
+        }
+      }
+
+      const nextAttachments = parsed.payload.db.attachments.filter((row) => {
+        const cipherId = String(row.cipher_id || '').trim();
+        const attachmentId = String(row.id || '').trim();
+        if (!cipherId || !attachmentId) return false;
+        return !oversizedAttachmentPaths.has(`attachments/${cipherId}/${attachmentId}.bin`);
+      });
+
+      const nextPayload: BackupPayload = {
+        ...parsed.payload,
+        db: {
+          ...parsed.payload.db,
+          attachments: nextAttachments,
+        },
+      };
+
+      const needsKvBlobStorage = nextAttachments.length > 0;
+
+      if (needsKvBlobStorage && !env.ATTACHMENTS_KV) {
+        throw new Error('Backup restore requires ATTACHMENTS_KV when using KV blob storage');
+      }
+
+      prepared = {
+        payload: nextPayload,
+        skipped: {
+          reason: skippedItems.length ? KV_BLOB_SKIP_REASON : null,
+          attachments: skippedItems.length,
+          items: skippedItems,
+        },
+      };
+    }
   }
   const report = (step: string, stage: string, outcome: Pick<BackupRestoreProgressEvent, 'done' | 'ok' | 'error'> = {}) => progress?.({
     source: restoreSource,
@@ -675,9 +371,19 @@ export async function importBackupArchiveBytes(
     replaceExisting,
     ...outcome,
   });
+  const orm = getOrm(env.DB);
 
   try {
-    await ensureImportTargetIsFresh(env.DB);
+    const counts = await Promise.all([
+      orm.select({ count: count() }).from(ciphers),
+      orm.select({ count: count() }).from(folders),
+      orm.select({ count: count() }).from(attachments),
+      orm.select({ count: count() }).from(sends),
+    ]);
+    const total = counts.reduce((sum, rows) => sum + Number(rows[0]?.count || 0), 0);
+    if (total > 0) {
+      throw new Error('Backup import requires a fresh instance with no vault or send data');
+    }
   } catch (error) {
     if (!replaceExisting) {
       throw error instanceof Error ? error : new Error('Backup import requires a fresh instance');
@@ -688,9 +394,104 @@ export async function importBackupArchiveBytes(
   const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
   try {
     await report('create_shadow', 'shadow');
-    await createShadowTables(env.DB);
+    const createStatements: string[] = [];
+    for (const table of BACKUP_TABLE_NAMES) {
+      const [row] = await orm.select({ sql: sqliteMaster.sql }).from(sqliteMaster)
+        .where(and(eq(sqliteMaster.type, 'table'), eq(sqliteMaster.name, table))).limit(1);
+      const createSql = String(row?.sql || '').trim();
+      if (!createSql) {
+        throw new Error(`Restore shadow schema is missing table definition for ${table}`);
+      }
+      // Rename the copy and point its foreign keys at the other shadow tables.
+      const tablePattern = new RegExp(`^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`, 'i');
+      let shadowSql = createSql.replace(tablePattern, `CREATE TABLE "${shadowTableName(table)}"`);
+      if (shadowSql === createSql) {
+        throw new Error(`Restore shadow schema could not rewrite CREATE TABLE statement for ${table}`);
+      }
+      for (const currentTable of BACKUP_TABLE_NAMES) {
+        const referencePattern = new RegExp(`\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`, 'gi');
+        shadowSql = shadowSql.replace(
+          referencePattern,
+          `REFERENCES "${shadowTableName(currentTable)}"`
+        );
+      }
+      createStatements.push(shadowSql);
+    }
+    // eslint-disable-next-line nodewarden/no-raw-sql -- shadow DDL is rewritten at runtime from the live tables' sqlite_master text
+    await env.DB.batch(createStatements.map((statement) => env.DB.prepare(statement)));
     await report('import_data', 'data');
-    const db = await importPreparedBackupRows(env.DB, prepared.payload.db, env);
+    let configRows = cloneRows(prepared.payload.db.config).filter(
+      (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY
+    );
+    const rawBackupSettings = configRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
+    const normalizedBackupSettings = await normalizeImportedBackupSettingsValue(
+      typeof rawBackupSettings?.value === 'string' ? rawBackupSettings.value : null,
+      env,
+      prepared.payload.db.users.map((row) => ({
+        id: String(row.id || '').trim(),
+        publicKey: typeof row.public_key === 'string' ? row.public_key : null,
+        role: String(row.role || '').trim() as User['role'],
+        status: String(row.status || '').trim() as User['status'],
+      })),
+      'UTC'
+    );
+    if (normalizedBackupSettings !== null) {
+      configRows = upsertConfigRow(configRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
+    }
+    configRows = upsertConfigRow(configRows, 'registered', 'true');
+    // Imported preferences must survive a later baseline replay, including archives without this marker.
+    configRows = upsertConfigRow(configRows, 'migration.verify-devices-on', '1');
+    const db: BackupPayload['db'] = {
+      config: configRows,
+      users: cloneRows(prepared.payload.db.users).map((row) => ({
+        ...row,
+        email_verified: row.email_verified ?? 1,
+        verify_devices: row.verify_devices ?? 0,
+        yubikey_nfc: row.yubikey_nfc ?? 0,
+      })),
+      domain_settings: cloneRows(prepared.payload.db.domain_settings),
+      user_revisions: cloneRows(prepared.payload.db.user_revisions),
+      // Archives from before passkey purposes hold login passkeys only.
+      webauthn_credentials: cloneRows(prepared.payload.db.webauthn_credentials).map((row) => ({
+        ...row,
+        purpose: row.purpose == null ? 'login' : String(row.purpose).trim() === 'twoFactor' ? 'twoFactor' : 'login',
+      })),
+      folders: cloneRows(prepared.payload.db.folders),
+      ciphers: cloneRows(prepared.payload.db.ciphers).map((row) => ({
+        ...row,
+        archived_at: row.archived_at ?? null,
+      })),
+      attachments: cloneRows(prepared.payload.db.attachments),
+    };
+    await restoreRows(env.DB, 'config', ['key', 'value'], db.config, true);
+    await restoreRows(
+      env.DB,
+      'users',
+      ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
+      db.users
+    );
+    await restoreRows(env.DB, 'user_revisions', ['user_id', 'revision_date'], db.user_revisions, true);
+    await restoreRows(
+      env.DB,
+      'domain_settings',
+      ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'],
+      db.domain_settings,
+      true
+    );
+    await restoreRows(
+      env.DB,
+      'webauthn_credentials',
+      ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'],
+      db.webauthn_credentials
+    );
+    await restoreRows(env.DB, 'folders', ['id', 'user_id', 'name', 'created_at', 'updated_at'], db.folders);
+    await restoreRows(
+      env.DB,
+      'ciphers',
+      ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
+      db.ciphers
+    );
+    await restoreRows(env.DB, 'attachments', ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], db.attachments);
     await validateShadowTableCounts(env.DB, {
       config: db.config.length,
       users: db.users.length,
@@ -703,12 +504,103 @@ export async function importBackupArchiveBytes(
     });
 
     await report('restore_files', 'files');
-    const restored = source
-      ? await restoreRemoteAttachmentFiles(env, prepared.payload, parsed.files, source)
-      : await restoreBlobFiles(env, db, parsed.files);
+    // Store each attachment blob; a row whose blob is missing or cannot be stored is skipped.
+    const restoredAttachments: SqlRow[] = [];
+    const restoreSkippedItems: BackupImportSkipSummary['items'] = [];
+    if (source) {
+      const manifestLookup = buildAttachmentBlobLookup(prepared.payload.manifest);
+      for (const row of prepared.payload.db.attachments) {
+        const cipherId = String(row.cipher_id || '').trim();
+        const attachmentId = String(row.id || '').trim();
+        const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
+        const ref = manifestLookup.get(`${cipherId}/${attachmentId}`);
+        if (!ref && !parsed.files[inlinePath]) {
+          restoreSkippedItems.push({
+            kind: 'attachment',
+            path: `attachments/${cipherId}/${attachmentId}`,
+            sizeBytes: Number(row.size || 0) || 0,
+          });
+          continue;
+        }
+        const bytes = parsed.files[inlinePath] || (ref ? await source.loadAttachment(ref.blobName) : null);
+        if (!bytes) {
+          restoreSkippedItems.push({
+            kind: 'attachment',
+            path: ref ? `attachments/${ref.blobName}` : inlinePath,
+            sizeBytes: ref?.sizeBytes || Number(row.size || 0) || 0,
+          });
+          continue;
+        }
+        try {
+          await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
+            size: bytes.byteLength,
+            contentType: 'application/octet-stream',
+          });
+          restoredAttachments.push(row);
+        } catch {
+          restoreSkippedItems.push({
+            kind: 'attachment',
+            path: ref ? `attachments/${ref.blobName}` : inlinePath,
+            sizeBytes: bytes.byteLength,
+          });
+        }
+      }
+    } else {
+      for (const row of db.attachments) {
+        const cipherId = String(row.cipher_id || '').trim();
+        const attachmentId = String(row.id || '').trim();
+        if (!cipherId || !attachmentId) continue;
+        const key = `attachments/${cipherId}/${attachmentId}.bin`;
+        const bytes = parsed.files[key];
+        if (!bytes) {
+          restoreSkippedItems.push({
+            kind: 'attachment',
+            path: key,
+            sizeBytes: Number(row.size || 0) || 0,
+          });
+          continue;
+        }
+        try {
+          await putBlobObject(env, getAttachmentObjectKey(cipherId, attachmentId), bytes, {
+            size: bytes.byteLength,
+            contentType: 'application/octet-stream',
+          });
+          restoredAttachments.push(row);
+        } catch {
+          restoreSkippedItems.push({
+            kind: 'attachment',
+            path: key,
+            sizeBytes: bytes.byteLength,
+          });
+        }
+      }
+    }
+    const restored: AttachmentRestoreResult = {
+      imported: restoredAttachments.length,
+      restoredAttachments,
+      skipped: {
+        reason: restoreSkippedItems.length ? ATTACHMENT_RESTORE_FAILED_REASON : null,
+        attachments: restoreSkippedItems.length,
+        items: restoreSkippedItems,
+      },
+    };
     const restoredAttachmentKeys = new Set(restored.restoredAttachments.map(attachmentRowKey));
     const failedRestoreRows = db.attachments.filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
-    await removeAttachmentRows(env.DB, failedRestoreRows).catch(() => undefined);
+    // Drop the staged rows of attachments whose blobs were not restored. A failed drop is left to the
+    // count validation below, which then rejects the restore.
+    try {
+      const staged = shadowTable(attachments);
+      const drops = failedRestoreRows.flatMap((row) => {
+        const attachmentId = String(row.id || '').trim();
+        const cipherId = String(row.cipher_id || '').trim();
+        return attachmentId && cipherId ? [orm.delete(staged).where(and(eq(staged.id, attachmentId), eq(staged.cipherId, cipherId)))] : [];
+      });
+      if (drops.length) {
+        await orm.batch(drops as [typeof drops[0], ...typeof drops]);
+      }
+    } catch {
+      // Reported by the count validation below.
+    }
     await validateShadowTableCounts(env.DB, {
       config: db.config.length,
       users: db.users.length,
@@ -720,13 +612,29 @@ export async function importBackupArchiveBytes(
       attachments: restored.restoredAttachments.length,
     });
     await report('finalize', 'finalize');
-    await swapShadowTablesIntoPlace(env.DB);
+    // Commit by replacing live table contents from validated shadow tables.
+    // This avoids D1 schema-rename edge cases while keeping current data intact
+    // until the final batch succeeds.
+    const swap = [
+      ...[attachments, ciphers, folders, webauthnCredentials, domainSettings, userRevisions, users, config].map((table) => orm.delete(table)),
+      // Copies by column name, not SELECT *: a live table's physical column order can differ from its
+      // schema order (users does), so a positional copy under drizzle's column list would misplace values.
+      ...Object.values(BACKUP_TABLES).map(<T extends SQLiteTable>(live: T) => orm.insert(live).select(orm.select().from(shadowTable(live)))),
+    ];
+    await orm.batch(swap as [typeof swap[0], ...typeof swap]);
     await syncVaultAdminRoles(env);
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
     if (replaceExisting && previousBlobKeys.size) {
       const nextBlobKeys = await collectCurrentBlobKeys(env.DB).catch(() => null);
       if (nextBlobKeys) {
-        await cleanupOrphanedBlobFiles(env, previousBlobKeys, nextBlobKeys).catch(() => undefined);
+        // Deleting orphaned blobs is best effort: the restore has already committed.
+        try {
+          for (const key of Array.from(previousBlobKeys).filter((blobKey) => !nextBlobKeys.has(blobKey))) {
+            await deleteBlobObject(env, key);
+          }
+        } catch {
+          // An orphaned blob only costs storage.
+        }
       }
     }
 
