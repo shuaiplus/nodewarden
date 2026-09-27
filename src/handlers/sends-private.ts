@@ -1,5 +1,6 @@
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { StorageService } from '../services/storage';
+import { recordSendEvent } from '../services/events';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
@@ -268,6 +269,7 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'created');
 
   return jsonResponse(sendToResponse(send));
 }
@@ -398,6 +400,7 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'created');
   const jwtSecret = getSafeJwtSecret(env);
   if (!jwtSecret) {
     return errorResponse('Server configuration error', 500);
@@ -650,6 +653,7 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'edited');
 
   return jsonResponse(sendToResponse(send));
 }
@@ -673,6 +677,7 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendDeleteForRequest(request, env, sendId, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'deleted');
   await writeSendAudit(storage, request, userId, 'send.delete', {
     id: sendId,
     type: send.type,
@@ -710,6 +715,7 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     for (const send of sends) {
       notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
+      await recordSendEvent(env, request, send, 'deleted');
     }
     await writeSendAudit(storage, request, userId, 'send.delete.bulk', {
       count: sends.length,
@@ -733,6 +739,7 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'edited');
   await writeSendAudit(storage, request, userId, 'send.password.remove', {
     id: send.id,
     type: send.type,
@@ -755,6 +762,7 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await recordSendEvent(env, request, send, 'edited');
   await writeSendAudit(storage, request, userId, 'send.auth.remove', {
     id: send.id,
     type: send.type,

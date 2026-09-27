@@ -91,7 +91,7 @@ export async function handleEventRoute(request: Request, env: Env, user: User, p
     }
     return cipher.userId === user.id ? listEventsResponse(request, env, { personalUserId: user.id, resourceType: 'cipher', resourceId: cipher.id }) : errorResponse('Not found', 404);
   }
-  const orgPath = path.match(/^\/api\/organizations\/([a-f0-9-]+)(?:\/(users)\/([a-f0-9-]+))?\/events$/i);
+  const orgPath = path.match(/^\/api\/organizations\/([a-f0-9-]+)(?:\/(users|sends)\/([a-f0-9-]+))?\/events$/i);
   if (!orgPath) return null;
   if (method !== 'GET') return errorResponse('Method not allowed', 405);
   const orgId = orgPath[1];
@@ -101,5 +101,7 @@ export async function handleEventRoute(request: Request, env: Env, user: User, p
     if (!member?.userId || member.orgId !== orgId) return errorResponse('Not found', 404);
     return listEventsResponse(request, env, { organizationId: orgId, actingUserId: member.userId });
   }
+  // As upstream GetSend: the rows are already scoped to this organization, so a deleted Send keeps its history.
+  if (orgPath[2] === 'sends') return listEventsResponse(request, env, { organizationId: orgId, resourceType: 'send', resourceId: orgPath[3] });
   return listEventsResponse(request, env, { organizationId: orgId });
 }

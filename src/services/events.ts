@@ -1,9 +1,10 @@
 import { and, desc, eq, gte, isNull, lt, lte, or } from 'drizzle-orm';
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { events, organizationMemberships } from '../db/schema';
-import type { Env } from '../types';
+import { SendAuthType, SendType, type Env, type Send } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
+import { MembershipStatus } from './org-types';
 import { StorageService } from './storage';
 
 export const EventType = {
@@ -24,9 +25,13 @@ export const EventType = {
   ProjectRetrieved: 2200, ProjectCreated: 2201, ProjectEdited: 2202, ProjectDeleted: 2203,
   ServiceAccountUserAdded: 2300, ServiceAccountUserRemoved: 2301, ServiceAccountGroupAdded: 2302,
   ServiceAccountGroupRemoved: 2303, ServiceAccountCreated: 2304, ServiceAccountDeleted: 2305,
+  SendCreatedText: 2500, SendCreatedTextWithEmailVerification: 2501, SendCreatedTextWithPasswordProtection: 2502,
+  SendCreatedFile: 2503, SendCreatedFileWithEmailVerification: 2504, SendCreatedFileWithPasswordProtection: 2505,
+  SendEditedText: 2506, SendEditedFile: 2507, SendDeletedText: 2508, SendDeletedFile: 2509,
+  SendAccessedText: 2510, SendAccessedFile: 2511,
 } as const;
 
-export type EventResourceType = 'cipher' | 'collection' | 'group' | 'policy' | 'organizationUser' | 'secret' | 'project';
+export type EventResourceType = 'cipher' | 'collection' | 'group' | 'policy' | 'organizationUser' | 'secret' | 'project' | 'send';
 export interface EventActor { userId?: string | null; serviceAccountId?: string | null; systemUser?: number | null }
 export interface EventInput {
   type: number;
@@ -34,6 +39,8 @@ export interface EventInput {
   resourceType?: EventResourceType;
   resourceId?: string;
   userId?: string | null;
+  // Overrides the actor for this row only; null records no acting user (an external Send accessor).
+  actingUserId?: string | null;
   grantedServiceAccountId?: string | null;
   date?: string;
 }
@@ -47,7 +54,7 @@ export async function storeEvents(env: Env, request: Request | null, actor: Even
   const now = new Date().toISOString();
   const rows: Array<typeof events.$inferInsert> = input.map(event => ({
     id: crypto.randomUUID(), organizationId: event.organizationId, type: event.type, date: event.date ?? now, recordedAt: now,
-    actingUserId: actor.userId ?? null, userId: event.userId ?? null,
+    actingUserId: event.actingUserId !== undefined ? event.actingUserId : actor.userId ?? null, userId: event.userId ?? null,
     resourceType: event.resourceType ?? null, resourceId: event.resourceId ?? null,
     serviceAccountId: actor.serviceAccountId ?? null, grantedServiceAccountId: event.grantedServiceAccountId ?? null,
     deviceType: deviceType !== null && Number.isSafeInteger(deviceType) ? deviceType : null,
@@ -63,15 +70,45 @@ export async function recordEvents(...args: Parameters<typeof storeEvents>): Pro
   try { await storeEvents(...args); } catch { console.error('Event recording failed'); }
 }
 
-export async function recordUserEvent(env: Env, request: Request | null, userId: string, type: number, date?: string): Promise<void> {
+type AccountEvent = Pick<EventInput, 'type' | 'resourceType' | 'resourceId'>;
+
+// Upstream LogUserEventAsync / LogSendEventAsync: one personal row acted by the account, plus a copy for
+// every organization where it is a confirmed member. Access events pass organizationActingUserId null,
+// because the account owns the Send but did not open it.
+async function recordAccountEvent(env: Env, request: Request | null, userId: string, event: AccountEvent, organizationActingUserId?: null): Promise<void> {
   try {
     const memberships = await getOrm(env.DB).select({ orgId: organizationMemberships.orgId, status: organizationMemberships.status })
-    .from(organizationMemberships).where(eq(organizationMemberships.userId, userId));
-  await recordEvents(env, request, { userId }, [
-    { organizationId: null, userId, type, date },
-    ...memberships.filter(member => member.status === 2).map(member => ({ organizationId: member.orgId, userId, type, date })),
+      .from(organizationMemberships).where(eq(organizationMemberships.userId, userId));
+    await recordEvents(env, request, { userId }, [
+      { ...event, organizationId: null, userId },
+      ...memberships.filter(member => member.status === MembershipStatus.Confirmed)
+        .map(member => ({ ...event, organizationId: member.orgId, userId, actingUserId: organizationActingUserId })),
     ]);
   } catch { console.error('User event recording failed'); }
+}
+
+export async function recordUserEvent(env: Env, request: Request | null, userId: string, type: number): Promise<void> {
+  await recordAccountEvent(env, request, userId, { type });
+}
+
+export type SendEventAction = 'created' | 'edited' | 'deleted' | 'accessed';
+
+function sendEventType(send: Pick<Send, 'type' | 'authType' | 'passwordHash'>, action: SendEventAction): number {
+  const text = send.type === SendType.Text;
+  if (action === 'edited') return text ? EventType.SendEditedText : EventType.SendEditedFile;
+  if (action === 'deleted') return text ? EventType.SendDeletedText : EventType.SendDeletedFile;
+  if (action === 'accessed') return text ? EventType.SendAccessedText : EventType.SendAccessedFile;
+  // A legacy password body sets a hash without authType, so the hash decides password protection.
+  if (send.passwordHash) return text ? EventType.SendCreatedTextWithPasswordProtection : EventType.SendCreatedFileWithPasswordProtection;
+  if (send.authType === SendAuthType.Email) return text ? EventType.SendCreatedTextWithEmailVerification : EventType.SendCreatedFileWithEmailVerification;
+  return text ? EventType.SendCreatedText : EventType.SendCreatedFile;
+}
+
+// ponytail: every accessor is recorded as External; attribute confirmed members once Send email
+// verification identifies who opened the Send.
+export async function recordSendEvent(env: Env, request: Request | null, send: Pick<Send, 'id' | 'userId' | 'type' | 'authType' | 'passwordHash'>, action: SendEventAction): Promise<void> {
+  await recordAccountEvent(env, request, send.userId, { type: sendEventType(send, action), resourceType: 'send', resourceId: send.id },
+    action === 'accessed' ? null : undefined);
 }
 
 export interface EventFilter {
@@ -85,7 +122,7 @@ export interface EventFilter {
 
 const RESOURCE_FIELDS = {
   cipher: 'cipherId', collection: 'collectionId', group: 'groupId', policy: 'policyId',
-  organizationUser: 'organizationUserId', secret: 'secretId', project: 'projectId',
+  organizationUser: 'organizationUserId', secret: 'secretId', project: 'projectId', send: 'sendId',
 } as const;
 
 function eventResponse(row: typeof events.$inferSelect) {

@@ -1,5 +1,6 @@
 import { Env, SendType } from '../types';
 import { StorageService } from '../services/storage';
+import { recordSendEvent } from '../services/events';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { sanitizeDownloadContentType } from '../utils/content-type';
@@ -100,6 +101,7 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     const revisionDate = await storage.updateRevisionDate(send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
     notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
+    await recordSendEvent(env, request, send, 'accessed');
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -173,6 +175,7 @@ export async function handleAccessSendFile(
   const revisionDate = await storage.updateRevisionDate(send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
+  await recordSendEvent(env, request, send, 'accessed');
 
   const token = await createSendFileDownloadToken(send.id, fileId, secret);
   const url = new URL(request.url);
@@ -214,6 +217,7 @@ export async function handleAccessSendV2(request: Request, env: Env): Promise<Re
     const revisionDate = await storage.updateRevisionDate(send.userId);
     notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
     notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
+    await recordSendEvent(env, request, send, 'accessed');
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -254,6 +258,7 @@ export async function handleAccessSendFileV2(request: Request, env: Env, fileId:
   const revisionDate = await storage.updateRevisionDate(send.userId);
   notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
+  await recordSendEvent(env, request, send, 'accessed');
 
   const downloadToken = await createSendFileDownloadToken(send.id, fileId, jwt.secret);
   const url = new URL(request.url);
