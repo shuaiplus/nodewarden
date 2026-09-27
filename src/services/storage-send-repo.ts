@@ -124,14 +124,12 @@ export async function getSendsByIds(db: D1Database, ids: string[], userId: strin
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return [];
   const orm = getOrm(db);
+  const read = (chunk: string[]) => orm.select().from(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
   const out: Send[] = [];
 
-  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
-    const rows = await orm
-      .select()
-      .from(sends)
-      .where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
-    out.push(...rows.map(mapSendRow));
+  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
+  for (const chunk of chunkRows(uniqueIds, 1, read([]).toSQL().params.length)) {
+    out.push(...(await read(chunk)).map(mapSendRow));
   }
 
   return out;
@@ -141,8 +139,9 @@ export async function bulkDeleteSends(db: D1Database, ids: string[], userId: str
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
   const orm = getOrm(db);
-  for (const chunk of chunkRows(uniqueIds, 1, 1)) {
-    await orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
+  const remove = (chunk: string[]) => orm.delete(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
+  for (const chunk of chunkRows(uniqueIds, 1, remove([]).toSQL().params.length)) {
+    await remove(chunk);
   }
 
   return updateRevisionDate(db, userId);
