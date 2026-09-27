@@ -24,9 +24,9 @@ function decodeBase64UrlUtf8(value: string): string | null {
 // Device fields come from form posts, JSON bodies and headers. Each is clipped to its column width
 // and falls back to a default instead of failing the sign-in it rides on.
 export const deviceText = z.string().trim().transform((text) => text.slice(0, DEVICE_TEXT_MAX_LENGTH));
-export const deviceType = z.coerce.number().int().min(0);
+const deviceType = z.coerce.number().int().min(0);
 const DeviceIdentifierSchema = deviceText.transform((text) => text || null).catch(null);
-const DeviceInfoSchema = z.object({
+export const DeviceInfoSchema = z.object({
   deviceIdentifier: DeviceIdentifierSchema,
   deviceName: deviceText.transform((text) => text || DEFAULT_DEVICE_NAME).catch(DEFAULT_DEVICE_NAME),
   deviceType: deviceType.catch(DEFAULT_DEVICE_TYPE),

@@ -4,8 +4,9 @@ import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications
 import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { registerMobilePushDevice, unregisterMobilePushDevice } from '../services/push-relay';
-import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
-import { readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
+import { z } from 'zod';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
+import { DeviceInfoSchema, deviceText, readAuthRequestDeviceInfo, readKnownDeviceProbe } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import * as deviceRepo from '../services/storage-device-repo';
 import * as sessionRepo from '../services/storage-session-repo';
@@ -94,58 +95,57 @@ function buildProtectedDeviceResponse(device: Device): ProtectedDeviceWireRespon
   return response as ProtectedDeviceWireResponse;
 }
 
-function parseKeysBody(body: any, fallback?: Device): {
-  encryptedUserKey?: string | null;
-  encryptedPublicKey?: string | null;
-  encryptedPrivateKey?: string | null;
-} {
+const storedKey = z.string().nullable().optional();
+const DeviceKeysSchema = z.object({ encryptedUserKey: storedKey, encryptedPublicKey: storedKey, encryptedPrivateKey: storedKey });
+
+// A key the body leaves out keeps the stored value; an explicit null clears it.
+function withStoredKeys(keys: z.output<typeof DeviceKeysSchema>, stored?: Device) {
   return {
-    encryptedUserKey:
-      Object.prototype.hasOwnProperty.call(body || {}, 'encryptedUserKey')
-        ? body?.encryptedUserKey ?? null
-        : fallback?.encryptedUserKey ?? null,
-    encryptedPublicKey:
-      Object.prototype.hasOwnProperty.call(body || {}, 'encryptedPublicKey')
-        ? body?.encryptedPublicKey ?? null
-        : fallback?.encryptedPublicKey ?? null,
-    encryptedPrivateKey:
-      Object.prototype.hasOwnProperty.call(body || {}, 'encryptedPrivateKey')
-        ? body?.encryptedPrivateKey ?? null
-        : fallback?.encryptedPrivateKey ?? null,
+    encryptedUserKey: stored?.encryptedUserKey ?? null,
+    encryptedPublicKey: stored?.encryptedPublicKey ?? null,
+    encryptedPrivateKey: stored?.encryptedPrivateKey ?? null,
+    ...keys,
   };
 }
 
-async function readJsonBody(request: Request): Promise<any> {
-  try {
-    return normalizeJsonKeys(await request.json());
-  } catch {
-    return null;
-  }
-}
+// Official clients name the device fields identifier/name/type; NodeWarden's own callers use the device* spelling.
+const DeviceFieldsSchema = z.looseObject({}).transform((body) => ({
+  ...body,
+  deviceIdentifier: body.identifier ?? body.deviceIdentifier,
+  deviceName: body.name ?? body.deviceName,
+  deviceType: body.type ?? body.deviceType,
+}));
 
-function parseDeviceName(value: unknown): string {
-  return String(value || '').trim().slice(0, 128);
-}
+const DEVICE_REQUIRED = { error: 'Device identifier and type are required' };
+const RegisterDeviceSchema = DeviceFieldsSchema.pipe(DeviceKeysSchema.extend({
+  deviceIdentifier: z.string(DEVICE_REQUIRED).trim().min(1, DEVICE_REQUIRED),
+  deviceName: DeviceInfoSchema.shape.deviceName,
+  deviceType: z.coerce.number(DEVICE_REQUIRED).int(DEVICE_REQUIRED).min(0, DEVICE_REQUIRED),
+  pushToken: z.string().trim().catch(''),
+}));
 
-function parseDeviceType(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
+const NAME_REQUIRED = { error: 'Device name is required' };
+const DeviceNameSchema = z.object({ name: z.string(NAME_REQUIRED).trim().min(1, NAME_REQUIRED).pipe(deviceText) });
+
+const UpdateTrustSchema = z.object({
+  currentDevice: DeviceKeysSchema.nullish(),
+  otherDevices: z.array(DeviceKeysSchema.extend({ deviceId: z.string().trim().catch('') })).optional(),
+});
+
+const PASSWORD_REQUIRED = { error: 'masterPasswordHash is required' };
+const MasterPasswordSchema = z.object({ masterPasswordHash: z.string(PASSWORD_REQUIRED).trim().min(1, PASSWORD_REQUIRED) });
+
+const PUSH_TOKEN_INVALID = { error: 'Invalid push token' };
+const PushTokenSchema = z.object({ pushToken: z.string(PUSH_TOKEN_INVALID).trim().min(1, PUSH_TOKEN_INVALID) });
 
 // POST /api/devices
 export async function handleRegisterDevice(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  const body = await parseBody(request, RegisterDeviceSchema, 'Invalid request payload');
+  if (body instanceof Response) return body;
+  const { deviceIdentifier: identifier, deviceName: name, deviceType: type, pushToken, ...keys } = body;
 
-  const identifier = normalizeIdentifier(body.identifier ?? body.deviceIdentifier);
-  const name = parseDeviceName(body.name ?? body.deviceName) || 'Unknown device';
-  const type = parseDeviceType(body.type ?? body.deviceType);
-  if (!identifier || type == null) return errorResponse('Device identifier and type are required', 400);
+  await deviceRepo.upsertDevice(env.DB, userId, identifier, name, type, undefined, keys);
 
-  await deviceRepo.upsertDevice(env.DB, userId, identifier, name, type, undefined, parseKeysBody(body));
-
-  const pushToken = String(body.pushToken ?? '').trim();
   if (pushToken) {
     const device = await deviceRepo.getDevice(env.DB, userId, identifier);
     const pushUuid = device?.pushUuid || generateUUID();
@@ -177,15 +177,9 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
 
 // POST /api/devices/lost-trust
 export async function handleReportLostTrust(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await readJsonBody(request) || {};
-  const deviceInfo = readAuthRequestDeviceInfo(
-    {
-      deviceIdentifier: String(body.identifier ?? body.deviceIdentifier ?? ''),
-      deviceName: String(body.name ?? body.deviceName ?? ''),
-      deviceType: String(body.type ?? body.deviceType ?? ''),
-    },
-    request
-  );
+  const body = await parseBody(request, DeviceFieldsSchema, 'Please provide a device identifier');
+  if (body instanceof Response) return body;
+  const deviceInfo = readAuthRequestDeviceInfo(body, request);
   if (!deviceInfo.deviceIdentifier) return errorResponse('Please provide a device identifier', 400);
 
   await writeAuditEvent(env.DB, {
@@ -432,9 +426,9 @@ export async function handleUpdateDeviceName(
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await readJsonBody(request);
-  const name = parseDeviceName(body?.name);
-  if (!name) return errorResponse('Device name is required', 400);
+  const body = await parseBody(request, DeviceNameSchema, NAME_REQUIRED.error);
+  if (body instanceof Response) return body;
+  const { name } = body;
 
   const updated = await deviceRepo.updateDeviceName(env.DB, userId, normalized, name);
   if (!updated) return errorResponse('Device not found', 404);
@@ -458,16 +452,9 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  let masterPasswordHash = '';
-  try {
-    const body = await request.json() as { masterPasswordHash?: string };
-    masterPasswordHash = String(body?.masterPasswordHash || '').trim();
-  } catch {
-    masterPasswordHash = '';
-  }
-  if (!masterPasswordHash) {
-    return errorResponse('masterPasswordHash is required', 400);
-  }
+  const body = await parseBody(request, MasterPasswordSchema, PASSWORD_REQUIRED.error);
+  if (body instanceof Response) return body;
+  const { masterPasswordHash } = body;
   const auth = new AuthService(env);
   const passwordValid = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
   if (!passwordValid) {
@@ -507,13 +494,14 @@ export async function handleUpdateDeviceKeys(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await readJsonBody(request);
+  const keys = await parseBody(request, DeviceKeysSchema);
+  if (keys instanceof Response) return keys;
   const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) {
     return errorResponse('Device not found', 404);
   }
 
-  const updated = await deviceRepo.updateDeviceKeys(env.DB, userId, normalized, parseKeysBody(body, device));
+  const updated = await deviceRepo.updateDeviceKeys(env.DB, userId, normalized, withStoredKeys(keys, device));
   if (!updated) {
     return errorResponse('Device not found', 404);
   }
@@ -528,42 +516,20 @@ export async function handleUpdateDeviceTrust(
   env: Env,
   userId: string
 ): Promise<Response> {
-  const body = await readJsonBody(request);
+  const body = await parseBody(request, UpdateTrustSchema);
+  if (body instanceof Response) return body;
   const currentDeviceIdentifier =
     normalizeIdentifier(request.headers.get('Device-Identifier')) ||
     normalizeIdentifier(request.headers.get('X-Device-Identifier'));
-
-  const updates: Array<{
-    deviceIdentifier: string;
-    keys: {
-      encryptedUserKey?: string | null;
-      encryptedPublicKey?: string | null;
-      encryptedPrivateKey?: string | null;
-    };
-  }> = [];
-
-  if (currentDeviceIdentifier && body?.currentDevice) {
-    updates.push({
-      deviceIdentifier: currentDeviceIdentifier,
-      keys: parseKeysBody(body.currentDevice, await deviceRepo.getDevice(env.DB, userId, currentDeviceIdentifier) || undefined),
-    });
-  }
-
-  if (Array.isArray(body?.otherDevices)) {
-    for (const item of body.otherDevices) {
-      const deviceIdentifier = normalizeIdentifier(item?.deviceId);
-      if (!deviceIdentifier) continue;
-      updates.push({
-        deviceIdentifier,
-        keys: parseKeysBody(item, await deviceRepo.getDevice(env.DB, userId, deviceIdentifier) || undefined),
-      });
-    }
-  }
+  const requested = [
+    ...(currentDeviceIdentifier && body.currentDevice ? [{ ...body.currentDevice, deviceId: currentDeviceIdentifier }] : []),
+    ...(body.otherDevices ?? []).filter((item) => item.deviceId),
+  ];
 
   let updatedCount = 0;
-  for (const update of updates) {
-    const ok = await deviceRepo.updateDeviceKeys(env.DB, userId, update.deviceIdentifier, update.keys);
-    if (ok) updatedCount++;
+  for (const { deviceId, ...keys } of requested) {
+    const stored = await deviceRepo.getDevice(env.DB, userId, deviceId) || undefined;
+    if (await deviceRepo.updateDeviceKeys(env.DB, userId, deviceId, withStoredKeys(keys, stored))) updatedCount++;
   }
 
   return jsonResponse({ success: true, updated: updatedCount });
@@ -575,8 +541,9 @@ export async function handleUntrustDevices(
   env: Env,
   userId: string
 ): Promise<Response> {
-  const body = await readJsonBody(request);
-  const devices = Array.isArray(body?.devices) ? body.devices.map((id: unknown) => normalizeIdentifier(String(id))) : [];
+  const body = await parseBody(request, z.object({ devices: z.array(z.coerce.string().trim()).default([]) }));
+  if (body instanceof Response) return body;
+  const { devices } = body;
   const removed = await deviceRepo.clearDeviceKeys(env.DB, userId, devices);
   for (const deviceIdentifier of devices) {
     if (!deviceIdentifier) continue;
@@ -656,9 +623,9 @@ export async function handleUpdateDeviceToken(
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const body = await readJsonBody(request);
-  const pushToken = String(body?.pushToken ?? body?.PushToken ?? '').trim();
-  if (!pushToken) return errorResponse('Invalid push token', 400);
+  const body = await parseBody(request, PushTokenSchema, PUSH_TOKEN_INVALID.error);
+  if (body instanceof Response) return body;
+  const { pushToken } = body;
 
   const device = await deviceRepo.getDevice(env.DB, userId, normalized);
   if (!device) return errorResponse('Device not found', 404);
