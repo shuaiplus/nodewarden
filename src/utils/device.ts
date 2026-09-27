@@ -1,7 +1,9 @@
+import { z } from 'zod';
 import type { Cipher } from '../types';
 
 const DEFAULT_DEVICE_NAME = 'Unknown device';
 const DEFAULT_DEVICE_TYPE = 14;
+const DEVICE_TEXT_MAX_LENGTH = 128;
 
 function decodeBase64UrlUtf8(value: string): string | null {
   try {
@@ -19,50 +21,28 @@ function decodeBase64UrlUtf8(value: string): string | null {
   }
 }
 
-function normalizeDeviceIdentifier(value: string | undefined | null): string | null {
-  if (!value) return null;
-  const normalized = String(value).trim();
-  if (!normalized) return null;
-  return normalized.slice(0, 128);
-}
+// Device fields come from form posts, JSON bodies and headers. Each is clipped to its column width
+// and falls back to a default instead of failing the sign-in it rides on.
+export const deviceText = z.string().trim().transform((text) => text.slice(0, DEVICE_TEXT_MAX_LENGTH));
+export const deviceType = z.coerce.number().int().min(0);
+const DeviceIdentifierSchema = deviceText.transform((text) => text || null).catch(null);
+const DeviceInfoSchema = z.object({
+  deviceIdentifier: DeviceIdentifierSchema,
+  deviceName: deviceText.transform((text) => text || DEFAULT_DEVICE_NAME).catch(DEFAULT_DEVICE_NAME),
+  deviceType: deviceType.catch(DEFAULT_DEVICE_TYPE),
+});
 
-function normalizeDeviceName(value: string | undefined | null): string {
-  const normalized = String(value || '').trim();
-  if (!normalized) return DEFAULT_DEVICE_NAME;
-  return normalized.slice(0, 128);
-}
+export type AuthRequestDeviceInfo = z.output<typeof DeviceInfoSchema>;
 
-function parseDeviceType(value: string | number | undefined | null): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.max(0, Math.floor(value));
-  }
-  const parsed = Number.parseInt(String(value || ''), 10);
-  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  return DEFAULT_DEVICE_TYPE;
-}
+const firstPresent = (...values: unknown[]) => values.find((value) => value != null && value !== '');
 
-export interface AuthRequestDeviceInfo {
-  deviceIdentifier: string | null;
-  deviceName: string;
-  deviceType: number;
-}
-
-export function readAuthRequestDeviceInfo(
-  body: Record<string, string | undefined>,
-  request: Request
-): AuthRequestDeviceInfo {
-  const bodyIdentifier = body.deviceIdentifier || body.device_identifier;
-  const headerIdentifier = request.headers.get('X-Device-Identifier') || undefined;
-  const bodyName = body.deviceName || body.device_name;
-  const headerName = request.headers.get('X-Device-Name') || undefined;
-  const bodyType = body.deviceType || body.device_type;
-  const headerType = request.headers.get('Device-Type') || undefined;
-
-  return {
-    deviceIdentifier: normalizeDeviceIdentifier(bodyIdentifier || headerIdentifier),
-    deviceName: normalizeDeviceName(bodyName || headerName),
-    deviceType: parseDeviceType(bodyType || headerType),
-  };
+// The body wins over the X-Device-* headers, field by field.
+export function readAuthRequestDeviceInfo(body: Record<string, unknown>, request: Request): AuthRequestDeviceInfo {
+  return DeviceInfoSchema.parse({
+    deviceIdentifier: firstPresent(body.deviceIdentifier, body.device_identifier, request.headers.get('X-Device-Identifier')),
+    deviceName: firstPresent(body.deviceName, body.device_name, request.headers.get('X-Device-Name')),
+    deviceType: firstPresent(body.deviceType, body.device_type, request.headers.get('Device-Type')),
+  });
 }
 
 export function readKnownDeviceProbe(request: Request): { email: string | null; deviceIdentifier: string | null } {
@@ -70,12 +50,12 @@ export function readKnownDeviceProbe(request: Request): { email: string | null; 
   const decodedEmail = decodeBase64UrlUtf8(encodedEmail);
   const fallbackRawEmail = request.headers.get('X-Request-Email');
   const email = (decodedEmail || fallbackRawEmail || '').trim().toLowerCase() || null;
-  const deviceIdentifier = normalizeDeviceIdentifier(request.headers.get('X-Device-Identifier'));
+  const deviceIdentifier = DeviceIdentifierSchema.parse(request.headers.get('X-Device-Identifier'));
   return { email, deviceIdentifier };
 }
 
 export function readActingDeviceIdentifier(request: Request): string | null {
-  return normalizeDeviceIdentifier(request.headers.get('X-NodeWarden-Acting-Device-Id'));
+  return DeviceIdentifierSchema.parse(request.headers.get('X-NodeWarden-Acting-Device-Id'));
 }
 
 // The cipher create/update/delete signals carry the same payload: the row, its organization and
