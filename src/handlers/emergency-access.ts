@@ -55,18 +55,6 @@ async function granteeDetails(db: D1Database, record: emergencyRepo.EmergencyAcc
   };
 }
 
-async function grantorDetails(db: D1Database, record: emergencyRepo.EmergencyAccessRecord) {
-  const user = await userSummary(db, record.grantorId, null);
-  return {
-    ...emergencyJson(record),
-    grantorId: user.id,
-    email: user.email,
-    name: user.name,
-    avatarColor: null,
-    object: 'emergencyAccessGrantorDetails',
-  };
-}
-
 function canAct(record: emergencyRepo.EmergencyAccessRecord, userId: string, type: number): boolean {
   if (record.granteeId !== userId || record.type !== type) return false;
   if (record.status === EmergencyAccessStatus.RecoveryApproved) return true;
@@ -125,7 +113,17 @@ export async function handleEmergencyAccessRoute(
   if (normalized === '/emergency-access/granted' && method === 'GET') {
     const rows = await emergencyRepo.listByGrantee(env.DB, user.id);
     const data = [];
-    for (const row of rows) data.push(await grantorDetails(env.DB, row));
+    for (const row of rows) {
+      const grantor = await userSummary(env.DB, row.grantorId, null);
+      data.push({
+        ...emergencyJson(row),
+        grantorId: grantor.id,
+        email: grantor.email,
+        name: grantor.name,
+        avatarColor: null,
+        object: 'emergencyAccessGrantorDetails',
+      });
+    }
     return jsonResponse({ data, object: 'list', continuationToken: null });
   }
   if (normalized === '/emergency-access/invite' && method === 'POST') {
