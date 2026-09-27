@@ -509,7 +509,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
   if (body.grant_type === 'authorization_code' && isSsoEnabled(env)) {
     const { code } = body;
-    const context = await ssoContinuationContext(env, request, body as Record<string, string>, code);
+    const context = await ssoContinuationContext(env, request, body, code);
     const continuation = await getSsoContinuation(env, context);
     if (continuation === null) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;

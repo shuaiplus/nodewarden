@@ -15,7 +15,7 @@ export interface SsoContinuation extends SsoContinuationContext {
   securityStamp: string;
 }
 
-export async function ssoContinuationContext(env: Env, request: Request, body: Record<string, string>, code: string): Promise<SsoContinuationContext> {
+export async function ssoContinuationContext(env: Env, request: Request, body: Record<string, unknown>, code: string): Promise<SsoContinuationContext> {
   const origin = new URL(request.url).origin;
   const { SSO_AUTHORITY, SSO_CLIENT_ID } = readEnvConfig(env);
   const provider = [SSO_AUTHORITY, SSO_CLIENT_ID];
