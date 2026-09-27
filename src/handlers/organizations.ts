@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
@@ -27,18 +28,17 @@ import {
 } from '../services/org-authz';
 import {
   clientMembershipType,
-  EMPTY_PERMISSIONS,
   MembershipStatus,
   MembershipType,
   type CollectionAccess,
   type CollectionRecord,
   type MembershipRecord,
-  type OrgPermissions,
+  OrgPermissions,
   publicMembershipStatus,
 } from '../services/org-types';
 import { deleteOrganizationAccount } from '../services/account-deletion';
 import * as orgRepo from '../services/storage-org-repo';
-import { errorResponse, jsonResponse, parseJsonBody, prop } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { organizationResponse, policyResponse } from '../utils/org-response';
 import { enterprisePlansResponse } from '../services/enterprise-license';
@@ -87,18 +87,32 @@ function inviteEmailsCheck(emails: string[]): MessageCheck {
   return message ? { ok: false, message } : { ok: true };
 }
 
+// Clients post null or '' for unset text, so a blank value falls back to the stored one.
+const optionalText = z.string().trim().nullish();
+const requiredText = (message: string) => z.string({ error: message }).trim().min(1, { error: message });
 
-function asString(value: unknown): string {
-  return String(value || '').trim();
-}
+const OrganizationKeysRequest = z.object({ publicKey: optionalText, encryptedPrivateKey: optionalText });
 
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === 'boolean' ? value : fallback;
-}
+const CreateOrganizationRequest = z.object({
+  name: requiredText('Name and key are required'),
+  key: requiredText('Name and key are required'),
+  billingEmail: optionalText,
+  collectionName: optionalText,
+  identifier: optionalText,
+  keys: OrganizationKeysRequest.nullish(),
+});
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
+// Upstream CollectionAccessSelection; a flag that is not a boolean reads as false.
+const accessFlag = z.boolean().catch(false);
+const AccessSelection = z.object({ id: z.string(), readOnly: accessFlag, hidePasswords: accessFlag, manage: accessFlag });
+type AccessSelection = z.output<typeof AccessSelection>;
+
+const CollectionRequest = z.object({
+  name: optionalText,
+  externalId: optionalText,
+  users: z.array(AccessSelection).nullish(),
+  groups: z.array(AccessSelection).nullish(),
+});
 
 async function requireMember(
   db: D1Database,
@@ -173,22 +187,17 @@ export async function createOwnedOrganization(
 }
 
 export async function handleCreateOrganization(request: Request, env: Env, user: User): Promise<Response> {
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, CreateOrganizationRequest);
   if (body instanceof Response) return body;
 
-  const name = asString(body.name);
-  const key = asString(body.key);
-  const keys = (body.keys || {}) as Record<string, unknown>;
-  if (!name || !key) return errorResponse('Name and key are required', 400);
-
   const org = await createOwnedOrganization(env, user, {
-    name,
-    billingEmail: asString(body.billingEmail) || user.email,
-    collectionName: asString(body.collectionName) || 'Default Collection',
-    key,
-    identifier: asString(body.identifier) || null,
-    privateKey: asString(keys.encryptedPrivateKey) || null,
-    publicKey: asString(keys.publicKey) || null,
+    name: body.name,
+    billingEmail: body.billingEmail || user.email,
+    collectionName: body.collectionName || 'Default Collection',
+    key: body.key,
+    identifier: body.identifier || null,
+    privateKey: body.keys?.encryptedPrivateKey || null,
+    publicKey: body.keys?.publicKey || null,
   });
   return jsonResponse(organizationResponse(org));
 }
@@ -207,11 +216,11 @@ export async function handleUpdateOrganization(request: Request, env: Env, userI
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
   const org = await orgRepo.getOrganization(env.DB, orgId);
   if (!org) return errorResponse('Organization not found', 404);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, z.object({ name: optionalText, billingEmail: optionalText }));
   if (body instanceof Response) return body;
   const previousSettings = [org.name, org.billingEmail];
-  org.name = asString(body.name) || org.name;
-  org.billingEmail = asString(body.billingEmail) || org.billingEmail;
+  org.name = body.name || org.name;
+  org.billingEmail = body.billingEmail || org.billingEmail;
   org.updatedAt = new Date().toISOString();
   await orgRepo.updateOrganization(env.DB, org);
   if (org.name !== previousSettings[0] || org.billingEmail !== previousSettings[1]) {
@@ -252,11 +261,11 @@ export async function handlePostOrganizationKeys(request: Request, env: Env, use
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
   const org = await orgRepo.getOrganization(env.DB, orgId);
   if (!org) return errorResponse('Organization not found', 404);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, OrganizationKeysRequest);
   if (body instanceof Response) return body;
   const previousKeys = [org.publicKey, org.privateKey];
-  org.publicKey = asString(body.publicKey) || org.publicKey;
-  org.privateKey = asString(body.encryptedPrivateKey) || org.privateKey;
+  org.publicKey = body.publicKey || org.publicKey;
+  org.privateKey = body.encryptedPrivateKey || org.privateKey;
   org.updatedAt = new Date().toISOString();
   await orgRepo.updateOrganization(env.DB, org);
   if (org.publicKey !== previousKeys[0] || org.privateKey !== previousKeys[1]) {
@@ -431,18 +440,17 @@ export async function handleCreateOrgCollection(request: Request, env: Env, user
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canCreateCollection(member)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, CollectionRequest.extend({ name: requiredText('Name is required') }));
   if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const collection = {
     id: generateUUID(),
     orgId,
-    name: asString(body.name),
-    externalId: asString(body.externalId) || null,
+    name: body.name,
+    externalId: body.externalId || null,
     createdAt: now,
     updatedAt: now,
   };
-  if (!collection.name) return errorResponse('Name is required', 400);
   await orgRepo.saveCollection(env.DB, collection);
   await applyCollectionAccess(env.DB, orgId, collection.id, body);
   await recordEvents(env, request, { userId }, [{ type: EventType.CollectionCreated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id }]);
@@ -454,11 +462,11 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'update');
   if (target instanceof Response) return target;
   const { member, collection } = target;
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, CollectionRequest);
   if (body instanceof Response) return body;
   const previousSettings = [collection.name, collection.externalId];
-  collection.name = asString(body.name) || collection.name;
-  collection.externalId = asString(body.externalId) || collection.externalId;
+  collection.name = body.name || collection.name;
+  collection.externalId = body.externalId || collection.externalId;
   collection.updatedAt = new Date().toISOString();
   await orgRepo.saveCollection(env.DB, collection);
   const accessChanged = await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
@@ -483,22 +491,14 @@ export async function handleDeleteOrgCollection(request: Request, env: Env, user
   return jsonResponse({});
 }
 
-function accessFlags(entry: Record<string, unknown>) {
-  return {
-    readOnly: asBoolean(entry.readOnly),
-    hidePasswords: asBoolean(entry.hidePasswords),
-    manage: asBoolean(entry.manage),
-  };
-}
-
 // Membership and group ids come straight from the request body, so each posted entry is matched
 // against the organization's own records and unknown ids are skipped. An omitted list stays undefined.
-function grantedSelections<T extends { id: string }, R>(entries: unknown, records: T[], grantee: (record: T) => R) {
-  if (!Array.isArray(entries)) return undefined;
+function grantedSelections<T extends { id: string }, R>(entries: AccessSelection[] | null | undefined, records: T[], grantee: (record: T) => R) {
+  if (!entries) return undefined;
   const recordsById = new Map(records.map((record) => [record.id, record]));
-  return entries.map(asRecord).flatMap((entry) => {
-    const record = recordsById.get(asString(entry.id));
-    return record ? [{ ...grantee(record), ...accessFlags(entry) }] : [];
+  return entries.flatMap(({ id, ...flags }) => {
+    const record = recordsById.get(id);
+    return record ? [{ ...grantee(record), ...flags }] : [];
   });
 }
 
@@ -513,14 +513,12 @@ async function applyCollectionAccess(
   db: D1Database,
   orgId: string,
   collectionId: string,
-  body: Record<string, unknown>
+  { users, groups }: z.output<typeof CollectionRequest>
 ): Promise<boolean> {
-  const users = body.users;
-  const groups = body.groups;
-  if (!Array.isArray(users) && !Array.isArray(groups)) return false;
+  if (!users && !groups) return false;
   const [members, groupRecords] = await Promise.all([
-    Array.isArray(users) ? orgRepo.listMembershipsByOrg(db, orgId) : [],
-    Array.isArray(groups) ? orgRepo.listGroupsByOrg(db, orgId) : [],
+    users ? orgRepo.listMembershipsByOrg(db, orgId) : [],
+    groups ? orgRepo.listGroupsByOrg(db, orgId) : [],
   ]);
   const previous = (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) ?? { users: [], groups: [] };
   const selection = {
@@ -533,34 +531,39 @@ async function applyCollectionAccess(
 }
 
 // Upstream deleted Manager (3), so EnumDataType on the request's Type rejects it like any unknown value.
-const ASSIGNABLE_MEMBER_TYPES: number[] = Object.values(MembershipType).filter((type) => type !== MembershipType.Manager);
+const ASSIGNABLE_MEMBER_TYPES = Object.values(MembershipType).filter((type) => type !== MembershipType.Manager);
+
+// The role, custom permissions, collections and groups that OrganizationUserInviteRequestModel and
+// OrganizationUserUpdateRequestModel share. An omitted collections or groups list leaves that access as is.
+const memberChangeFields = {
+  type: z.literal(ASSIGNABLE_MEMBER_TYPES, {
+    error: ({ input }) => (input == null ? 'The Type field is required.' : 'The field Type is invalid.'),
+  }),
+  permissions: OrgPermissions,
+  collections: z.array(AccessSelection).nullish(),
+  groups: z.array(z.string()).nullish(),
+};
+const MemberUpdateRequest = z.object(memberChangeFields);
+
+// Upstream checks the invited emails before the rest of the request.
+const MemberInviteRequest = z.object({
+  emails: z.array(z.string()).nullish()
+    .transform((emails) => (emails ?? []).map((email) => email.trim().toLowerCase()).filter(Boolean))
+    .superRefine((emails, context) => {
+      const check = inviteEmailsCheck(emails);
+      if (!check.ok) context.addIssue({ code: 'custom', message: check.message });
+    }),
+  ...memberChangeFields,
+});
 
 type MemberChange =
   | { ok: true; type: number; permissions: OrgPermissions; collections?: CollectionAccess[]; groupIds?: string[] }
   | { ok: false; status: number; message: string };
 
-// The role, custom permissions, collections and groups that OrganizationUserInviteRequestModel and
-// OrganizationUserUpdateRequestModel share. An omitted collections or groups list leaves that access as is.
-async function readMemberChange(db: D1Database, orgId: string, body: Record<string, unknown>): Promise<MemberChange> {
-  const type = body.type;
-  if (type == null) return { ok: false, status: 400, message: 'The Type field is required.' };
-  if (typeof type !== 'number' || !ASSIGNABLE_MEMBER_TYPES.includes(type)) {
-    return { ok: false, status: 400, message: 'The field Type is invalid.' };
-  }
-  const permissionSource = asRecord(body.permissions);
-  const permissions: OrgPermissions = {
-    ...EMPTY_PERMISSIONS,
-    ...Object.fromEntries(Object.keys(EMPTY_PERMISSIONS).map((name) => [
-      name,
-      asBoolean(permissionSource[name]),
-    ])),
-  };
-  const rawCollections = body.collections;
-  const collections = Array.isArray(rawCollections)
-    ? rawCollections.map(asRecord).map((entry) => ({ collectionId: asString(entry.id), ...accessFlags(entry) }))
-    : undefined;
-  const rawGroups = body.groups;
-  const groupIds = Array.isArray(rawGroups) ? rawGroups.map(asString) : undefined;
+// Checks the requested collections and groups against the organization's own records.
+async function readMemberChange(db: D1Database, orgId: string, body: z.output<typeof MemberUpdateRequest>): Promise<MemberChange> {
+  const collections = body.collections?.map(({ id, ...flags }) => ({ collectionId: id, ...flags }));
+  const groupIds = body.groups ?? undefined;
   // Upstream 735cc5db4: every id must belong to this organization, and missing or foreign ids fail
   // alike so the response cannot probe other organizations.
   const orgCollectionIds = new Set((await orgRepo.listCollectionsByOrg(db, orgId)).map((collection) => collection.id));
@@ -577,7 +580,7 @@ async function readMemberChange(db: D1Database, orgId: string, body: Record<stri
       message: 'The Manage property is mutually exclusive and cannot be true while the ReadOnly or HidePasswords properties are also true.',
     };
   }
-  return { ok: true, type, permissions, collections, groupIds };
+  return { ok: true, type: body.type, permissions: body.permissions, collections, groupIds };
 }
 
 // Loads what memberCollectionsCheck compares. An invite has no target yet, so it has no access to
@@ -687,11 +690,8 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   const member = await requireMember(env.DB, user.id, orgId);
   if (member instanceof Response) return member;
   if (!canManageMembers(member)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, MemberInviteRequest);
   if (body instanceof Response) return body;
-  const emails = ((body.emails as string[]) || []).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
-  const emailsCheck = inviteEmailsCheck(emails);
-  if (!emailsCheck.ok) return errorResponse(emailsCheck.message, 400);
   const change = await readMemberChange(env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
   const collections = await authorizeMemberCollections(env.DB, user.id, member, null, change.collections);
@@ -708,7 +708,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   const now = new Date().toISOString();
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
-  const invites = [...new Set(emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
+  const invites = [...new Set(body.emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
   if (!invites.length) return jsonResponse({});
   const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
@@ -788,13 +788,11 @@ export async function mailOrganizationInvites(
 export async function handleAcceptInvite(request: Request, env: Env, user: User, orgId: string, memberId: string): Promise<Response> {
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Organization user mismatch', 404);
-  const body = await parseJsonBody(request);
-  if (body instanceof Response) return body;
   // The emailed token is the only proof that this user owns the invited mailbox (upstream
   // OrganizationUserAcceptRequestModel.Token is [Required]).
-  const token = asString(body.token);
-  if (!token) return errorResponse('The Token field is required.', 400);
-  const tokenCheck = await verifyOrgInviteToken(token, env.JWT_SECRET, membership.id, membership.email);
+  const body = await parseBody(request, z.object({ token: requiredText('The Token field is required.') }));
+  if (body instanceof Response) return body;
+  const tokenCheck = await verifyOrgInviteToken(body.token, env.JWT_SECRET, membership.id, membership.email);
   if (!tokenCheck.ok) return errorResponse(tokenCheck.message, 400);
   const organization = await orgRepo.getOrganization(env.DB, orgId);
   const check = acceptInviteCheck(
@@ -839,13 +837,11 @@ function notifyConfirmedMembers(request: Request, env: Env, orgId: string, membe
 
 // Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an empty
 // list, so an absent field fails MinLength and only an explicit null fails Required.
-function readBulkIds(body: Record<string, unknown>): string[] | Response {
-  const sentIds = body.ids;
-  const ids = sentIds === undefined ? [] : sentIds;
-  if (!Array.isArray(ids)) return errorResponse('The Ids field is required.', 400);
-  if (!ids.length) return errorResponse("The field Ids must be a string or array type with a minimum length of '1'.", 400);
-  return ids.map(asString);
-}
+const BulkIdsRequest = z.object({
+  ids: z.array(z.string(), { error: 'The Ids field is required.' })
+    .min(1, { error: "The field Ids must be a string or array type with a minimum length of '1'." })
+    .prefault([]),
+});
 
 // Upstream OrganizationUserBulkResponseModel, whose object name is the same for every bulk member
 // action. Official web counts an entry as done only when its error is the empty string.
@@ -863,10 +859,9 @@ export async function handleListMemberPublicKeys(request: Request, env: Env, use
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, BulkIdsRequest);
   if (body instanceof Response) return body;
-  const ids = readBulkIds(body);
-  if (ids instanceof Response) return ids;
+  const { ids } = body;
   const keys = await orgRepo.listAcceptedMemberPublicKeys(env.DB, orgId, ids);
   return jsonResponse({
     data: keys.map(({ publicKey, ...member }) => ({ ...member, key: publicKey, object: 'organizationUserPublicKeyResponseModel' })),
@@ -881,11 +876,9 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const check = confirmMemberCheck(await orgRepo.getMembership(env.DB, memberId), orgId);
   if (!check.ok) return errorResponse(check.message, 400);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, z.object({ key: requiredText('Key is required') }));
   if (body instanceof Response) return body;
-  const key = asString(body.key);
-  if (!key) return errorResponse('Key is required', 400);
-  const confirmed = confirmedWithKey(check, key);
+  const confirmed = confirmedWithKey(check, body.key);
   if (!confirmed.ok) return errorResponse(confirmed.message, 400);
   await orgRepo.saveMembership(env.DB, confirmed.member);
   await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserConfirmed, organizationId: orgId, resourceType: 'organizationUser', resourceId: confirmed.member.id, userId: confirmed.member.userId }]);
@@ -909,14 +902,14 @@ export async function handleBulkConfirmMembers(request: Request, env: Env, userI
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, z.object({
+    keys: z.array(z.object({ id: z.string(), key: z.string().trim() }), { error: 'The Keys field is required.' }),
+  }));
   if (body instanceof Response) return body;
-  const entries = body.keys;
-  if (!Array.isArray(entries)) return errorResponse('The Keys field is required.', 400);
   const membersById = new Map((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((member) => [member.id, member]));
   // Upstream's ToDictionary rejects a repeated id; here the last key sent for an id wins, so each
   // member is confirmed once.
-  const keysById = new Map(entries.map(asRecord).map((entry) => [asString(entry.id), asString(entry.key)]));
+  const keysById = new Map(body.keys.map(({ id, key }) => [id, key]));
   const results = [...keysById].map(([id, key]) => ({ id, check: confirmedWithKey(confirmMemberCheck(membersById.get(id) ?? null, orgId), key) }));
   const confirmed = results.flatMap(({ check }) => (check.ok ? [check.member] : []));
   if (confirmed.length) {
@@ -956,10 +949,9 @@ export async function handleBulkReinviteMembers(request: Request, env: Env, user
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, BulkIdsRequest);
   if (body instanceof Response) return body;
-  const ids = readBulkIds(body);
-  if (ids instanceof Response) return ids;
+  const { ids } = body;
   const membersById = new Map((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((member) => [member.id, member]));
   const targets = [...new Set(ids)].map((id) => ({ id, membership: membersById.get(id) ?? null }));
   const invites = targets.flatMap(({ membership }) => (isReinvitable(membership, orgId) ? [membership] : []));
@@ -974,7 +966,7 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, MemberUpdateRequest);
   if (body instanceof Response) return body;
   const change = await readMemberChange(env.DB, orgId, body);
   if (!change.ok) return errorResponse(change.message, change.status);
@@ -1043,10 +1035,9 @@ async function applyMemberAction(request: Request, env: Env, userId: string, org
 }
 
 export async function handleBulkMemberAction(request: Request, env: Env, userId: string, orgId: string, action: MemberAction): Promise<Response> {
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, BulkIdsRequest);
   if (body instanceof Response) return body;
-  const ids = readBulkIds(body);
-  if (ids instanceof Response) return ids;
+  const { ids } = body;
   if (!ids.every(isUUID)) return errorResponse('The Ids field must contain valid GUIDs.', 400);
   const results = await applyMemberAction(request, env, userId, orgId, ids, action);
   return results instanceof Response ? results : bulkResultsResponse(results);
@@ -1088,12 +1079,17 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, z.object({
+    name: optionalText,
+    accessAll: z.boolean().nullish(),
+    externalId: optionalText,
+    users: z.array(z.string()).nullish(),
+  }));
   if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const existing = groupId ? await orgRepo.getGroup(env.DB, groupId) : null;
   if (groupId && (!existing || existing.orgId !== orgId)) return errorResponse('Group not found', 404);
-  const users = ((body.users as string[]) || []).map((id) => String(id));
+  const users = body.users ?? [];
   // Upstream ValidateMemberAccessAsync: missing and foreign membership ids fail alike, before any
   // write, so the response cannot probe other organizations. Like upstream, skip it without users.
   const orgMemberships = users.length ? await orgRepo.listMembershipsByOrg(env.DB, orgId) : [];
@@ -1104,9 +1100,9 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   const group = {
     id: existing?.id || generateUUID(),
     orgId,
-    name: asString(body.name) || existing?.name || 'Group',
-    accessAll: asBoolean(body.accessAll, existing?.accessAll || false),
-    externalId: asString(body.externalId) || existing?.externalId || null,
+    name: body.name || existing?.name || 'Group',
+    accessAll: body.accessAll ?? existing?.accessAll ?? false,
+    externalId: body.externalId || existing?.externalId || null,
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
@@ -1163,27 +1159,28 @@ export async function handleGetPolicy(env: Env, userId: string, orgId: string, p
     : { organizationId: orgId, type: policyType, enabled: false, data: {}, object: 'policy' });
 }
 
+// Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; NodeWarden's webapp
+// still sends the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
+// marks Policy [Required], so a malformed envelope is rejected instead of saving a disabled policy.
+const policyState = z.object({
+  enabled: z.boolean().catch(false),
+  data: z.record(z.string(), z.unknown()).nullish().transform((data) => data ?? {}),
+}, { error: 'The Policy field is required.' });
+const SavePolicyRequest = policyState.extend({ policy: policyState.optional() }).transform(({ policy, ...flat }) => policy ?? flat);
+
 export async function handlePutPolicy(request: Request, env: Env, userId: string, orgId: string, policyType: number): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
-  if (body instanceof Response) return body;
-  // Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; NodeWarden's webapp
-  // still sends the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
-  // marks Policy [Required], so a malformed envelope is rejected instead of saving a disabled policy.
-  const envelope = body.policy;
-  if (envelope !== undefined && (!envelope || typeof envelope !== 'object' || Array.isArray(envelope))) {
-    return errorResponse('The Policy field is required.', 400);
-  }
-  const source = asRecord(envelope ?? body);
+  const source = await parseBody(request, SavePolicyRequest);
+  if (source instanceof Response) return source;
   const existing = await orgRepo.getPolicy(env.DB, orgId, policyType);
   const policy = {
     id: existing?.id || generateUUID(),
     orgId,
     type: policyType,
-    enabled: asBoolean(source.enabled),
-    data: (source.data as Record<string, unknown>) || {},
+    enabled: source.enabled,
+    data: source.data,
     updatedAt: new Date().toISOString(),
   };
   await orgRepo.savePolicy(env.DB, policy);
@@ -1199,9 +1196,12 @@ export async function handleGetPlans(): Promise<Response> {
 }
 
 // Bitwarden guards the organization API key endpoints with a SecretVerificationRequestModel,
-// so re-authenticate the caller before minting a key instead of trusting the session alone.
-async function verifyMasterPassword(env: Env, userId: string, body: Record<string, unknown>): Promise<Response | null> {
-  const secret = asString(prop(body, ['masterPasswordHash', 'secret']).value);
+// so re-authenticate the caller before minting a key instead of trusting the session alone. A sent
+// masterPasswordHash wins over secret even when it is null.
+const SecretVerificationRequest = z.object({ masterPasswordHash: z.string().nullish(), secret: z.string().nullish() })
+  .transform((body) => ('masterPasswordHash' in body ? body.masterPasswordHash : body.secret)?.trim() ?? '');
+
+async function verifyMasterPassword(env: Env, userId: string, secret: string): Promise<Response | null> {
   if (!secret) return errorResponse('masterPasswordHash is required', 400);
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
@@ -1213,9 +1213,9 @@ export async function handleOrgApiKey(request: Request, env: Env, userId: string
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
-  if (body instanceof Response) return body;
-  const unverified = await verifyMasterPassword(env, userId, body);
+  const secret = await parseBody(request, SecretVerificationRequest);
+  if (secret instanceof Response) return secret;
+  const unverified = await verifyMasterPassword(env, userId, secret);
   if (unverified) return unverified;
 
   // Only the hash is persisted, so an existing key can never be displayed again:

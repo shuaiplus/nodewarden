@@ -284,3 +284,15 @@ test('only members who manage a collection may update it', async () => {
   assert.equal((await putCollection(env, manager.user, orgId, collectionId, { users: grants })).status, 200);
   assert.equal((await putCollection(env, collectionEditor.user, orgId, collectionId, { users: grants })).status, 200);
 });
+
+test('a collection save with a malformed access list is rejected before anything is written', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orgId = await createOrg(env, owner);
+  const before = await orgRepo.listCollectionsByOrg(env.DB, orgId);
+
+  const rejected = await postCollection(env, owner, orgId, { users: [{ readOnly: true }] });
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(Object.keys((await rejected.json() as { validationErrors: Record<string, string[]> }).validationErrors), ['users.0.id']);
+  assert.deepEqual(await orgRepo.listCollectionsByOrg(env.DB, orgId), before);
+});
