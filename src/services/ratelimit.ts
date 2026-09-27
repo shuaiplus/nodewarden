@@ -1,4 +1,13 @@
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import {
+  convertIPv4BinaryToString,
+  convertIPv4MappedIPv6ToIPv4,
+  convertIPv4ToBinary,
+  convertIPv6BinaryToString,
+  convertIPv6ToBinary,
+  expandIPv6,
+  isIPv4MappedIPv6,
+} from 'hono/utils/ipaddr';
 
 import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
@@ -252,117 +261,19 @@ export class RateLimitService {
   }
 }
 
-function parseIpv4Octets(input: string): number[] | null {
-  const parts = input.split('.');
-  if (parts.length !== 4) return null;
-
-  const octets: number[] = [];
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    const value = Number(part);
-    if (!Number.isInteger(value) || value < 0 || value > 255) return null;
-    octets.push(value);
-  }
-  return octets;
-}
-
-function parseIpv6Hextets(input: string): number[] | null {
-  let value = input.trim().toLowerCase();
-  if (!value) return null;
-
-  if (value.startsWith('[') && value.endsWith(']')) {
-    value = value.slice(1, -1);
-  }
-  const zoneIndex = value.indexOf('%');
-  if (zoneIndex >= 0) {
-    value = value.slice(0, zoneIndex);
-  }
-  if (!value.includes(':')) return null;
-
-  // Handle IPv4-mapped tail (e.g. ::ffff:192.0.2.1).
-  if (value.includes('.')) {
-    const lastColon = value.lastIndexOf(':');
-    if (lastColon < 0) return null;
-    const ipv4Tail = value.slice(lastColon + 1);
-    const octets = parseIpv4Octets(ipv4Tail);
-    if (!octets) return null;
-    const high = ((octets[0] << 8) | octets[1]).toString(16);
-    const low = ((octets[2] << 8) | octets[3]).toString(16);
-    value = `${value.slice(0, lastColon)}:${high}:${low}`;
-  }
-
-  const doubleColon = value.indexOf('::');
-  if (doubleColon !== value.lastIndexOf('::')) return null;
-
-  const parsePart = (part: string): number | null => {
-    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
-    const n = parseInt(part, 16);
-    return Number.isNaN(n) ? null : n;
-  };
-
-  const parseParts = (parts: string[]): number[] | null => {
-    const out: number[] = [];
-    for (const p of parts) {
-      if (!p) return null;
-      const n = parsePart(p);
-      if (n === null) return null;
-      out.push(n);
-    }
-    return out;
-  };
-
-  if (doubleColon >= 0) {
-    const [headRaw, tailRaw] = value.split('::');
-    const head = headRaw ? headRaw.split(':') : [];
-    const tail = tailRaw ? tailRaw.split(':') : [];
-
-    const headNums = parseParts(head);
-    const tailNums = parseParts(tail);
-    if (!headNums || !tailNums) return null;
-
-    const missing = 8 - (headNums.length + tailNums.length);
-    if (missing < 1) return null;
-
-    return [...headNums, ...new Array<number>(missing).fill(0), ...tailNums];
-  }
-
-  const all = parseParts(value.split(':'));
-  if (!all || all.length !== 8) return null;
-  return all;
-}
-
 function normalizeClientIpForRateLimit(rawIp: string): string | null {
   const input = rawIp.trim();
-  if (!input) return null;
-
-  const ipv4 = parseIpv4Octets(input);
-  if (ipv4) {
-    return `ip4:${ipv4.join('.')}`;
+  // hono's parsers throw on anything that is not an address; that simply means no identity here.
+  try {
+    if (!input.includes(':')) return `ip4:${convertIPv4BinaryToString(convertIPv4ToBinary(input))}`;
+    const ipv6 = convertIPv6ToBinary(input.replace(/^\[(.*)\]$/, '$1').split('%')[0]);
+    // IPv4-mapped (::ffff:192.0.2.1) and IPv4-compatible (::192.0.2.1) addresses keep the IPv4 identity.
+    if (isIPv4MappedIPv6(ipv6) || ipv6 >> 32n === 0n) return `ip4:${convertIPv4BinaryToString(convertIPv4MappedIPv6ToIPv4(ipv6))}`;
+    // Collapse to /64 to reduce brute-force bypass via IPv6 address rotation.
+    return `ip6:${expandIPv6(convertIPv6BinaryToString(ipv6)).split(':').slice(0, 4).join(':')}`;
+  } catch {
+    return null;
   }
-
-  const ipv6 = parseIpv6Hextets(input);
-  if (!ipv6) return null;
-
-  // Handle IPv4-mapped / IPv4-compatible IPv6 as IPv4 identity.
-  // Examples: ::ffff:192.0.2.1, ::192.0.2.1
-  if (
-    ipv6[0] === 0 &&
-    ipv6[1] === 0 &&
-    ipv6[2] === 0 &&
-    ipv6[3] === 0 &&
-    ipv6[4] === 0 &&
-    (ipv6[5] === 0xffff || ipv6[5] === 0)
-  ) {
-    const octets = [ipv6[6] >> 8, ipv6[6] & 0xff, ipv6[7] >> 8, ipv6[7] & 0xff];
-    return `ip4:${octets.join('.')}`;
-  }
-
-  // Collapse to /64 to reduce brute-force bypass via IPv6 address rotation.
-  const prefix64 = ipv6
-    .slice(0, 4)
-    .map(part => part.toString(16).padStart(4, '0'))
-    .join(':');
-  return `ip6:${prefix64}`;
 }
 
 function isLocalRequest(request: Request): boolean {
