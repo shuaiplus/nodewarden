@@ -42,9 +42,13 @@ async function signIn(page: Page) {
 
 test('administrator sign-in isolates the portal from same-origin scripts, popups and frames', async ({ page, context }) => {
   test.skip(!localOrigin || !email, 'Requires local Wrangler with E2E_ORIGIN=http://localhost:<port> and ADMIN_EMAILS.');
-  // The WebAuthn connector is the only other page this origin serves, so it stands in for a hostile same-origin script.
+  // A blank same-origin document with no CSP of its own stands in for a hostile same-origin script. The
+  // Worker's only other pages (the connectors) forbid frames themselves, which would hide whether the
+  // portal refuses to be framed; only this URL is fulfilled locally, every portal request is real.
   const app = await context.newPage();
-  await app.goto(`${origin}/webauthn-connector.html`);
+  const probe = `${origin}/portal-isolation-probe`;
+  await app.route(probe, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>probe</title>' }));
+  await app.goto(probe);
   await signIn(page);
   // Portal CSP blocks its own fetches before HTTP; exercise a real same-origin page instead.
   expect(await app.evaluate(async () => (await fetch('/admin')).status)).toBe(403);
