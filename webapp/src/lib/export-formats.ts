@@ -101,22 +101,6 @@ function normalizeNumber(value: unknown, fallback = 0): number {
   return n;
 }
 
-function cloneValue<T>(value: T): T {
-  if (value === null || value === undefined) return value;
-  if (typeof structuredClone === 'function') {
-    try {
-      return structuredClone(value);
-    } catch {
-      // ignore and fallback
-    }
-  }
-  try {
-    return JSON.parse(JSON.stringify(value)) as T;
-  } catch {
-    return value;
-  }
-}
-
 function randomGuid(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -217,7 +201,7 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
               match: (uri as { match?: unknown })?.match ?? null,
             }))
           : [],
-        fido2Credentials: Array.isArray(login.fido2Credentials) ? cloneValue(login.fido2Credentials) : [],
+        fido2Credentials: Array.isArray(login.fido2Credentials) ? structuredClone(login.fido2Credentials) : [],
       }
     : null;
 
@@ -461,7 +445,7 @@ function cloneWithoutDecodedFields(value: unknown): Record<string, unknown> | nu
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (/^dec[A-Z]/.test(key)) continue;
-    out[key] = cloneValue(item);
+    out[key] = structuredClone(item);
   }
   return out;
 }
