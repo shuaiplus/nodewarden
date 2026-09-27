@@ -34,7 +34,8 @@ export class RateLimitService {
   private static readonly LOGIN_IP_RETENTION_MS = LIMITS.rateLimit.loginIpRetentionMs;
   private static readonly STRICT_BUDGET_CLEANUP_INTERVAL_MS = LIMITS.rateLimit.loginIpCleanupIntervalMs;
 
-  constructor(private db: D1Database) {}
+  // Scoped per request: env carries D1 plus the per-minute Workers Rate Limiting bindings.
+  constructor(private readonly env: Pick<Env, 'DB'> & Partial<Pick<Env, `RATE_LIMIT_${number}_PER_MINUTE`>>) {}
 
   private shouldRunCleanup(lastRunAt: number, intervalMs: number): boolean {
     const now = Date.now();
@@ -48,7 +49,7 @@ export class RateLimitService {
     }
 
     const cutoff = nowMs - RateLimitService.LOGIN_IP_RETENTION_MS;
-    await getOrm(this.db)
+    await getOrm(this.env.DB)
       .delete(loginAttemptsIp)
       .where(and(
         lt(loginAttemptsIp.updatedAt, cutoff),
@@ -62,7 +63,7 @@ export class RateLimitService {
       return;
     }
 
-    await getOrm(this.db).delete(rateLimitBuckets).where(lt(rateLimitBuckets.expiresAt, nowMs));
+    await getOrm(this.env.DB).delete(rateLimitBuckets).where(lt(rateLimitBuckets.expiresAt, nowMs));
     RateLimitService.lastStrictBudgetCleanupAt = nowMs;
   }
 
@@ -75,7 +76,7 @@ export class RateLimitService {
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
 
-    const [row] = await getOrm(this.db)
+    const [row] = await getOrm(this.env.DB)
       .select({ attempts: loginAttemptsIp.attempts, lockedUntil: loginAttemptsIp.lockedUntil })
       .from(loginAttemptsIp)
       .where(eq(loginAttemptsIp.ip, key))
@@ -94,7 +95,7 @@ export class RateLimitService {
     }
 
     if (row.lockedUntil && row.lockedUntil <= now) {
-      await getOrm(this.db).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
+      await getOrm(this.env.DB).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
       return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
     }
 
@@ -106,7 +107,7 @@ export class RateLimitService {
     const key = ip.trim() || 'unknown';
     const now = Date.now();
     await this.maybeCleanupLoginAttemptsIp(now);
-    const orm = getOrm(this.db);
+    const orm = getOrm(this.env.DB);
 
     // D1 in Workers forbids raw BEGIN/COMMIT statements.
     // Use a single atomic UPSERT to increment attempts.
@@ -143,7 +144,7 @@ export class RateLimitService {
 
   async clearLoginAttempts(ip: string): Promise<void> {
     const key = ip.trim() || 'unknown';
-    await getOrm(this.db).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
+    await getOrm(this.env.DB).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
   }
 
   async consumeStrictBudget(
@@ -170,7 +171,7 @@ export class RateLimitService {
     const windowEndMs = (windowStart + windowSize) * 1000;
     const retryAfterSeconds = Math.max(1, Math.ceil((windowEndMs - nowMs) / 1000));
     const bucketKey = `${key}:${windowStart}`;
-    const orm = getOrm(this.db);
+    const orm = getOrm(this.env.DB);
 
     await this.maybeCleanupStrictBudgets(nowMs);
     await orm
@@ -211,10 +212,7 @@ export class RateLimitService {
     maxRequests: number,
     cost?: number
   ): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
-    // Loaded on use, not at module load, so the many modules importing this service stay loadable in
-    // Node tests that never spend a budget.
-    const { env } = await import('cloudflare:workers');
-    const binding = (env as Env)[`RATE_LIMIT_${maxRequests}_PER_MINUTE`];
+    const binding = this.env[`RATE_LIMIT_${maxRequests}_PER_MINUTE`];
     if (!binding || cost !== undefined) {
       return this.consumeStrictBudgetWithWindow(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS, cost);
     }

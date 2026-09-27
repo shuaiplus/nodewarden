@@ -79,7 +79,7 @@ async function mailEmergencyAccessInvite(request: Request, env: Env, grantor: Us
   if (config.kind !== 'enabled') return config;
   const vaultOrigin = configuredVaultOrigin(request, env);
   if (!vaultOrigin) return { kind: 'disabled' };
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(
     `ea-invite-mail:${grantor.id}`, LIMITS.mail.emergencyAccessInvitesPerGrantorPerHour, 3600,
   );
   if (!budget.allowed) return { kind: 'throttled', retryAfterSeconds: budget.retryAfterSeconds ?? 3600 };

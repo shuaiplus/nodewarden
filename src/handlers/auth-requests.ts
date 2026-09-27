@@ -112,7 +112,7 @@ async function enforceAuthRequestCreateRateLimit(
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier) return errorResponse('Client IP is required', 403);
 
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
   const limit = LIMITS.rateLimit.authRequestRequestsPerMinute;
   const encodedEmail = encodeURIComponent(email || 'missing');
   const encodedDevice = encodeURIComponent(deviceIdentifier || 'missing');

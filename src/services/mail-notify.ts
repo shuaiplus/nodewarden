@@ -18,7 +18,7 @@ export function notifyMail<N extends TemplateName>(env: Env, to: string, name: N
 export function notifyFailedTwoFactor(env: Env, request: Request, user: { email: string }, provider: number): void {
   if (provider === 5) return;
   runInBackground('failed-two-factor', async () => {
-    const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`failed-2fa-mail:${await sha256Base64Url(user.email.toLowerCase())}`, 1, 3600);
+    const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`failed-2fa-mail:${await sha256Base64Url(user.email.toLowerCase())}`, 1, 3600);
     if (budget.allowed) await sendMail(env, user.email, 'failedTwoFactor', { provider: [-1, 100].includes(provider) ? 8 : provider, time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
   });
 }

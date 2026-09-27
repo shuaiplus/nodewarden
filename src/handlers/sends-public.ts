@@ -60,7 +60,7 @@ async function authorizeSendByPassword(request: Request, env: Env, send: Send): 
   const clientIdentifier = send.passwordHash ? getClientIdentifier(request) : null;
   if (send.passwordHash && !clientIdentifier) return errorResponse('Client IP is required', 403);
   const limitKey = clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
   if (limitKey) {
     const check = await rateLimit.checkLoginAttempt(limitKey);
     if (!check.allowed) return sendPasswordLockedErrorResponse(check.retryAfterSeconds || 60);

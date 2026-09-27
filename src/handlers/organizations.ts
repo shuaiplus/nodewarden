@@ -757,7 +757,7 @@ export async function mailOrganizationInvites(
 
   // Documentation domains bounce and hurt sender reputation, as in register verification.
   const deliverable = invites.filter(({ email }) => !isReservedDocumentationEmail(email));
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(
     `org-invite-mail:${inviter}`,
     LIMITS.rateLimit.orgInviteEmailsPerHour,
     LIMITS.rateLimit.orgInviteEmailWindowSeconds,

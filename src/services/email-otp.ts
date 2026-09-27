@@ -20,7 +20,7 @@ export async function spendEmailOtpIssueBudget(env: Env, target: EmailOtpTarget)
   const limit = target.purpose === 'two-factor-login' || target.purpose === 'new-device'
     ? LIMITS.rateLimit.emailSignInCodeIssuesPerHour
     : LIMITS.rateLimit.emailOtpIssuesPerHour;
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(
     `otp-issue:${await emailOtpId(env, target)}`, limit, 3600,
   );
   return budget.allowed;
@@ -58,7 +58,7 @@ export async function redeemEmailOtp(env: Env, target: EmailOtpTarget, input: st
   const code = input.trim();
   if (!/^\d{6}$/.test(code)) return false;
   const id = await emailOtpId(env, target);
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(
     `otp-try:${id}`, LIMITS.rateLimit.emailOtpAttemptsPerWindow, LIMITS.auth.emailOtpTtlSeconds,
   );
   if (!budget.allowed) return false;

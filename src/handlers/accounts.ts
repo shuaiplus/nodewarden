@@ -503,7 +503,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     return errorResponse('Email is required', 400);
   }
 
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
   const minuteBudget = await rateLimit.consumeStrictBudgetWithWindow(
     `${clientIdentifier}:password-hint`,
     LIMITS.rateLimit.passwordHintRequestsPerMinute,
@@ -670,7 +670,7 @@ export async function handleDeleteRecover(request: Request, env: Env): Promise<R
   if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
   const clientId = getClientIdentifier(request);
   if (!clientId) return errorResponse('Client IP is required', 403);
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`delete-recover:${clientId}`, LIMITS.rateLimit.deleteRecoverPerIpPerHour, 3600);
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`delete-recover:${clientId}`, LIMITS.rateLimit.deleteRecoverPerIpPerHour, 3600);
   if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds ?? 3600) });
   const origin = configuredVaultOrigin(request, env);
   if (readMailConfig(env).kind !== 'enabled' || !origin) return errorResponse('Email sending is not configured', 503);
@@ -1442,7 +1442,7 @@ export async function handleGetTotpRecoveryCode(request: Request, env: Env, user
 // Disable TOTP by recovery code + password, then rotate recovery code.
 export async function handleRecoverTwoFactor(request: Request, env: Env): Promise<Response> {
   const auth = new AuthService(env);
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
 
   let body: Record<string, string | undefined>;
   try {

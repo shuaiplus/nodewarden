@@ -452,7 +452,7 @@ async function completeLogin(
 // POST /identity/connect/token
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   const auth = new AuthService(env);
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
 
   async function recordFailedTwoFactorAndBuildResponse(
     rateLimit: RateLimitService,

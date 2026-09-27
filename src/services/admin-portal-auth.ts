@@ -79,7 +79,7 @@ export async function readAdminSession(request: Request, env: Env, admins: Reado
 }
 
 export async function issueAdminLogin(env: Env, request: Request, email: string, stampHash: string, browser: string, returnPath: string): Promise<void> {
-  const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-login-email:${await sha256Base64Url(email)}`, LIMITS.admin.loginLinksPerAdminPerWindow, LIMITS.admin.loginLinkTtlSeconds);
+  const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`admin-login-email:${await sha256Base64Url(email)}`, LIMITS.admin.loginLinksPerAdminPerWindow, LIMITS.admin.loginLinkTtlSeconds);
   if (!budget.allowed) { console.warn('Administrator link budget exhausted'); return; }
   const token = randomAdminToken();
   const id = `admin-login:${await sha256Base64Url(token)}`;

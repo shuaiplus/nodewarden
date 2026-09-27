@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module';
 import { LIMITS } from '../../src/config/limits';
 import { AuthService } from '../../src/services/auth';
 import type { Env, User } from '../../src/types';
-import { env as workersEnv, waitUntil } from './cloudflare-workers';
+import { waitUntil } from './cloudflare-workers';
 import './workers-crypto';
 import { createSqliteD1 } from './d1-sqlite';
 import { initializeDatabase } from '../../src/db/migrate';
@@ -31,7 +31,7 @@ const namedCache = (cacheName: string) => ({
   },
 });
 // The [[ratelimits]] bindings wrangler.toml declares, counting every call per key in fixed windows of
-// their period. src reads them through the importable `cloudflare:workers` env.
+// their period.
 const rateLimitCounts = new Map<string, number>();
 const rateLimitBindings = Object.fromEntries([...readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8')
   .matchAll(/name = "(\w+)"\s+namespace_id = "\d+"\s+simple = \{ limit = (\d+), period = (\d+) \}/g)]
@@ -43,7 +43,6 @@ const rateLimitBindings = Object.fromEntries([...readFileSync(new URL('../../wra
       return { success: count <= Number(limit) };
     },
   }]));
-Object.assign(workersEnv, rateLimitBindings);
 
 Object.assign(globalThis, {
   caches: { default: namedCache('default') },
@@ -84,6 +83,7 @@ export async function createTestEnv(overrides: Partial<Env> = {}): Promise<Env> 
     DB: await createSqliteD1(),
     JWT_SECRET: TEST_JWT_SECRET,
     NOTIFICATIONS_HUB: acceptingDurableObjectNamespace,
+    ...rateLimitBindings,
     ...overrides,
   } as Env;
 }

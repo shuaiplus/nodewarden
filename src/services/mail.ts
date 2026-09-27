@@ -53,7 +53,7 @@ export async function sendMail<N extends TemplateName>(env: Env, to: string, nam
   if (isReservedDocumentationEmail(to)) { log({ kind: 'sent' }); return { kind: 'sent' }; }
   try {
     if (MAIL_TEMPLATES[name].throttle === 'user') {
-      const limiter = new RateLimitService(env.DB);
+      const limiter = new RateLimitService(env);
       const instance = await limiter.consumeStrictBudgetWithWindow('mail-instance', config.sendsPerHour, 3600);
       if (!instance.allowed) return log({ kind: 'throttled', retryAfterSeconds: instance.retryAfterSeconds ?? 3600 });
       const recipient = await limiter.consumeStrictBudgetWithWindow(`mail-rcpt:${await sha256Base64Url(to.toLowerCase())}`, LIMITS.mail.perRecipientPerHour, 3600);

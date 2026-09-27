@@ -47,7 +47,7 @@ async function collectEvents(request: Request, env: Env, user: User): Promise<Re
   const exportCopies = input.filter(event => event.type === EventType.UserClientExportedVault).length * memberships.length;
   const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
   if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
-  const budget = await new RateLimitService(env.DB).consumeBudget(`${user.id}:events`, EVENT_BATCHES_PER_MINUTE, batches);
+  const budget = await new RateLimitService(env).consumeBudget(`${user.id}:events`, EVENT_BATCHES_PER_MINUTE, batches);
   if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
   const memberByOrg = new Map(memberships.map(member => [member.orgId, member]));
   const ids = [...new Set(input.filter(event => CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId).map(event => event.cipherId!))];

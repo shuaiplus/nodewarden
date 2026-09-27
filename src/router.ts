@@ -145,7 +145,7 @@ app.use(async (c, next) => {
   c.set('principal', verified);
 
   if (verified.kind === 'serviceAccount') {
-    const budget = await new RateLimitService(c.env.DB).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+    const budget = await new RateLimitService(c.env).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
     if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
     if (!isMachineAllowedRoute(c.req.path, c.req.method)) return errorResponse('Not found', 404);
     return next();
@@ -162,7 +162,7 @@ app.use(async (c, next) => {
   if (user.status !== 'active') return errorResponse('Account is disabled', 403);
 
   if (!isImportBypassRequest(c.req.raw, c.req.path, c.req.method)) {
-    const budget = await new RateLimitService(c.env.DB).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+    const budget = await new RateLimitService(c.env).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
     if (!budget.allowed) return tooManyRequests(budget.retryAfterSeconds);
   }
 

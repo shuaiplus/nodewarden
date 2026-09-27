@@ -321,7 +321,7 @@ async function enforcePublicRateLimit(
     );
   }
 
-  const rateLimit = new RateLimitService(env.DB);
+  const rateLimit = new RateLimitService(env);
   const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
   const check = shouldUseStrictBudget
     ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)

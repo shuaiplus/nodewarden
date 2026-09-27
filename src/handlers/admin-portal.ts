@@ -62,7 +62,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (!EMAIL_PATTERN.test(email) || email.length > 256) return loginPage(returnPath, mailEnabled, 'Enter a valid email address.', 400);
       const clientId = getClientIdentifier(request);
       if (!clientId) return forbidden();
-      const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-login-ip:${clientId}`, LIMITS.admin.loginRequestsPerIpPerHour, 3600);
+      const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`admin-login-ip:${clientId}`, LIMITS.admin.loginRequestsPerIpPerHour, 3600);
       if (!budget.allowed) return portalPage('Too many requests', html`<p>Try signing in later.</p>`, 429, { 'Retry-After': String(budget.retryAfterSeconds) });
       const existingNonce = readAdminCookie(request, ADMIN_LOGIN_COOKIE);
       const nonce = ADMIN_TOKEN_PATTERN.test(existingNonce) ? existingNonce : randomAdminToken();
@@ -110,7 +110,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     const sensitiveActionCheck = async (confirmation: string, expected: string, viewPath: string): Promise<Response | null> => {
       if (Date.now() - session.authTime > LIMITS.admin.destructiveReauthSeconds * 1000) return portalRedirect(`/admin/login?returnUrl=${encodeURIComponent(viewPath)}&m=reauth`);
       if (confirmation !== expected) return portalPage('Confirmation does not match', html`${portalNavigation(session.csrf)}<p>The typed confirmation does not match.</p><a href="${viewPath}">Return</a>`, 400);
-      const budget = await new RateLimitService(env.DB).consumeStrictBudgetWithWindow(`admin-portal-sensitive:${await sha256Base64Url(session.email)}`, LIMITS.admin.sensitiveActionsPerAdminPerHour, 3600);
+      const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`admin-portal-sensitive:${await sha256Base64Url(session.email)}`, LIMITS.admin.sensitiveActionsPerAdminPerHour, 3600);
       return budget.allowed ? null : portalPage('Too many requests', html`<p>Try again later.</p>`, 429, { 'Retry-After': String(budget.retryAfterSeconds) });
     };
     if (path === '/admin/users') {
