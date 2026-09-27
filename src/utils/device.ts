@@ -6,14 +6,6 @@ const DEFAULT_DEVICE_NAME = 'Unknown device';
 const DEFAULT_DEVICE_TYPE = 14;
 const DEVICE_TEXT_MAX_LENGTH = 128;
 
-function decodeBase64UrlUtf8(value: string): string | null {
-  try {
-    return new TextDecoder().decode(decodeBase64Url(value));
-  } catch {
-    return null;
-  }
-}
-
 // Device fields come from form posts, JSON bodies and headers. Each is clipped to its column width
 // and falls back to a default instead of failing the sign-in it rides on.
 export const deviceText = z.string().trim().transform((text) => text.slice(0, DEVICE_TEXT_MAX_LENGTH));
@@ -40,7 +32,12 @@ export function readAuthRequestDeviceInfo(body: Record<string, unknown>, request
 
 export function readKnownDeviceProbe(request: Request): { email: string | null; deviceIdentifier: string | null } {
   const encodedEmail = request.headers.get('X-Request-Email') || '';
-  const decodedEmail = decodeBase64UrlUtf8(encodedEmail);
+  let decodedEmail: string | null = null;
+  try {
+    decodedEmail = new TextDecoder().decode(decodeBase64Url(encodedEmail));
+  } catch {
+    // A header that is not base64url falls back to its raw value below.
+  }
   const fallbackRawEmail = request.headers.get('X-Request-Email');
   const email = (decodedEmail || fallbackRawEmail || '').trim().toLowerCase() || null;
   const deviceIdentifier = DeviceIdentifierSchema.parse(request.headers.get('X-Device-Identifier'));
