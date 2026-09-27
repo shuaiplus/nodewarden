@@ -26,7 +26,7 @@ import {
   userRevisions,
   users,
 } from '../db/schema';
-import type { Attachment, Cipher, User } from '../types';
+import type { Attachment, Cipher } from '../types';
 import { hasFullCollectionAccess, type CollectionAssignmentPlan } from './org-authz';
 import { attachmentUpsert } from './storage-attachment-repo';
 import { cipherUpsert } from './storage-cipher-repo';
