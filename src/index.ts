@@ -19,44 +19,6 @@ let dbInitialized = false;
 let dbInitError: string | null = null;
 let dbInitPromise: Promise<void> | null = null;
 
-function normalizeRequestUrl(request: Request): Request {
-  const url = new URL(request.url);
-  const normalizedPathname = url.pathname.length <= 1 ? url.pathname : url.pathname.replace(/\/+$/, '');
-  if (normalizedPathname === url.pathname) return request;
-
-  url.pathname = normalizedPathname;
-  return new Request(url.toString(), request);
-}
-
-function addSearchIndexHeaders(request: Request, response: Response): Response {
-  const url = new URL(request.url);
-  const contentType = String(response.headers.get('Content-Type') || '').toLowerCase();
-  const shouldNoIndex =
-    url.pathname === '/robots.txt' ||
-    contentType.includes('text/html');
-
-  if (!shouldNoIndex) return response;
-
-  const headers = new Headers(response.headers);
-  headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
-
-async function maybeServeAsset(request: Request, env: Env): Promise<Response | null> {
-  if (!env.ASSETS) return null;
-  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
-  const url = new URL(request.url);
-  if (isBackendRequestPath(url.pathname)) return null;
-
-  const response = await env.ASSETS.fetch(request);
-  return addSearchIndexHeaders(request, response);
-}
-
 async function ensureDatabaseInitialized(env: Env): Promise<void> {
   if (dbInitialized) return;
 
@@ -85,11 +47,27 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const normalizedRequest = normalizeRequestUrl(request);
+    // Trailing slashes are trimmed so routes match either form.
+    const url = new URL(request.url);
+    const normalizedPathname = url.pathname.length <= 1 ? url.pathname : url.pathname.replace(/\/+$/, '');
+    let normalizedRequest = request;
+    if (normalizedPathname !== url.pathname) {
+      url.pathname = normalizedPathname;
+      normalizedRequest = new Request(url.toString(), request);
+    }
 
-    const assetResponse = await maybeServeAsset(normalizedRequest, env);
-    if (assetResponse) {
-      return applyCors(normalizedRequest, assetResponse, env);
+    if (env.ASSETS && (normalizedRequest.method === 'GET' || normalizedRequest.method === 'HEAD') && !isBackendRequestPath(url.pathname)) {
+      const assetResponse = await env.ASSETS.fetch(normalizedRequest);
+      const contentType = String(assetResponse.headers.get('Content-Type') || '').toLowerCase();
+      const shouldNoIndex = url.pathname === '/robots.txt' || contentType.includes('text/html');
+      if (!shouldNoIndex) return applyCors(normalizedRequest, assetResponse, env);
+      const headers = new Headers(assetResponse.headers);
+      headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+      return applyCors(normalizedRequest, new Response(assetResponse.body, {
+        status: assetResponse.status,
+        statusText: assetResponse.statusText,
+        headers,
+      }), env);
     }
 
     await ensureDatabaseInitialized(env);
