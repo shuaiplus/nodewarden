@@ -1,6 +1,9 @@
 import { handleProject } from '../handlers/secrets-manager';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { orgGroupMembers, orgGroups, smProjectGroups, smProjects } from '../db/schema';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 import * as orgRepo from '../services/storage-org-repo';
@@ -22,10 +25,11 @@ test('project routes enforce creator and group grants, bulk isolation, encrypted
   assert.equal((await request(a.id, projectPath, 'POST', { name: 'plaintext' })).status, 400);
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId);
   const group = crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(group, orgId, 'group', new Date().toISOString(), new Date().toISOString()),
-    env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(group, member!.id),
-    env.DB.prepare('INSERT INTO sm_project_groups (project_id, group_id, write_access) VALUES (?, ?, 0)').bind(p.id, group),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(orgGroups).values({ id: group, orgId, name: 'group', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+    orm.insert(orgGroupMembers).values({ groupId: group, membershipId: member!.id }),
+    orm.insert(smProjectGroups).values({ projectId: p.id, groupId: group, writeAccess: 0 }),
   ]);
   assert.equal((await (await request(b.id, `/api/projects/${p.id}`)).json() as any).write, false);
   const foreign = await seedSmOrg(env);
@@ -41,8 +45,9 @@ test('project updates cannot resurrect a concurrently deleted row and reject nul
   const { orgId, owner } = await seedSmOrg(env);
   const p = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   assert.equal((await authedFetch(env, { userId: owner.id, method: 'PUT', path: `/api/projects/${p.id}`, body: null })).status, 400);
+  const orm = getOrm(env.DB);
   const request = new Request(`https://example.test/api/projects/${p.id}`, { method: 'PUT' });
-  request.json = async () => { await env.DB.prepare('DELETE FROM sm_projects WHERE id = ?').bind(p.id).run(); return { name: ENCRYPTED_FIELD }; };
+  request.json = async () => { await orm.delete(smProjects).where(eq(smProjects.id, p.id)); return { name: ENCRYPTED_FIELD }; };
   assert.equal((await handleProject(request, env, await smUser(env, owner), p.id)).status, 404);
-  assert.equal(await env.DB.prepare('SELECT id FROM sm_projects WHERE id = ?').bind(p.id).first(), null);
+  assert.equal(await orm.select().from(smProjects).where(eq(smProjects.id, p.id)).get(), undefined);
 });
