@@ -1,4 +1,4 @@
-import type { AuthRequestRecord, AuthRequestType, Env } from '../types';
+import type { AuthRequestRecord, Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { z } from 'zod';
 import { deviceTypeName, readAuthRequestDeviceInfo, readActingDeviceIdentifier } from '../utils/device';
@@ -118,11 +118,6 @@ async function enforceAuthRequestCreateRateLimit(
   return errorResponse('Too many authentication requests. Try again later.', 429);
 }
 
-
-function isSupportedAuthRequestType(value: number): value is AuthRequestType {
-  return value === AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK || value === AUTH_REQUEST_TYPE_UNLOCK || value === AUTH_REQUEST_TYPE_ADMIN_APPROVAL;
-}
-
 export async function handleCreateAuthRequest(request: Request, env: Env): Promise<Response> {
   const body = await parseBody(request, AuthRequestCreateSchema, 'Invalid request payload');
   if (body instanceof Response) return body;
@@ -134,7 +129,8 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
   }
   const rateLimitResponse = await enforceAuthRequestCreateRateLimit(request, env, email, deviceInfo.deviceIdentifier);
   if (rateLimitResponse) return rateLimitResponse;
-  if (!isSupportedAuthRequestType(type) || type === AUTH_REQUEST_TYPE_ADMIN_APPROVAL) {
+  // Admin approval requests are created through their own authenticated endpoint.
+  if (type !== AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK && type !== AUTH_REQUEST_TYPE_UNLOCK) {
     return errorResponse('Invalid auth request type.', 400);
   }
 
