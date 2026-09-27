@@ -29,8 +29,18 @@ function mapAuthRequestRow(row: typeof authRequests.$inferSelect): AuthRequestRe
   };
 }
 
-function authRequestValues(request: AuthRequestRecord) {
-  return {
+export function isAuthRequestExpired(request: AuthRequestRecord, nowMs: number = Date.now()): boolean {
+  return new Date(request.creationDate).getTime() + AUTH_REQUEST_EXPIRATION_MS <= nowMs;
+}
+
+export function isAuthRequestLoginApproved(request: AuthRequestRecord | null, userId: string, accessCode: string): boolean {
+  return !!(request && request.userId === userId && request.type === 0 && request.approved === true
+    && request.responseDate && !request.authenticationDate && !isAuthRequestExpired(request) && request.key
+    && constantTimeEquals(request.accessCode, accessCode));
+}
+
+export async function createAuthRequest(db: D1Database, request: AuthRequestRecord): Promise<void> {
+  await getOrm(db).insert(authRequests).values({
     id: request.id,
     userId: request.userId,
     organizationId: request.organizationId,
@@ -48,21 +58,7 @@ function authRequestValues(request: AuthRequestRecord) {
     creationDate: request.creationDate,
     responseDate: request.responseDate,
     authenticationDate: request.authenticationDate,
-  };
-}
-
-export function isAuthRequestExpired(request: AuthRequestRecord, nowMs: number = Date.now()): boolean {
-  return new Date(request.creationDate).getTime() + AUTH_REQUEST_EXPIRATION_MS <= nowMs;
-}
-
-export function isAuthRequestLoginApproved(request: AuthRequestRecord | null, userId: string, accessCode: string): boolean {
-  return !!(request && request.userId === userId && request.type === 0 && request.approved === true
-    && request.responseDate && !request.authenticationDate && !isAuthRequestExpired(request) && request.key
-    && constantTimeEquals(request.accessCode, accessCode));
-}
-
-export async function createAuthRequest(db: D1Database, request: AuthRequestRecord): Promise<void> {
-  await getOrm(db).insert(authRequests).values(authRequestValues(request));
+  });
 }
 
 export async function getAuthRequestById(db: D1Database, id: string): Promise<AuthRequestRecord | null> {
@@ -104,7 +100,7 @@ export async function listPendingAuthRequestsByUserId(db: D1Database, userId: st
       isNull(ar.approved),
       isNull(ar.responseDate),
       isNull(ar.authenticationDate),
-      gteCreation(ar.creationDate, cutoff),
+      sql`${ar.creationDate} >= ${cutoff}`,
     ))
     .groupBy(ar.requestDeviceIdentifier)
     .as('latest');
@@ -129,10 +125,6 @@ export async function listPendingAuthRequestsByUserId(db: D1Database, userId: st
     .orderBy(desc(ar.creationDate));
 
   return rows.map((row) => mapAuthRequestRow(row.auth_requests)).filter((request) => !isAuthRequestExpired(request, nowMs));
-}
-
-function gteCreation(column: typeof authRequests.creationDate, cutoff: string) {
-  return sql`${column} >= ${cutoff}`;
 }
 
 export async function updateAuthRequestResponse(
