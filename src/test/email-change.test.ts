@@ -193,7 +193,7 @@ test('an old password-change mirror cannot overwrite a later atomic email change
   let newRefresh = '';
   t.mock.method(f.env.DB, 'prepare', (query: string) => {
     const statement = prepare(query);
-    if (query.startsWith('INSERT INTO account ')) {
+    if (query.startsWith('insert into "account" ')) {
       const bind = statement.bind.bind(statement);
       statement.bind = (...values) => {
         const bound = bind(...values);

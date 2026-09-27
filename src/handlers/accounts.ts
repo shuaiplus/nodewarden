@@ -1,5 +1,7 @@
 import { EventType, recordUserEvent } from '../services/events';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { session, userRevisions, users } from '../db/schema';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
@@ -513,26 +515,29 @@ export async function handleChangeEmail(request: Request, env: Env, userId: stri
   const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash, email);
   const stamp = generateUUID();
   const now = new Date().toISOString();
+  const orm = getOrm(env.DB);
+  // Every dependent write runs only if the first statement installed this batch's fresh stamp.
   const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${user.id} AND security_stamp = ${stamp})`;
-  const event = auditEventStatement(env.DB, {
-    actorUserId: user.id, action: 'user.email.change', category: 'security', level: 'security',
-    targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
-  }, guard).toSQL();
-  let result: D1Result[];
+  let changed: D1Result;
   try {
-    result = await env.DB.batch([
-      env.DB.prepare("UPDATE users SET email = ?, email_verified = 1, master_password_hash = ?, key = ?, security_stamp = ?, updated_at = ? WHERE id = ? AND security_stamp = ? AND status = 'active'")
-        .bind(email, passwordHash, update.key, stamp, now, user.id, user.securityStamp),
+    [changed] = await orm.batch([
+      orm.update(users).set({ email, emailVerified: 1, masterPasswordHash: passwordHash, key: update.key, securityStamp: stamp, updatedAt: now })
+        .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp), eq(users.status, 'active'))),
       credentialAccountStatement(env.DB, user.id, passwordHash, stamp),
-      env.DB.prepare('DELETE FROM session WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)').bind(user.id, user.id, stamp),
-      env.DB.prepare('INSERT INTO user_revisions (user_id, revision_date) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?) ON CONFLICT(user_id) DO UPDATE SET revision_date = excluded.revision_date').bind(user.id, now, user.id, stamp),
-      env.DB.prepare(event.sql).bind(...event.params),
+      orm.delete(session).where(and(eq(session.userId, user.id), guard)),
+      orm.insert(userRevisions).select(orm.select({ userId: users.id, revisionDate: sql`${now}`.as('revision_date') }).from(users)
+        .where(and(eq(users.id, user.id), eq(users.securityStamp, stamp))))
+        .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: sql`excluded.revision_date` } }),
+      auditEventStatement(env.DB, {
+        actorUserId: user.id, action: 'user.email.change', category: 'security', level: 'security',
+        targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
+      }, guard),
     ]);
   } catch (error) {
     if (error instanceof Error && /UNIQUE constraint failed: users\.email/i.test(error.message)) return errorResponse('Email already in use.', 400);
     throw error;
   }
-  if (!result[0].meta.changes) return errorResponse('User verification failed.', 400);
+  if (!changed.meta.changes) return errorResponse('User verification failed.', 400);
   AuthService.invalidateUserCache(user.id);
   notifyUserLogout(env, user.id, null);
   notifyMail(env, user.email, 'emailChanged', { utc: now, ip: getClientIdentifier(request) ?? 'Unknown' });
