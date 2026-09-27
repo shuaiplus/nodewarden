@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { account } from '../db/schema';
 import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import { AuthService } from '../services/auth';
@@ -95,10 +98,9 @@ test('the web 2026.9 nested takeover body lets the grantor log in with the new p
   assert.equal(login.status, 200);
   assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
   const stored = await userRepo.getUserById(env.DB, grantor.id);
-  const credentialPassword = await env.DB.prepare("SELECT password FROM account WHERE user_id = ? AND provider_id = 'credential'")
-    .bind(grantor.id)
-    .first('password');
-  assert.equal(credentialPassword, stored?.masterPasswordHash);
+  const credential = await getOrm(env.DB).select({ password: account.password }).from(account)
+    .where(and(eq(account.userId, grantor.id), eq(account.providerId, 'credential'))).get();
+  assert.equal(credential?.password, stored?.masterPasswordHash);
 });
 
 test('the legacy newMasterPasswordHash and key takeover body still works', async () => {
