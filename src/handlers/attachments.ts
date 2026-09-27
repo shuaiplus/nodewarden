@@ -77,18 +77,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-async function runWithConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) return;
-  const limit = Math.max(1, concurrency);
-  for (let index = 0; index < items.length; index += limit) {
-    await Promise.all(items.slice(index, index + limit).map(worker));
-  }
-}
-
 async function processAttachmentUpload(
   request: Request,
   env: Env,
@@ -450,10 +438,14 @@ export async function deleteAllAttachmentsForCiphers(
   );
   if (!attachments.length) return;
 
-  await runWithConcurrency(attachments, LIMITS.performance.attachmentDeleteConcurrency, async ({ attachment, cipherId }) => {
-    const path = getAttachmentObjectKey(cipherId, attachment.id);
-    await deleteBlobObject(env, path);
-  });
+  // Delete the stored files in batches, so at most `concurrency` deletions run at once.
+  const concurrency = Math.max(1, LIMITS.performance.attachmentDeleteConcurrency);
+  for (let index = 0; index < attachments.length; index += concurrency) {
+    await Promise.all(attachments.slice(index, index + concurrency).map(async ({ attachment, cipherId }) => {
+      const path = getAttachmentObjectKey(cipherId, attachment.id);
+      await deleteBlobObject(env, path);
+    }));
+  }
 
   await attachmentRepo.bulkDeleteAttachmentsByIds(env.DB, attachments.map(({ attachment }) => attachment.id));
 }
