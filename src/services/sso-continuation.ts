@@ -1,9 +1,10 @@
-import { and, eq, exists, gt, lt, sql } from 'drizzle-orm';
+import { and, eq, gt, lt } from 'drizzle-orm';
 
 import { twoFactorClearStatements } from './two-factor-providers';
 import { readEnvConfig } from '../config/env';
-import { abortUnlessChanged, getOrm } from '../db/client';
+import { abortUnlessChanged, getOrm, userRowMatches } from '../db/client';
 import { users, verification } from '../db/schema';
+import { jsonExtract, jsonSet } from '../db/sql';
 import type { Env, User } from '../types';
 import { constantTimeEquals, hashApiKey } from '../utils/api-key';
 import { readAuthRequestDeviceInfo } from '../utils/device';
@@ -58,18 +59,16 @@ export async function saveSsoContinuation(env: Env, context: SsoContinuationCont
 export async function consumeSsoContinuation(env: Env, continuation: SsoContinuation, user: User, recovery?: { recoveryCode: string; securityStamp: string }): Promise<boolean> {
   const now = Date.now();
   const orm = getOrm(env.DB);
-  const claim = orm.update(verification).set({ value: sql`json_set(${verification.value}, '$.consumed', 1)`, updatedAt: now })
+  const claim = orm.update(verification).set({ value: jsonSet(verification.value, '$.consumed', 1), updatedAt: now })
     .where(and(
       eq(verification.id, continuation.id), eq(verification.identifier, PURPOSE), gt(verification.expiresAt, now),
-      sql`json_extract(${verification.value}, '$.expiresAt') > ${now}`,
-      sql`json_extract(${verification.value}, '$.consumed') = 0`,
-      sql`json_extract(${verification.value}, '$.binding') = ${continuation.binding}`,
-      sql`json_extract(${verification.value}, '$.userId') = ${user.id}`,
-      sql`json_extract(${verification.value}, '$.securityStamp') = ${user.securityStamp}`,
-      sql`json_extract(${verification.value}, '$.email') = ${user.email}`,
-      exists(orm.select({ id: users.id }).from(users).where(and(
-        eq(users.id, user.id), eq(users.status, 'active'), eq(users.securityStamp, user.securityStamp), eq(users.email, user.email),
-      ))),
+      gt(jsonExtract(verification.value, '$.expiresAt'), now),
+      eq(jsonExtract(verification.value, '$.consumed'), 0),
+      eq(jsonExtract(verification.value, '$.binding'), continuation.binding),
+      eq(jsonExtract(verification.value, '$.userId'), user.id),
+      eq(jsonExtract(verification.value, '$.securityStamp'), user.securityStamp),
+      eq(jsonExtract(verification.value, '$.email'), user.email),
+      userRowMatches(orm, user.id, eq(users.status, 'active'), eq(users.securityStamp, user.securityStamp), eq(users.email, user.email)),
     ));
   try {
     const [result] = await orm.batch([claim, ...(recovery ? [

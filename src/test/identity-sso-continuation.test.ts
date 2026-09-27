@@ -5,6 +5,7 @@ import { TOTP } from 'otpauth';
 import { getOrm } from '../db/client';
 import { devices, session, trustedTwoFactorDeviceTokens, users, verification } from '../db/schema';
 import { SINGLE_ROW, jsonSet } from '../db/sql';
+import { consumeSsoContinuation, saveSsoContinuation } from '../services/sso-continuation';
 import type { User } from '../types';
 import { verifyJWT } from '../utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
@@ -196,4 +197,29 @@ test('verified SSO is exempt from new-device verification on an old opted-in acc
   f.env.DISABLE_EMAIL_NEW_DEVICE = 'true';
   await deviceRepo.upsertDevice(f.env.DB, f.user.id, 'known-device', 'Known', 9);
   assert.equal((await f.login()).status, 200);
+});
+
+// The claim re-checks the stored proof inside its UPDATE. Each refused claim below meets every other
+// condition, and the account row always matches the user passed in.
+test('an SSO continuation claim refuses another binding, account, stamp or email and an expired proof', async () => {
+  const env = await createTestEnv();
+  const owner = await seedUser(env);
+  const orm = getOrm(env.DB);
+  const issue = async (id: string) => (await saveSsoContinuation(env, { id, binding: 'issued-binding' }, owner))!;
+  const updateOwner = (values: { securityStamp?: string; email?: string }) => orm.update(users).set(values).where(eq(users.id, owner.id));
+  const continuation = await issue('sso-continuation:claim');
+  assert.equal(await consumeSsoContinuation(env, { ...continuation, binding: 'other-binding' }, owner), false);
+  await updateOwner({ securityStamp: 'rotated-stamp' });
+  assert.equal(await consumeSsoContinuation(env, continuation, { ...owner, securityStamp: 'rotated-stamp' }), false);
+  await updateOwner({ securityStamp: owner.securityStamp, email: 'renamed@example.test' });
+  assert.equal(await consumeSsoContinuation(env, continuation, { ...owner, email: 'renamed@example.test' }), false);
+  const heir = await seedUser(env, { email: owner.email, securityStamp: owner.securityStamp });
+  assert.equal(await consumeSsoContinuation(env, continuation, heir), false);
+  await orm.delete(users).where(eq(users.id, heir.id));
+  await updateOwner({ email: owner.email });
+  assert.equal(await consumeSsoContinuation(env, continuation, owner), true);
+
+  const expired = await issue('sso-continuation:expired');
+  await orm.update(verification).set({ value: jsonSet(verification.value, '$.expiresAt', Date.now() - 1) }).where(eq(verification.id, expired.id));
+  assert.equal(await consumeSsoContinuation(env, expired, owner), false);
 });
