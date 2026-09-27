@@ -46,7 +46,7 @@ for the Worker bootstrap in `src/db/baseline.ts`.
 If you add or change a table, column, or index:
 
 - Edit `src/db/schema.ts` (and `relations.ts` when a foreign key changes).
-- Run `npm run db:generate` and `npm run test:db-schema`.
+- Run `npm run db:generate` and `npm test`.
 - Bump `STORAGE_SCHEMA_VERSION` in `src/services/storage.ts`.
 - Decide whether the data should be included in instance backup.
 
