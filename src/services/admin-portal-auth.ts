@@ -8,6 +8,7 @@ import type { Env } from '../types';
 import { bytesToBase64Url } from '../utils/passkey';
 import { EMAIL_PATTERN } from './mail';
 import { isAdminPortalPath } from '../web-vault-visibility';
+import { parse, serialize } from 'hono/utils/cookie';
 
 export type AdminDirectory = { kind: 'disabled' } | { kind: 'invalid'; entryIndex: number }
   | { kind: 'enabled'; admins: ReadonlyMap<string, string> };
@@ -50,11 +51,12 @@ export const ADMIN_LOGIN_COOKIE = '__Host-nw_admin_login';
 export const ADMIN_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 export type AdminSession = { email: string; stampHash: string; authTime: number; id: string; token: string; csrf: string };
 export function adminCookie(name: string, token = '', seconds = 0): string {
-  return `${name}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${seconds}`;
+  return serialize(name, token, { path: '/', httpOnly: true, secure: true, sameSite: 'Strict', maxAge: seconds });
 }
 export function readAdminCookie(request: Request, name: string): string {
-  const matches = (request.headers.get('Cookie') ?? '').split(';').map((part) => part.trim()).filter((part) => part.startsWith(name + '='));
-  return matches.length === 1 ? matches[0].slice(name.length + 1) : '';
+  const cookie = request.headers.get('Cookie') ?? '';
+  // A repeated name means another cookie is shadowing ours, so neither copy is trusted.
+  return cookie.split(';').filter((part) => part.trim().startsWith(`${name}=`)).length === 1 ? parse(cookie, name)[name] ?? '' : '';
 }
 export function randomAdminToken(): string { return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 

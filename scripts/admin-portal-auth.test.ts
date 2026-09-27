@@ -26,7 +26,7 @@ test('admin links are same-browser POST-only and single-use; sessions use CSRF a
   assert.equal(confirmed.status, 303);
   assert.equal(confirmed.headers.get('Location'), '/admin/users?page=2');
   const session = cookie(confirmed, '__Host-nw_admin');
-  assert.match(confirmed.headers.getSetCookie().find((c) => c.startsWith('__Host-nw_admin='))!, /Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=172800/);
+  assert.match(confirmed.headers.getSetCookie().find((c) => c.startsWith('__Host-nw_admin='))!, /Max-Age=172800; Path=\/; HttpOnly; Secure; SameSite=Strict/);
   assert.equal((await portalFetch(env, { method: 'POST', path: '/admin/login/confirm', form: { token: value }, cookie: nonce })).status, 400);
   const dashboard = await portalFetch(env, { path: '/admin', cookie: session });
   assert.equal(dashboard.status, 200);

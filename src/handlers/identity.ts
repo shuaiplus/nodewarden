@@ -10,6 +10,8 @@ import { twoFactorProviders, twoFactorClearStatements } from '../services/two-fa
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { deviceErrorResponse, errorResponse, identityErrorResponse, jsonResponse, parseJsonBody, prop, normalizeJsonKeys } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
+import { parse, serialize } from 'hono/utils/cookie';
+import { sha256 } from 'hono/utils/crypto';
 import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { signHs256Jwt, createRefreshToken, createSsoEmail2faSessionToken } from '../utils/jwt';
 import { getSafeJwtSecret } from '../utils/direct-upload';
@@ -160,54 +162,20 @@ function shouldUseWebSession(request: Request): boolean {
   return String(request.headers.get('X-NodeWarden-Web-Session') || '').trim() === '1';
 }
 
-function parseCookieValue(request: Request, name: string): string | null {
-  const rawCookie = String(request.headers.get('Cookie') || '').trim();
-  if (!rawCookie) return null;
-  for (const part of rawCookie.split(';')) {
-    const [key, ...rest] = part.trim().split('=');
-    if (key !== name) continue;
-    const value = rest.join('=').trim();
-    return value ? decodeURIComponent(value) : null;
-  }
-  return null;
-}
-
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 async function loginRateLimitKey(clientIdentifier: string, grantType: string, subject: string): Promise<string> {
-  const subjectHash = await sha256Hex(`${grantType}:${String(subject || '').trim() || 'unknown'}`);
+  const subjectHash = await sha256(`${grantType}:${String(subject || '').trim() || 'unknown'}`);
   return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
-}
-
-function buildRefreshCookie(request: Request, refreshToken: string, maxAgeSeconds: number): string {
-  const isHttps = new URL(request.url).protocol === 'https:';
-  const parts = [
-    `${WEB_REFRESH_COOKIE}=${encodeURIComponent(refreshToken)}`,
-    'Path=/identity/connect',
-    'HttpOnly',
-    'SameSite=Strict',
-    `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`,
-  ];
-  if (isHttps) parts.push('Secure');
-  return parts.join('; ');
-}
-
-function buildClearedRefreshCookie(request: Request): string {
-  return buildRefreshCookie(request, '', 0);
 }
 
 function withWebRefreshCookie(request: Request, response: Response, refreshToken: string | null): Response {
   const headers = new Headers(response.headers);
-  headers.append(
-    'Set-Cookie',
-    refreshToken
-      ? buildRefreshCookie(request, refreshToken, Math.floor(getRefreshTokenSlidingTtlMs('web') / 1000))
-      : buildClearedRefreshCookie(request)
-  );
+  headers.append('Set-Cookie', serialize(WEB_REFRESH_COOKIE, refreshToken ?? '', {
+    path: '/identity/connect',
+    httpOnly: true,
+    sameSite: 'Strict',
+    maxAge: refreshToken ? Math.floor(getRefreshTokenSlidingTtlMs('web') / 1000) : 0,
+    secure: new URL(request.url).protocol === 'https:',
+  }));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -934,14 +902,14 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   } else if (grantType === 'refresh_token') {
     const refreshToken = String(body.refresh_token || '').trim() || (
       shouldUseWebSession(request)
-        ? parseCookieValue(request, WEB_REFRESH_COOKIE)
+        ? parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE]
         : null
     );
     if (!refreshToken) {
       return identityErrorResponse('Refresh token is required', 'invalid_request', 400);
     }
 
-    const refreshTokenHash = await sha256Hex(refreshToken);
+    const refreshTokenHash = await sha256(refreshToken);
     try {
       const sessionLimit = await rateLimit.consumeBudget(
         `refresh-session:${refreshTokenHash}`,
@@ -1082,7 +1050,7 @@ export async function handleRevocation(request: Request, env: Env): Promise<Resp
 
   const token = String(body.token || '').trim() || (
     shouldUseWebSession(request)
-      ? (parseCookieValue(request, WEB_REFRESH_COOKIE) || '')
+      ? (parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE] || '')
       : ''
   );
   if (token) {
