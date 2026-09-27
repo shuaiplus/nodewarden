@@ -12,8 +12,8 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 
 ## Runtime
 
-- Worker: `src/index.ts` → `src/router.ts`
-- Data: D1 via Drizzle v1 (`src/db/`, `src/services/storage*.ts`, `migrations/`)
+- Worker: `src/index.ts` → `src/router.ts` (Hono 4 app; sub-routers in `src/router-*.ts`; paths match exact case except the Secrets Manager sub-router)
+- Data: D1 via Drizzle v1 (`src/db/`, repositories `src/services/storage-*-repo.ts` called directly with `env.DB`, `migrations/`)
 - Auth engine: Better Auth (`src/auth.ts`) behind Bitwarden `/identity` and `/api` adapters
 - Blobs: R2 or KV (`src/services/blob-store.ts`)
 - Push: `NotificationsHub` Durable Object
@@ -21,6 +21,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 - Web vaults:
   - Local: `webapp/` (Preact + Vite) → Worker assets (`dist/`)
   - Official: `official-web/` (Bitwarden OSS self-host Angular) → Cloudflare Pages, API proxied to the Worker
+- Shared: `shared/backend-paths.ts` lists the backend path prefixes used by the Pages proxy, `scripts/serve-official-web.mjs` and the Worker web-vault visibility check
 
 ## Data
 

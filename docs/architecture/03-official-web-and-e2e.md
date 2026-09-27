@@ -7,7 +7,7 @@
 | NodeWarden Preact vault | `webapp/` | Worker assets (`npm run build` → `dist/`) |
 | Official Bitwarden OSS web | `official-web/` | Cloudflare Pages (`npm run build:official-web`) |
 
-The official vault (`ghcr.io/bitwarden/web` / `@bitwarden/web-vault` OSS self-host) always uses `window.location.origin` as its API base. Pages therefore proxies `/api`, `/identity`, `/icons`, `/notifications`, `/scim`, `/sso`, `/config`, `/alive` to the Worker (`official-web/functions/_middleware.js`).
+The official vault (`ghcr.io/bitwarden/web` / `@bitwarden/web-vault` OSS self-host) always uses `window.location.origin` as its API base. Pages therefore proxies `/api`, `/identity`, `/icons`, `/notifications`, `/scim`, `/sso`, `/config`, `/alive` to the Worker (`official-web/functions/_middleware.js`). The proxied prefix list lives in `shared/backend-paths.ts`, shared with `scripts/serve-official-web.mjs` and the Worker web-vault visibility check.
 
 Set Worker `WEB_VAULT_ORIGINS` to the Pages origin so CORS, WebAuthn, and signup accept that origin. Config responses honor `X-Forwarded-Host` so `environment.vault` stays on the Pages origin.
 
