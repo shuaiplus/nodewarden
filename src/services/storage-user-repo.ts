@@ -1,4 +1,4 @@
-import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, notExists, sql, type SQL } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
@@ -118,24 +118,15 @@ export async function createUser(db: D1Database, user: User): Promise<void> {
   await getOrm(db).insert(users).values(userValues(user));
 }
 
+// One INSERT ... SELECT guarded by NOT EXISTS, so two concurrent first registrations cannot both
+// create the first (administrator) account.
 export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
+  const orm = getOrm(db);
   const values = userValues(user);
-  const result = await getOrm(db).run(sql`
-    INSERT INTO users (
-      id, email, email_verified, name, master_password_hint, master_password_hash, key, private_key, public_key,
-      kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices,
-      totp_secret, totp_recovery_code, two_factor_email, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5,
-      yubikey_nfc, api_key, created_at, updated_at
-    )
-    SELECT
-      ${values.id}, ${values.email}, ${values.emailVerified}, ${values.name}, ${values.masterPasswordHint}, ${values.masterPasswordHash},
-      ${values.key}, ${values.privateKey}, ${values.publicKey}, ${values.kdfType}, ${values.kdfIterations},
-      ${values.kdfMemory}, ${values.kdfParallelism}, ${values.securityStamp}, ${values.role}, ${values.status},
-      ${values.verifyDevices}, ${values.totpSecret}, ${values.totpRecoveryCode}, ${values.twoFactorEmail}, ${values.yubikeyKey1},
-      ${values.yubikeyKey2}, ${values.yubikeyKey3}, ${values.yubikeyKey4}, ${values.yubikeyKey5},
-      ${values.yubikeyNfc}, ${values.apiKey}, ${values.createdAt}, ${values.updatedAt}
-    WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)
-  `);
+  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, sql`${value}`.as(key)])) as { [K in keyof typeof values]: SQL.Aliased };
+  const result = await orm.insert(users)
+    .select(orm.select(literals).from(sql`(SELECT 1)`).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
+    .run();
   return (result.meta.changes ?? 0) > 0;
 }
 
