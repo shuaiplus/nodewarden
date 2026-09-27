@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { and, asc, count, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
+import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { chunkRows, columnCount, getOrm, type Orm } from '../db/client';
 import {
@@ -17,6 +18,9 @@ import {
   orgGroups,
   orgPolicies,
   pendingCollectionUsers,
+  smProjects,
+  smSecrets,
+  smServiceAccounts,
   ssoAuth,
   ssoUsers,
   userRevisions,
@@ -257,20 +261,22 @@ export async function listRegisteredEmails(db: D1Database, emails: string[]): Pr
 // The revision write and every chunk commit together, including a failed later chunk.
 export async function applyMembershipAction(db: D1Database, orgId: string, ids: string[], action: 'remove' | 'revoke' | 'restore'): Promise<void> {
   if (!ids.length) return;
+  const orm = getOrm(db);
   const now = new Date().toISOString();
-  const revision = db.prepare(`
-    INSERT INTO user_revisions(user_id, revision_date)
-    SELECT user_id, ? FROM organization_memberships
-    WHERE org_id = ? AND user_id IS NOT NULL
-    ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date
-  `).bind(now, orgId);
-  const operation = action === 'remove' ? 'DELETE FROM organization_memberships'
-    : `UPDATE organization_memberships SET status = status ${action === 'revoke' ? '-' : '+'} ${REVOKE_STATUS_OFFSET}, updated_at = ?`;
-  const statusGuard = action === 'remove' ? '' : ` AND status ${action === 'revoke' ? '> -1' : '<= -1'}`;
-  const writes = chunkRows(ids, 1, action === 'remove' ? 1 : 2).map((chunk) => db.prepare(
-    `${operation} WHERE org_id = ? AND id IN (${chunk.map(() => '?').join(',')})${statusGuard}`,
-  ).bind(...(action === 'remove' ? [] : [now]), orgId, ...chunk));
-  await db.batch([revision, ...writes]);
+  const { orgId: memberOrgId, id: memberId, status } = organizationMemberships;
+  // Revoking shifts a status REVOKE_STATUS_OFFSET below Revoked and restoring shifts it back. The guard
+  // skips rows already on the target side, so repeating an action never shifts a status twice.
+  const write = (chunk: string[]) => {
+    const inOrg = and(eq(memberOrgId, orgId), inArray(memberId, chunk));
+    return action === 'remove'
+      ? orm.delete(organizationMemberships).where(inOrg)
+      : orm.update(organizationMemberships)
+        .set({ status: sql`${status} + ${action === 'revoke' ? -REVOKE_STATUS_OFFSET : REVOKE_STATUS_OFFSET}`, updatedAt: now })
+        .where(and(inOrg, action === 'revoke' ? gt(status, MembershipStatus.Revoked) : lte(status, MembershipStatus.Revoked)));
+  };
+  // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
+  const writes = chunkRows(ids, 1, write([]).toSQL().params.length).map(write);
+  await orm.batch([bumpOrgMemberRevisions(db, orgId, now), ...writes]);
 }
 
 export async function countConfirmedOwners(db: D1Database, orgId: string): Promise<number> {
@@ -1092,13 +1098,13 @@ export async function getSsoUserByUserId(db: D1Database, userId: string): Promis
   return row ?? null;
 }
 
-export function bumpOrgMemberRevisions(db: D1Database, orgId: string) {
-  const now = new Date().toISOString();
-  return getOrm(db).insert(userRevisions).select(sql`
-    SELECT user_id, ${now} FROM organization_memberships
-    WHERE org_id = ${orgId} AND user_id IS NOT NULL
-    ON CONFLICT(user_id) DO UPDATE SET revision_date=excluded.revision_date
-  `);
+export function bumpOrgMemberRevisions(db: D1Database, orgId: string, now = new Date().toISOString()) {
+  const orm = getOrm(db);
+  return orm.insert(userRevisions)
+    .select(orm.select({ userId: organizationMemberships.userId, revisionDate: sql`${now}`.as('revision_date') })
+      .from(organizationMemberships)
+      .where(and(eq(organizationMemberships.orgId, orgId), isNotNull(organizationMemberships.userId))))
+    .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: sql`excluded.revision_date` } });
 }
 
 export async function searchOrganizations(db: D1Database, options: { nameContains: string; memberEmail: string; offset: number; limit: number }) {
@@ -1111,17 +1117,20 @@ export async function searchOrganizations(db: D1Database, options: { nameContain
 }
 
 export async function getOrganizationPortalStats(db: D1Database, orgId: string): Promise<Array<[string, number]>> {
-  const queries: Array<[string, string]> = [
-    ['Collections', 'SELECT count(*) AS total FROM collections WHERE org_id=?'],
-    ['Groups', 'SELECT count(*) AS total FROM org_groups WHERE org_id=?'],
-    ['Enabled policies', 'SELECT count(*) AS total FROM org_policies WHERE org_id=? AND enabled=1'],
-    ['Organization items', 'SELECT count(*) AS total FROM ciphers WHERE organization_id=?'],
-    ['SM projects', 'SELECT count(*) AS total FROM sm_projects WHERE org_id=?'],
-    ['SM secrets', 'SELECT count(*) AS total FROM sm_secrets WHERE org_id=? AND deleted_at IS NULL'],
-    ['SM machine accounts', 'SELECT count(*) AS total FROM sm_service_accounts WHERE org_id=?'],
+  const orm = getOrm(db);
+  const countRows = (table: SQLiteTable, where: SQL | undefined) => orm.select({ total: count() }).from(table).where(where);
+  const stats: Array<[string, ReturnType<typeof countRows>]> = [
+    ['Collections', countRows(collections, eq(collections.orgId, orgId))],
+    ['Groups', countRows(orgGroups, eq(orgGroups.orgId, orgId))],
+    ['Enabled policies', countRows(orgPolicies, and(eq(orgPolicies.orgId, orgId), eq(orgPolicies.enabled, 1)))],
+    ['Organization items', countRows(ciphers, eq(ciphers.organizationId, orgId))],
+    ['SM projects', countRows(smProjects, eq(smProjects.orgId, orgId))],
+    ['SM secrets', countRows(smSecrets, and(eq(smSecrets.orgId, orgId), isNull(smSecrets.deletedAt)))],
+    ['SM machine accounts', countRows(smServiceAccounts, eq(smServiceAccounts.orgId, orgId))],
   ];
-  const results = await db.batch<{ total: number }>(queries.map(([, query]) => db.prepare(query).bind(orgId)));
-  return queries.map(([name], index) => [name, results[index].results[0]?.total ?? 0]);
+  const queries = stats.map(([, query]) => query);
+  const results = await orm.batch(queries as [typeof queries[0], ...typeof queries]);
+  return stats.map(([name], index) => [name, results[index][0]?.total ?? 0]);
 }
 
 // Administrative reports need the complete encrypted organization vault, independent of assignments.
