@@ -45,27 +45,6 @@ export async function replaceYubicoCredentials(
   ]);
 }
 
-async function acquireBootstrapClaim(db: D1Database): Promise<string | null> {
-  const now = Date.now();
-  const orm = getOrm(db);
-  await orm
-    .delete(config)
-    .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), sql`cast(${config.value} as integer) < ${now}`));
-  const claim = `${now + YUBICO_BOOTSTRAP_CLAIM_TTL_MS}:${crypto.randomUUID()}`;
-  const result = await orm
-    .insert(config)
-    .values({ key: YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, value: claim })
-    .onConflictDoNothing({ target: config.key })
-    .run();
-  return (result.meta.changes ?? 0) > 0 ? claim : null;
-}
-
-async function releaseBootstrapClaim(db: D1Database, claim: string): Promise<void> {
-  await getOrm(db)
-    .delete(config)
-    .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), eq(config.value, claim)));
-}
-
 export async function initializeYubicoCredentialsOnce(
   db: D1Database,
   email: string,
@@ -74,8 +53,21 @@ export async function initializeYubicoCredentialsOnce(
   const existing = await getYubicoCredentials(db);
   if (existing) return { credentials: existing, created: false };
 
-  const claim = await acquireBootstrapClaim(db);
-  if (!claim) {
+  // One request at a time bootstraps: an expired claim is cleared, then the claim is taken unless
+  // another request holds it. The claim value begins with its expiry, so an unreleased claim lapses.
+  const now = Date.now();
+  const orm = getOrm(db);
+  await orm
+    .delete(config)
+    .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), sql`cast(${config.value} as integer) < ${now}`));
+  const claim = `${now + YUBICO_BOOTSTRAP_CLAIM_TTL_MS}:${crypto.randomUUID()}`;
+  const claimInsert = await orm
+    .insert(config)
+    .values({ key: YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, value: claim })
+    .onConflictDoNothing({ target: config.key })
+    .run();
+  const claimed = (claimInsert.meta.changes ?? 0) > 0;
+  if (!claimed) {
     const concurrentlyCreated = await getYubicoCredentials(db);
     return concurrentlyCreated ? { credentials: concurrentlyCreated, created: false } : null;
   }
@@ -95,6 +87,10 @@ export async function initializeYubicoCredentialsOnce(
     await replaceYubicoCredentials(db, issued);
     return { credentials: issued, created: true };
   } finally {
-    await releaseBootstrapClaim(db, claim).catch(() => undefined);
+    // Release only this request's claim; a failed release leaves it to expire.
+    await orm
+      .delete(config)
+      .where(and(eq(config.key, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY), eq(config.value, claim)))
+      .catch(() => undefined);
   }
 }

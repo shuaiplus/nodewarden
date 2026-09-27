@@ -50,16 +50,6 @@ export function isYubiKeyEnabled(user: User): boolean {
   return userYubiKeyPublicIds(user).length > 0;
 }
 
-function parseYubicoResponse(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    const idx = line.indexOf('=');
-    if (idx <= 0) continue;
-    out[line.slice(0, idx)] = line.slice(idx + 1);
-  }
-  return out;
-}
-
 async function hmacSha1Base64(base64Key: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -129,7 +119,13 @@ export async function verifyYubicoOtp(
     try {
       const response = await fetch(`${baseUrl}?${params.toString()}`, { method: 'GET' });
       if (!response.ok) continue;
-      const parsed = parseYubicoResponse(await response.text());
+      // The response body is one key=value pair per line.
+      const parsed: Record<string, string> = {};
+      for (const line of (await response.text()).split(/\r?\n/)) {
+        const separatorIndex = line.indexOf('=');
+        if (separatorIndex <= 0) continue;
+        parsed[line.slice(0, separatorIndex)] = line.slice(separatorIndex + 1);
+      }
       if (parsed.otp !== otp || parsed.nonce !== nonce || parsed.status !== 'OK') continue;
       if (!parsed.h) continue;
       const signedParams = new URLSearchParams();
