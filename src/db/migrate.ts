@@ -1,4 +1,5 @@
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 import { BASELINE_MIGRATION_SQL } from './baseline';
 import { getOrm } from './client';
@@ -30,8 +31,10 @@ function makeIdempotent(statement: string): string {
   return statement;
 }
 
+// Every raw statement of the bootstrap runs here: migration DDL and PRAGMAs are SQL text by nature.
 async function executeSchemaStatement(db: D1Database, statement: string): Promise<void> {
   try {
+    // eslint-disable-next-line nodewarden/no-raw-sql -- migration DDL and PRAGMAs have no query-builder form
     await db.prepare(statement).run();
   } catch (error) {
     const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -60,9 +63,12 @@ async function ensureAdminUserExists(db: D1Database): Promise<void> {
     .where(eq(users.id, firstUser.id));
 }
 
+// The config table records the schema version, so it has to exist before the first version check.
+const CONFIG_TABLE_SQL = 'CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
+
 export async function ensureStorageSchema(db: D1Database): Promise<void> {
-  await db.prepare('PRAGMA foreign_keys = ON').run();
-  await db.prepare('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)').run();
+  await executeSchemaStatement(db, 'PRAGMA foreign_keys = ON');
+  await executeSchemaStatement(db, CONFIG_TABLE_SQL);
   for (const statement of schemaStatements()) {
     await executeSchemaStatement(db, statement);
   }
@@ -87,11 +93,16 @@ const REQUIRED_SCHEMA_TABLES = [
 ] as const;
 let schemaVerified = false;
 
+// SQLite's catalog. Declared outside schema.ts so drizzle-kit never generates DDL for it.
+export const sqliteMaster = sqliteTable('sqlite_master', {
+  type: text('type').notNull(),
+  name: text('name').notNull(),
+  sql: text('sql'),
+});
+
 async function hasRequiredSchemaTables(db: D1Database): Promise<boolean> {
-  const rows = await getOrm(db).all(sql`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name IN (${sql.join(REQUIRED_SCHEMA_TABLES.map((name) => sql`${name}`), sql`, `)})
-  `) as Array<{ name: string }>;
+  const rows = await getOrm(db).select({ name: sqliteMaster.name }).from(sqliteMaster)
+    .where(and(eq(sqliteMaster.type, 'table'), inArray(sqliteMaster.name, REQUIRED_SCHEMA_TABLES)));
   const found = new Set(rows.map((row) => row.name));
   return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
 }
@@ -100,7 +111,7 @@ async function hasRequiredSchemaTables(db: D1Database): Promise<boolean> {
 // required table is missing, then makes sure push credentials exist.
 export async function initializeDatabase(db: D1Database): Promise<void> {
   if (schemaVerified) return;
-  await getOrm(db).run(sql`CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  await executeSchemaStatement(db, CONFIG_TABLE_SQL);
   const schemaVersion = await getConfigValue(db, STORAGE_SCHEMA_VERSION_KEY);
   if (schemaVersion !== STORAGE_SCHEMA_VERSION || !(await hasRequiredSchemaTables(db))) {
     await ensureStorageSchema(db);
