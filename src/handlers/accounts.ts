@@ -1,7 +1,7 @@
 import { EventType, recordUserEvent } from '../services/events';
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrm } from '../db/client';
-import { session, userRevisions, users } from '../db/schema';
+import { devices, session, userRevisions, users } from '../db/schema';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
@@ -648,7 +648,9 @@ export async function handleResendNewDeviceOtp(request: Request, env: Env): Prom
       || !(Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000)) return;
     if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash)) return;
     const hasPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
-    if (twoFactorProviders(user, hasPasskey).length || !await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()) return;
+    if (twoFactorProviders(user, hasPasskey).length) return;
+    const [knownDevice] = await getOrm(env.DB).select({ userId: devices.userId }).from(devices).where(eq(devices.userId, user.id)).limit(1);
+    if (!knownDevice) return;
     const device = readAuthRequestDeviceInfo({ deviceType: body.deviceType }, request);
     notifyNewDeviceVerification(env, request, user, device.deviceType);
   });

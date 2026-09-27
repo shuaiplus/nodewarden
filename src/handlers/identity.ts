@@ -1,6 +1,9 @@
 import { EventType, recordUserEvent } from '../services/events';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { readEnvConfig } from '../config/env';
+import { getOrm } from '../db/client';
+import { devices } from '../db/schema';
 import { markEmailVerified } from '../services/vault-admin-role';
 import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
@@ -707,7 +710,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       if (otp) {
         if (!await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)) return deviceErrorResponse('invalid_otp');
         await markEmailVerified(env, user.id);
-      } else if (await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()
+      } else if ((await getOrm(env.DB).select({ userId: devices.userId }).from(devices).where(eq(devices.userId, user.id)).limit(1)).length
         && (!deviceInfo.deviceIdentifier || !await deviceRepo.isKnownDevice(env.DB, user.id, deviceInfo.deviceIdentifier))) {
         notifyNewDeviceVerification(env, request, user, deviceInfo.deviceType);
         return deviceErrorResponse('required');
