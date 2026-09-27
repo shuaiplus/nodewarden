@@ -18,18 +18,9 @@ function base64UrlDecode(input: string): Uint8Array | null {
   }
 }
 
-function uuidToBytes(uuid: string): Uint8Array | null {
-  const hex = uuid.replace(/-/g, '').toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(hex)) return null;
-  const bytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToUuid(bytes: Uint8Array): string | null {
-  if (bytes.length !== 16) return null;
+export function fromAccessId(accessId: string): string | null {
+  const bytes = base64UrlDecode(accessId);
+  if (!bytes || bytes.length !== 16) return null;
   const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
   return [
     hex.slice(0, 8),
@@ -38,18 +29,6 @@ function bytesToUuid(bytes: Uint8Array): string | null {
     hex.slice(16, 20),
     hex.slice(20, 32),
   ].join('-');
-}
-
-function toAccessId(sendId: string): string {
-  const bytes = uuidToBytes(sendId);
-  if (!bytes) return '';
-  return bytesToBase64Url(bytes);
-}
-
-export function fromAccessId(accessId: string): string | null {
-  const bytes = base64UrlDecode(accessId);
-  if (!bytes || bytes.length !== 16) return null;
-  return bytesToUuid(bytes);
 }
 
 export async function resolveSendFromIdOrAccessId(db: D1Database, idOrAccessId: string): Promise<Send | null> {
@@ -151,14 +130,6 @@ async function deriveSendPasswordHash(password: string, salt: Uint8Array, iterat
   return new Uint8Array(bits);
 }
 
-function isLikelyHashB64(value: string): boolean {
-  const raw = String(value || '').trim();
-  if (!raw) return false;
-  if (!/^[A-Za-z0-9+/_=-]+$/.test(raw)) return false;
-  const decoded = base64UrlDecode(raw);
-  return !!decoded && decoded.length === 32;
-}
-
 export async function setSendPassword(send: Send, password: string | null): Promise<void> {
   if (!password) {
     send.passwordHash = null;
@@ -170,8 +141,10 @@ export async function setSendPassword(send: Send, password: string | null): Prom
     return;
   }
 
-  if (isLikelyHashB64(password)) {
-    send.passwordHash = password.trim();
+  // A password that reads as a base64 32-byte hash was hashed by the client; store it as sent.
+  const trimmedPassword = password.trim();
+  if (/^[A-Za-z0-9+/_=-]+$/.test(trimmedPassword) && base64UrlDecode(trimmedPassword)?.length === 32) {
+    send.passwordHash = trimmedPassword;
     send.passwordSalt = null;
     send.passwordIterations = null;
     send.authType = SendAuthType.Password;
@@ -225,9 +198,13 @@ export function extractBearerToken(request: Request): string | null {
 
 export function sendToResponse(send: Send): SendResponse {
   const data = parseStoredSendData(send);
+  // The access id is the base64url of a UUID send id's 16 bytes; any other id has none.
+  const hex = send.id.replace(/-/g, '').toLowerCase();
   return {
     id: send.id,
-    accessId: toAccessId(send.id),
+    accessId: /^[0-9a-f]{32}$/.test(hex)
+      ? bytesToBase64Url(Uint8Array.from({ length: 16 }, (_, index) => parseInt(hex.slice(index * 2, index * 2 + 2), 16)))
+      : '',
     type: Number(send.type) || 0,
     name: send.name,
     notes: send.notes,
