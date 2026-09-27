@@ -1,3 +1,6 @@
+import { and, eq, sql } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { users } from '../db/schema';
 import type { User } from '../types';
 import { isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode } from '../utils/recovery-code';
@@ -15,9 +18,14 @@ export function twoFactorProviders(user: ProviderUser, hasTwoFactorPasskey: bool
   return providers;
 }
 
+// Enrolment fills a missing recovery code but never replaces one the user may already have written down.
+export function existingOrNewRecoveryCode() {
+  return sql<string>`COALESCE(NULLIF(${users.totpRecoveryCode}, ''), ${createRecoveryCode()})`;
+}
+
 export async function ensureTwoFactorRecoveryCode(db: D1Database, userId: string, securityStamp: string): Promise<string | null> {
-  const row = await db.prepare("UPDATE users SET totp_recovery_code = COALESCE(NULLIF(totp_recovery_code, ''), ?) WHERE id = ? AND security_stamp = ? RETURNING totp_recovery_code AS code")
-    .bind(createRecoveryCode(), userId, securityStamp).first<{ code: string }>();
+  const [row] = await getOrm(db).update(users).set({ totpRecoveryCode: existingOrNewRecoveryCode() })
+    .where(and(eq(users.id, userId), eq(users.securityStamp, securityStamp))).returning({ code: users.totpRecoveryCode });
   return row?.code ?? null;
 }
 

@@ -12,7 +12,7 @@ import { syncVaultAdminRoles } from '../services/vault-admin-role';
 import { deleteUserAccount } from '../services/account-deletion';
 import { notifyUserLogout } from '../durable/notifications-hub';
 import { issueEmailOtp, redeemEmailOtp, spendEmailOtpIssueBudget } from '../services/email-otp';
-import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
+import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCode, existingOrNewRecoveryCode } from '../services/two-factor-providers';
 import { upsertCredentialAccount, credentialAccountStatement } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent, auditEventStatement } from '../services/audit-events';
@@ -997,8 +997,9 @@ export async function handlePutTwoFactorEmail(request: Request, env: Env, userId
   if (!await redeemEmailOtp(env, { purpose: 'two-factor-setup', subject: user.id, binding: `${user.securityStamp}:${email}` }, body.token)) {
     return errorResponse('Invalid token.', 400, {}, { Token: ['Invalid token.'] });
   }
-  const changed = await env.DB.prepare("UPDATE users SET two_factor_email = ?, totp_recovery_code = COALESCE(NULLIF(totp_recovery_code, ''), ?), updated_at = ? WHERE id = ? AND security_stamp = ? RETURNING id")
-    .bind(email, createRecoveryCode(), new Date().toISOString(), user.id, user.securityStamp).first();
+  const [changed] = await getOrm(env.DB).update(users)
+    .set({ twoFactorEmail: email, totpRecoveryCode: existingOrNewRecoveryCode(), updatedAt: new Date().toISOString() })
+    .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp))).returning({ id: users.id });
   if (!changed) return errorResponse('User verification failed.', 400);
   await revisionRepo.updateRevisionDate(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
