@@ -1,8 +1,9 @@
+import { z } from 'zod';
 import { Env, User, Invite } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders } from '../services/two-factor-providers';
 import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
-import { errorResponse, jsonResponse, parseJsonBody, normalizeJsonKeys } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 import * as adminRepo from '../services/storage-admin-repo';
@@ -12,32 +13,21 @@ function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
 }
 
-async function requireMasterPasswordHash(
-  env: Env,
-  actorUser: User,
-  masterPasswordHash: unknown
-): Promise<Response | null> {
-  const normalized = String(masterPasswordHash || '').trim();
-  if (!normalized) {
-    return errorResponse('masterPasswordHash is required', 400);
-  }
-  const auth = new AuthService(env);
-  const valid = await auth.verifyPassword(normalized, actorUser.masterPasswordHash, actorUser.email);
-  if (!valid) {
-    return errorResponse('Invalid password', 400);
-  }
-  return null;
-}
+const PASSWORD_REQUIRED = 'masterPasswordHash is required';
+const PasswordBody = z.object({ masterPasswordHash: z.string({ error: PASSWORD_REQUIRED }).trim().min(1, { error: PASSWORD_REQUIRED }) }, { error: PASSWORD_REQUIRED });
+const DEFAULT_INVITE_HOURS = 24 * 7;
+const MAX_INVITE_HOURS = 24 * 30;
+const InviteBody = PasswordBody.extend({
+  expiresInHours: z.coerce.number().catch(DEFAULT_INVITE_HOURS).transform(hours => Math.max(1, Math.min(MAX_INVITE_HOURS, Math.floor(hours)))),
+});
+const StatusBody = PasswordBody.extend({ status: z.enum(['active', 'banned'], { error: 'status must be active or banned' }) });
 
-async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
-  try {
-    const body = normalizeJsonKeys(await request.json());
-    return body && typeof body === 'object' && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
+// Every destructive admin action re-proves the master password; unparseable JSON reads as a missing one.
+async function readConfirmedBody<S extends typeof PasswordBody>(request: Request, env: Env, actorUser: User, schema: S): Promise<z.output<S> | Response> {
+  const body = await parseBody(request, schema, PASSWORD_REQUIRED);
+  if (body instanceof Response) return body;
+  const valid = await new AuthService(env).verifyPassword(body.masterPasswordHash, actorUser.masterPasswordHash, actorUser.email);
+  return valid ? body : errorResponse('Invalid password', 400);
 }
 
 function randomHex(bytes: number): string {
@@ -188,7 +178,7 @@ export async function handleAdminUpdateAuditLogSettings(
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, z.unknown());
   if (body instanceof Response) return body;
   const settings = await saveAuditLogSettings(env.DB, normalizeAuditLogSettings(body));
   await writeAuditLog(env.DB, actorUser.id, 'admin.audit.settings.update', 'auditLog', null, { ...settings }, request);
@@ -224,13 +214,9 @@ export async function handleAdminCreateInvite(
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readJsonBody(request);
-  const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
-  if (passwordError) return passwordError;
-
-  const expiresInHours = Number.isFinite(Number(body.expiresInHours))
-    ? Math.max(1, Math.min(24 * 30, Math.floor(Number(body.expiresInHours))))
-    : 24 * 7;
+  const body = await readConfirmedBody(request, env, actorUser, InviteBody);
+  if (body instanceof Response) return body;
+  const { expiresInHours } = body;
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInHours * 60 * 60 * 1000);
   const invite: Invite = {
@@ -282,9 +268,8 @@ export async function handleAdminDeleteInvite(
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readJsonBody(request);
-  const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
-  if (passwordError) return passwordError;
+  const confirmed = await readConfirmedBody(request, env, actorUser, PasswordBody);
+  if (confirmed instanceof Response) return confirmed;
 
   const deleted = await adminRepo.deleteInvite(env.DB, code);
   if (!deleted) {
@@ -307,9 +292,8 @@ export async function handleAdminDeleteAllInvites(
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readJsonBody(request);
-  const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
-  if (passwordError) return passwordError;
+  const confirmed = await readConfirmedBody(request, env, actorUser, PasswordBody);
+  if (confirmed instanceof Response) return confirmed;
 
   const url = new URL(request.url);
   if (url.searchParams.get('scope') === 'invalid') {
@@ -340,14 +324,9 @@ export async function handleAdminSetUserStatus(
     return errorResponse('Forbidden', 403);
   }
 
-  const body = await readJsonBody(request);
-  const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
-  if (passwordError) return passwordError;
-
-  const nextStatus = body.status === 'banned' ? 'banned' : body.status === 'active' ? 'active' : null;
-  if (!nextStatus) {
-    return errorResponse('status must be active or banned', 400);
-  }
+  const body = await readConfirmedBody(request, env, actorUser, StatusBody);
+  if (body instanceof Response) return body;
+  const nextStatus = body.status;
   if (targetUserId === actorUser.id && nextStatus !== 'active') {
     return errorResponse('You cannot ban yourself', 400);
   }
@@ -388,9 +367,8 @@ export async function handleAdminDeleteUser(
     return errorResponse('You cannot delete yourself', 400);
   }
 
-  const body = await readJsonBody(request);
-  const passwordError = await requireMasterPasswordHash(env, actorUser, body.masterPasswordHash);
-  if (passwordError) return passwordError;
+  const confirmed = await readConfirmedBody(request, env, actorUser, PasswordBody);
+  if (confirmed instanceof Response) return confirmed;
 
   const target = await userRepo.getUserById(env.DB, targetUserId);
   if (!target) {
