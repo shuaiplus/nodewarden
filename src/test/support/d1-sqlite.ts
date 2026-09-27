@@ -15,15 +15,6 @@ interface ExecutedStatement {
 // here to catch unchunked queries before they reach a real database.
 export const D1_MAX_BOUND_PARAMETERS = 100;
 
-// D1 validates bindings eagerly: undefined is a type error, and booleans and integral numbers
-// bind as INTEGER. better-sqlite3 rejects booleans and binds every number as REAL (a TEXT column
-// would store 1 as '1.0'), so pass integers as bigint, which it binds as INTEGER.
-function toD1Binding(value: unknown): unknown {
-  if (value === undefined) throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported for value 'undefined'");
-  const scalar = typeof value === 'boolean' ? Number(value) : value;
-  return Number.isSafeInteger(scalar) ? BigInt(scalar as number) : scalar;
-}
-
 // Object rows are built from positional ones, so duplicate column names resolve the way D1's
 // all()/first() resolve them: the last column wins.
 function toD1Result({ columns, rows, changes, lastRowId }: ExecutedStatement): D1Result<Record<string, unknown>> {
@@ -50,8 +41,15 @@ class SqliteD1Statement {
   ) {}
 
   // D1 statements are immutable: drizzle prepares a query once and re-binds it per call.
+  // D1 also validates bindings eagerly: undefined is a type error, and booleans and integral numbers
+  // bind as INTEGER. better-sqlite3 rejects booleans and binds every number as REAL (a TEXT column
+  // would store 1 as '1.0'), so pass integers as bigint, which it binds as INTEGER.
   bind(...values: unknown[]): SqliteD1Statement {
-    return new SqliteD1Statement(this.connection, this.query, values.map(toD1Binding));
+    return new SqliteD1Statement(this.connection, this.query, values.map((value) => {
+      if (value === undefined) throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported for value 'undefined'");
+      const scalar = typeof value === 'boolean' ? Number(value) : value;
+      return Number.isSafeInteger(scalar) ? BigInt(scalar as number) : scalar;
+    }));
   }
 
   // D1 compiles lazily, so SQL errors (including "already exists", which the schema bootstrap
