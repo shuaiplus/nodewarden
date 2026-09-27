@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { auditLogs, users } from '../db/schema';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { createDeleteRecoverToken, signHs256Jwt } from '../utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, seedUser } from './support/env';
@@ -85,7 +88,7 @@ test('unknown, banned, expired, foreign and revoked deletion tokens have identic
     failure ??= payload;
     assert.deepEqual(payload, failure);
   }
-  await f.env.DB.prepare('UPDATE users SET security_stamp=? WHERE id=?').bind(crypto.randomUUID(), f.active.id).run();
+  await getOrm(f.env.DB).update(users).set({ securityStamp: crypto.randomUUID() }).where(eq(users.id, f.active.id));
   const revoked = await authedFetch(f.env, { method: 'POST', path: tokenPath, body: { userId: f.active.id, token: beforeChange } });
   assert.deepEqual(await revoked.json(), failure);
 });
@@ -116,7 +119,7 @@ test('a mid-flight security-stamp change prevents self or recovery deletion with
     const batch = f.env.DB.batch.bind(f.env.DB);
     const newStamp = crypto.randomUUID();
     f.env.DB.batch = async statements => {
-      await f.env.DB.prepare('UPDATE users SET security_stamp=? WHERE id=?').bind(newStamp, f.active.id).run();
+      await getOrm(f.env.DB).update(users).set({ securityStamp: newStamp }).where(eq(users.id, f.active.id));
       return batch(statements);
     };
     const response = await authedFetch(f.env, {
@@ -126,6 +129,6 @@ test('a mid-flight security-stamp change prevents self or recovery deletion with
     assert.equal(response.status, recover ? 400 : 404);
     assert.equal((await userRepo.getUserById(f.env.DB, f.active.id))?.securityStamp, newStamp);
     assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'existing-session'));
-    assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS n FROM audit_logs').first('n'), 0);
+    assert.equal(await getOrm(f.env.DB).$count(auditLogs), 0);
   }
 });
