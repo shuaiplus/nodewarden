@@ -3,7 +3,7 @@ import test from 'node:test';
 import { inspect } from 'node:util';
 
 import type { Env } from '../types';
-import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
+import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, interceptStatement, MAILABLE_DOMAIN, seedUser } from './support/env';
 import * as adminRepo from '../services/storage-admin-repo';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -68,7 +68,8 @@ test('welcome mail delivery failure or missing vault origin leaves account creat
 test('a failed credential mirror during signup logs the failure without its bound password hash', async (t) => {
   const env = await createTestEnv({ ALLOW_OPEN_REGISTRATION: '1' });
   await seedUser(env);
-  await env.DB.prepare("CREATE TRIGGER fail_mirror BEFORE INSERT ON account BEGIN SELECT RAISE(ABORT, 'forced mirror failure'); END").run();
+  // The mirror statement fails in D1 as it executes, after drizzle has bound the password hash.
+  interceptStatement(env, /^insert into "account" /i, async () => { throw new Error('D1_ERROR: forced mirror failure'); });
   const errors = t.mock.method(console, 'error', () => {});
   const email = `mirror@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 500);
