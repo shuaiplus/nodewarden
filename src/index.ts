@@ -56,18 +56,26 @@ export default {
       normalizedRequest = new Request(url.toString(), request);
     }
 
-    if (env.ASSETS && (normalizedRequest.method === 'GET' || normalizedRequest.method === 'HEAD') && !isBackendRequestPath(url.pathname)) {
+    if (
+      env.ASSETS &&
+      (normalizedRequest.method === 'GET' || normalizedRequest.method === 'HEAD') &&
+      !isBackendRequestPath(url.pathname)
+    ) {
       const assetResponse = await env.ASSETS.fetch(normalizedRequest);
       const contentType = String(assetResponse.headers.get('Content-Type') || '').toLowerCase();
       const shouldNoIndex = url.pathname === '/robots.txt' || contentType.includes('text/html');
       if (!shouldNoIndex) return applyCors(normalizedRequest, assetResponse, env);
       const headers = new Headers(assetResponse.headers);
       headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
-      return applyCors(normalizedRequest, new Response(assetResponse.body, {
-        status: assetResponse.status,
-        statusText: assetResponse.statusText,
-        headers,
-      }), env);
+      return applyCors(
+        normalizedRequest,
+        new Response(assetResponse.body, {
+          status: assetResponse.status,
+          statusText: assetResponse.statusText,
+          headers,
+        }),
+        env,
+      );
     }
 
     await ensureDatabaseInitialized(env);
@@ -83,7 +91,7 @@ export default {
             Object: 'error',
           },
         },
-        500
+        500,
       );
       return applyCors(normalizedRequest, resp, env);
     }
@@ -98,22 +106,24 @@ export default {
       console.error('Skipping scheduled backup because DB init failed:', dbInitError);
       return;
     }
-    ctx.waitUntil(Promise.all([
-      pruneEvents(env).catch(() => console.error('Event cleanup failed')),
-      purgeExpiredEmailOtps(env).catch(() => console.error('Email code cleanup failed')),
-      runScheduledBackupIfDue(env).catch((error) => {
-        console.error('Scheduled backup failed:', withoutQueryParams(error));
-      }),
-      purgeSecretsTrash(env.DB).catch((error) => {
-        console.error('Secrets Manager trash purge failed:', withoutQueryParams(error));
-      }),
-      approveExpiredEmergencyAccess(env).catch((error) => {
-        console.error('Emergency access timeout job failed:', withoutQueryParams(error));
-      }),
-      remindPendingEmergencyAccess(env).catch((error) => {
-        console.error('Emergency access reminder job failed:', withoutQueryParams(error));
-      }),
-    ]));
+    ctx.waitUntil(
+      Promise.all([
+        pruneEvents(env).catch(() => console.error('Event cleanup failed')),
+        purgeExpiredEmailOtps(env).catch(() => console.error('Email code cleanup failed')),
+        runScheduledBackupIfDue(env).catch((error) => {
+          console.error('Scheduled backup failed:', withoutQueryParams(error));
+        }),
+        purgeSecretsTrash(env.DB).catch((error) => {
+          console.error('Secrets Manager trash purge failed:', withoutQueryParams(error));
+        }),
+        approveExpiredEmergencyAccess(env).catch((error) => {
+          console.error('Emergency access timeout job failed:', withoutQueryParams(error));
+        }),
+        remindPendingEmergencyAccess(env).catch((error) => {
+          console.error('Emergency access reminder job failed:', withoutQueryParams(error));
+        }),
+      ]),
+    );
   },
 
   async queue(batch: MessageBatch<PlatformEvent>, env: Env): Promise<void> {

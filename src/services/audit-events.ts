@@ -103,7 +103,7 @@ function normalizePositiveInteger(value: unknown, allowed: readonly number[]): n
 }
 
 export function normalizeAuditLogSettings(value: unknown): AuditLogSettings {
-  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const input = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   const retentionDays = normalizePositiveInteger(input.retentionDays, [7, 30, 90, 180, 365]);
   const maxEntries = normalizePositiveInteger(input.maxEntries, [1_000, 5_000, 10_000, 50_000]);
 
@@ -149,7 +149,7 @@ export async function saveAuditLogSettings(db: D1Database, settings: AuditLogSet
 }
 
 export async function applyAuditLogRetention(db: D1Database, settings?: AuditLogSettings): Promise<void> {
-  const current = settings || await getAuditLogSettings(db);
+  const current = settings || (await getAuditLogSettings(db));
   if (current.retentionDays) {
     const before = new Date(Date.now() - current.retentionDays * 24 * 60 * 60 * 1000).toISOString();
     await adminRepo.pruneAuditLogs(db, before);
@@ -179,11 +179,24 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
   }
 
   const orm = getOrm(db);
-  return orm.insert(auditLogs).select(orm.select(boundRow({
-    id: generateUUID(), actorUserId: event.actorUserId ?? null, action: event.action, category: event.category,
-    level: event.level || 'info', targetType: event.targetType ?? null, targetId: event.targetId ?? null,
-    metadata: metadataJson, createdAt: new Date().toISOString(),
-  })).from(SINGLE_ROW).where(guard));
+  return orm.insert(auditLogs).select(
+    orm
+      .select(
+        boundRow({
+          id: generateUUID(),
+          actorUserId: event.actorUserId ?? null,
+          action: event.action,
+          category: event.category,
+          level: event.level || 'info',
+          targetType: event.targetType ?? null,
+          targetId: event.targetId ?? null,
+          metadata: metadataJson,
+          createdAt: new Date().toISOString(),
+        }),
+      )
+      .from(SINGLE_ROW)
+      .where(guard),
+  );
 }
 
 export async function writeAuditEvent(db: D1Database, event: AuditEventInput): Promise<void> {
@@ -212,7 +225,7 @@ export async function writeDataAudit(
   userId: string,
   targetType: 'folder' | 'cipher' | 'attachment' | 'send',
   action: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
 ): Promise<void> {
   await writeAuditEvent(db, {
     actorUserId: userId,

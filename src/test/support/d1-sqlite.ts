@@ -37,7 +37,7 @@ class SqliteD1Statement {
   constructor(
     private readonly connection: SqliteConnection,
     private readonly query: string,
-    private readonly bindings: unknown[] = []
+    private readonly bindings: unknown[] = [],
   ) {}
 
   // D1 statements are immutable: drizzle prepares a query once and re-binds it per call.
@@ -45,11 +45,15 @@ class SqliteD1Statement {
   // bind as INTEGER. better-sqlite3 rejects booleans and binds every number as REAL (a TEXT column
   // would store 1 as '1.0'), so pass integers as bigint, which it binds as INTEGER.
   bind(...values: unknown[]): SqliteD1Statement {
-    return new SqliteD1Statement(this.connection, this.query, values.map((value) => {
-      if (value === undefined) throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported for value 'undefined'");
-      const scalar = typeof value === 'boolean' ? Number(value) : value;
-      return Number.isSafeInteger(scalar) ? BigInt(scalar as number) : scalar;
-    }));
+    return new SqliteD1Statement(
+      this.connection,
+      this.query,
+      values.map((value) => {
+        if (value === undefined) throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported for value 'undefined'");
+        const scalar = typeof value === 'boolean' ? Number(value) : value;
+        return Number.isSafeInteger(scalar) ? BigInt(scalar as number) : scalar;
+      }),
+    );
   }
 
   // D1 compiles lazily, so SQL errors (including "already exists", which the schema bootstrap
@@ -68,7 +72,10 @@ class SqliteD1Statement {
       // Row-returning writes (INSERT ... RETURNING) still report their changes, as D1 does.
       const writeInfo = statement.readonly
         ? { changes: 0, lastRowId: 0 }
-        : this.connection.prepare('SELECT changes() AS changes, last_insert_rowid() AS lastRowId').get() as { changes: number; lastRowId: number };
+        : (this.connection.prepare('SELECT changes() AS changes, last_insert_rowid() AS lastRowId').get() as {
+            changes: number;
+            lastRowId: number;
+          });
       return { columns: statement.columns().map((column: { name: string }) => column.name), rows, ...writeInfo };
     } catch (error) {
       throw new Error(`D1_ERROR: ${error instanceof Error ? error.message : String(error)}`, { cause: error });

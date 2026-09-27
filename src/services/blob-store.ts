@@ -55,7 +55,7 @@ export async function putBlobObject(
   env: Env,
   key: string,
   value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
-  options: PutBlobOptions
+  options: PutBlobOptions,
 ): Promise<void> {
   const contentType = options.contentType || DEFAULT_CONTENT_TYPE;
 

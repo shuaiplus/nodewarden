@@ -11,10 +11,7 @@ import {
   verifySendAccessToken,
   verifySendFileDownloadToken,
 } from '../utils/jwt';
-import {
-  getBlobObject,
-  getSendFileObjectKey,
-} from '../services/blob-store';
+import { getBlobObject, getSendFileObjectKey } from '../services/blob-store';
 import {
   SEND_INACCESSIBLE_MSG,
   extractBearerToken,
@@ -76,17 +73,27 @@ async function authorizeSendByToken(request: Request, env: Env): Promise<{ secre
 
 // Counts one access against the Send's limit, then tells the owner's devices and the event log.
 async function touchSendAccess(request: Request, env: Env, send: Send): Promise<Response | null> {
-  if (!await sendRepo.incrementSendAccessCount(env.DB, send.id)) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
+  if (!(await sendRepo.incrementSendAccessCount(env.DB, send.id))) return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   send.accessCount += 1;
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
   notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserSendUpdate(env, { userId: send.userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+  notifyUserSendUpdate(env, {
+    userId: send.userId,
+    sendId: send.id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(request),
+  });
   await recordSendEvent(env, request, send, 'accessed');
   return null;
 }
 
 // The file itself is fetched through a short-lived signed URL rather than a bearer header.
-async function sendFileDownloadResponse(request: Request, send: Send, fileId: string, secret: string): Promise<Response> {
+async function sendFileDownloadResponse(
+  request: Request,
+  send: Send,
+  fileId: string,
+  secret: string,
+): Promise<Response> {
   const token = await createSendFileDownloadToken(send.id, fileId, secret);
   return jsonResponse({
     object: 'send-fileDownload',
@@ -115,9 +122,8 @@ export async function handleAccessSendFile(
   request: Request,
   env: Env,
   idOrAccessId: string,
-  fileId: string
+  fileId: string,
 ): Promise<Response> {
-
   const send = await resolveSendFromIdOrAccessId(env.DB, idOrAccessId);
   if (!send || !isSendAvailable(send) || send.type !== SendType.File || !sendFileIdMatches(send, fileId)) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
@@ -163,9 +169,8 @@ export async function handleDownloadSendFile(
   request: Request,
   env: Env,
   sendId: string,
-  fileId: string
+  fileId: string,
 ): Promise<Response> {
-
   const url = new URL(request.url);
   const token = url.searchParams.get('t') || url.searchParams.get('token');
   if (!token) {
@@ -217,9 +222,8 @@ export async function issueSendAccessToken(
   passwordHashB64?: string | null,
   password?: string | null,
   rateLimit?: RateLimitService,
-  clientIdentifier?: string
+  clientIdentifier?: string,
 ): Promise<{ token: string } | { error: Response }> {
-
   const send = await resolveSendFromIdOrAccessId(env.DB, sendIdOrAccessId);
 
   if (!send || !isSendAvailable(send)) {
@@ -234,7 +238,7 @@ export async function issueSendAccessToken(
             Object: 'error',
           },
         },
-        400
+        400,
       ),
     };
   }
@@ -252,13 +256,12 @@ export async function issueSendAccessToken(
             Object: 'error',
           },
         },
-        501
+        501,
       ),
     };
   }
 
-  const sendPasswordLimitIpKey =
-    rateLimit && clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
+  const sendPasswordLimitIpKey = rateLimit && clientIdentifier ? sendPasswordLimitKey(clientIdentifier, send.id) : null;
 
   if (send.passwordHash) {
     if (rateLimit && sendPasswordLimitIpKey) {
@@ -297,7 +300,7 @@ export async function issueSendAccessToken(
               Object: 'error',
             },
           },
-          400
+          400,
         ),
       };
     }

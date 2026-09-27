@@ -84,7 +84,12 @@ const CreateOrganizationRequest = z.object({
 
 // Upstream CollectionAccessSelection; a flag that is not a boolean reads as false.
 const accessFlag = z.boolean().catch(false);
-const AccessSelection = z.object({ id: z.string(), readOnly: accessFlag, hidePasswords: accessFlag, manage: accessFlag });
+const AccessSelection = z.object({
+  id: z.string(),
+  readOnly: accessFlag,
+  hidePasswords: accessFlag,
+  manage: accessFlag,
+});
 type AccessSelection = z.output<typeof AccessSelection>;
 
 const CollectionRequest = z.object({
@@ -94,11 +99,7 @@ const CollectionRequest = z.object({
   groups: z.array(AccessSelection).nullish(),
 });
 
-async function requireMember(
-  db: D1Database,
-  userId: string,
-  orgId: string
-): Promise<MembershipRecord | Response> {
+async function requireMember(db: D1Database, userId: string, orgId: string): Promise<MembershipRecord | Response> {
   const member = await orgRepo.getMembershipByUserAndOrg(db, userId, orgId);
   if (!isActiveMember(member)) return errorResponse('Organization not found', 404);
   return member;
@@ -115,7 +116,7 @@ export async function createOwnedOrganization(
     publicKey?: string | null;
     privateKey?: string | null;
     identifier?: string | null;
-  }
+  },
 ) {
   const now = new Date().toISOString();
   const orgId = generateUUID();
@@ -175,7 +176,12 @@ export async function handleCreateOrganization(request: Request, env: Env, user:
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleGetOrganization(_request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleGetOrganization(
+  _request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   const org = await orgRepo.getOrganization(env.DB, orgId);
@@ -183,7 +189,12 @@ export async function handleGetOrganization(_request: Request, env: Env, userId:
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleUpdateOrganization(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleUpdateOrganization(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
@@ -217,18 +228,36 @@ export async function handleDeleteOrganization(env: Env, userId: string, orgId: 
   return jsonResponse({});
 }
 
-export async function handleLeaveOrganization(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleLeaveOrganization(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type === MembershipType.Owner && (await orgRepo.countConfirmedOwners(env.DB, orgId)) <= 1) {
     return errorResponse('The last owner cannot leave', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [member.id], 'remove');
-  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserLeft, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId }]);
+  await recordEvents(env, request, { userId }, [
+    {
+      type: EventType.OrganizationUserLeft,
+      organizationId: orgId,
+      resourceType: 'organizationUser',
+      resourceId: member.id,
+      userId: member.userId,
+    },
+  ]);
   return jsonResponse({});
 }
 
-export async function handlePostOrganizationKeys(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handlePostOrganizationKeys(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
@@ -255,7 +284,10 @@ export async function handleGetOrganizationKeys(env: Env, userId: string, orgId:
   return jsonResponse({ publicKey: org.publicKey, privateKey: org.privateKey, object: 'organizationKeys' });
 }
 
-function collectionJson(collection: Awaited<ReturnType<typeof orgRepo.getCollection>>, extra?: Record<string, unknown>) {
+function collectionJson(
+  collection: Awaited<ReturnType<typeof orgRepo.getCollection>>,
+  extra?: Record<string, unknown>,
+) {
   if (!collection) return null;
   return {
     id: collection.id,
@@ -280,11 +312,13 @@ export async function handleListAllCollections(env: Env, userId: string): Promis
     for (const collection of collections) {
       const permission = resolveCollectionPermission(member, assignedMap.get(collection.id) || null);
       if (!permission.canView && !hasFullCollectionAccess(member)) continue;
-      data.push(collectionJson(collection, {
-        readOnly: permission.readOnly,
-        hidePasswords: permission.hidePasswords,
-        manage: permission.manage,
-      }));
+      data.push(
+        collectionJson(collection, {
+          readOnly: permission.readOnly,
+          hidePasswords: permission.hidePasswords,
+          manage: permission.manage,
+        }),
+      );
     }
   }
   return jsonResponse({ data, object: 'list', continuationToken: null });
@@ -317,7 +351,7 @@ function collectionAccessDetailsJson(
   collection: CollectionRecord,
   member: MembershipRecord,
   access: CollectionAccess | null,
-  grants: orgRepo.CollectionAccessGrants
+  grants: orgRepo.CollectionAccessGrants,
 ) {
   const permission = resolveCollectionPermission(member, access);
   // Upstream aggregates the actor's own grants, so a reader holding none gets every flag false.
@@ -335,8 +369,16 @@ function collectionAccessDetailsJson(
   });
 }
 
-async function actorCollectionAccess(db: D1Database, userId: string, orgId: string, collectionId: string): Promise<CollectionAccess | null> {
-  return (await orgRepo.listUserCollectionAccess(db, userId, orgId)).find((item) => item.collectionId === collectionId) || null;
+async function actorCollectionAccess(
+  db: D1Database,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+): Promise<CollectionAccess | null> {
+  return (
+    (await orgRepo.listUserCollectionAccess(db, userId, orgId)).find((item) => item.collectionId === collectionId) ||
+    null
+  );
 }
 
 // Upstream GetManyWithDetails: every collection for those who may read all access, otherwise only
@@ -345,14 +387,26 @@ export async function handleListOrgCollectionDetails(env: Env, userId: string, o
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   const collections = await orgRepo.listCollectionsByOrg(env.DB, orgId);
-  const accessById = new Map((await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).map((item) => [item.collectionId, item]));
+  const accessById = new Map(
+    (await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).map((item) => [item.collectionId, item]),
+  );
   const grants = await orgRepo.listCollectionAccessGrants(env.DB, orgId);
   // The 9.0 member-access report maps grants in the client; AccessReports needs this bulk metadata
   // even though upstream's old collection gate omits it. Single-resource and write gates stay separate.
   const canReadReports = resolvePermissions(member).accessReports;
   const data = collections
-    .filter((collection) => canReadReports || canActOnCollection(member, accessById.get(collection.id) || null, 'readAllWithAccess'))
-    .map((collection) => collectionAccessDetailsJson(collection, member, accessById.get(collection.id) || null, grants.get(collection.id) || NO_ACCESS_GRANTS));
+    .filter(
+      (collection) =>
+        canReadReports || canActOnCollection(member, accessById.get(collection.id) || null, 'readAllWithAccess'),
+    )
+    .map((collection) =>
+      collectionAccessDetailsJson(
+        collection,
+        member,
+        accessById.get(collection.id) || null,
+        grants.get(collection.id) || NO_ACCESS_GRANTS,
+      ),
+    );
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
@@ -362,7 +416,7 @@ async function authorizedCollection(
   userId: string,
   orgId: string,
   collectionId: string,
-  operation: CollectionOperation
+  operation: CollectionOperation,
 ): Promise<{ member: MembershipRecord; collection: CollectionRecord; access: CollectionAccess | null } | Response> {
   const member = await requireMember(db, userId, orgId);
   if (member instanceof Response) return member;
@@ -374,11 +428,20 @@ async function authorizedCollection(
   return { member, collection, access };
 }
 
-async function collectionGrants(db: D1Database, orgId: string, collectionId: string): Promise<orgRepo.CollectionAccessGrants> {
+async function collectionGrants(
+  db: D1Database,
+  orgId: string,
+  collectionId: string,
+): Promise<orgRepo.CollectionAccessGrants> {
   return (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) || NO_ACCESS_GRANTS;
 }
 
-export async function handleGetOrgCollectionDetails(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+export async function handleGetOrgCollectionDetails(
+  env: Env,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+): Promise<Response> {
   const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readWithAccess');
   if (target instanceof Response) return target;
   const grants = await collectionGrants(env.DB, orgId, collectionId);
@@ -386,7 +449,12 @@ export async function handleGetOrgCollectionDetails(env: Env, userId: string, or
 }
 
 // Upstream GetUsers: a bare SelectionReadOnlyResponseModel array, not a list envelope.
-export async function handleListOrgCollectionUsers(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+export async function handleListOrgCollectionUsers(
+  env: Env,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+): Promise<Response> {
   const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'readAccess');
   if (target instanceof Response) return target;
   return jsonResponse((await collectionGrants(env.DB, orgId, collectionId)).users);
@@ -394,10 +462,20 @@ export async function handleListOrgCollectionUsers(env: Env, userId: string, org
 
 // Upstream Post and Put answer with the saved collection's fresh access details when the actor may
 // read them, and otherwise with the bare Collection constructor: no grants and every flag false.
-async function savedCollectionJson(db: D1Database, userId: string, member: MembershipRecord, collection: CollectionRecord) {
+async function savedCollectionJson(
+  db: D1Database,
+  userId: string,
+  member: MembershipRecord,
+  collection: CollectionRecord,
+) {
   const access = await actorCollectionAccess(db, userId, collection.orgId, collection.id);
   if (canActOnCollection(member, access, 'readWithAccess')) {
-    return collectionAccessDetailsJson(collection, member, access, await collectionGrants(db, collection.orgId, collection.id));
+    return collectionAccessDetailsJson(
+      collection,
+      member,
+      access,
+      await collectionGrants(db, collection.orgId, collection.id),
+    );
   }
   return collectionJson(collection, {
     ...NO_ACTOR_FLAGS,
@@ -409,7 +487,12 @@ async function savedCollectionJson(db: D1Database, userId: string, member: Membe
   });
 }
 
-export async function handleCreateOrgCollection(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleCreateOrgCollection(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canCreateCollection(member)) return errorResponse('Access denied', 403);
@@ -426,12 +509,20 @@ export async function handleCreateOrgCollection(request: Request, env: Env, user
   };
   await orgRepo.saveCollection(env.DB, collection);
   await applyCollectionAccess(env.DB, orgId, collection.id, body);
-  await recordEvents(env, request, { userId }, [{ type: EventType.CollectionCreated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id }]);
+  await recordEvents(env, request, { userId }, [
+    { type: EventType.CollectionCreated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id },
+  ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
 
-export async function handleUpdateOrgCollection(request: Request, env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+export async function handleUpdateOrgCollection(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+): Promise<Response> {
   const target = await authorizedCollection(env.DB, userId, orgId, collectionId, 'update');
   if (target instanceof Response) return target;
   const { member, collection } = target;
@@ -444,13 +535,26 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   await orgRepo.saveCollection(env.DB, collection);
   const accessChanged = await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
   if (accessChanged || collection.name !== previousSettings[0] || collection.externalId !== previousSettings[1]) {
-    await recordEvents(env, request, { userId }, [{ type: EventType.CollectionUpdated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id }]);
+    await recordEvents(env, request, { userId }, [
+      {
+        type: EventType.CollectionUpdated,
+        organizationId: orgId,
+        resourceType: 'collection',
+        resourceId: collection.id,
+      },
+    ]);
   }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
 
-export async function handleDeleteOrgCollection(request: Request, env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+export async function handleDeleteOrgCollection(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  collectionId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   const collection = await orgRepo.getCollection(env.DB, collectionId);
@@ -459,14 +563,25 @@ export async function handleDeleteOrgCollection(request: Request, env: Env, user
     return errorResponse('Access denied', 403);
   }
   await orgRepo.deleteCollection(env.DB, collectionId);
-  await recordEvents(env, request, { userId }, [{ type: EventType.CollectionDeleted, organizationId: collection.orgId, resourceType: 'collection', resourceId: collection.id }]);
+  await recordEvents(env, request, { userId }, [
+    {
+      type: EventType.CollectionDeleted,
+      organizationId: collection.orgId,
+      resourceType: 'collection',
+      resourceId: collection.id,
+    },
+  ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
 
 // Membership and group ids come straight from the request body, so each posted entry is matched
 // against the organization's own records and unknown ids are skipped. An omitted list stays undefined.
-function grantedSelections<T extends { id: string }, R>(entries: AccessSelection[] | null | undefined, records: T[], grantee: (record: T) => R) {
+function grantedSelections<T extends { id: string }, R>(
+  entries: AccessSelection[] | null | undefined,
+  records: T[],
+  grantee: (record: T) => R,
+) {
   if (!entries) return undefined;
   const recordsById = new Map(records.map((record) => [record.id, record]));
   return entries.flatMap(({ id, ...flags }) => {
@@ -476,7 +591,7 @@ function grantedSelections<T extends { id: string }, R>(entries: AccessSelection
 }
 
 function accessEventState(entries: unknown[]): string {
-  return JSON.stringify(entries.map(entry => JSON.stringify(entry, Object.keys(entry as object).sort())).sort());
+  return JSON.stringify(entries.map((entry) => JSON.stringify(entry, Object.keys(entry as object).sort())).sort());
 }
 
 // As upstream ReplaceAsync, an omitted list leaves that access as is and an empty one removes it,
@@ -486,21 +601,30 @@ async function applyCollectionAccess(
   db: D1Database,
   orgId: string,
   collectionId: string,
-  { users, groups }: z.output<typeof CollectionRequest>
+  { users, groups }: z.output<typeof CollectionRequest>,
 ): Promise<boolean> {
   if (!users && !groups) return false;
   const [members, groupRecords] = await Promise.all([
     users ? orgRepo.listMembershipsByOrg(db, orgId) : [],
     groups ? orgRepo.listGroupsByOrg(db, orgId) : [],
   ]);
-  const previous = (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) ?? { users: [], groups: [] };
+  const previous = (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) ?? {
+    users: [],
+    groups: [],
+  };
   const selection = {
     users: grantedSelections(users, members, (member) => ({ member })),
     groups: grantedSelections(groups, groupRecords, (group) => ({ groupId: group.id })),
   };
   await orgRepo.replaceCollectionAccess(db, collectionId, selection);
-  return (selection.users !== undefined && accessEventState(previous.users) !== accessEventState(selection.users.map(({ member, ...flags }) => ({ id: member.id, ...flags }))))
-    || (selection.groups !== undefined && accessEventState(previous.groups) !== accessEventState(selection.groups.map(({ groupId, ...flags }) => ({ id: groupId, ...flags }))));
+  return (
+    (selection.users !== undefined &&
+      accessEventState(previous.users) !==
+        accessEventState(selection.users.map(({ member, ...flags }) => ({ id: member.id, ...flags })))) ||
+    (selection.groups !== undefined &&
+      accessEventState(previous.groups) !==
+        accessEventState(selection.groups.map(({ groupId, ...flags }) => ({ id: groupId, ...flags }))))
+  );
 }
 
 // Upstream deleted Manager (3), so EnumDataType on the request's Type rejects it like any unknown value.
@@ -520,19 +644,22 @@ const MemberUpdateRequest = z.object(memberChangeFields);
 
 // Upstream checks the invited emails before the rest of the request.
 const MemberInviteRequest = z.object({
-  emails: z.array(z.string()).nullish()
+  emails: z
+    .array(z.string())
+    .nullish()
     .transform((emails) => (emails ?? []).map((email) => email.trim().toLowerCase()).filter(Boolean))
     .superRefine((emails, context) => {
       const message = !emails.length
         ? 'An email is required.'
         : emails.length > MAX_INVITE_EMAILS
           ? `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.`
-          // Upstream reports the first failing address, checking its format before its length.
-          : emails.flatMap((email, index) => {
-            if (!EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
-            if (email.length > MAX_INVITE_EMAIL_LENGTH) return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
-            return [];
-          })[0];
+          : // Upstream reports the first failing address, checking its format before its length.
+            emails.flatMap((email, index) => {
+              if (!EMAIL_PATTERN.test(email)) return [`Email #${index + 1} is not valid.`];
+              if (email.length > MAX_INVITE_EMAIL_LENGTH)
+                return [`Email #${index + 1} is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`];
+              return [];
+            })[0];
       if (message) context.addIssue({ code: 'custom', message });
     }),
   ...memberChangeFields,
@@ -543,7 +670,11 @@ type MemberChange =
   | { ok: false; status: number; message: string };
 
 // Checks the requested collections and groups against the organization's own records.
-async function readMemberChange(db: D1Database, orgId: string, body: z.output<typeof MemberUpdateRequest>): Promise<MemberChange> {
+async function readMemberChange(
+  db: D1Database,
+  orgId: string,
+  body: z.output<typeof MemberUpdateRequest>,
+): Promise<MemberChange> {
   const collections = body.collections?.map(({ id, ...flags }) => ({ collectionId: id, ...flags }));
   const groupIds = body.groups ?? undefined;
   // Upstream 735cc5db4: every id must belong to this organization, and missing or foreign ids fail
@@ -559,7 +690,8 @@ async function readMemberChange(db: D1Database, orgId: string, body: z.output<ty
     return {
       ok: false,
       status: 400,
-      message: 'The Manage property is mutually exclusive and cannot be true while the ReadOnly or HidePasswords properties are also true.',
+      message:
+        'The Manage property is mutually exclusive and cannot be true while the ReadOnly or HidePasswords properties are also true.',
     };
   }
   return { ok: true, type: body.type, permissions: body.permissions, collections, groupIds };
@@ -572,7 +704,7 @@ async function authorizeMemberCollections(
   actorUserId: string,
   actor: MembershipRecord,
   target: MembershipRecord | null,
-  requested: CollectionAccess[] | undefined
+  requested: CollectionAccess[] | undefined,
 ): Promise<CollectionAccess[] | undefined | Response> {
   if (!requested) return undefined;
   const check = memberCollectionsCheck({
@@ -603,21 +735,28 @@ function memberMiniDetails(item: MembershipRecord, account: Pick<User, 'name' | 
   };
 }
 
-export async function handleListMembers(env: Env, userId: string, orgId: string, includeGroups = false): Promise<Response> {
+export async function handleListMembers(
+  env: Env,
+  userId: string,
+  orgId: string,
+  includeGroups = false,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   const groupsByMember = includeGroups ? await orgRepo.listMembershipGroupIdsByOrg(env.DB, orgId) : null;
-  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account, hasTwoFactorPasskey }) => ({
-    ...memberMiniDetails(item, account),
-    ...(groupsByMember ? { groups: groupsByMember.get(item.id) || [] } : {}),
-    externalId: item.externalId,
-    accessAll: item.accessAll,
-    twoFactorEnabled: account ? twoFactorProviders(account, hasTwoFactorPasskey).length > 0 : false,
-    resetPasswordEnrolled: !!item.resetPasswordKey,
-    permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
-    accessSecretsManager: canAccessSecretsManager(item),
-    object: 'organizationUserUserDetails',
-  }));
+  const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(
+    ({ item, account, hasTwoFactorPasskey }) => ({
+      ...memberMiniDetails(item, account),
+      ...(groupsByMember ? { groups: groupsByMember.get(item.id) || [] } : {}),
+      externalId: item.externalId,
+      accessAll: item.accessAll,
+      twoFactorEnabled: account ? twoFactorProviders(account, hasTwoFactorPasskey).length > 0 : false,
+      resetPasswordEnrolled: !!item.resetPasswordKey,
+      permissions: item.type === MembershipType.Custom ? resolvePermissions(item) : null,
+      accessSecretsManager: canAccessSecretsManager(item),
+      object: 'organizationUserUserDetails',
+    }),
+  );
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
@@ -636,7 +775,13 @@ export async function handleListMemberMiniDetails(env: Env, userId: string, orgI
 
 // Upstream OrganizationUsersController.Get: the OrganizationUserDetailsResponseModel that official
 // web's edit-member dialog loads with includeGroups=true before it can open.
-export async function handleGetMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleGetMember(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -685,33 +830,53 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
   // Upstream InviteUsersAsync invites each distinct address once and skips any address already in the
   // org by its invited or bound account email (SelectKnownEmailsAsync), so a re-invite neither mails
   // nor adds a row that accept would refuse. Nothing left to invite still succeeds, as upstream.
-  const knownEmails = new Set((await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId))
-    .flatMap(({ item, account }) => [item.email?.toLowerCase(), account?.email.toLowerCase()]));
+  const knownEmails = new Set(
+    (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).flatMap(({ item, account }) => [
+      item.email?.toLowerCase(),
+      account?.email.toLowerCase(),
+    ]),
+  );
   const now = new Date().toISOString();
   // Upstream OrganizationService.InviteUsersAsync: every invite starts Invited and unbound, even for
   // an existing account, so the invitee stays hidden until they accept with the emailed token.
-  const invites = [...new Set(body.emails)].filter((email) => !knownEmails.has(email)).map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
+  const invites = [...new Set(body.emails)]
+    .filter((email) => !knownEmails.has(email))
+    .map((email) => ({ id: generateUUID(), email, invitedByEmail: user.email }));
   if (!invites.length) return jsonResponse({});
   const mailed = await mailOrganizationInvites(request, env, orgId, user.id, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
-  await orgRepo.insertInvitedMemberships(env.DB, invites.map(({ id, email }) => ({
-    id,
-    userId: null,
-    orgId,
-    email,
-    invitedByEmail: user.email,
-    // Upstream's invite request has no AccessAll either; see handleEditMember.
-    accessAll: false,
-    key: '',
-    status: MembershipStatus.Invited,
-    type: change.type,
-    permissions: storedPermissions(change),
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  })), { ...change, collections });
-  await recordEvents(env, request, { userId: user.id }, invites.map(invite => ({ type: EventType.OrganizationUserInvited, organizationId: orgId, resourceType: 'organizationUser', resourceId: invite.id })));
+  await orgRepo.insertInvitedMemberships(
+    env.DB,
+    invites.map(({ id, email }) => ({
+      id,
+      userId: null,
+      orgId,
+      email,
+      invitedByEmail: user.email,
+      // Upstream's invite request has no AccessAll either; see handleEditMember.
+      accessAll: false,
+      key: '',
+      status: MembershipStatus.Invited,
+      type: change.type,
+      permissions: storedPermissions(change),
+      resetPasswordKey: null,
+      externalId: null,
+      createdAt: now,
+      updatedAt: now,
+    })),
+    { ...change, collections },
+  );
+  await recordEvents(
+    env,
+    request,
+    { userId: user.id },
+    invites.map((invite) => ({
+      type: EventType.OrganizationUserInvited,
+      organizationId: orgId,
+      resourceType: 'organizationUser',
+      resourceId: invite.id,
+    })),
+  );
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -754,20 +919,43 @@ export async function mailOrganizationInvites(
     };
   }
   const organization = await orgRepo.getOrganization(env.DB, orgId);
-  const registered = await orgRepo.listRegisteredEmails(env.DB, deliverable.map(({ email }) => email));
+  const registered = await orgRepo.listRegisteredEmails(
+    env.DB,
+    deliverable.map(({ email }) => email),
+  );
   const expiresAt = Math.floor(Date.now() / 1000) + ORG_INVITE_TTL_DAYS * 86400;
-  const outcomes = await Promise.all(deliverable.map(async ({ id, email, invitedByEmail }) => sendMail(env, email, 'organizationInvite', {
-    vaultOrigin, organizationId: orgId, organizationUserId: id,
-    organizationName: organization?.name ?? '', email,
-    token: await createOrgInviteToken(env.JWT_SECRET, id, email, expiresAt), hasExistingUser: registered.has(email),
-    inviterEmail: !inviter.startsWith('scim:') && invitedByEmail && EMAIL_PATTERN.test(invitedByEmail) ? invitedByEmail : undefined,
-    expiresAt: new Date(expiresAt * 1000).toISOString(),
-  })));
-  for (const outcome of outcomes) { const check = mailStatusCheck(outcome); if (!check.ok) return check; }
+  const outcomes = await Promise.all(
+    deliverable.map(async ({ id, email, invitedByEmail }) =>
+      sendMail(env, email, 'organizationInvite', {
+        vaultOrigin,
+        organizationId: orgId,
+        organizationUserId: id,
+        organizationName: organization?.name ?? '',
+        email,
+        token: await createOrgInviteToken(env.JWT_SECRET, id, email, expiresAt),
+        hasExistingUser: registered.has(email),
+        inviterEmail:
+          !inviter.startsWith('scim:') && invitedByEmail && EMAIL_PATTERN.test(invitedByEmail)
+            ? invitedByEmail
+            : undefined,
+        expiresAt: new Date(expiresAt * 1000).toISOString(),
+      }),
+    ),
+  );
+  for (const outcome of outcomes) {
+    const check = mailStatusCheck(outcome);
+    if (!check.ok) return check;
+  }
   return { ok: true };
 }
 
-export async function handleAcceptInvite(request: Request, env: Env, user: User, orgId: string, memberId: string): Promise<Response> {
+export async function handleAcceptInvite(
+  request: Request,
+  env: Env,
+  user: User,
+  orgId: string,
+  memberId: string,
+): Promise<Response> {
   const membership = await orgRepo.getMembership(env.DB, memberId);
   if (!membership || membership.orgId !== orgId) return errorResponse('Organization user mismatch', 404);
   // The emailed token is the only proof that this user owns the invited mailbox (upstream
@@ -781,7 +969,7 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
     membership,
     user.email,
     await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId),
-    organization?.name ?? ''
+    organization?.name ?? '',
   );
   if (!check.ok) return errorResponse(check.message, 400);
   await orgRepo.saveAcceptedMembership(env.DB, {
@@ -796,8 +984,17 @@ export async function handleAcceptInvite(request: Request, env: Env, user: User,
   runInBackground('organization-user-accepted', async () => {
     for (const { item, account } of await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)) {
       const email = account?.email || item.email;
-      if (item.status !== MembershipStatus.Confirmed || item.type > MembershipType.Admin || item.userId === user.id || !email) continue;
-      await sendMail(env, email, 'organizationUserAccepted', { organizationName: organization?.name || '', memberName: user.name || user.email });
+      if (
+        item.status !== MembershipStatus.Confirmed ||
+        item.type > MembershipType.Admin ||
+        item.userId === user.id ||
+        !email
+      )
+        continue;
+      await sendMail(env, email, 'organizationUserAccepted', {
+        organizationName: organization?.name || '',
+        memberName: user.name || user.email,
+      });
     }
   });
   return jsonResponse({});
@@ -808,11 +1005,16 @@ function notifyConfirmedMembers(request: Request, env: Env, orgId: string, membe
   runInBackground('organization-user-confirmed', async () => {
     const ids = new Set(members.map((member) => member.id));
     const [organization, rows] = await Promise.all([
-      orgRepo.getOrganization(env.DB, orgId), orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId),
+      orgRepo.getOrganization(env.DB, orgId),
+      orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId),
     ]);
     for (const { item, account } of rows) {
       const email = account?.email || item.email;
-      if (ids.has(item.id) && email) await sendMail(env, email, 'organizationUserConfirmed', { organizationName: organization?.name || '', vaultOrigin });
+      if (ids.has(item.id) && email)
+        await sendMail(env, email, 'organizationUserConfirmed', {
+          organizationName: organization?.name || '',
+          vaultOrigin,
+        });
     }
   });
 }
@@ -820,7 +1022,8 @@ function notifyConfirmedMembers(request: Request, env: Env, orgId: string, membe
 // Upstream OrganizationUserBulkRequestModel.Ids is [Required, MinLength(1)] and defaults to an empty
 // list, so an absent field fails MinLength and only an explicit null fails Required.
 const BulkIdsRequest = z.object({
-  ids: z.array(z.string(), { error: 'The Ids field is required.' })
+  ids: z
+    .array(z.string(), { error: 'The Ids field is required.' })
     .min(1, { error: "The field Ids must be a string or array type with a minimum length of '1'." })
     .prefault([]),
 });
@@ -837,7 +1040,12 @@ function bulkResultsResponse(results: Array<{ id: string; error: string }>): Res
 
 // Upstream OrganizationUsersController.UserPublicKeys: official web's bulk confirm dialog wraps the
 // org key with each selected member's public key before it posts the confirm.
-export async function handleListMemberPublicKeys(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleListMemberPublicKeys(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -846,13 +1054,23 @@ export async function handleListMemberPublicKeys(request: Request, env: Env, use
   const { ids } = body;
   const keys = await orgRepo.listAcceptedMemberPublicKeys(env.DB, orgId, ids);
   return jsonResponse({
-    data: keys.map(({ publicKey, ...member }) => ({ ...member, key: publicKey, object: 'organizationUserPublicKeyResponseModel' })),
+    data: keys.map(({ publicKey, ...member }) => ({
+      ...member,
+      key: publicKey,
+      object: 'organizationUserPublicKeyResponseModel',
+    })),
     object: 'list',
     continuationToken: null,
   });
 }
 
-export async function handleConfirmMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleConfirmMember(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -863,7 +1081,15 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   const confirmed = confirmedWithKey(check, body.key);
   if (!confirmed.ok) return errorResponse(confirmed.message, 400);
   await orgRepo.saveMembership(env.DB, confirmed.member);
-  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserConfirmed, organizationId: orgId, resourceType: 'organizationUser', resourceId: confirmed.member.id, userId: confirmed.member.userId }]);
+  await recordEvents(env, request, { userId }, [
+    {
+      type: EventType.OrganizationUserConfirmed,
+      organizationId: orgId,
+      resourceType: 'organizationUser',
+      resourceId: confirmed.member.id,
+      userId: confirmed.member.userId,
+    },
+  ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   notifyConfirmedMembers(request, env, orgId, [confirmed.member]);
   return jsonResponse({});
@@ -873,30 +1099,55 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
 function confirmedWithKey(check: MemberCheck, key: string): MemberCheck {
   if (!check.ok) return check;
   if (!MEMBER_ORG_KEY_PATTERN.test(key)) return { ok: false, message: 'Key is not a valid encrypted string.' };
-  return { ok: true, member: { ...check.member, key, status: MembershipStatus.Confirmed, updatedAt: new Date().toISOString() } };
+  return {
+    ok: true,
+    member: { ...check.member, key, status: MembershipStatus.Confirmed, updatedAt: new Date().toISOString() },
+  };
 }
 
 // Upstream BulkConfirm: each {id, key} entry is confirmed on its own and reports its own error, and
 // the confirmed rows are saved together. Upstream drops entries it will not confirm; every entry
 // gets a result here, and the org's rows are read once, so another org's member reads like an id
 // that does not exist.
-export async function handleBulkConfirmMembers(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleBulkConfirmMembers(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, z.object({
-    keys: z.array(z.object({ id: z.string(), key: z.string().trim() }), { error: 'The Keys field is required.' }),
-  }));
+  const body = await parseBody(
+    request,
+    z.object({
+      keys: z.array(z.object({ id: z.string(), key: z.string().trim() }), { error: 'The Keys field is required.' }),
+    }),
+  );
   if (body instanceof Response) return body;
   const membersById = new Map((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((member) => [member.id, member]));
   // Upstream's ToDictionary rejects a repeated id; here the last key sent for an id wins, so each
   // member is confirmed once.
   const keysById = new Map(body.keys.map(({ id, key }) => [id, key]));
-  const results = [...keysById].map(([id, key]) => ({ id, check: confirmedWithKey(confirmMemberCheck(membersById.get(id) ?? null, orgId), key) }));
+  const results = [...keysById].map(([id, key]) => ({
+    id,
+    check: confirmedWithKey(confirmMemberCheck(membersById.get(id) ?? null, orgId), key),
+  }));
   const confirmed = results.flatMap(({ check }) => (check.ok ? [check.member] : []));
   if (confirmed.length) {
     await orgRepo.saveMemberships(env.DB, confirmed);
-    await recordEvents(env, request, { userId }, confirmed.map(member => ({ type: EventType.OrganizationUserConfirmed, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId })));
+    await recordEvents(
+      env,
+      request,
+      { userId },
+      confirmed.map((member) => ({
+        type: EventType.OrganizationUserConfirmed,
+        organizationId: orgId,
+        resourceType: 'organizationUser',
+        resourceId: member.id,
+        userId: member.userId,
+      })),
+    );
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
     notifyConfirmedMembers(request, env, orgId, confirmed);
   }
@@ -907,13 +1158,22 @@ export async function handleBulkConfirmMembers(request: Request, env: Env, userI
 // Invited rows of the org; an accepted, confirmed, revoked or staged row is "User invalid.".
 const REINVITE_INVALID = 'User invalid.';
 
-function isReinvitable(membership: MembershipRecord | null, orgId: string): membership is MembershipRecord & { email: string } {
+function isReinvitable(
+  membership: MembershipRecord | null,
+  orgId: string,
+): membership is MembershipRecord & { email: string } {
   return membership?.status === MembershipStatus.Invited && membership.orgId === orgId && !!membership.email;
 }
 
 // A resend mails the row a fresh token through mailOrganizationInvites, so it spends the inviter's
 // budget like an invite and recovers an invite whose token has expired.
-export async function handleReinviteMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleReinviteMember(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -927,7 +1187,12 @@ export async function handleReinviteMember(request: Request, env: Env, userId: s
 // Every requested id gets a result and the Invited rows go out in one budgeted send, so a batch
 // over the budget mails nothing. Upstream drops missing ids and reports another org's rows; both
 // read as "User invalid." here, since only the org's own rows are loaded.
-export async function handleBulkReinviteMembers(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleBulkReinviteMembers(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -939,10 +1204,18 @@ export async function handleBulkReinviteMembers(request: Request, env: Env, user
   const invites = targets.flatMap(({ membership }) => (isReinvitable(membership, orgId) ? [membership] : []));
   const mailed = await mailOrganizationInvites(request, env, orgId, userId, invites);
   if (!mailed.ok) return errorResponse(mailed.message, mailed.status, mailed.headers);
-  return bulkResultsResponse(targets.map(({ id, membership }) => ({ id, error: isReinvitable(membership, orgId) ? '' : REINVITE_INVALID })));
+  return bulkResultsResponse(
+    targets.map(({ id, membership }) => ({ id, error: isReinvitable(membership, orgId) ? '' : REINVITE_INVALID })),
+  );
 }
 
-export async function handleEditMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleEditMember(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -954,12 +1227,21 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (!change.ok) return errorResponse(change.message, change.status);
   const collections = await authorizeMemberCollections(env.DB, userId, actor, membership, change.collections);
   if (collections instanceof Response) return collections;
-  const roleCheck = memberRoleChangeCheck(actor, clientMembershipType(membership.type), change.type, change.permissions, 'update');
+  const roleCheck = memberRoleChangeCheck(
+    actor,
+    clientMembershipType(membership.type),
+    change.type,
+    change.permissions,
+    'update',
+  );
   if (!roleCheck.ok) return errorResponse(roleCheck.message, 400);
   // Leaving Owner must leave another confirmed owner behind. Upstream HasConfirmedOwnersExceptAsync
   // does not count this member when it is a confirmed Owner itself.
   const isConfirmedOwner = membership.type === MembershipType.Owner && membership.status === MembershipStatus.Confirmed;
-  if (change.type !== MembershipType.Owner && !((await orgRepo.countConfirmedOwners(env.DB, membership.orgId)) > (isConfirmedOwner ? 1 : 0))) {
+  if (
+    change.type !== MembershipType.Owner &&
+    !((await orgRepo.countConfirmedOwners(env.DB, membership.orgId)) > (isConfirmedOwner ? 1 : 0))
+  ) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   const previousType = membership.type;
@@ -977,13 +1259,26 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   // Upstream skips groups on a restricted self-edit rather than failing it, as groups carry collection access.
   const groupIds = restrictsEditingSelf(actor, membership) ? undefined : change.groupIds;
   await orgRepo.saveMembershipWithAccess(env.DB, membership, { collections, groupIds });
-  const memberChanged = previousType !== membership.type || previousPermissions !== JSON.stringify(membership.permissions)
-    || previousAccessAll !== membership.accessAll || (collections !== undefined && accessEventState(previousCollections) !== accessEventState(collections));
-  const groupsChanged = groupIds !== undefined && JSON.stringify([...new Set(previousGroups)].sort()) !== JSON.stringify([...new Set(groupIds)].sort());
+  const memberChanged =
+    previousType !== membership.type ||
+    previousPermissions !== JSON.stringify(membership.permissions) ||
+    previousAccessAll !== membership.accessAll ||
+    (collections !== undefined && accessEventState(previousCollections) !== accessEventState(collections));
+  const groupsChanged =
+    groupIds !== undefined &&
+    JSON.stringify([...new Set(previousGroups)].sort()) !== JSON.stringify([...new Set(groupIds)].sort());
   // Upstream's member update logs OrganizationUser_Updated even when only groups change; it reserves
   // OrganizationUser_UpdatedGroups for the group endpoints.
   if (memberChanged || groupsChanged) {
-    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserUpdated, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
+    await recordEvents(env, request, { userId }, [
+      {
+        type: EventType.OrganizationUserUpdated,
+        organizationId: orgId,
+        resourceType: 'organizationUser',
+        resourceId: membership.id,
+        userId: membership.userId,
+      },
+    ]);
   }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
@@ -993,7 +1288,14 @@ type MemberAction = 'remove' | 'revoke' | 'restore';
 
 // One membership transition for any number of ids: per-id role checks, the last-confirmed-owner
 // guard (an Owner can only be restored by another Owner), then one chunked batch and its events.
-async function applyMemberAction(request: Request, env: Env, userId: string, orgId: string, ids: string[], action: MemberAction): Promise<Array<{ id: string; error: string }> | Response> {
+async function applyMemberAction(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  ids: string[],
+  action: MemberAction,
+): Promise<Array<{ id: string; error: string }> | Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -1005,20 +1307,50 @@ async function applyMemberAction(request: Request, env: Env, userId: string, org
     return { id, error: check.ok ? '' : check.message };
   });
   if (action !== 'restore') {
-    const owners = new Set(members.filter((member) => member.type === MembershipType.Owner && isActiveMember(member)).map((member) => member.id));
+    const owners = new Set(
+      members
+        .filter((member) => member.type === MembershipType.Owner && isActiveMember(member))
+        .map((member) => member.id),
+    );
     const removedOwners = results.filter((result) => !result.error && owners.has(result.id));
     if (removedOwners.length && removedOwners.length === owners.size) {
       for (const result of removedOwners) result.error = 'Organization must have at least one confirmed owner.';
     }
   }
-  const successful = results.filter(result => !result.error);
-  await orgRepo.applyMembershipAction(env.DB, orgId, successful.map(result => result.id), action);
-  const type = { remove: EventType.OrganizationUserRemoved, revoke: EventType.OrganizationUserRevoked, restore: EventType.OrganizationUserRestored }[action];
-  await recordEvents(env, request, { userId }, successful.map(({ id }) => ({ type, organizationId: orgId, resourceType: 'organizationUser', resourceId: id, userId: byId.get(id)!.userId })));
+  const successful = results.filter((result) => !result.error);
+  await orgRepo.applyMembershipAction(
+    env.DB,
+    orgId,
+    successful.map((result) => result.id),
+    action,
+  );
+  const type = {
+    remove: EventType.OrganizationUserRemoved,
+    revoke: EventType.OrganizationUserRevoked,
+    restore: EventType.OrganizationUserRestored,
+  }[action];
+  await recordEvents(
+    env,
+    request,
+    { userId },
+    successful.map(({ id }) => ({
+      type,
+      organizationId: orgId,
+      resourceType: 'organizationUser',
+      resourceId: id,
+      userId: byId.get(id)!.userId,
+    })),
+  );
   return results;
 }
 
-export async function handleBulkMemberAction(request: Request, env: Env, userId: string, orgId: string, action: MemberAction): Promise<Response> {
+export async function handleBulkMemberAction(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  action: MemberAction,
+): Promise<Response> {
   const body = await parseBody(request, BulkIdsRequest);
   if (body instanceof Response) return body;
   const { ids } = body;
@@ -1027,7 +1359,14 @@ export async function handleBulkMemberAction(request: Request, env: Env, userId:
   return results instanceof Response ? results : bulkResultsResponse(results);
 }
 
-async function handleMemberAction(request: Request, env: Env, userId: string, orgId: string, memberId: string, action: MemberAction): Promise<Response> {
+async function handleMemberAction(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+  action: MemberAction,
+): Promise<Response> {
   const results = await applyMemberAction(request, env, userId, orgId, [memberId], action);
   if (results instanceof Response) return results;
   const [{ error }] = results;
@@ -1035,9 +1374,27 @@ async function handleMemberAction(request: Request, env: Env, userId: string, or
   return error ? errorResponse(error, 400) : jsonResponse({});
 }
 
-export const handleDeleteMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'remove');
-export const handleRevokeMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'revoke');
-export const handleRestoreMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'restore');
+export const handleDeleteMember = (
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'remove');
+export const handleRevokeMember = (
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'revoke');
+export const handleRestoreMember = (
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  memberId: string,
+): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'restore');
 
 export async function handleListGroups(env: Env, userId: string, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
@@ -1059,16 +1416,25 @@ export async function handleListGroups(env: Env, userId: string, orgId: string):
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
 
-export async function handleSaveGroup(request: Request, env: Env, userId: string, orgId: string, groupId?: string): Promise<Response> {
+export async function handleSaveGroup(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  groupId?: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
-  const body = await parseBody(request, z.object({
-    name: optionalText,
-    accessAll: z.boolean().nullish(),
-    externalId: optionalText,
-    users: z.array(z.string()).nullish(),
-  }));
+  const body = await parseBody(
+    request,
+    z.object({
+      name: optionalText,
+      accessAll: z.boolean().nullish(),
+      externalId: optionalText,
+      users: z.array(z.string()).nullish(),
+    }),
+  );
   if (body instanceof Response) return body;
   const now = new Date().toISOString();
   const existing = groupId ? await orgRepo.getGroup(env.DB, groupId) : null;
@@ -1078,7 +1444,7 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   // write, so the response cannot probe other organizations. Like upstream, skip it without users.
   const orgMemberships = users.length ? await orgRepo.listMembershipsByOrg(env.DB, orgId) : [];
   if (users.length) {
-    const orgMembershipIds = new Set(orgMemberships.map(membership => membership.id));
+    const orgMembershipIds = new Set(orgMemberships.map((membership) => membership.id));
     if (users.some((id) => !orgMembershipIds.has(id))) return errorResponse('Resource not found.', 404);
   }
   const group = {
@@ -1095,11 +1461,33 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   if (users.length || !existing) await orgRepo.replaceGroupMembers(env.DB, group.id, users);
   const previousUserIds = new Set(previousUsers);
   const currentUserIds = new Set(users.length || !existing ? users : previousUsers);
-  const changedUsers = orgMemberships.filter(membership => previousUserIds.has(membership.id) !== currentUserIds.has(membership.id));
-  const groupChanged = !existing || changedUsers.length > 0 || existing.name !== group.name || existing.accessAll !== group.accessAll || existing.externalId !== group.externalId;
+  const changedUsers = orgMemberships.filter(
+    (membership) => previousUserIds.has(membership.id) !== currentUserIds.has(membership.id),
+  );
+  const groupChanged =
+    !existing ||
+    changedUsers.length > 0 ||
+    existing.name !== group.name ||
+    existing.accessAll !== group.accessAll ||
+    existing.externalId !== group.externalId;
   await recordEvents(env, request, { userId }, [
-    ...(groupChanged ? [{ type: existing ? EventType.GroupUpdated : EventType.GroupCreated, organizationId: orgId, resourceType: 'group' as const, resourceId: group.id }] : []),
-    ...changedUsers.map(membership => ({ type: EventType.OrganizationUserUpdatedGroups, organizationId: orgId, resourceType: 'organizationUser' as const, resourceId: membership.id, userId: membership.userId })),
+    ...(groupChanged
+      ? [
+          {
+            type: existing ? EventType.GroupUpdated : EventType.GroupCreated,
+            organizationId: orgId,
+            resourceType: 'group' as const,
+            resourceId: group.id,
+          },
+        ]
+      : []),
+    ...changedUsers.map((membership) => ({
+      type: EventType.OrganizationUserUpdatedGroups,
+      organizationId: orgId,
+      resourceType: 'organizationUser' as const,
+      resourceId: membership.id,
+      userId: membership.userId,
+    })),
   ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({
@@ -1112,14 +1500,22 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   });
 }
 
-export async function handleDeleteGroup(request: Request, env: Env, userId: string, orgId: string, groupId: string): Promise<Response> {
+export async function handleDeleteGroup(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  groupId: string,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
   const group = await orgRepo.getGroup(env.DB, groupId);
   if (!group || group.orgId !== orgId) return errorResponse('Group not found', 404);
   await orgRepo.deleteGroup(env.DB, groupId);
-  await recordEvents(env, request, { userId }, [{ type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id }]);
+  await recordEvents(env, request, { userId }, [
+    { type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id },
+  ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -1138,21 +1534,37 @@ export async function handleGetPolicy(env: Env, userId: string, orgId: string, p
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
   const policy = await orgRepo.getPolicy(env.DB, orgId, policyType);
-  return jsonResponse(policy
-    ? policyResponse(policy)
-    : { organizationId: orgId, type: policyType, enabled: false, data: {}, object: 'policy' });
+  return jsonResponse(
+    policy
+      ? policyResponse(policy)
+      : { organizationId: orgId, type: policyType, enabled: false, data: {}, object: 'policy' },
+  );
 }
 
 // Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; older clients
 // still send the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
 // marks Policy [Required], so a malformed envelope is rejected instead of saving a disabled policy.
-const policyState = z.object({
-  enabled: z.boolean().catch(false),
-  data: z.record(z.string(), z.unknown()).nullish().transform((data) => data ?? {}),
-}, { error: 'The Policy field is required.' });
-const SavePolicyRequest = policyState.extend({ policy: policyState.optional() }).transform(({ policy, ...flat }) => policy ?? flat);
+const policyState = z.object(
+  {
+    enabled: z.boolean().catch(false),
+    data: z
+      .record(z.string(), z.unknown())
+      .nullish()
+      .transform((data) => data ?? {}),
+  },
+  { error: 'The Policy field is required.' },
+);
+const SavePolicyRequest = policyState
+  .extend({ policy: policyState.optional() })
+  .transform(({ policy, ...flat }) => policy ?? flat);
 
-export async function handlePutPolicy(request: Request, env: Env, userId: string, orgId: string, policyType: number): Promise<Response> {
+export async function handlePutPolicy(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  policyType: number,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManagePolicies(member)) return errorResponse('Access denied', 403);
@@ -1168,8 +1580,14 @@ export async function handlePutPolicy(request: Request, env: Env, userId: string
     updatedAt: new Date().toISOString(),
   };
   await orgRepo.savePolicy(env.DB, policy);
-  if (!existing || existing.enabled !== policy.enabled || JSON.stringify(existing.data) !== JSON.stringify(policy.data)) {
-    await recordEvents(env, request, { userId }, [{ type: EventType.PolicyUpdated, organizationId: orgId, resourceType: 'policy', resourceId: policy.id }]);
+  if (
+    !existing ||
+    existing.enabled !== policy.enabled ||
+    JSON.stringify(existing.data) !== JSON.stringify(policy.data)
+  ) {
+    await recordEvents(env, request, { userId }, [
+      { type: EventType.PolicyUpdated, organizationId: orgId, resourceType: 'policy', resourceId: policy.id },
+    ]);
   }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(policyResponse(policy));
@@ -1182,10 +1600,17 @@ export async function handleGetPlans(): Promise<Response> {
 // Bitwarden guards the organization API key endpoints with a SecretVerificationRequestModel,
 // so re-authenticate the caller before minting a key instead of trusting the session alone. A sent
 // masterPasswordHash wins over secret even when it is null.
-const SecretVerificationRequest = z.object({ masterPasswordHash: z.string().nullish(), secret: z.string().nullish() })
+const SecretVerificationRequest = z
+  .object({ masterPasswordHash: z.string().nullish(), secret: z.string().nullish() })
   .transform((body) => ('masterPasswordHash' in body ? body.masterPasswordHash : body.secret)?.trim() ?? '');
 
-export async function handleOrgApiKey(request: Request, env: Env, userId: string, orgId: string, rotate: boolean): Promise<Response> {
+export async function handleOrgApiKey(
+  request: Request,
+  env: Env,
+  userId: string,
+  orgId: string,
+  rotate: boolean,
+): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type > MembershipType.Admin) return errorResponse('Access denied', 403);
@@ -1202,7 +1627,10 @@ export async function handleOrgApiKey(request: Request, env: Env, userId: string
   // a non-rotating read has nothing to hand back and must be rotated instead.
   const existing = await orgRepo.getOrganizationApiKey(env.DB, orgId);
   if (!rotate && existing) {
-    return errorResponse('The organization API key is only shown when it is created or rotated. Rotate it to get a new key.', 409);
+    return errorResponse(
+      'The organization API key is only shown when it is created or rotated. Rotate it to get a new key.',
+      409,
+    );
   }
 
   const apiKey = generateUUID().replace(/-/g, '') + generateUUID().replace(/-/g, '');
@@ -1227,7 +1655,9 @@ export async function handleRotateScimKey(env: Env, userId: string, orgId: strin
 }
 
 export async function verifyScimBearer(env: Env, orgId: string, authorization: string | null): Promise<boolean> {
-  const token = String(authorization || '').replace(/^Bearer\s+/i, '').trim();
+  const token = String(authorization || '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
   if (!token) return false;
   const stored = await orgRepo.getScimTokenHash(env.DB, orgId);
   if (!stored) return false;

@@ -44,7 +44,8 @@ const sendName = nonBlank('Name is required').trim();
 const sendKey = nonBlank('Key is required');
 const deletionDate = sendDate('Invalid deletionDate')
   .refine((date) => date.getTime() <= Date.now() + LIMITS.send.maxDeletionDays * DAY_MS, {
-    error: 'You cannot have a Send with a deletion date that far into the future. Adjust the Deletion Date to a value less than 31 days from now and try again.',
+    error:
+      'You cannot have a Send with a deletion date that far into the future. Adjust the Deletion Date to a value less than 31 days from now and try again.',
   })
   .transform((date) => date.toISOString());
 // The text or file object is stored as sent so new client fields round-trip; only the server's own
@@ -60,19 +61,27 @@ const SendEdit = z.object({
   key: sendKey.optional(),
   deletionDate: deletionDate.optional(),
   text: sendData.nullable().optional(),
-  maxAccessCount: z.preprocess(
-    (raw) => (raw === '' ? null : toInteger(raw)),
-    z.int({ error: 'Invalid maxAccessCount' }).min(0, { error: 'Invalid maxAccessCount' }).nullable()
-  ).optional(),
-  expirationDate: z.preprocess(
-    (raw) => (raw === '' ? null : raw),
-    sendDate('Invalid expirationDate').transform((date) => date.toISOString()).nullable()
-  ).optional(),
+  maxAccessCount: z
+    .preprocess(
+      (raw) => (raw === '' ? null : toInteger(raw)),
+      z.int({ error: 'Invalid maxAccessCount' }).min(0, { error: 'Invalid maxAccessCount' }).nullable(),
+    )
+    .optional(),
+  expirationDate: z
+    .preprocess(
+      (raw) => (raw === '' ? null : raw),
+      sendDate('Invalid expirationDate')
+        .transform((date) => date.toISOString())
+        .nullable(),
+    )
+    .optional(),
   authType: z.preprocess(toInteger, z.enum(SendAuthType, { error: 'Invalid authType' })).optional(),
-  emails: z.union(
-    [z.string().min(1, { error: emailsError }), z.array(z.string()).min(1, { error: emailsError })],
-    { error: emailsError }
-  ).nullable().optional(),
+  emails: z
+    .union([z.string().min(1, { error: emailsError }), z.array(z.string()).min(1, { error: emailsError })], {
+      error: emailsError,
+    })
+    .nullable()
+    .optional(),
   notes: z.string().nullable().catch(null).optional(),
   disabled: z.boolean({ error: 'Invalid disabled' }).optional(),
   hideEmail: z.boolean({ error: 'Invalid hideEmail' }).nullable().optional(),
@@ -92,19 +101,14 @@ const FileSendCreate = SendEdit.extend({
   ...newSendFields,
   fileLength: z.preprocess(
     toInteger,
-    z.int({ error: 'Invalid send length' }).min(0, { error: "Send size can't be negative" })
+    z.int({ error: 'Invalid send length' }).min(0, { error: "Send size can't be negative" }),
   ),
   file: sendData,
 });
 
 const SendIds = z.object({ ids: z.array(z.string(), { error: 'ids array is required' }) });
 
-async function processSendFileUpload(
-  request: Request,
-  env: Env,
-  send: Send,
-  fileId: string
-): Promise<Response> {
+async function processSendFileUpload(request: Request, env: Env, send: Send, fileId: string): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
   const { id, fileName, size } = parseStoredSendData(send);
   if (id !== fileId) {
@@ -147,7 +151,12 @@ async function processSendFileUpload(
 
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, send.userId);
   notifyUserVaultSync(env, send.userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserSendUpdate(env, { userId: send.userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+  notifyUserSendUpdate(env, {
+    userId: send.userId,
+    sendId: send.id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(request),
+  });
 
   return new Response(null, { status: 201 });
 }
@@ -192,9 +201,10 @@ async function parseNewSend(
   body: z.output<typeof TextSendCreate> | z.output<typeof FileSendCreate>,
   userId: string,
   type: SendType,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
 ): Promise<Send | Response> {
-  if (body.authType === SendAuthType.Email || body.emails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+  if (body.authType === SendAuthType.Email || body.emails)
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
 
   const now = new Date().toISOString();
   const send: Send = {
@@ -288,7 +298,7 @@ export async function handleGetSendFileUpload(
   env: Env,
   userId: string,
   sendId: string,
-  fileId: string
+  fileId: string,
 ): Promise<Response> {
   const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
   if (!send || send.userId !== userId) return errorResponse('Send not found', 404);
@@ -302,7 +312,7 @@ export async function handleUploadSendFile(
   env: Env,
   userId: string,
   sendId: string,
-  fileId: string
+  fileId: string,
 ): Promise<Response> {
   const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
   if (!send || send.userId !== userId) {
@@ -319,9 +329,8 @@ export async function handlePublicUploadSendFile(
   request: Request,
   env: Env,
   sendId: string,
-  fileId: string
+  fileId: string,
 ): Promise<Response> {
-
   const token = new URL(request.url).searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
@@ -355,7 +364,8 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   const body = await parseBody(request, SendEdit);
   if (body instanceof Response) return body;
   if (body.type !== undefined && body.type !== send.type) return errorResponse("Sends can't change type", 400);
-  if (body.authType === SendAuthType.Email || body.emails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+  if (body.authType === SendAuthType.Email || body.emails)
+    return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
   if (send.type === SendType.Text && body.text === null) return errorResponse('Send data not provided', 400);
 
   const { type, text, emails, password, ...edits } = body;
@@ -412,7 +422,12 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
   if (revisionDate) {
     notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const send of sends) {
-      notifyUserSendDelete(env, { userId, sendId: send.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+      notifyUserSendDelete(env, {
+        userId,
+        sendId: send.id,
+        revisionDate,
+        contextId: readActingDeviceIdentifier(request),
+      });
     }
     await recordSendEvents(env, request, userId, sends, 'deleted');
     await writeDataAudit(env.DB, request, userId, 'send', 'send.delete.bulk', {
@@ -424,7 +439,12 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
   return new Response(null, { status: 200 });
 }
 
-export async function handleRemoveSendPassword(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
+export async function handleRemoveSendPassword(
+  request: Request,
+  env: Env,
+  userId: string,
+  sendId: string,
+): Promise<Response> {
   const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);
@@ -441,7 +461,12 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
   return jsonResponse(sendToResponse(send));
 }
 
-export async function handleRemoveSendAuth(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
+export async function handleRemoveSendAuth(
+  request: Request,
+  env: Env,
+  userId: string,
+  sendId: string,
+): Promise<Response> {
   const send = await sendRepo.getSendForUser(env.DB, sendId, userId);
   if (!send || send.userId !== userId) {
     return errorResponse('Send not found', 404);

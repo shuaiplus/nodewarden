@@ -21,37 +21,50 @@ const DomainsBody = z.record(z.string(), z.unknown()).catch({});
 
 export async function handleGetDomains(env: Env, userId: string): Promise<Response> {
   const settings = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
-  return jsonResponse(buildDomainsResponse(
-    settings.equivalentDomains,
-    settings.customEquivalentDomains,
-    settings.excludedGlobalEquivalentDomains
-  ));
+  return jsonResponse(
+    buildDomainsResponse(
+      settings.equivalentDomains,
+      settings.customEquivalentDomains,
+      settings.excludedGlobalEquivalentDomains,
+    ),
+  );
 }
 
 export async function handleUpdateDomains(request: Request, env: Env, userId: string): Promise<Response> {
   const payload = DomainsBody.parse(normalizeJsonKeys(await request.json().catch(() => null)));
   const current = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
-  const customEquivalentDomains = payload.customEquivalentDomains !== undefined
-    ? normalizeCustomEquivalentDomains(payload.customEquivalentDomains)
-    : payload.equivalentDomains !== undefined
-      ? normalizeCustomEquivalentDomains(normalizeEquivalentDomains(payload.equivalentDomains))
-      : current.customEquivalentDomains;
+  const customEquivalentDomains =
+    payload.customEquivalentDomains !== undefined
+      ? normalizeCustomEquivalentDomains(payload.customEquivalentDomains)
+      : payload.equivalentDomains !== undefined
+        ? normalizeCustomEquivalentDomains(normalizeEquivalentDomains(payload.equivalentDomains))
+        : current.customEquivalentDomains;
   const equivalentDomains = customRulesToActiveEquivalentDomains(customEquivalentDomains);
   // Some older compatible clients send the excluded type list as globalEquivalentDomains.
-  const excludedTypes = payload.excludedGlobalEquivalentDomains !== undefined ? payload.excludedGlobalEquivalentDomains : payload.globalEquivalentDomains;
-  const excludedGlobalEquivalentDomains = excludedTypes === undefined
-    ? current.excludedGlobalEquivalentDomains
-    : normalizeExcludedGlobalTypes(excludedTypes);
+  const excludedTypes =
+    payload.excludedGlobalEquivalentDomains !== undefined
+      ? payload.excludedGlobalEquivalentDomains
+      : payload.globalEquivalentDomains;
+  const excludedGlobalEquivalentDomains =
+    excludedTypes === undefined ? current.excludedGlobalEquivalentDomains : normalizeExcludedGlobalTypes(excludedTypes);
 
-  await domainRulesRepo.saveUserDomainSettings(env.DB, userId, equivalentDomains, customEquivalentDomains, excludedGlobalEquivalentDomains);
+  await domainRulesRepo.saveUserDomainSettings(
+    env.DB,
+    userId,
+    equivalentDomains,
+    customEquivalentDomains,
+    excludedGlobalEquivalentDomains,
+  );
 
   const settings = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
   if (!settings) {
     return errorResponse('Domain settings unavailable', 500);
   }
-  return jsonResponse(buildDomainsResponse(
-    settings.equivalentDomains,
-    settings.customEquivalentDomains,
-    settings.excludedGlobalEquivalentDomains
-  ));
+  return jsonResponse(
+    buildDomainsResponse(
+      settings.equivalentDomains,
+      settings.customEquivalentDomains,
+      settings.excludedGlobalEquivalentDomains,
+    ),
+  );
 }

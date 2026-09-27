@@ -17,23 +17,25 @@ export function corsPolicy(request: Request, env: Env): CorsPolicy {
   const url = new URL(request.url);
   if (isAdminPortalPath(url.pathname)) return { kind: 'none' };
   const origin = normalizeOrigin(request.headers.get('Origin'));
-  if (origin && (
-    origin === url.origin
-    || isConfiguredWebVaultOrigin(env, origin)
-    || ((isBrowserExtensionOrigin(origin) || isOfficialBitwardenDesktopOrigin(origin)) && isConfiguredWebAuthnAllowedOrigin(env, origin))
-  )) {
+  if (
+    origin &&
+    (origin === url.origin ||
+      isConfiguredWebVaultOrigin(env, origin) ||
+      ((isBrowserExtensionOrigin(origin) || isOfficialBitwardenDesktopOrigin(origin)) &&
+        isConfiguredWebAuthnAllowedOrigin(env, origin)))
+  ) {
     return { kind: 'credentialed', origin };
   }
   const path = url.pathname;
-  return (
-    path.startsWith('/icons/')
-    || path.startsWith('/fill-assist/')
-    || path === '/v1/assetlinks:check'
-    || path === '/api/v1/assetlinks:check'
-    || path === '/config'
-    || path === '/api/config'
-    || path === '/api/version'
-  ) ? { kind: 'public' } : { kind: 'none' };
+  return path.startsWith('/icons/') ||
+    path.startsWith('/fill-assist/') ||
+    path === '/v1/assetlinks:check' ||
+    path === '/api/v1/assetlinks:check' ||
+    path === '/config' ||
+    path === '/api/config' ||
+    path === '/api/version'
+    ? { kind: 'public' }
+    : { kind: 'none' };
 }
 
 // Responses built outside the Hono app (static assets, the database-unavailable error) miss its cors
@@ -67,7 +69,7 @@ export function applySecurityHeaders(request: Request, response: Response): Resp
     headers.delete('X-Frame-Options');
     headers.set(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+      "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
     );
   } else {
     headers.set('X-Frame-Options', 'DENY');
@@ -100,7 +102,7 @@ export function errorResponse(
   message: string,
   status: number = 400,
   headers: Record<string, string> = {},
-  validationErrors: Record<string, string[]> | null = null
+  validationErrors: Record<string, string[]> | null = null,
 ): Response {
   return jsonResponse(
     {
@@ -115,16 +117,23 @@ export function errorResponse(
       },
     },
     status,
-    headers
+    headers,
   );
 }
 
 export function deviceErrorResponse(kind: 'required' | 'invalid_otp'): Response {
-  return jsonResponse({
-    error: 'device_error',
-    error_description: kind === 'required' ? 'New device verification required' : 'Invalid New Device OTP',
-    ErrorModel: { Message: kind === 'required' ? 'new device verification required' : 'invalid new device otp', Object: 'error' },
-  }, 400, { 'Cache-Control': 'no-store' });
+  return jsonResponse(
+    {
+      error: 'device_error',
+      error_description: kind === 'required' ? 'New device verification required' : 'Invalid New Device OTP',
+      ErrorModel: {
+        Message: kind === 'required' ? 'new device verification required' : 'invalid new device otp',
+        Object: 'error',
+      },
+    },
+    400,
+    { 'Cache-Control': 'no-store' },
+  );
 }
 
 export function unsupportedResponse(message: string = 'This feature is not supported by this server.'): Response {
@@ -136,7 +145,7 @@ export function identityErrorResponse(
   message: string,
   error: string = 'invalid_grant',
   status: number = 400,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
 ): Response {
   return jsonResponse(
     {
@@ -148,7 +157,7 @@ export function identityErrorResponse(
       },
     },
     status,
-    { 'Cache-Control': 'no-store', Pragma: 'no-cache', ...headers }
+    { 'Cache-Control': 'no-store', Pragma: 'no-cache', ...headers },
   );
 }
 
@@ -192,18 +201,26 @@ export async function readFormOrJson(request: Request): Promise<unknown> {
 // message with validationErrors from bodyIssues, every issue message grouped under its dotted path ('' for
 // the body itself) as in upstream ErrorResponseModel.
 export function bodyIssues(error: z.ZodError): Record<string, string[]> {
-  return Object.fromEntries(error.issues.reduce((byPath, { path, message }) => {
-    const field = path.join('.');
-    return byPath.set(field, [...(byPath.get(field) ?? []), message]);
-  }, new Map<string, string[]>()));
+  return Object.fromEntries(
+    error.issues.reduce((byPath, { path, message }) => {
+      const field = path.join('.');
+      return byPath.set(field, [...(byPath.get(field) ?? []), message]);
+    }, new Map<string, string[]>()),
+  );
 }
 
-export async function parseBody<S extends z.ZodType>(request: Request, schema: S, message = 'Invalid JSON'): Promise<z.output<S> | Response> {
+export async function parseBody<S extends z.ZodType>(
+  request: Request,
+  schema: S,
+  message = 'Invalid JSON',
+): Promise<z.output<S> | Response> {
   // Scalars read as an empty object; arrays pass through for the routes that take a bare list.
   const body = await readFormOrJson(request)
     .then((payload) => (payload && typeof payload === 'object' ? payload : {}))
     .catch(() => errorResponse(message, 400));
   if (body instanceof Response) return body;
   const result = schema.safeParse(body);
-  return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
+  return result.success
+    ? result.data
+    : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
 }

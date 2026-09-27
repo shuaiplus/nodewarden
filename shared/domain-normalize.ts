@@ -98,7 +98,9 @@ const MULTI_LABEL_PUBLIC_SUFFIXES = new Set([
 
 export function normalizeEquivalentDomain(value: unknown): string {
   // Reduce a URL or bare host (with optional credentials, port or wildcard) to its lowercase hostname.
-  let raw = String(value || '').trim().toLowerCase();
+  let raw = String(value || '')
+    .trim()
+    .toLowerCase();
   if (!raw) return '';
   raw = raw.replace(/\\/g, '/');
 
@@ -125,11 +127,10 @@ export function normalizeEquivalentDomain(value: unknown): string {
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return '';
 
   const labels = host.split('.');
-  if (!labels.every((label) => (
-    label.length > 0
-    && label.length <= 63
-    && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
-  ))) return '';
+  if (
+    !labels.every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+  )
+    return '';
 
   for (let index = 0; index < labels.length; index += 1) {
     const suffix = labels.slice(index).join('.');

@@ -16,10 +16,7 @@ import {
 import type { BackupImportResultBody } from '../services/backup-import';
 import { getBlobObject } from '../services/blob-store';
 import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from './notifications-hub';
-import {
-  executeConfiguredBackup,
-  importAndAuditRemoteBackupFile,
-} from '../handlers/backup';
+import { executeConfiguredBackup, importAndAuditRemoteBackupFile } from '../handlers/backup';
 import { isSafeBackupAttachmentBlobName, verifyBackupArchiveFileNameChecksum } from '../services/backup-archive';
 import { zipSync } from 'fflate';
 import { withoutQueryParams } from '../db/client';
@@ -121,7 +118,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
         request.destinationId,
         () => this.touchJob(token),
         (event) => notifyUserBackupProgress(this.env, request.actorUserId, event, request.targetDeviceIdentifier),
-        request.auditMetadata
+        request.auditMetadata,
       );
       return { result, settings: await loadBackupSettings(this.env.DB, this.env, 'UTC') };
     } finally {
@@ -141,9 +138,10 @@ export class BackupTransferRunner extends DurableObject<Env> {
         await this.touchJob(token);
         const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
         const now = new Date();
-        const dueDestinations = settings.destinations.filter((destination) =>
-          isBackupDueNow(destination, now, BACKUP_SCHEDULER_WINDOW_MINUTES)
-          || hasBackupSlotBetween(destination, new Date(scanStartMs), now)
+        const dueDestinations = settings.destinations.filter(
+          (destination) =>
+            isBackupDueNow(destination, now, BACKUP_SCHEDULER_WINDOW_MINUTES) ||
+            hasBackupSlotBetween(destination, new Date(scanStartMs), now),
         );
 
         if (!dueDestinations.length) {
@@ -155,8 +153,11 @@ export class BackupTransferRunner extends DurableObject<Env> {
           await this.touchJob(token);
           // One failing destination must not stop the others; executeConfiguredBackup has already
           // recorded the error in that destination's runtime state for the admin page.
-          await executeConfiguredBackup(this.env, this.env.DB, null, 'scheduled', destination.id, () => this.touchJob(token))
-            .catch((error: unknown) => console.error('Scheduled backup failed', destination.id, withoutQueryParams(error)));
+          await executeConfiguredBackup(this.env, this.env.DB, null, 'scheduled', destination.id, () =>
+            this.touchJob(token),
+          ).catch((error: unknown) =>
+            console.error('Scheduled backup failed', destination.id, withoutQueryParams(error)),
+          );
         }
       }
     } finally {
@@ -187,7 +188,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
           stageDetail: 'txt_backup_restore_progress_remote_fetch_detail',
           replaceExisting: request.replaceExisting,
         },
-        request.targetDeviceIdentifier
+        request.targetDeviceIdentifier,
       );
 
       const remoteFile = await downloadRemoteBackupFile(destination, path);
@@ -207,7 +208,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
         !checksumOk,
         request.auditMetadata,
         request.targetDeviceIdentifier,
-        () => this.touchJob(token)
+        () => this.touchJob(token),
       );
       return imported.result;
     } finally {
@@ -217,7 +218,10 @@ export class BackupTransferRunner extends DurableObject<Env> {
 
   // Attachment bytes return as streams: RPC streams bypass the 32 MiB message cap that a large
   // attachment or a 40-file batch would otherwise hit.
-  async downloadRemoteAttachment(destination: BackupDestinationRecord, blobName: string): Promise<ReadableStream<Uint8Array> | null> {
+  async downloadRemoteAttachment(
+    destination: BackupDestinationRecord,
+    blobName: string,
+  ): Promise<ReadableStream<Uint8Array> | null> {
     if (!isSafeBackupAttachmentBlobName(blobName)) {
       throw new Error('Remote attachment download payload is invalid');
     }
@@ -225,7 +229,10 @@ export class BackupTransferRunner extends DurableObject<Env> {
     return file ? new Response(file.bytes).body : null;
   }
 
-  async downloadRemoteAttachmentBatch(destination: BackupDestinationRecord, blobNames: string[]): Promise<ReadableStream<Uint8Array>> {
+  async downloadRemoteAttachmentBatch(
+    destination: BackupDestinationRecord,
+    blobNames: string[],
+  ): Promise<ReadableStream<Uint8Array>> {
     const names = Array.from(new Set(blobNames.filter(isSafeBackupAttachmentBlobName)));
     if (!names.length || names.length > REMOTE_ATTACHMENT_BATCH_LIMIT) {
       throw new Error('Remote attachment batch download payload is invalid');
@@ -244,7 +251,10 @@ export class BackupTransferRunner extends DurableObject<Env> {
     return new Response(zipSync(files)).body!;
   }
 
-  async uploadAttachmentChunk(destination: BackupDestinationRecord, attachments: Array<{ blobName: string }>): Promise<void> {
+  async uploadAttachmentChunk(
+    destination: BackupDestinationRecord,
+    attachments: Array<{ blobName: string }>,
+  ): Promise<void> {
     const remoteSession = createRemoteBackupTransferSession(destination);
     for (const { blobName } of attachments) {
       if (!isSafeBackupAttachmentBlobName(blobName)) {

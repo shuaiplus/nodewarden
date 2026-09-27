@@ -57,11 +57,7 @@ async function readJsonBody(request: Request): Promise<PasskeyRequest | Response
   return parseBody(request, PasskeyRequestSchema, 'Invalid request payload');
 }
 
-async function verifyUserSecret(
-  env: Env,
-  user: User,
-  body: PasskeyRequest
-): Promise<boolean> {
+async function verifyUserSecret(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
   const secret = body.masterPasswordHash || body.master_password_hash || body.secret || body.password;
   if (!secret) return false;
   const storedHash = String(user.masterPasswordHash || '').trim();
@@ -72,14 +68,17 @@ async function verifyUserSecret(
 
 async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
   const token = body.userVerificationToken || '';
-  return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
+  return (await verifyTwoFactorUserVerificationToken(env, user, 7, token)) || (await verifyUserSecret(env, user, body));
 }
 
 function hasCompletePrfKeySet(body: PasskeyRequest): boolean {
   return !!(body.encryptedUserKey && body.encryptedPublicKey && body.encryptedPrivateKey);
 }
 
-function twoFactorWebAuthnResponse(credentials: AccountPasskeyCredential[], object = 'twoFactorWebAuthn'): Record<string, unknown> {
+function twoFactorWebAuthnResponse(
+  credentials: AccountPasskeyCredential[],
+  object = 'twoFactorWebAuthn',
+): Record<string, unknown> {
   const keys = credentials.map((credential, index) => ({
     Id: index + 1,
     id: index + 1,
@@ -106,14 +105,18 @@ function readChallenge(response: { response: { clientDataJSON: string } }): stri
 }
 
 const encryptedKey = z.string().trim().refine(isSerializedEncString);
-const PrfKeySetSchema = z.object({ encryptedUserKey: encryptedKey, encryptedPublicKey: encryptedKey, encryptedPrivateKey: encryptedKey });
+const PrfKeySetSchema = z.object({
+  encryptedUserKey: encryptedKey,
+  encryptedPublicKey: encryptedKey,
+  encryptedPrivateKey: encryptedKey,
+});
 const NO_PRF_KEY_SET = { encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null };
 
 async function saveChallenge(
   db: D1Database,
   scope: AccountPasskeyChallengeScope,
   challenge: string,
-  userId: string | null
+  userId: string | null,
 ): Promise<void> {
   const now = Date.now();
   await passkeyRepo.saveAccountPasskeyChallenge(db, {
@@ -141,7 +144,12 @@ export async function handleGetAccountPasskeyAssertionOptions(request: Request, 
     userId: null,
     rpId,
   });
-  return jsonResponse({ options, token, object: 'webAuthnLoginAssertionOptions', Object: 'webAuthnLoginAssertionOptions' });
+  return jsonResponse({
+    options,
+    token,
+    object: 'webAuthnLoginAssertionOptions',
+    Object: 'webAuthnLoginAssertionOptions',
+  });
 }
 
 export async function assertAccountPasskeyCredential(
@@ -153,7 +161,7 @@ export async function assertAccountPasskeyCredential(
     deviceResponse: unknown;
     scope: 'Authentication' | 'UpdateKeySet';
     expectedUserId?: string | null;
-  }
+  },
 ): Promise<{ user: User; credential: AccountPasskeyCredential }> {
   const payload = await verifyAccountPasskeyToken(env, input.token, input.scope);
   if (!payload) {
@@ -169,11 +177,12 @@ export async function assertAccountPasskeyCredential(
   }
 
   const challengeHash = await sha256Base64Url(payload.challenge);
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(db,
+  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
+    db,
     challengeHash,
     input.scope,
     payload.userId,
-    Date.now()
+    Date.now(),
   );
   if (!consumed) {
     throw new Error('Passkey challenge has expired or was already used');
@@ -215,17 +224,22 @@ export async function assertAccountPasskeyCredential(
     throw new Error('Passkey assertion could not be verified');
   }
 
-  await passkeyRepo.updateAccountPasskeyCounter(db,
+  await passkeyRepo.updateAccountPasskeyCounter(
+    db,
     credential.userId,
     credential.credentialId,
     verification.authenticationInfo.newCounter,
-    new Date().toISOString()
+    new Date().toISOString(),
   );
   credential.counter = verification.authenticationInfo.newCounter;
   return { user, credential };
 }
 
-export async function handleGetAccountPasskeyCredentials(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleGetAccountPasskeyCredentials(
+  request: Request,
+  env: Env,
+  userId: string,
+): Promise<Response> {
   const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId);
   return jsonResponse({
     data: credentials.map(accountPasskeyCredentialToResponse),
@@ -241,7 +255,7 @@ export async function buildTwoFactorPasskeyAssertionOptions(
   request: Request,
   env: Env,
   db: D1Database,
-  user: User
+  user: User,
 ): Promise<Record<string, unknown> | null> {
   const credentials = await passkeyRepo.listAccountPasskeyCredentialsByUserId(db, user.id, 'twoFactor');
   if (!credentials.length) return null;
@@ -262,7 +276,7 @@ export async function assertTwoFactorPasskeyCredential(
   env: Env,
   db: D1Database,
   user: User,
-  deviceResponse: unknown
+  deviceResponse: unknown,
 ): Promise<AccountPasskeyCredential> {
   const response = normalizeAuthenticationResponse(deviceResponse);
   if (!response) {
@@ -278,11 +292,12 @@ export async function assertTwoFactorPasskeyCredential(
   if (!challenge) {
     throw new Error('Passkey assertion challenge is missing');
   }
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(db,
+  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
+    db,
     await sha256Base64Url(challenge),
     'TwoFactorAuthentication',
     user.id,
-    Date.now()
+    Date.now(),
   );
   if (!consumed) {
     throw new Error('Passkey challenge has expired or was already used');
@@ -301,17 +316,23 @@ export async function assertTwoFactorPasskeyCredential(
     throw new Error('Passkey assertion could not be verified');
   }
 
-  await passkeyRepo.updateAccountPasskeyCounter(db,
+  await passkeyRepo.updateAccountPasskeyCounter(
+    db,
     credential.userId,
     credential.credentialId,
     verification.authenticationInfo.newCounter,
-    new Date().toISOString()
+    new Date().toISOString(),
   );
   credential.counter = verification.authenticationInfo.newCounter;
   return credential;
 }
 
-export async function handleGetTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handleGetTwoFactorWebAuthn(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {
@@ -325,7 +346,12 @@ export async function handleGetTwoFactorWebAuthn(request: Request, env: Env, use
   });
 }
 
-export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handleGetTwoFactorWebAuthnChallenge(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
@@ -357,7 +383,12 @@ export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env:
   return jsonResponse({ ...options, Options: options, Object: 'twoFactorWebAuthnChallenge' });
 }
 
-export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handlePutTwoFactorWebAuthn(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
@@ -377,11 +408,12 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   if (!challenge) {
     return errorResponse('Passkey challenge is missing', 400);
   }
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(env.DB,
+  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
+    env.DB,
     await sha256Base64Url(challenge),
     'TwoFactorCreate',
     userId,
-    Date.now()
+    Date.now(),
   );
   if (!consumed) {
     return errorResponse('Passkey challenge has expired or was already used', 400);
@@ -405,32 +437,40 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
     return errorResponse('Passkey registration could not be verified', 400);
   }
 
-  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(env.DB, verification.registrationInfo.credential.id);
+  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(
+    env.DB,
+    verification.registrationInfo.credential.id,
+  );
   if (existing) {
     return errorResponse('Passkey is already registered', 409);
   }
 
-  if (!await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp)) return errorResponse('User verification failed.', 400);
+  if (!(await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp)))
+    return errorResponse('User verification failed.', 400);
   const now = new Date().toISOString();
   const transports = normalizeTransports(registrationResponse.response.transports);
-  const saved = await passkeyRepo.saveAccountPasskeyCredential(env.DB, {
-    id: generateUUID(),
-    userId,
-    purpose: 'twoFactor',
-    name: normalizeAccountPasskeyName(body.name || `Passkey ${currentCount + 1}`),
-    publicKey: bytesToBase64Url(verification.registrationInfo.credential.publicKey),
-    credentialId: verification.registrationInfo.credential.id,
-    counter: verification.registrationInfo.credential.counter,
-    type: verification.registrationInfo.credentialType || 'public-key',
-    aaGuid: verification.registrationInfo.aaguid || null,
-    transports,
-    encryptedUserKey: null,
-    encryptedPublicKey: null,
-    encryptedPrivateKey: null,
-    supportsPrf: false,
-    createdAt: now,
-    updatedAt: now,
-  }, user.securityStamp);
+  const saved = await passkeyRepo.saveAccountPasskeyCredential(
+    env.DB,
+    {
+      id: generateUUID(),
+      userId,
+      purpose: 'twoFactor',
+      name: normalizeAccountPasskeyName(body.name || `Passkey ${currentCount + 1}`),
+      publicKey: bytesToBase64Url(verification.registrationInfo.credential.publicKey),
+      credentialId: verification.registrationInfo.credential.id,
+      counter: verification.registrationInfo.credential.counter,
+      type: verification.registrationInfo.credentialType || 'public-key',
+      aaGuid: verification.registrationInfo.aaguid || null,
+      transports,
+      encryptedUserKey: null,
+      encryptedPublicKey: null,
+      encryptedPrivateKey: null,
+      supportsPrf: false,
+      createdAt: now,
+      updatedAt: now,
+    },
+    user.securityStamp,
+  );
   if (!saved) return errorResponse('User verification failed.', 400);
 
   await sessionRepo.deleteRefreshTokensByUserId(env.DB, userId);
@@ -451,7 +491,12 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   return jsonResponse(twoFactorWebAuthnResponse(credentials, 'twoFactorWebAuthnUpdate'));
 }
 
-export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handleDeleteTwoFactorWebAuthn(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
@@ -488,10 +533,20 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(twoFactorWebAuthnResponse(await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor'), 'twoFactorWebAuthnDelete'));
+  return jsonResponse(
+    twoFactorWebAuthnResponse(
+      await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId, 'twoFactor'),
+      'twoFactorWebAuthnDelete',
+    ),
+  );
 }
 
-export async function handleGetAccountPasskeyAttestationOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handleGetAccountPasskeyAttestationOptions(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
 
@@ -533,7 +588,12 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
       userId,
       rpId,
     });
-    return jsonResponse({ options: { ...options, extensions: { ...options.extensions, prf: {} } }, token, object: 'webauthnCredentialCreateOptions', Object: 'webauthnCredentialCreateOptions' });
+    return jsonResponse({
+      options: { ...options, extensions: { ...options.extensions, prf: {} } },
+      token,
+      object: 'webauthnCredentialCreateOptions',
+      Object: 'webauthnCredentialCreateOptions',
+    });
   } catch (error) {
     const redacted = withoutQueryParams(error);
     const err = redacted instanceof Error ? redacted : null;
@@ -544,17 +604,28 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
       stack: err?.stack,
       userId,
     });
-    const stageMessage = stage === 'verify_master_password' ? 'verifying master password'
-      : stage === 'load_existing_credentials' ? 'loading existing passkeys'
-      : stage === 'generate_options' ? 'generating passkey options'
-      : stage === 'save_challenge' ? 'saving passkey challenge'
-      : stage === 'create_token' ? 'creating passkey challenge token'
-      : 'preparing passkey setup';
+    const stageMessage =
+      stage === 'verify_master_password'
+        ? 'verifying master password'
+        : stage === 'load_existing_credentials'
+          ? 'loading existing passkeys'
+          : stage === 'generate_options'
+            ? 'generating passkey options'
+            : stage === 'save_challenge'
+              ? 'saving passkey challenge'
+              : stage === 'create_token'
+                ? 'creating passkey challenge token'
+                : 'preparing passkey setup';
     return errorResponse(`Passkey setup failed while ${stageMessage}`, 500);
   }
 }
 
-export async function handleGetAccountPasskeyUpdateAssertionOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {
+export async function handleGetAccountPasskeyUpdateAssertionOptions(
+  request: Request,
+  env: Env,
+  userId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {
@@ -583,10 +654,19 @@ export async function handleGetAccountPasskeyUpdateAssertionOptions(request: Req
     userId,
     rpId,
   });
-  return jsonResponse({ options, token, object: 'webAuthnLoginAssertionOptions', Object: 'webAuthnLoginAssertionOptions' });
+  return jsonResponse({
+    options,
+    token,
+    object: 'webAuthnLoginAssertionOptions',
+    Object: 'webAuthnLoginAssertionOptions',
+  });
 }
 
-export async function handleCreateAccountPasskeyCredential(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleCreateAccountPasskeyCredential(
+  request: Request,
+  env: Env,
+  userId: string,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
 
@@ -596,7 +676,13 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
   }
 
   const challengeHash = await sha256Base64Url(payload.challenge);
-  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(env.DB, challengeHash, 'CreateCredential', userId, Date.now());
+  const consumed = await passkeyRepo.consumeAccountPasskeyChallenge(
+    env.DB,
+    challengeHash,
+    'CreateCredential',
+    userId,
+    Date.now(),
+  );
   if (!consumed) {
     return errorResponse('Passkey challenge has expired or was already used', 400);
   }
@@ -607,7 +693,9 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
   }
 
   // A partial key set stores nothing; a complete one must be three EncStrings.
-  const prfKeySet = hasCompletePrfKeySet(body) ? PrfKeySetSchema.safeParse(body) : { success: true as const, data: NO_PRF_KEY_SET };
+  const prfKeySet = hasCompletePrfKeySet(body)
+    ? PrfKeySetSchema.safeParse(body)
+    : { success: true as const, data: NO_PRF_KEY_SET };
   if (!prfKeySet.success) return errorResponse('Invalid encrypted passkey key set', 400);
 
   const registrationResponse = normalizeRegistrationResponse(body.deviceResponse);
@@ -633,7 +721,10 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
     return errorResponse('Passkey registration could not be verified', 400);
   }
 
-  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(env.DB, verification.registrationInfo.credential.id);
+  const existing = await passkeyRepo.getAccountPasskeyCredentialByCredentialId(
+    env.DB,
+    verification.registrationInfo.credential.id,
+  );
   if (existing) {
     return errorResponse('Passkey is already registered', 409);
   }
@@ -675,7 +766,11 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
   return jsonResponse(accountPasskeyCredentialToResponse(credential));
 }
 
-export async function handleUpdateAccountPasskeyEncryption(request: Request, env: Env, userId: string): Promise<Response> {
+export async function handleUpdateAccountPasskeyEncryption(
+  request: Request,
+  env: Env,
+  userId: string,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
 
@@ -695,12 +790,13 @@ export async function handleUpdateAccountPasskeyEncryption(request: Request, env
     return errorResponse(error instanceof Error ? error.message : 'Passkey assertion failed', 400);
   }
 
-  const updated = await passkeyRepo.updateAccountPasskeyEncryption(env.DB,
+  const updated = await passkeyRepo.updateAccountPasskeyEncryption(
+    env.DB,
     userId,
     assertion.credential.credentialId,
     prfKeySet.data.encryptedUserKey,
     prfKeySet.data.encryptedPublicKey,
-    prfKeySet.data.encryptedPrivateKey
+    prfKeySet.data.encryptedPrivateKey,
   );
   if (!updated) return errorResponse('Passkey not found', 404);
 
@@ -716,7 +812,13 @@ export async function handleUpdateAccountPasskeyEncryption(request: Request, env
   return jsonResponse({ success: true });
 }
 
-export async function handleDeleteAccountPasskeyCredential(request: Request, env: Env, userId: string, credentialId: string, user: User): Promise<Response> {
+export async function handleDeleteAccountPasskeyCredential(
+  request: Request,
+  env: Env,
+  userId: string,
+  credentialId: string,
+  user: User,
+): Promise<Response> {
   const body = await readJsonBody(request);
   if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {

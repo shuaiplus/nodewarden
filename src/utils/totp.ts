@@ -7,13 +7,16 @@ const TOTP_TOKEN_PATTERN = new RegExp(`^\\d{${TOTP_DIGITS}}$`);
 
 // Authenticator keys are shown grouped with spaces or dashes, in either case and sometimes padded.
 export function normalizeTotpSecret(input: string): string {
-  return input.toUpperCase().replace(/[ \t\r\n-]/g, '').replace(/=+$/, '');
+  return input
+    .toUpperCase()
+    .replace(/[ \t\r\n-]/g, '')
+    .replace(/=+$/, '');
 }
 
 export async function findMatchingTotpCounter(
   secretRaw: string,
   tokenRaw: string,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
 ): Promise<number | null> {
   const token = tokenRaw.replace(/\s+/g, '');
   if (!TOTP_TOKEN_PATTERN.test(token)) return null;

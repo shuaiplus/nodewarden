@@ -64,7 +64,9 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
     updatedAt: now,
   });
   if (env.CACHE_KV) {
-    await env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), { expirationTtl: 600 });
+    await env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), {
+      expirationTtl: 600,
+    });
   }
 
   const config = readEnvConfig(env);
@@ -116,7 +118,12 @@ export interface OidcIdentity {
   emailVerified: boolean;
 }
 
-export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: string, codeVerifier?: string): Promise<OidcIdentity | null> {
+export async function exchangeOidcCode(
+  env: Env,
+  code: string,
+  redirectOrigin: string,
+  codeVerifier?: string,
+): Promise<OidcIdentity | null> {
   const config = readEnvConfig(env);
   const authority = config.SSO_AUTHORITY;
   const { token_endpoint: tokenEndpoint } = await discoverOidcConfig(authority);
@@ -135,7 +142,7 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
     body,
   });
   if (!response.ok) return null;
-  const payload = await response.json() as { id_token?: string; access_token?: string };
+  const payload = (await response.json()) as { id_token?: string; access_token?: string };
   // The id_token must verify against the provider's JWKS; any failure yields no identity.
   const idToken = payload.id_token || '';
   const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
@@ -146,10 +153,16 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
     if (!alg) return null;
     // OIDC lets a provider with one signing key omit kid, which hono's verifyWithJwks refuses, so the
     // key is chosen here: the kid match, else the only key of the token's type.
-    const { keys = [] } = await (await fetch(jwksUri || `${authority}/.well-known/jwks.json`)).json() as { keys?: ProviderJwk[] };
+    const { keys = [] } = (await (await fetch(jwksUri || `${authority}/.well-known/jwks.json`)).json()) as {
+      keys?: ProviderJwk[];
+    };
     const kty = alg.startsWith('ES') ? 'EC' : 'RSA';
-    const candidates = keys.filter((jwk) => jwk.kty === kty && (!jwk.alg || jwk.alg === alg) && (!jwk.use || jwk.use === 'sig'));
-    const key = candidates.find((candidate) => header.kid && candidate.kid === header.kid) ?? (candidates.length === 1 ? candidates[0] : undefined);
+    const candidates = keys.filter(
+      (jwk) => jwk.kty === kty && (!jwk.alg || jwk.alg === alg) && (!jwk.use || jwk.use === 'sig'),
+    );
+    const key =
+      candidates.find((candidate) => header.kid && candidate.kid === header.kid) ??
+      (candidates.length === 1 ? candidates[0] : undefined);
     if (!key) return null;
     // hono's time checks allow no clock skew, so the claim checks below own exp/nbf instead.
     claims = await verify(idToken, key, { alg, exp: false, nbf: false, iat: false });
@@ -164,8 +177,14 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
   } catch {
     return null;
   }
-  const verifiedEmail = String(claims.email || '').trim().toLowerCase();
-  const email = verifiedEmail || String(claims.preferred_username || '').trim().toLowerCase();
+  const verifiedEmail = String(claims.email || '')
+    .trim()
+    .toLowerCase();
+  const email =
+    verifiedEmail ||
+    String(claims.preferred_username || '')
+      .trim()
+      .toLowerCase();
   const identifier = String(claims.sub || email);
   if (!email || !identifier) return null;
   return {
@@ -198,7 +217,7 @@ async function discoverOidcConfig(authority: string): Promise<OidcDiscovery> {
   try {
     const response = await fetch(`${authority}/.well-known/openid-configuration`);
     if (!response.ok) return {};
-    const document = await response.json() as OidcDiscovery;
+    const document = (await response.json()) as OidcDiscovery;
     discoveryCache.set(authority, { expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS, document });
     return document;
   } catch {

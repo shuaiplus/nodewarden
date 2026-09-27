@@ -12,7 +12,10 @@ import { jsonText } from '../services/org-types';
 const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
 
 export function enterpriseLicenseFileResponse(user: User): Response {
-  const license = buildNodeWardenEnterpriseLicense({ name: user.name || 'NodeWarden Enterprise', billingEmail: user.email });
+  const license = buildNodeWardenEnterpriseLicense({
+    name: user.name || 'NodeWarden Enterprise',
+    billingEmail: user.email,
+  });
   return new Response(JSON.stringify(license, null, 2), {
     status: 200,
     headers: {
@@ -23,14 +26,18 @@ export function enterpriseLicenseFileResponse(user: User): Response {
   });
 }
 
-export async function handleCreateSelfHostedOrganizationLicense(request: Request, env: Env, user: User): Promise<Response> {
+export async function handleCreateSelfHostedOrganizationLicense(
+  request: Request,
+  env: Env,
+  user: User,
+): Promise<Response> {
   const contentType = String(request.headers.get('Content-Type') || '');
   let form: { license: unknown; key: string; collectionName: string };
   if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
     const formData = await request.formData();
     // The Workers FormData types omit the File entries a multipart upload carries.
     const licenseField = (formData.get('license') ?? formData.get('License')) as Blob | string | null;
-    const text = typeof licenseField === 'string' ? licenseField : await licenseField?.text() ?? '';
+    const text = typeof licenseField === 'string' ? licenseField : ((await licenseField?.text()) ?? '');
     // Text that is not JSON is the organization's name when posted as a field, and 'Organization' when uploaded as a file.
     const unparsed = { name: typeof licenseField === 'string' ? text : 'Organization' };
     form = {
@@ -62,7 +69,7 @@ export async function handleCreateSelfHostedOrganizationLicense(request: Request
 export async function handleUpdateSelfHostedOrganizationLicense(
   env: Env,
   user: User,
-  orgId: string
+  orgId: string,
 ): Promise<Response> {
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
@@ -73,11 +80,7 @@ export async function handleUpdateSelfHostedOrganizationLicense(
   return jsonResponse(organizationResponse(org));
 }
 
-export async function handleSyncSelfHostedOrganizationLicense(
-  env: Env,
-  user: User,
-  orgId: string
-): Promise<Response> {
+export async function handleSyncSelfHostedOrganizationLicense(env: Env, user: User, orgId: string): Promise<Response> {
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId);
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);

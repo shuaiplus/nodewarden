@@ -3,10 +3,7 @@ import { errorResponse } from '../utils/response';
 import { cipherToResponse, isCipherResponseSyncCompatible, shouldPreserveRepairableCipherUris } from './ciphers';
 import { sendToResponse } from './sends';
 import { LIMITS } from '../config/limits';
-import {
-  buildUserDecryptionCompat,
-  buildUserDecryptionOptions,
-} from '../utils/user-decryption';
+import { buildUserDecryptionCompat, buildUserDecryptionOptions } from '../utils/user-decryption';
 import { buildDomainsResponse } from '../services/domain-rules';
 import { buildWebAuthnPrfOption } from '../utils/account-passkeys';
 import { buildProfileResponse } from '../utils/profile-response';
@@ -43,18 +40,23 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, userId),
   ]);
   const accountPasskeyCacheTag = accountPasskeys
-    .map((credential) => [
-      credential.id,
-      credential.updatedAt,
-      credential.supportsPrf ? '1' : '0',
-      credential.encryptedUserKey && credential.encryptedPublicKey && credential.encryptedPrivateKey ? '1' : '0',
-    ].join(':'))
+    .map((credential) =>
+      [
+        credential.id,
+        credential.updatedAt,
+        credential.supportsPrf ? '1' : '0',
+        credential.encryptedUserKey && credential.encryptedPublicKey && credential.encryptedPrivateKey ? '1' : '0',
+      ].join(':'),
+    )
     .join(',');
   // The cache key carries the revision, the passkey state and every response option.
-  const cacheRequest = new Request(new URL(
-    `/__nodewarden/cache/sync/${encodeURIComponent(userId)}/${encodeURIComponent(revisionDate)}/${encodeURIComponent(accountPasskeyCacheTag)}/${excludeDomains ? '1' : '0'}/${excludeSends ? '1' : '0'}/${preserveRepairableUris ? '1' : '0'}`,
-    url.origin
-  ).toString(), { method: 'GET' });
+  const cacheRequest = new Request(
+    new URL(
+      `/__nodewarden/cache/sync/${encodeURIComponent(userId)}/${encodeURIComponent(revisionDate)}/${encodeURIComponent(accountPasskeyCacheTag)}/${excludeDomains ? '1' : '0'}/${excludeSends ? '1' : '0'}/${preserveRepairableUris ? '1' : '0'}`,
+      url.origin,
+    ).toString(),
+    { method: 'GET' },
+  );
   const cachedResponse = await caches.default.match(cacheRequest);
   if (cachedResponse) {
     return new Response(cachedResponse.body, cachedResponse);
@@ -74,7 +76,10 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     orgRepo.listAccessibleOrgCiphers(env.DB, userId),
   ]);
   const attachmentsByCipher = new Map(personalAttachments);
-  const extraAttachmentMap = await attachmentRepo.getAttachmentsByCipherIds(env.DB, orgCiphersForAttachments.map((cipher) => cipher.id));
+  const extraAttachmentMap = await attachmentRepo.getAttachmentsByCipherIds(
+    env.DB,
+    orgCiphersForAttachments.map((cipher) => cipher.id),
+  );
   for (const [cipherId, attachments] of extraAttachmentMap.entries()) {
     attachmentsByCipher.set(cipherId, attachments);
   }
@@ -121,7 +126,10 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
 
   const cipherResponses: CipherResponse[] = [];
   for (const cipher of [...ciphers, ...visibleOrgCiphers]) {
-    const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris, validFolderIds });
+    const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], {
+      preserveRepairableUris,
+      validFolderIds,
+    });
     if (cipher.organizationId) {
       response.organizationId = cipher.organizationId;
       response.collectionIds = Array.isArray((cipher as { collectionIds?: string[] }).collectionIds)
@@ -157,7 +165,7 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
           domainSettings?.equivalentDomains || [],
           domainSettings?.customEquivalentDomains || [],
           domainSettings?.excludedGlobalEquivalentDomains || [],
-          { omitExcludedGlobals: true }
+          { omitExcludedGlobals: true },
         ),
     policies: policies.map(policyResponse),
     policiesNew: policies.map(policyResponse),

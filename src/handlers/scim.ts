@@ -15,30 +15,36 @@ function scimJson(data: unknown, status = 200, headers: Record<string, string> =
 }
 
 function scimError(status: number, detail: string, headers: Record<string, string> = {}): Response {
-  return scimJson({
-    schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+  return scimJson(
+    {
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+      status,
+      detail,
+    },
     status,
-    detail,
-  }, status, headers);
+    headers,
+  );
 }
 
 // IdPs send loosely typed PATCH values, so an active that is not a boolean is ignored rather than rejected.
 const scimActive = z.boolean().optional().catch(undefined);
 
-const ScimUserRequest = z.object({
-  userName: z.string().nullish(),
-  emails: z.array(z.object({ value: z.string().nullish() })).nullish(),
-  externalId: z.string().nullish(),
-  name: z.object({ formatted: z.string().nullish() }).nullish(),
-  active: scimActive,
-  Operations: z.array(z.object({ path: z.string().nullish(), value: scimActive })).nullish(),
-}).transform(({ userName, emails, externalId, name, active, Operations }) => ({
-  email: (userName || emails?.[0]?.value || '').trim().toLowerCase(),
-  externalId: externalId || null,
-  displayName: name?.formatted || '',
-  // A replaced active wins over the first PATCH operation on the active path.
-  active: active ?? Operations?.find((operation) => operation.path?.toLowerCase() === 'active')?.value,
-}));
+const ScimUserRequest = z
+  .object({
+    userName: z.string().nullish(),
+    emails: z.array(z.object({ value: z.string().nullish() })).nullish(),
+    externalId: z.string().nullish(),
+    name: z.object({ formatted: z.string().nullish() }).nullish(),
+    active: scimActive,
+    Operations: z.array(z.object({ path: z.string().nullish(), value: scimActive })).nullish(),
+  })
+  .transform(({ userName, emails, externalId, name, active, Operations }) => ({
+    email: (userName || emails?.[0]?.value || '').trim().toLowerCase(),
+    externalId: externalId || null,
+    displayName: name?.formatted || '',
+    // A replaced active wins over the first PATCH operation on the active path.
+    active: active ?? Operations?.find((operation) => operation.path?.toLowerCase() === 'active')?.value,
+  }));
 
 const ScimGroupRequest = z.object({ displayName: z.string().nullish(), externalId: z.string().nullish() });
 
@@ -68,7 +74,15 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       const resources = [];
       for (const member of slice) {
         const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
-        resources.push(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status !== MembershipStatus.Revoked && member.status > MembershipStatus.Revoked, member.externalId));
+        resources.push(
+          scimUser(
+            member.id,
+            user?.email || member.email || '',
+            user?.name || '',
+            member.status !== MembershipStatus.Revoked && member.status > MembershipStatus.Revoked,
+            member.externalId,
+          ),
+        );
       }
       return scimJson({
         schemas: ['urn:ietf:params:scim:api:messages:2.0:ListResponse'],
@@ -83,7 +97,15 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       const member = await orgRepo.getMembership(env.DB, id);
       if (!member || member.orgId !== orgId) return scimError(404, 'User not found');
       const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
-      return scimJson(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status > MembershipStatus.Revoked, member.externalId));
+      return scimJson(
+        scimUser(
+          member.id,
+          user?.email || member.email || '',
+          user?.name || '',
+          member.status > MembershipStatus.Revoked,
+          member.externalId,
+        ),
+      );
     }
 
     if (request.method === 'POST') {
@@ -94,8 +116,11 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       // Upstream PostUserCommand: a known member or externalId is a conflict, so an IdP replay after a
       // lost 201 neither mails a second invite nor adds a duplicate row. Bound rows carry the account email.
       const members = await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId);
-      const conflict = members.some(({ item, account }) =>
-        (account?.email ?? item.email)?.toLowerCase() === email || (externalId !== null && item.externalId === externalId));
+      const conflict = members.some(
+        ({ item, account }) =>
+          (account?.email ?? item.email)?.toLowerCase() === email ||
+          (externalId !== null && item.externalId === externalId),
+      );
       if (conflict) return scimError(409, 'User already exists.');
       const existingUser = await userRepo.getUser(env.DB, email);
       const now = new Date().toISOString();
@@ -143,7 +168,15 @@ export async function handleScimRoute(request: Request, env: Env, path: string):
       await orgRepo.saveMembership(env.DB, member);
       await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
       const user = member.userId ? await userRepo.getUserById(env.DB, member.userId) : null;
-      return scimJson(scimUser(member.id, user?.email || member.email || '', user?.name || '', member.status > MembershipStatus.Revoked, member.externalId));
+      return scimJson(
+        scimUser(
+          member.id,
+          user?.email || member.email || '',
+          user?.name || '',
+          member.status > MembershipStatus.Revoked,
+          member.externalId,
+        ),
+      );
     }
 
     if (request.method === 'DELETE' && id) {

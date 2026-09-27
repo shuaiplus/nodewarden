@@ -39,7 +39,8 @@ test.describe('official Bitwarden web against NodeWarden', () => {
     const nameField = page.getByLabel(/^name$/i);
     if (await nameField.count()) await nameField.fill('Official');
     const verify = page.waitForResponse(
-      (response) => response.url().includes('/accounts/register/send-verification-email') && response.request().method() === 'POST'
+      (response) =>
+        response.url().includes('/accounts/register/send-verification-email') && response.request().method() === 'POST',
     );
     await page.getByRole('button', { name: /^continue$/i }).click();
     const verifyResponse = await verify;

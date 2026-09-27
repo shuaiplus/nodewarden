@@ -63,14 +63,15 @@ export async function listByGrantee(db: D1Database, granteeId: string): Promise<
   return rows;
 }
 
-export async function findInvite(db: D1Database, grantorId: string, email: string): Promise<EmergencyAccessRecord | null> {
+export async function findInvite(
+  db: D1Database,
+  grantorId: string,
+  email: string,
+): Promise<EmergencyAccessRecord | null> {
   const [row] = await getOrm(db)
     .select()
     .from(emergencyAccess)
-    .where(and(
-      eq(emergencyAccess.grantorId, grantorId),
-      eq(lower(emergencyAccess.email), lower(email)),
-    ))
+    .where(and(eq(emergencyAccess.grantorId, grantorId), eq(lower(emergencyAccess.email), lower(email))))
     .limit(1);
   return row ?? null;
 }
@@ -83,10 +84,12 @@ export async function listRecoveryReady(db: D1Database, nowIso: string): Promise
   const rows = await getOrm(db)
     .select()
     .from(emergencyAccess)
-    .where(and(
-      eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
-      isNotNull(emergencyAccess.recoveryInitiatedAt),
-    ));
+    .where(
+      and(
+        eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
+        isNotNull(emergencyAccess.recoveryInitiatedAt),
+      ),
+    );
   return rows.filter((record) => {
     if (!record.recoveryInitiatedAt) return false;
     const started = Date.parse(record.recoveryInitiatedAt);
@@ -96,7 +99,9 @@ export async function listRecoveryReady(db: D1Database, nowIso: string): Promise
 }
 
 export async function listRecoveryToNotify(db: D1Database, nowIso: string): Promise<EmergencyAccessRecord[]> {
-  const rows = await getOrm(db).select().from(emergencyAccess)
+  const rows = await getOrm(db)
+    .select()
+    .from(emergencyAccess)
     .where(eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated));
   const now = Date.parse(nowIso);
   const day = 86_400_000;
@@ -107,14 +112,24 @@ export async function listRecoveryToNotify(db: D1Database, nowIso: string): Prom
   });
 }
 
-export async function claimRecoveryNotification(db: D1Database, record: EmergencyAccessRecord, nowIso: string): Promise<boolean> {
-  const rows = await getOrm(db).update(emergencyAccess).set({ lastNotificationAt: nowIso })
-    .where(and(
-      eq(emergencyAccess.id, record.id), eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
-      // Compare-and-swap on the listed snapshot; a NULL date binds NULL and never matches.
-      eq(emergencyAccess.lastNotificationAt, bound(record.lastNotificationAt)),
-      eq(emergencyAccess.recoveryInitiatedAt, bound(record.recoveryInitiatedAt)),
-      eq(emergencyAccess.waitTimeDays, record.waitTimeDays),
-    )).returning({ id: emergencyAccess.id });
+export async function claimRecoveryNotification(
+  db: D1Database,
+  record: EmergencyAccessRecord,
+  nowIso: string,
+): Promise<boolean> {
+  const rows = await getOrm(db)
+    .update(emergencyAccess)
+    .set({ lastNotificationAt: nowIso })
+    .where(
+      and(
+        eq(emergencyAccess.id, record.id),
+        eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
+        // Compare-and-swap on the listed snapshot; a NULL date binds NULL and never matches.
+        eq(emergencyAccess.lastNotificationAt, bound(record.lastNotificationAt)),
+        eq(emergencyAccess.recoveryInitiatedAt, bound(record.recoveryInitiatedAt)),
+        eq(emergencyAccess.waitTimeDays, record.waitTimeDays),
+      ),
+    )
+    .returning({ id: emergencyAccess.id });
   return rows.length > 0;
 }

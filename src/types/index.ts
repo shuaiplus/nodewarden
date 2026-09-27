@@ -363,11 +363,7 @@ export interface AccountPasskeyCredential {
 }
 
 export type AccountPasskeyChallengeScope =
-  | 'Authentication'
-  | 'CreateCredential'
-  | 'UpdateKeySet'
-  | 'TwoFactorAuthentication'
-  | 'TwoFactorCreate';
+  'Authentication' | 'CreateCredential' | 'UpdateKeySet' | 'TwoFactorAuthentication' | 'TwoFactorCreate';
 
 export interface AccountPasskeyChallenge {
   challengeHash: string;
@@ -514,14 +510,14 @@ export interface SendResponse {
 
 // JWT Payload
 export interface JWTPayload {
-  sub: string;      // user id
+  sub: string; // user id
   email: string;
   name: string | null;
   email_verified: boolean; // required by mobile client
-  amr: string[];    // authentication methods reference - required by mobile client
-  sstamp: string;   // security stamp - invalidates token when user changes password
-  did?: string;     // device identifier - invalidates per-device sessions
-  dstamp?: string;  // device session stamp
+  amr: string[]; // authentication methods reference - required by mobile client
+  sstamp: string; // security stamp - invalidates token when user changes password
+  did?: string; // device identifier - invalidates per-device sessions
+  dstamp?: string; // device session stamp
   iat: number;
   exp: number;
   iss: string;

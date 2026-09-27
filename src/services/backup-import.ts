@@ -4,9 +4,25 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
 import { sqliteMaster } from '../db/migrate';
-import { attachments, ciphers, config, domainSettings, folders, sends, userRevisions, users, webauthnCredentials } from '../db/schema';
+import {
+  attachments,
+  ciphers,
+  config,
+  domainSettings,
+  folders,
+  sends,
+  userRevisions,
+  users,
+  webauthnCredentials,
+} from '../db/schema';
 import type { Env, User } from '../types';
-import { KV_MAX_OBJECT_BYTES, deleteBlobObject, getAttachmentObjectKey, getBlobStorageKind, putBlobObject } from './blob-store';
+import {
+  KV_MAX_OBJECT_BYTES,
+  deleteBlobObject,
+  getAttachmentObjectKey,
+  getBlobStorageKind,
+  putBlobObject,
+} from './blob-store';
 import { BACKUP_SETTINGS_CONFIG_KEY, normalizeImportedBackupSettingsValue } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
@@ -86,22 +102,29 @@ export interface BackupImportExecutionResult {
 }
 
 async function resetRestoreArtifacts(db: D1Database): Promise<void> {
-  // eslint-disable-next-line nodewarden/no-raw-sql -- shadow tables are DDL copies made at runtime, outside the drizzle schema
-  await db.batch(BACKUP_TABLE_NAMES.slice().reverse().map((table) => db.prepare(`DROP TABLE IF EXISTS ${shadowTableName(table)}`)));
+  /* eslint-disable nodewarden/no-raw-sql -- shadow tables are DDL copies made at runtime, outside the drizzle schema */
+  await db.batch(
+    BACKUP_TABLE_NAMES.slice()
+      .reverse()
+      .map((table) => db.prepare(`DROP TABLE IF EXISTS ${shadowTableName(table)}`)),
+  );
+  /* eslint-enable nodewarden/no-raw-sql */
 }
 
 async function validateShadowTableCounts(
   db: D1Database,
-  expectedCounts: Partial<Record<BackupTableName, number>>
+  expectedCounts: Partial<Record<BackupTableName, number>>,
 ): Promise<void> {
   const orm = getOrm(db);
-  await Promise.all(BACKUP_TABLE_NAMES.map(async (table) => {
-    const expected = expectedCounts[table] ?? 0;
-    const actual = await orm.$count(shadowTable(BACKUP_TABLES[table]));
-    if (actual !== expected) {
-      throw new Error(`Restore shadow validation failed for ${table}: expected ${expected}, received ${actual}`);
-    }
-  }));
+  await Promise.all(
+    BACKUP_TABLE_NAMES.map(async (table) => {
+      const expected = expectedCounts[table] ?? 0;
+      const actual = await orm.$count(shadowTable(BACKUP_TABLES[table]));
+      if (actual !== expected) {
+        throw new Error(`Restore shadow validation failed for ${table}: expected ${expected}, received ${actual}`);
+      }
+    }),
+  );
 }
 
 async function collectCurrentBlobKeys(db: D1Database): Promise<Set<string>> {
@@ -187,7 +210,13 @@ function upsertConfigRow(rows: SqlRow[], key: string, value: string): SqlRow[] {
 
 // Writes archive rows into a table's shadow copy: one statement per row, one batch per table. Only the
 // allowlisted columns come from the archive; every other column keeps its default.
-async function restoreRows(db: D1Database, table: BackupTableName, columns: readonly string[], rows: SqlRow[], replace = false): Promise<void> {
+async function restoreRows(
+  db: D1Database,
+  table: BackupTableName,
+  columns: readonly string[],
+  rows: SqlRow[],
+  replace = false,
+): Promise<void> {
   if (!rows.length) return;
   const orm = getOrm(db);
   const target: SQLiteTable = shadowTable(BACKUP_TABLES[table]);
@@ -197,12 +226,17 @@ async function restoreRows(db: D1Database, table: BackupTableName, columns: read
   // empty, so only a key the archive repeats can conflict; skipping it leaves the count check to reject
   // the archive, as it did after REPLACE deduplicated the rows.
   const statements = rows.map((row) => {
-    const insert = orm.insert(target).values(Object.fromEntries(imported.map(([key, column]) =>
-      [key, row[column.name] ?? (replace && column.notNull ? undefined : null)])));
+    const insert = orm
+      .insert(target)
+      .values(
+        Object.fromEntries(
+          imported.map(([key, column]) => [key, row[column.name] ?? (replace && column.notNull ? undefined : null)]),
+        ),
+      );
     return replace ? insert.onConflictDoNothing() : insert;
   });
   try {
-    await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+    await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Restore insert failed for ${shadowTableName(table)}: ${message}`);
@@ -210,9 +244,13 @@ async function restoreRows(db: D1Database, table: BackupTableName, columns: read
 }
 
 function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
-  return new Map(manifest.attachmentBlobs
-    .filter(({ cipherId, attachmentId, blobName }) => cipherId && attachmentId && isSafeBackupAttachmentBlobName(blobName))
-    .map((item) => [`${item.cipherId}/${item.attachmentId}`, item]));
+  return new Map(
+    manifest.attachmentBlobs
+      .filter(
+        ({ cipherId, attachmentId, blobName }) => cipherId && attachmentId && isSafeBackupAttachmentBlobName(blobName),
+      )
+      .map((item) => [`${item.cipherId}/${item.attachmentId}`, item]),
+  );
 }
 
 export async function importBackupArchiveBytes(
@@ -222,7 +260,7 @@ export async function importBackupArchiveBytes(
   replaceExisting: boolean,
   source: RemoteAttachmentSource | null = null,
   progress?: BackupRestoreProgressReporter,
-  fileName: string = 'nodewarden_backup.zip'
+  fileName: string = 'nodewarden_backup.zip',
 ): Promise<BackupImportExecutionResult> {
   // A remote archive keeps attachment blobs at the destination instead of inline .bin entries, so its
   // rows are trimmed to what the source can supply before validation; a local archive validates as-is.
@@ -362,15 +400,20 @@ export async function importBackupArchiveBytes(
       };
     }
   }
-  const report = (step: string, stage: string, outcome: Pick<BackupRestoreProgressEvent, 'done' | 'ok' | 'error'> = {}) => progress?.({
-    source: restoreSource,
-    step: `${restoreSource}_${step}`,
-    fileName,
-    stageTitle: `txt_backup_restore_progress_${restoreSource}_${stage}_title`,
-    stageDetail: `txt_backup_restore_progress_${restoreSource}_${stage}_detail`,
-    replaceExisting,
-    ...outcome,
-  });
+  const report = (
+    step: string,
+    stage: string,
+    outcome: Pick<BackupRestoreProgressEvent, 'done' | 'ok' | 'error'> = {},
+  ) =>
+    progress?.({
+      source: restoreSource,
+      step: `${restoreSource}_${step}`,
+      fileName,
+      stageTitle: `txt_backup_restore_progress_${restoreSource}_${stage}_title`,
+      stageDetail: `txt_backup_restore_progress_${restoreSource}_${stage}_detail`,
+      replaceExisting,
+      ...outcome,
+    });
   const orm = getOrm(env.DB);
 
   try {
@@ -396,24 +439,30 @@ export async function importBackupArchiveBytes(
     await report('create_shadow', 'shadow');
     const createStatements: string[] = [];
     for (const table of BACKUP_TABLE_NAMES) {
-      const [row] = await orm.select({ sql: sqliteMaster.sql }).from(sqliteMaster)
-        .where(and(eq(sqliteMaster.type, 'table'), eq(sqliteMaster.name, table))).limit(1);
+      const [row] = await orm
+        .select({ sql: sqliteMaster.sql })
+        .from(sqliteMaster)
+        .where(and(eq(sqliteMaster.type, 'table'), eq(sqliteMaster.name, table)))
+        .limit(1);
       const createSql = String(row?.sql || '').trim();
       if (!createSql) {
         throw new Error(`Restore shadow schema is missing table definition for ${table}`);
       }
       // Rename the copy and point its foreign keys at the other shadow tables.
-      const tablePattern = new RegExp(`^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`, 'i');
+      const tablePattern = new RegExp(
+        `^CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+(?:\"${table}\"|\`${table}\`|${table})(?=\\s*\\()`,
+        'i',
+      );
       let shadowSql = createSql.replace(tablePattern, `CREATE TABLE "${shadowTableName(table)}"`);
       if (shadowSql === createSql) {
         throw new Error(`Restore shadow schema could not rewrite CREATE TABLE statement for ${table}`);
       }
       for (const currentTable of BACKUP_TABLE_NAMES) {
-        const referencePattern = new RegExp(`\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`, 'gi');
-        shadowSql = shadowSql.replace(
-          referencePattern,
-          `REFERENCES "${shadowTableName(currentTable)}"`
+        const referencePattern = new RegExp(
+          `\\bREFERENCES\\s+(?:\"${currentTable}\"|\`${currentTable}\`|${currentTable})(?=\\s*\\()`,
+          'gi',
         );
+        shadowSql = shadowSql.replace(referencePattern, `REFERENCES "${shadowTableName(currentTable)}"`);
       }
       createStatements.push(shadowSql);
     }
@@ -421,7 +470,7 @@ export async function importBackupArchiveBytes(
     await env.DB.batch(createStatements.map((statement) => env.DB.prepare(statement)));
     await report('import_data', 'data');
     let configRows = cloneRows(prepared.payload.db.config).filter(
-      (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY
+      (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
     );
     const rawBackupSettings = configRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
     const normalizedBackupSettings = await normalizeImportedBackupSettingsValue(
@@ -433,7 +482,7 @@ export async function importBackupArchiveBytes(
         role: String(row.role || '').trim() as User['role'],
         status: String(row.status || '').trim() as User['status'],
       })),
-      'UTC'
+      'UTC',
     );
     if (normalizedBackupSettings !== null) {
       configRows = upsertConfigRow(configRows, BACKUP_SETTINGS_CONFIG_KEY, normalizedBackupSettings);
@@ -467,31 +516,103 @@ export async function importBackupArchiveBytes(
     await restoreRows(
       env.DB,
       'users',
-      ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
-      db.users
+      [
+        'id',
+        'email',
+        'email_verified',
+        'name',
+        'master_password_hint',
+        'master_password_hash',
+        'key',
+        'private_key',
+        'public_key',
+        'kdf_type',
+        'kdf_iterations',
+        'kdf_memory',
+        'kdf_parallelism',
+        'security_stamp',
+        'role',
+        'status',
+        'verify_devices',
+        'totp_secret',
+        'totp_recovery_code',
+        'two_factor_email',
+        'yubikey_key1',
+        'yubikey_key2',
+        'yubikey_key3',
+        'yubikey_key4',
+        'yubikey_key5',
+        'yubikey_nfc',
+        'created_at',
+        'updated_at',
+      ],
+      db.users,
     );
     await restoreRows(env.DB, 'user_revisions', ['user_id', 'revision_date'], db.user_revisions, true);
     await restoreRows(
       env.DB,
       'domain_settings',
-      ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'],
+      [
+        'user_id',
+        'equivalent_domains',
+        'custom_equivalent_domains',
+        'excluded_global_equivalent_domains',
+        'updated_at',
+      ],
       db.domain_settings,
-      true
+      true,
     );
     await restoreRows(
       env.DB,
       'webauthn_credentials',
-      ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'],
-      db.webauthn_credentials
+      [
+        'id',
+        'user_id',
+        'purpose',
+        'name',
+        'public_key',
+        'credential_id',
+        'counter',
+        'type',
+        'aa_guid',
+        'transports',
+        'encrypted_user_key',
+        'encrypted_public_key',
+        'encrypted_private_key',
+        'supports_prf',
+        'created_at',
+        'updated_at',
+      ],
+      db.webauthn_credentials,
     );
     await restoreRows(env.DB, 'folders', ['id', 'user_id', 'name', 'created_at', 'updated_at'], db.folders);
     await restoreRows(
       env.DB,
       'ciphers',
-      ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
-      db.ciphers
+      [
+        'id',
+        'user_id',
+        'type',
+        'folder_id',
+        'name',
+        'notes',
+        'favorite',
+        'data',
+        'reprompt',
+        'key',
+        'created_at',
+        'updated_at',
+        'archived_at',
+        'deleted_at',
+      ],
+      db.ciphers,
     );
-    await restoreRows(env.DB, 'attachments', ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], db.attachments);
+    await restoreRows(
+      env.DB,
+      'attachments',
+      ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'],
+      db.attachments,
+    );
     await validateShadowTableCounts(env.DB, {
       config: db.config.length,
       users: db.users.length,
@@ -593,10 +714,12 @@ export async function importBackupArchiveBytes(
       const drops = failedRestoreRows.flatMap((row) => {
         const attachmentId = String(row.id || '').trim();
         const cipherId = String(row.cipher_id || '').trim();
-        return attachmentId && cipherId ? [orm.delete(staged).where(and(eq(staged.id, attachmentId), eq(staged.cipherId, cipherId)))] : [];
+        return attachmentId && cipherId
+          ? [orm.delete(staged).where(and(eq(staged.id, attachmentId), eq(staged.cipherId, cipherId)))]
+          : [];
       });
       if (drops.length) {
-        await orm.batch(drops as [typeof drops[0], ...typeof drops]);
+        await orm.batch(drops as [(typeof drops)[0], ...typeof drops]);
       }
     } catch {
       // Reported by the count validation below.
@@ -616,12 +739,16 @@ export async function importBackupArchiveBytes(
     // This avoids D1 schema-rename edge cases while keeping current data intact
     // until the final batch succeeds.
     const swap = [
-      ...[attachments, ciphers, folders, webauthnCredentials, domainSettings, userRevisions, users, config].map((table) => orm.delete(table)),
+      ...[attachments, ciphers, folders, webauthnCredentials, domainSettings, userRevisions, users, config].map(
+        (table) => orm.delete(table),
+      ),
       // Copies by column name, not SELECT *: a live table's physical column order can differ from its
       // schema order (users does), so a positional copy under drizzle's column list would misplace values.
-      ...Object.values(BACKUP_TABLES).map(<T extends SQLiteTable>(live: T) => orm.insert(live).select(orm.select().from(shadowTable(live)))),
+      ...Object.values(BACKUP_TABLES).map(<T extends SQLiteTable>(live: T) =>
+        orm.insert(live).select(orm.select().from(shadowTable(live))),
+      ),
     ];
-    await orm.batch(swap as [typeof swap[0], ...typeof swap]);
+    await orm.batch(swap as [(typeof swap)[0], ...typeof swap]);
     await syncVaultAdminRoles(env);
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
     if (replaceExisting && previousBlobKeys.size) {
@@ -662,7 +789,11 @@ export async function importBackupArchiveBytes(
       },
     };
   } catch (error) {
-    await report('failed', 'finalize', { done: true, ok: false, error: error instanceof Error ? error.message : String(error) });
+    await report('failed', 'finalize', {
+      done: true,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
     throw error;
   }

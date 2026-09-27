@@ -12,10 +12,14 @@ test('Pages forwards authenticated event collection to the Worker instead of SPA
   let fallback = false;
   const response = await onRequest({
     request: new Request('https://vault.example.test/events/collect', {
-      method: 'POST', headers: { Authorization: 'Bearer synthetic', 'Device-Type': '9' },
+      method: 'POST',
+      headers: { Authorization: 'Bearer synthetic', 'Device-Type': '9' },
     }),
     env: { WORKER_ORIGIN: 'https://worker.example.test' },
-    next: () => { fallback = true; return new Response('assets'); },
+    next: () => {
+      fallback = true;
+      return new Response('assets');
+    },
   });
   assert.equal(await response.text(), 'collected');
   assert.equal(fallback, false);

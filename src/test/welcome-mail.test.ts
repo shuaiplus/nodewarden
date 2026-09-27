@@ -4,16 +4,39 @@ import { inspect } from 'node:util';
 
 import type { Env } from '../types';
 import { account } from '../db/schema';
-import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
+import {
+  abortWrites,
+  authedFetch,
+  captureEmail,
+  createTestEnv,
+  drainWaitUntil,
+  failingEmail,
+  MAILABLE_DOMAIN,
+  seedUser,
+} from './support/env';
 import * as adminRepo from '../services/storage-admin-repo';
 import * as userRepo from '../services/storage-user-repo';
 
 const ENCRYPTED = '2.YQ==|Yg==|Yw==';
 
-async function register(env: Env, email: string, extra: Record<string, unknown> = {}, path = '/identity/accounts/register/finish') {
+async function register(
+  env: Env,
+  email: string,
+  extra: Record<string, unknown> = {},
+  path = '/identity/accounts/register/finish',
+) {
   const response = await authedFetch(env, {
-    method: 'POST', path,
-    body: { email, name: '<New> https://x.y @home', masterPasswordHash: 'master-password-hash', key: ENCRYPTED, encryptedPrivateKey: ENCRYPTED, publicKey: 'YQ==', ...extra },
+    method: 'POST',
+    path,
+    body: {
+      email,
+      name: '<New> https://x.y @home',
+      masterPasswordHash: 'master-password-hash',
+      key: ENCRYPTED,
+      encryptedPrivateKey: ENCRYPTED,
+      publicKey: 'YQ==',
+      ...extra,
+    },
   });
   await drainWaitUntil();
   return response;
@@ -25,22 +48,35 @@ test('first administrator, invite-code signup and open signup each receive one w
   const firstEmail = `first@${MAILABLE_DOMAIN}`;
   const first = await register(env, firstEmail);
   assert.equal(first.status, 200);
-  assert.equal((await first.json() as { role: string }).role, 'admin');
+  assert.equal(((await first.json()) as { role: string }).role, 'admin');
   const admin = await userRepo.getUser(env.DB, firstEmail);
   assert.ok(admin);
-  await adminRepo.createInvite(env.DB, { code: 'welcome-invite', createdBy: admin.id, usedBy: null, status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() });
+  await adminRepo.createInvite(env.DB, {
+    code: 'welcome-invite',
+    createdBy: admin.id,
+    usedBy: null,
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+  });
   const invitedEmail = `invited@${MAILABLE_DOMAIN}`;
-  assert.equal((await register(env, invitedEmail, { inviteCode: 'welcome-invite' }, '/api/accounts/register')).status, 200);
+  assert.equal(
+    (await register(env, invitedEmail, { inviteCode: 'welcome-invite' }, '/api/accounts/register')).status,
+    200,
+  );
   env.ALLOW_OPEN_REGISTRATION = '1';
   const openEmail = `open@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, openEmail)).status, 200);
-  assert.deepEqual(capture.sent.map(({ to, subject }) => [to, subject]), [firstEmail, invitedEmail, openEmail].map((email) => [email, 'Welcome to NodeWarden']));
+  assert.deepEqual(
+    capture.sent.map(({ to, subject }) => [to, subject]),
+    [firstEmail, invitedEmail, openEmail].map((email) => [email, 'Welcome to NodeWarden']),
+  );
   for (const mail of capture.sent) {
     assert.match(mail.html, /&lt;New&gt; x\[dot\]y \[at\]home/);
     assert.match(mail.text, /https:\/\/web.example.test\//);
     assert.doesNotMatch(mail.text, /master-password-hash/);
   }
-
 });
 
 test('duplicate email, invalid invite and documentation addresses send no welcome mail', async () => {
@@ -55,7 +91,11 @@ test('duplicate email, invalid invite and documentation addresses send no welcom
 
 test('welcome mail delivery failure or missing vault origin leaves account creation successful', async () => {
   const capture = captureEmail();
-  const env = await createTestEnv({ ...capture.overrides, EMAIL: failingEmail('E_RECIPIENT_SUPPRESSED'), ALLOW_OPEN_REGISTRATION: '1' });
+  const env = await createTestEnv({
+    ...capture.overrides,
+    EMAIL: failingEmail('E_RECIPIENT_SUPPRESSED'),
+    ALLOW_OPEN_REGISTRATION: '1',
+  });
   const email = `failure@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 200);
   assert.ok(await userRepo.getUser(env.DB, email));
@@ -74,7 +114,9 @@ test('a failed credential mirror during signup logs the failure without its boun
   const email = `mirror@${MAILABLE_DOMAIN}`;
   assert.equal((await register(env, email)).status, 500);
   const { masterPasswordHash } = (await userRepo.getUser(env.DB, email))!;
-  const logged = errors.mock.calls.flatMap((call) => call.arguments.map((argument) => inspect(argument, { depth: 5 }))).join('\n');
+  const logged = errors.mock.calls
+    .flatMap((call) => call.arguments.map((argument) => inspect(argument, { depth: 5 })))
+    .join('\n');
   assert.match(logged, /forced mirror failure/);
   assert.ok(!logged.includes(masterPasswordHash));
 });

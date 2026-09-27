@@ -14,7 +14,7 @@ async function createSecret(env: Env, orgId: string, owner: User): Promise<strin
     userId: owner.id,
   });
   assert.equal(created.status, 200);
-  return (await created.json() as { id: string }).id;
+  return ((await created.json()) as { id: string }).id;
 }
 
 // Official web and the SDK (`bws secret delete`) post the ids as a bare JSON array, as upstream's
@@ -24,7 +24,12 @@ test('an owner deleting [id] soft-deletes the secret and gets a BulkDeleteRespon
   const { orgId, owner } = await seedSmOrg(env);
   const secretId = await createSecret(env, orgId, owner);
 
-  const deleted = await authedFetch(env, { method: 'POST', path: '/api/secrets/delete', body: [secretId], userId: owner.id });
+  const deleted = await authedFetch(env, {
+    method: 'POST',
+    path: '/api/secrets/delete',
+    body: [secretId],
+    userId: owner.id,
+  });
   assert.equal(deleted.status, 200);
   assert.deepEqual(await deleted.json(), {
     data: [{ id: secretId, error: null, object: 'BulkDeleteResponseModel' }],
@@ -48,7 +53,12 @@ for (const [shape, body] of INVALID_BODIES) {
     const { orgId, owner } = await seedSmOrg(env);
     const secretId = await createSecret(env, orgId, owner);
 
-    const deleted = await authedFetch(env, { method: 'POST', path: '/api/secrets/delete', body: body(secretId), userId: owner.id });
+    const deleted = await authedFetch(env, {
+      method: 'POST',
+      path: '/api/secrets/delete',
+      body: body(secretId),
+      userId: owner.id,
+    });
     assert.equal(deleted.status, 400);
     assert.equal((await smRepo.getSecret(env.DB, secretId))?.deletedAt, null);
   });

@@ -57,14 +57,15 @@ export function organizationResponse(org: OrganizationRecord, options?: { useSso
 export function profileOrganizationResponse(
   org: OrganizationRecord,
   member: MembershipRecord,
-  options?: { useSso?: boolean; useScim?: boolean }
+  options?: { useSso?: boolean; useScim?: boolean },
 ) {
   const type = clientMembershipType(member.type);
-  const permissions = member.type === MembershipType.Custom
-    ? resolvePermissions(member)
-    : type === MembershipType.Custom && member.accessAll
-      ? { ...EMPTY_PERMISSIONS, createNewCollections: true, editAnyCollection: true, deleteAnyCollection: true }
-      : EMPTY_PERMISSIONS;
+  const permissions =
+    member.type === MembershipType.Custom
+      ? resolvePermissions(member)
+      : type === MembershipType.Custom && member.accessAll
+        ? { ...EMPTY_PERMISSIONS, createNewCollections: true, editAnyCollection: true, deleteAnyCollection: true }
+        : EMPTY_PERMISSIONS;
 
   return {
     id: org.id,

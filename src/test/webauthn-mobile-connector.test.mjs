@@ -28,10 +28,19 @@ const assertionOptions = {
 };
 
 test('parses the current Bitwarden Android V2 connector payload', () => {
-  const request = parseConnectorRequest(v2Search({
-    btnReturnText: 'Return to app', btnText: 'Authenticate', data: JSON.stringify(assertionOptions),
-    headerText: 'Verify your identity', mobile: true,
-  }, '&client=mobile&deeplinkScheme=bitwarden'), 'vault.example.com');
+  const request = parseConnectorRequest(
+    v2Search(
+      {
+        btnReturnText: 'Return to app',
+        btnText: 'Authenticate',
+        data: JSON.stringify(assertionOptions),
+        headerText: 'Verify your identity',
+        mobile: true,
+      },
+      '&client=mobile&deeplinkScheme=bitwarden',
+    ),
+    'vault.example.com',
+  );
   assert.equal(request.callbackUri, 'bitwarden://webauthn-callback');
   assert.equal(request.headerText, 'Verify your identity');
   assert.equal(request.buttonText, 'Authenticate');
@@ -40,18 +49,26 @@ test('parses the current Bitwarden Android V2 connector payload', () => {
 });
 
 test('uses callbackUri only as a signal and never as the redirect target', () => {
-  const trustedLooking = parseConnectorRequest(v2Search({
-    callbackUri: 'https://bitwarden.eu/webauthn-callback', data: assertionOptions,
-  }).replace('&parent=bitwarden%3A__webauthn-callback', ''));
-  const attacker = parseConnectorRequest(v2Search({
-    callbackUri: 'https://attacker.example/capture', data: assertionOptions,
-  }).replace('&parent=bitwarden%3A__webauthn-callback', ''));
+  const trustedLooking = parseConnectorRequest(
+    v2Search({
+      callbackUri: 'https://bitwarden.eu/webauthn-callback',
+      data: assertionOptions,
+    }).replace('&parent=bitwarden%3A__webauthn-callback', ''),
+  );
+  const attacker = parseConnectorRequest(
+    v2Search({
+      callbackUri: 'https://attacker.example/capture',
+      data: assertionOptions,
+    }).replace('&parent=bitwarden%3A__webauthn-callback', ''),
+  );
   assert.equal(trustedLooking.callbackUri, 'bitwarden://webauthn-callback');
   assert.equal(attacker.callbackUri, 'bitwarden://webauthn-callback');
 });
 
 test('treats any non-HTTPS deeplinkScheme as the fixed Bitwarden custom scheme', () => {
-  const request = parseConnectorRequest(v2Search({ mobile: true, data: assertionOptions }, '&deeplinkScheme=untrusted'));
+  const request = parseConnectorRequest(
+    v2Search({ mobile: true, data: assertionOptions }, '&deeplinkScheme=untrusted'),
+  );
   assert.equal(request.callbackUri, 'bitwarden://webauthn-callback');
 });
 
@@ -59,7 +76,10 @@ test('supports Android custom-scheme and official HTTPS App Link callbacks', () 
   const payload = { mobile: true, data: assertionOptions };
   const custom = parseConnectorRequest(v2Search(payload, '&client=mobile&deeplinkScheme=bitwarden'));
   const eu = parseConnectorRequest(v2Search(payload, '&client=mobile&deeplinkScheme=https'), 'vault.bitwarden.eu');
-  const selfHosted = parseConnectorRequest(v2Search(payload, '&client=mobile&deeplinkScheme=https'), 'vault.example.com');
+  const selfHosted = parseConnectorRequest(
+    v2Search(payload, '&client=mobile&deeplinkScheme=https'),
+    'vault.example.com',
+  );
   assert.equal(custom.callbackUri, 'bitwarden://webauthn-callback');
   assert.equal(eu.callbackUri, 'https://bitwarden.eu/webauthn-callback');
   assert.equal(selfHosted.callbackUri, 'https://bitwarden.com/webauthn-callback');
@@ -67,7 +87,10 @@ test('supports Android custom-scheme and official HTTPS App Link callbacks', () 
 
 test('supports V1 mobile requests and requires a recognized mobile signal', () => {
   const encoded = encodeURIComponent(encodeBase64Utf8(JSON.stringify(assertionOptions)));
-  assert.equal(parseConnectorRequest(`?data=${encoded}&v=1&client=mobile`).callbackUri, 'bitwarden://webauthn-callback');
+  assert.equal(
+    parseConnectorRequest(`?data=${encoded}&v=1&client=mobile`).callbackUri,
+    'bitwarden://webauthn-callback',
+  );
   assert.equal(resolveMobileCallbackUri({ payload: {}, hostname: 'vault.example.com' }), null);
   assert.throws(() => parseConnectorRequest(`?data=${encoded}&v=1`), /return target/i);
 });
@@ -82,16 +105,20 @@ test('decodes UTF-8 and normalizes WebAuthn binary fields without mutation', () 
 });
 
 test('serializes the exact assertion shape emitted by Bitwarden common-webauthn', () => {
-  const serialized = JSON.parse(buildCredentialData({
-    id: 'credential-id', rawId: Uint8Array.from([1, 2, 255]).buffer, type: 'public-key',
-    getClientExtensionResults: () => ({ appid: false }),
-    response: {
-      authenticatorData: Uint8Array.from([3, 4]).buffer,
-      clientDataJSON: Uint8Array.from([5, 6]).buffer,
-      signature: Uint8Array.from([7, 8]).buffer,
-      userHandle: Uint8Array.from([9, 10]).buffer,
-    },
-  }));
+  const serialized = JSON.parse(
+    buildCredentialData({
+      id: 'credential-id',
+      rawId: Uint8Array.from([1, 2, 255]).buffer,
+      type: 'public-key',
+      getClientExtensionResults: () => ({ appid: false }),
+      response: {
+        authenticatorData: Uint8Array.from([3, 4]).buffer,
+        clientDataJSON: Uint8Array.from([5, 6]).buffer,
+        signature: Uint8Array.from([7, 8]).buffer,
+        userHandle: Uint8Array.from([9, 10]).buffer,
+      },
+    }),
+  );
   assert.deepEqual(serialized, {
     id: 'credential-id',
     rawId: 'AQL_',
@@ -103,8 +130,14 @@ test('serializes the exact assertion shape emitted by Bitwarden common-webauthn'
 });
 
 test('encodes success and error callbacks safely', () => {
-  assert.equal(buildCallbackUrl('bitwarden://webauthn-callback', 'data', '{"id":"a+b"}'), 'bitwarden://webauthn-callback?data=%7B%22id%22%3A%22a%2Bb%22%7D');
-  assert.equal(buildCallbackUrl('bitwarden://webauthn-callback?source=nodewarden', 'error', 'Not allowed'), 'bitwarden://webauthn-callback?source=nodewarden&error=Not%20allowed');
+  assert.equal(
+    buildCallbackUrl('bitwarden://webauthn-callback', 'data', '{"id":"a+b"}'),
+    'bitwarden://webauthn-callback?data=%7B%22id%22%3A%22a%2Bb%22%7D',
+  );
+  assert.equal(
+    buildCallbackUrl('bitwarden://webauthn-callback?source=nodewarden', 'error', 'Not allowed'),
+    'bitwarden://webauthn-callback?source=nodewarden&error=Not%20allowed',
+  );
 });
 
 test('HTML matches the fallback connector visual structure', async () => {

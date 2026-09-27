@@ -89,17 +89,25 @@ test('the web 2026.9 nested takeover body lets the grantor log in with the new p
 
   const takeover = await authedFetch(env, { method: 'POST', path: takeoverPath, userId: grantee.id });
   assert.equal(takeover.status, 200);
-  assert.equal((await takeover.json() as { salt: string }).salt, grantor.email.toLowerCase());
+  assert.equal(((await takeover.json()) as { salt: string }).salt, grantor.email.toLowerCase());
 
-  const password = await authedFetch(env, { method: 'POST', path: passwordPath, body: nestedPasswordBody(grantor), userId: grantee.id });
+  const password = await authedFetch(env, {
+    method: 'POST',
+    path: passwordPath,
+    body: nestedPasswordBody(grantor),
+    userId: grantee.id,
+  });
   assert.equal(password.status, 200);
 
   const login = await passwordLogin(env, grantor.email, NEW_MASTER_PASSWORD_HASH);
   assert.equal(login.status, 200);
-  assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
+  assert.equal(((await login.json()) as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
   const stored = await userRepo.getUserById(env.DB, grantor.id);
-  const credential = await getOrm(env.DB).select({ password: account.password }).from(account)
-    .where(and(eq(account.userId, grantor.id), eq(account.providerId, 'credential'))).get();
+  const credential = await getOrm(env.DB)
+    .select({ password: account.password })
+    .from(account)
+    .where(and(eq(account.userId, grantor.id), eq(account.providerId, 'credential')))
+    .get();
   assert.equal(credential?.password, stored?.masterPasswordHash);
 });
 
@@ -112,7 +120,7 @@ test('the legacy newMasterPasswordHash and key takeover body still works', async
 
   const login = await passwordLogin(env, grantor.email, NEW_MASTER_PASSWORD_HASH);
   assert.equal(login.status, 200);
-  assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
+  assert.equal(((await login.json()) as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
 });
 
 test('an incomplete, mismatched or unauthorized takeover is rejected and leaves the grantor untouched', async () => {
@@ -126,8 +134,14 @@ test('an incomplete, mismatched or unauthorized takeover is rejected and leaves 
     { body: { newMasterPasswordHash: NEW_MASTER_PASSWORD_HASH }, userId: grantee.id },
     { body: { authenticationData: nested.authenticationData }, userId: grantee.id },
     { body: { ...nested, unlockData: { ...nested.unlockData, masterKeyWrappedUserKey: '' } }, userId: grantee.id },
-    { body: { ...nested, unlockData: { ...nested.unlockData, salt: 'someone-else@example.test' } }, userId: grantee.id },
-    { body: { ...nested, unlockData: { ...nested.unlockData, masterKeyWrappedUserKey: 'not-an-enc-string' } }, userId: grantee.id },
+    {
+      body: { ...nested, unlockData: { ...nested.unlockData, salt: 'someone-else@example.test' } },
+      userId: grantee.id,
+    },
+    {
+      body: { ...nested, unlockData: { ...nested.unlockData, masterKeyWrappedUserKey: 'not-an-enc-string' } },
+      userId: grantee.id,
+    },
     // Both halves agree but weaken the grantor's KDF: the client would derive a different key.
     {
       body: {
@@ -163,5 +177,5 @@ test('the account password change still accepts the nested body', async () => {
 
   const login = await passwordLogin(env, user.email, NEW_MASTER_PASSWORD_HASH);
   assert.equal(login.status, 200);
-  assert.equal((await login.json() as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
+  assert.equal(((await login.json()) as { Key: string }).Key, NEW_WRAPPED_USER_KEY);
 });

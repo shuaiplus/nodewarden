@@ -19,11 +19,7 @@ function parseStored(raw: string | null | undefined): unknown {
 const StoredTypes = z.array(z.int()).catch([]);
 
 export async function getUserDomainSettings(db: D1Database, userId: string): Promise<UserDomainSettings> {
-  const [row] = await getOrm(db)
-    .select()
-    .from(domainSettings)
-    .where(eq(domainSettings.userId, userId))
-    .limit(1);
+  const [row] = await getOrm(db).select().from(domainSettings).where(eq(domainSettings.userId, userId)).limit(1);
   const equivalentDomains = normalizeEquivalentDomains(parseStored(row?.equivalentDomains));
   const storedCustomEquivalentDomains = normalizeCustomEquivalentDomains(parseStored(row?.customEquivalentDomains));
   const customEquivalentDomains = storedCustomEquivalentDomains.length
@@ -44,7 +40,7 @@ export async function saveUserDomainSettings(
   userId: string,
   equivalentDomains: string[][],
   customEquivalentDomains: UserDomainSettings['customEquivalentDomains'],
-  excludedGlobalEquivalentDomains: number[]
+  excludedGlobalEquivalentDomains: number[],
 ): Promise<void> {
   const values = {
     userId,

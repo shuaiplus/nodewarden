@@ -40,7 +40,7 @@ function parseContentLength(request: Request): number | null {
 
 export async function parseDirectUploadPayload(
   request: Request,
-  options: ParseDirectUploadOptions
+  options: ParseDirectUploadOptions,
 ): Promise<DirectUploadPayload | Response> {
   const {
     expectedSize = null,

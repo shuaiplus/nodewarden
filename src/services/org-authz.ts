@@ -61,10 +61,11 @@ export function canAccessEventLogs(member: MembershipRecord | null | undefined):
 }
 
 export function canManageMembers(member: MembershipRecord): boolean {
-  return isActiveMember(member) && (
-    member.type === MembershipType.Owner
-    || member.type === MembershipType.Admin
-    || resolvePermissions(member).manageUsers
+  return (
+    isActiveMember(member) &&
+    (member.type === MembershipType.Owner ||
+      member.type === MembershipType.Admin ||
+      resolvePermissions(member).manageUsers)
   );
 }
 
@@ -73,9 +74,11 @@ export function canManageMembers(member: MembershipRecord): boolean {
 function canManageMemberType(actor: MembershipRecord, type: number): boolean {
   if (actor.type === MembershipType.Owner) return true;
   if (actor.type === MembershipType.Admin) return type !== MembershipType.Owner;
-  return actor.type === MembershipType.Custom
-    && resolvePermissions(actor).manageUsers
-    && (type === MembershipType.User || type === MembershipType.Custom);
+  return (
+    actor.type === MembershipType.Custom &&
+    resolvePermissions(actor).manageUsers &&
+    (type === MembershipType.User || type === MembershipType.Custom)
+  );
 }
 
 export type RoleChangeCheck = { ok: true } | { ok: false; message: string };
@@ -95,7 +98,7 @@ export function memberRoleChangeCheck(
   currentType: number,
   newType: number,
   newPermissions: OrgPermissions,
-  route: keyof typeof ONLY_OWNERS_MESSAGES
+  route: keyof typeof ONLY_OWNERS_MESSAGES,
 ): RoleChangeCheck {
   if (!canManageMemberType(actor, currentType) || !canManageMemberType(actor, newType)) {
     const touchesOwner = currentType === MembershipType.Owner || newType === MembershipType.Owner;
@@ -105,9 +108,12 @@ export function memberRoleChangeCheck(
     };
   }
   const actorPermissions = resolvePermissions(actor);
-  const grantsUnheld = actor.type === MembershipType.Custom
-    && newType === MembershipType.Custom
-    && (Object.keys(newPermissions) as Array<keyof OrgPermissions>).some((name) => newPermissions[name] && !actorPermissions[name]);
+  const grantsUnheld =
+    actor.type === MembershipType.Custom &&
+    newType === MembershipType.Custom &&
+    (Object.keys(newPermissions) as Array<keyof OrgPermissions>).some(
+      (name) => newPermissions[name] && !actorPermissions[name],
+    );
   return grantsUnheld
     ? { ok: false, message: 'Custom users can only grant the same custom permissions that they have.' }
     : { ok: true };
@@ -115,13 +121,20 @@ export function memberRoleChangeCheck(
 
 // Upstream RemoveOrganizationUserCommand and the v1 Revoke/RestoreOrganizationUserCommand: the same
 // role guard as a role change, applied to the member's current type and worded per action.
-export function memberRemovalCheck(actor: MembershipRecord, target: MembershipRecord, action: 'remove' | 'revoke' | 'restore'): RoleChangeCheck {
+export function memberRemovalCheck(
+  actor: MembershipRecord,
+  target: MembershipRecord,
+  action: 'remove' | 'revoke' | 'restore',
+): RoleChangeCheck {
   if (actor.userId && actor.userId === target.userId) return { ok: false, message: `You cannot ${action} yourself.` };
   const targetType = clientMembershipType(target.type);
   if (!canManageMemberType(actor, targetType)) {
     return {
       ok: false,
-      message: targetType === MembershipType.Owner ? `Only owners can ${action} other owners.` : `Custom users can not ${action} admins.`,
+      message:
+        targetType === MembershipType.Owner
+          ? `Only owners can ${action} other owners.`
+          : `Custom users can not ${action} admins.`,
     };
   }
   const revoked = publicMembershipStatus(target.status) === MembershipStatus.Revoked;
@@ -137,8 +150,7 @@ export function restrictsEditingSelf(actor: MembershipRecord, target: Membership
 }
 
 export type MemberCollectionsCheck =
-  | { ok: true; collections: CollectionAccess[] }
-  | { ok: false; status: number; message: string };
+  { ok: true; collections: CollectionAccess[] } | { ok: false; status: number; message: string };
 
 // Upstream OrganizationUsersController.Invite and GetAuthorizedCollectionsToSaveAsync: granting
 // access needs ModifyUserAccess on the collection. Owners, Admins and editAnyCollection members hold
@@ -148,7 +160,13 @@ export type MemberCollectionsCheck =
 // collection it does not manage. Group membership stays unchecked, as upstream. Official web still
 // treats that setting as on and offers every collection it shows, so an unchanged entry the actor
 // cannot modify is accepted, and the member keeps that access whether re-posted or omitted.
-export function memberCollectionsCheck({ actor, actorAccess, requested, current, restrictSelf }: {
+export function memberCollectionsCheck({
+  actor,
+  actorAccess,
+  requested,
+  current,
+  restrictSelf,
+}: {
   actor: MembershipRecord;
   actorAccess: CollectionAccess[];
   requested: CollectionAccess[];
@@ -162,46 +180,57 @@ export function memberCollectionsCheck({ actor, actorAccess, requested, current,
   const modifiesAll = hasFullCollectionAccess(actor) || resolvePermissions(actor).editAnyCollection;
   const managed = new Set(actorAccess.filter((access) => access.manage).map(({ collectionId }) => collectionId));
   const canModify = ({ collectionId }: CollectionAccess) => modifiesAll || managed.has(collectionId);
-  if (requested.some((access) => {
-    if (canModify(access)) return false;
-    // An entry the actor cannot modify passes only when it repeats the member's stored access.
-    const stored = currentById.get(access.collectionId);
-    return !(stored && access.readOnly === stored.readOnly && access.hidePasswords === stored.hidePasswords && access.manage === stored.manage);
-  })) {
+  if (
+    requested.some((access) => {
+      if (canModify(access)) return false;
+      // An entry the actor cannot modify passes only when it repeats the member's stored access.
+      const stored = currentById.get(access.collectionId);
+      return !(
+        stored &&
+        access.readOnly === stored.readOnly &&
+        access.hidePasswords === stored.hidePasswords &&
+        access.manage === stored.manage
+      );
+    })
+  ) {
     return { ok: false, status: 404, message: 'Resource not found.' };
   }
   return { ok: true, collections: [...requested.filter(canModify), ...current.filter((access) => !canModify(access))] };
 }
 
 export function canManageGroups(member: MembershipRecord): boolean {
-  return isActiveMember(member) && (
-    member.type === MembershipType.Owner
-    || member.type === MembershipType.Admin
-    || resolvePermissions(member).manageGroups
+  return (
+    isActiveMember(member) &&
+    (member.type === MembershipType.Owner ||
+      member.type === MembershipType.Admin ||
+      resolvePermissions(member).manageGroups)
   );
 }
 
 export function canManagePolicies(member: MembershipRecord): boolean {
-  return isActiveMember(member) && (
-    member.type === MembershipType.Owner
-    || member.type === MembershipType.Admin
-    || resolvePermissions(member).managePolicies
+  return (
+    isActiveMember(member) &&
+    (member.type === MembershipType.Owner ||
+      member.type === MembershipType.Admin ||
+      resolvePermissions(member).managePolicies)
   );
 }
 
 export function canManageSso(member: MembershipRecord): boolean {
-  return isActiveMember(member) && (
-    member.type === MembershipType.Owner
-    || member.type === MembershipType.Admin
-    || resolvePermissions(member).manageSso
+  return (
+    isActiveMember(member) &&
+    (member.type === MembershipType.Owner ||
+      member.type === MembershipType.Admin ||
+      resolvePermissions(member).manageSso)
   );
 }
 
 export function canManageScim(member: MembershipRecord): boolean {
-  return isActiveMember(member) && (
-    member.type === MembershipType.Owner
-    || member.type === MembershipType.Admin
-    || resolvePermissions(member).manageScim
+  return (
+    isActiveMember(member) &&
+    (member.type === MembershipType.Owner ||
+      member.type === MembershipType.Admin ||
+      resolvePermissions(member).manageScim)
   );
 }
 
@@ -229,9 +258,16 @@ export type CollectionOperation = keyof typeof COLLECTION_OPERATION_PERMISSIONS;
 
 // Anyone else acts only on the collections it manages, by the stored Manage flag, own or via a group,
 // as upstream CanManageCollectionsAsync (and memberCollectionsCheck) counts it; "Can edit" does not count.
-export function canActOnCollection(member: MembershipRecord, access: CollectionAccess | null, operation: CollectionOperation): boolean {
+export function canActOnCollection(
+  member: MembershipRecord,
+  access: CollectionAccess | null,
+  operation: CollectionOperation,
+): boolean {
   const permissions = resolvePermissions(member);
-  return isActiveMember(member) && (COLLECTION_OPERATION_PERMISSIONS[operation].some((name) => permissions[name]) || !!access?.manage);
+  return (
+    isActiveMember(member) &&
+    (COLLECTION_OPERATION_PERMISSIONS[operation].some((name) => permissions[name]) || !!access?.manage)
+  );
 }
 
 export function canDeleteOrganization(member: MembershipRecord): boolean {
@@ -240,7 +276,7 @@ export function canDeleteOrganization(member: MembershipRecord): boolean {
 
 export function resolveCollectionPermission(
   member: MembershipRecord,
-  assigned: CollectionAccess | null
+  assigned: CollectionAccess | null,
 ): CollectionPermission {
   if (hasFullCollectionAccess(member)) {
     return {
@@ -274,7 +310,7 @@ export function resolveCollectionPermission(
 export function canViewCipher(
   member: MembershipRecord,
   collectionIds: string[],
-  assignedByCollection: Map<string, CollectionAccess>
+  assignedByCollection: Map<string, CollectionAccess>,
 ): boolean {
   if (hasFullCollectionAccess(member)) return true;
   if (collectionIds.length === 0) return false;
@@ -284,7 +320,7 @@ export function canViewCipher(
 export function canEditCipher(
   member: MembershipRecord,
   collectionIds: string[],
-  assignedByCollection: Map<string, CollectionAccess>
+  assignedByCollection: Map<string, CollectionAccess>,
 ): boolean {
   if (hasFullCollectionAccess(member)) return true;
   if (collectionIds.length === 0) return false;
@@ -301,7 +337,11 @@ export interface CollectionAssignmentPlan {
 
 // Upstream CollectionCipher_UpdateCollections[Admin] (and 1aed7ce03 for EF): a caller adds and drops
 // only collections it may write, so assignments it cannot see or edit survive its request.
-export function planCollectionAssignment({ current, requested, available }: {
+export function planCollectionAssignment({
+  current,
+  requested,
+  available,
+}: {
   current: string[];
   requested: string[];
   available: string[];
@@ -325,12 +365,13 @@ export function acceptInviteCheck(
   invite: MembershipRecord,
   userEmail: string,
   existingMembership: MembershipRecord | null,
-  orgName: string
+  orgName: string,
 ): MemberCheck {
   if (existingMembership) {
-    const message = invite.status === MembershipStatus.Accepted
-      ? 'Invitation already accepted. You will receive an email when your organization membership is confirmed.'
-      : 'You are already part of this organization.';
+    const message =
+      invite.status === MembershipStatus.Accepted
+        ? 'Invitation already accepted. You will receive an email when your organization membership is confirmed.'
+        : 'You are already part of this organization.';
     return { ok: false, message };
   }
   if (!invite.email || invite.email.toLowerCase() !== userEmail.toLowerCase()) {

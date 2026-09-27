@@ -1,17 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  ENTERPRISE_PLAN_TYPE,
-  buildNodeWardenEnterpriseLicense,
-  parseOrganizationLicense,
-} from './enterprise-license';
+import { ENTERPRISE_PLAN_TYPE, buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from './enterprise-license';
 
 test('parses an official organization license file', () => {
-  const parsed = parseOrganizationLicense({
-    Name: 'Acme',
-    BillingEmail: 'billing@acme.test',
-    PlanType: 20,
-  }, 'Fallback');
+  const parsed = parseOrganizationLicense(
+    {
+      Name: 'Acme',
+      BillingEmail: 'billing@acme.test',
+      PlanType: 20,
+    },
+    'Fallback',
+  );
   assert.equal(parsed.name, 'Acme');
   assert.equal(parsed.billingEmail, 'billing@acme.test');
   assert.equal(parsed.planType, 20);

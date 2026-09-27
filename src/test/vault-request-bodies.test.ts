@@ -29,12 +29,17 @@ test('a created cipher keeps the fields a newer client adds, at the top level an
   const env = await createTestEnv();
   const user = await seedUser(env);
   const response = await send(env, user, 'POST', '/api/ciphers', {
-    type: LOGIN_TYPE, name: ENCRYPTED, futureField: { nested: true }, login: { username: ENCRYPTED, futureLoginField: 7 },
+    type: LOGIN_TYPE,
+    name: ENCRYPTED,
+    futureField: { nested: true },
+    login: { username: ENCRYPTED, futureLoginField: 7 },
   });
   assert.equal(response.status, 200);
   const created = (await response.json()) as CipherBody;
 
-  const fetched = (await (await authedFetch(env, { path: `/api/ciphers/${created.id}`, userId: user.id })).json()) as CipherBody;
+  const fetched = (await (
+    await authedFetch(env, { path: `/api/ciphers/${created.id}`, userId: user.id })
+  ).json()) as CipherBody;
   assert.deepEqual(fetched.futureField, { nested: true });
   assert.equal(fetched.login?.futureLoginField, 7);
 });
@@ -42,7 +47,11 @@ test('a created cipher keeps the fields a newer client adds, at the top level an
 test('a wrongly typed favorite or id list answers 400 with the field under validationErrors', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  const favorite = await send(env, user, 'POST', '/api/ciphers', { type: LOGIN_TYPE, name: ENCRYPTED, favorite: 'yes' });
+  const favorite = await send(env, user, 'POST', '/api/ciphers', {
+    type: LOGIN_TYPE,
+    name: ENCRYPTED,
+    favorite: 'yes',
+  });
   assert.equal(favorite.status, 400);
   assert.deepEqual(Object.keys(((await favorite.json()) as ErrorBody).validationErrors ?? {}), ['favorite']);
 
@@ -54,9 +63,13 @@ test('a wrongly typed favorite or id list answers 400 with the field under valid
 test('a full update clears the archive only when archivedAt or archivedDate is sent', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  const created = (await (await send(env, user, 'POST', '/api/ciphers', {
-    type: LOGIN_TYPE, name: ENCRYPTED, archivedDate: ARCHIVED_AT,
-  })).json()) as CipherBody;
+  const created = (await (
+    await send(env, user, 'POST', '/api/ciphers', {
+      type: LOGIN_TYPE,
+      name: ENCRYPTED,
+      archivedDate: ARCHIVED_AT,
+    })
+  ).json()) as CipherBody;
   assert.equal(created.archivedDate, ARCHIVED_AT);
 
   const path = `/api/ciphers/${created.id}`;
@@ -64,22 +77,32 @@ test('a full update clears the archive only when archivedAt or archivedDate is s
   assert.equal(kept.archivedDate, ARCHIVED_AT);
 
   // A sent archivedAt wins over the archivedDate alias, even when it is null.
-  const cleared = (await (await send(env, user, 'PUT', path, {
-    type: LOGIN_TYPE, name: ENCRYPTED, archivedAt: null, archivedDate: ARCHIVED_AT,
-  })).json()) as CipherBody;
+  const cleared = (await (
+    await send(env, user, 'PUT', path, {
+      type: LOGIN_TYPE,
+      name: ENCRYPTED,
+      archivedAt: null,
+      archivedDate: ARCHIVED_AT,
+    })
+  ).json()) as CipherBody;
   assert.equal(cleared.archivedDate, null);
 });
 
 test('attachment v2 reads the numeric-string fileSize Android sends and requires fileName and key', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env);
-  const created = (await (await send(env, user, 'POST', '/api/ciphers', { type: LOGIN_TYPE, name: ENCRYPTED })).json()) as CipherBody;
+  const created = (await (
+    await send(env, user, 'POST', '/api/ciphers', { type: LOGIN_TYPE, name: ENCRYPTED })
+  ).json()) as CipherBody;
   const path = `/api/ciphers/${created.id}/attachment/v2`;
 
   const response = await send(env, user, 'POST', path, { fileName: ENCRYPTED, key: ENCRYPTED, fileSize: '2048' });
   assert.equal(response.status, 200);
   const { cipherResponse } = (await response.json()) as { cipherResponse: { attachments: Array<{ size: string }> } };
-  assert.deepEqual(cipherResponse.attachments.map((attachment) => attachment.size), ['2048']);
+  assert.deepEqual(
+    cipherResponse.attachments.map((attachment) => attachment.size),
+    ['2048'],
+  );
 
   const missing = await send(env, user, 'POST', path, { fileName: ENCRYPTED, fileSize: 1 });
   assert.equal(missing.status, 400);

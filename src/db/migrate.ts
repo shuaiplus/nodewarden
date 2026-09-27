@@ -8,26 +8,28 @@ import { ensurePushInstallationCredentials } from '../services/push-relay';
 import { getConfigValue, setConfigValue } from '../services/storage-config-repo';
 
 export function schemaStatements(sql: string = BASELINE_MIGRATION_SQL): string[] {
-  return sql
-    .split('--> statement-breakpoint')
-    .map((statement) => statement.trim())
-    .filter(Boolean)
-    // Idempotent CREATEs let every schema version bump replay the whole baseline.
-    .map((statement) => {
-      if (/^CREATE TABLE IF NOT EXISTS /i.test(statement)) return statement;
-      if (/^CREATE UNIQUE INDEX IF NOT EXISTS /i.test(statement)) return statement;
-      if (/^CREATE INDEX IF NOT EXISTS /i.test(statement)) return statement;
-      if (/^CREATE TABLE /i.test(statement)) {
-        return statement.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ');
-      }
-      if (/^CREATE UNIQUE INDEX /i.test(statement)) {
-        return statement.replace(/^CREATE UNIQUE INDEX /i, 'CREATE UNIQUE INDEX IF NOT EXISTS ');
-      }
-      if (/^CREATE INDEX /i.test(statement)) {
-        return statement.replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
-      }
-      return statement;
-    });
+  return (
+    sql
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter(Boolean)
+      // Idempotent CREATEs let every schema version bump replay the whole baseline.
+      .map((statement) => {
+        if (/^CREATE TABLE IF NOT EXISTS /i.test(statement)) return statement;
+        if (/^CREATE UNIQUE INDEX IF NOT EXISTS /i.test(statement)) return statement;
+        if (/^CREATE INDEX IF NOT EXISTS /i.test(statement)) return statement;
+        if (/^CREATE TABLE /i.test(statement)) {
+          return statement.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ');
+        }
+        if (/^CREATE UNIQUE INDEX /i.test(statement)) {
+          return statement.replace(/^CREATE UNIQUE INDEX /i, 'CREATE UNIQUE INDEX IF NOT EXISTS ');
+        }
+        if (/^CREATE INDEX /i.test(statement)) {
+          return statement.replace(/^CREATE INDEX /i, 'CREATE INDEX IF NOT EXISTS ');
+        }
+        return statement;
+      })
+  );
 }
 
 // Every raw statement of the bootstrap runs here: migration DDL and PRAGMAs are SQL text by nature.
@@ -58,17 +60,10 @@ export async function ensureStorageSchema(db: D1Database): Promise<void> {
   const [admin] = await orm.select({ id: users.id }).from(users).where(eq(users.role, 'admin')).limit(1);
   if (admin) return;
 
-  const [firstUser] = await orm
-    .select({ id: users.id })
-    .from(users)
-    .orderBy(asc(users.createdAt))
-    .limit(1);
+  const [firstUser] = await orm.select({ id: users.id }).from(users).orderBy(asc(users.createdAt)).limit(1);
   if (!firstUser) return;
 
-  await orm
-    .update(users)
-    .set({ role: 'admin', updatedAt: new Date().toISOString() })
-    .where(eq(users.id, firstUser.id));
+  await orm.update(users).set({ role: 'admin', updatedAt: new Date().toISOString() }).where(eq(users.id, firstUser.id));
 }
 
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
@@ -103,14 +98,16 @@ export async function initializeDatabase(db: D1Database): Promise<void> {
   await executeSchemaStatement(db, CONFIG_TABLE_SQL);
   const schemaVersion = await getConfigValue(db, STORAGE_SCHEMA_VERSION_KEY);
   // The catalog is only read when the recorded version already matches.
-  const schemaCurrent = schemaVersion === STORAGE_SCHEMA_VERSION && (await getOrm(db)
-    .select({ name: sqliteMaster.name })
-    .from(sqliteMaster)
-    .where(and(eq(sqliteMaster.type, 'table'), inArray(sqliteMaster.name, REQUIRED_SCHEMA_TABLES)))
-    .then((rows) => {
-      const found = new Set(rows.map((row) => row.name));
-      return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
-    }));
+  const schemaCurrent =
+    schemaVersion === STORAGE_SCHEMA_VERSION &&
+    (await getOrm(db)
+      .select({ name: sqliteMaster.name })
+      .from(sqliteMaster)
+      .where(and(eq(sqliteMaster.type, 'table'), inArray(sqliteMaster.name, REQUIRED_SCHEMA_TABLES)))
+      .then((rows) => {
+        const found = new Set(rows.map((row) => row.name));
+        return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
+      }));
   if (!schemaCurrent) {
     await ensureStorageSchema(db);
     await setConfigValue(db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);

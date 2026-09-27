@@ -11,7 +11,10 @@ const NOW = 1_800_000_000_000;
 test('a Yubico bootstrap claim holds through its expiry instant and is cleared only once it has passed', async (t) => {
   const env = await createTestEnv();
   t.mock.method(Date, 'now', () => NOW);
-  for (const [expiresAt, cleared] of [[NOW, false], [NOW - 1, true]] as const) {
+  for (const [expiresAt, cleared] of [
+    [NOW, false],
+    [NOW - 1, true],
+  ] as const) {
     const claim = `${expiresAt}:other-request`;
     await setConfigValue(env.DB, YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY, claim);
     assert.equal(await initializeYubicoCredentialsOnce(env.DB, 'owner@example.test', 'not-a-yubikey-otp'), null);

@@ -52,15 +52,22 @@ export class RateLimitService {
     const cutoff = nowMs - RateLimitService.LOGIN_IP_RETENTION_MS;
     await getOrm(this.env.DB)
       .delete(loginAttemptsIp)
-      .where(and(
-        lt(loginAttemptsIp.updatedAt, cutoff),
-        or(isNull(loginAttemptsIp.lockedUntil), lt(loginAttemptsIp.lockedUntil, nowMs)),
-      ));
+      .where(
+        and(
+          lt(loginAttemptsIp.updatedAt, cutoff),
+          or(isNull(loginAttemptsIp.lockedUntil), lt(loginAttemptsIp.lockedUntil, nowMs)),
+        ),
+      );
     RateLimitService.lastLoginIpCleanupAt = nowMs;
   }
 
   private async maybeCleanupStrictBudgets(nowMs: number): Promise<void> {
-    if (!this.shouldRunCleanup(RateLimitService.lastStrictBudgetCleanupAt, RateLimitService.STRICT_BUDGET_CLEANUP_INTERVAL_MS)) {
+    if (
+      !this.shouldRunCleanup(
+        RateLimitService.lastStrictBudgetCleanupAt,
+        RateLimitService.STRICT_BUDGET_CLEANUP_INTERVAL_MS,
+      )
+    ) {
       return;
     }
 
@@ -133,10 +140,7 @@ export class RateLimitService {
     const attempts = row?.attempts || 1;
     if (attempts >= CONFIG.LOGIN_MAX_ATTEMPTS) {
       const lockedUntil = now + CONFIG.LOGIN_LOCKOUT_MINUTES * 60 * 1000;
-      await orm
-        .update(loginAttemptsIp)
-        .set({ lockedUntil, updatedAt: now })
-        .where(eq(loginAttemptsIp.ip, key));
+      await orm.update(loginAttemptsIp).set({ lockedUntil, updatedAt: now }).where(eq(loginAttemptsIp.ip, key));
       return { locked: true, retryAfterSeconds: CONFIG.LOGIN_LOCKOUT_MINUTES * 60 };
     }
 
@@ -150,7 +154,7 @@ export class RateLimitService {
 
   async consumeStrictBudget(
     identifier: string,
-    maxRequests: number
+    maxRequests: number,
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
     return this.consumeStrictBudgetWithWindow(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS);
   }
@@ -161,7 +165,7 @@ export class RateLimitService {
     identifier: string,
     maxRequests: number,
     windowSeconds: number,
-    cost = 1
+    cost = 1,
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
     const key = String(identifier || '').trim() || 'unknown';
     const max = Math.max(1, Math.floor(maxRequests));
@@ -211,7 +215,7 @@ export class RateLimitService {
   async consumeBudget(
     identifier: string,
     maxRequests: number,
-    cost?: number
+    cost?: number,
   ): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
     const binding = this.env[`RATE_LIMIT_${maxRequests}_PER_MINUTE`];
     if (!binding || cost !== undefined) {
@@ -242,7 +246,8 @@ export function getClientIdentifier(request: Request): string | null {
       if (!input.includes(':')) return `ip4:${convertIPv4BinaryToString(convertIPv4ToBinary(input))}`;
       const ipv6 = convertIPv6ToBinary(input.replace(/^\[(.*)\]$/, '$1').split('%')[0]);
       // IPv4-mapped (::ffff:192.0.2.1) and IPv4-compatible (::192.0.2.1) addresses keep the IPv4 identity.
-      if (isIPv4MappedIPv6(ipv6) || ipv6 >> 32n === 0n) return `ip4:${convertIPv4BinaryToString(convertIPv4MappedIPv6ToIPv4(ipv6))}`;
+      if (isIPv4MappedIPv6(ipv6) || ipv6 >> 32n === 0n)
+        return `ip4:${convertIPv4BinaryToString(convertIPv4MappedIPv6ToIPv4(ipv6))}`;
       // Collapse to /64 to reduce brute-force bypass via IPv6 address rotation.
       return `ip6:${expandIPv6(convertIPv6BinaryToString(ipv6)).split(':').slice(0, 4).join(':')}`;
     } catch {

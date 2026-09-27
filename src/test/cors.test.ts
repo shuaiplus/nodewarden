@@ -4,7 +4,8 @@ import { LIMITS } from '../config/limits';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const VAULT_ORIGIN = 'https://web.example.test';
-const corsHeaders = (response: Response) => Object.fromEntries([...response.headers].filter(([name]) => name.startsWith('access-control-') || name === 'vary'));
+const corsHeaders = (response: Response) =>
+  Object.fromEntries([...response.headers].filter(([name]) => name.startsWith('access-control-') || name === 'vary'));
 
 test('configured vault origins read every response, errors included, with credentials', async () => {
   const env = await createTestEnv({ WEB_VAULT_ORIGINS: VAULT_ORIGIN });
@@ -20,7 +21,11 @@ test('configured vault origins read every response, errors included, with creden
       vary: 'Origin',
     });
   }
-  const preflight = await authedFetch(env, { method: 'OPTIONS', path: '/api/sync', headers: { Origin: VAULT_ORIGIN, 'Access-Control-Request-Headers': 'authorization, bitwarden-client-name' } });
+  const preflight = await authedFetch(env, {
+    method: 'OPTIONS',
+    path: '/api/sync',
+    headers: { Origin: VAULT_ORIGIN, 'Access-Control-Request-Headers': 'authorization, bitwarden-client-name' },
+  });
   assert.equal(preflight.status, 204);
   assert.deepEqual(corsHeaders(preflight), {
     'access-control-allow-credentials': 'true',

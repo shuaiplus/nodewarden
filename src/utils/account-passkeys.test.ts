@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  normalizeAuthenticationResponse, normalizeRegistrationResponse, normalizeTransports, userHandleToUserId, userIdToWebAuthnUserId,
+  normalizeAuthenticationResponse,
+  normalizeRegistrationResponse,
+  normalizeTransports,
+  userHandleToUserId,
+  userIdToWebAuthnUserId,
 } from './account-passkeys';
 import { normalizeJsonKeys } from './response';
 
@@ -34,21 +38,30 @@ test('accepts the official web 2FA WebAuthn body with PascalCase AttestationObje
 test('rejects a registration body without an attestation object in either casing', () => {
   const { clientDataJson, transports } = officialTwoFactorDeviceResponse.response;
   assert.equal(
-    normalizeRegistrationResponse(normalizeJsonKeys({ ...officialTwoFactorDeviceResponse, response: { clientDataJson, transports } })),
-    null
+    normalizeRegistrationResponse(
+      normalizeJsonKeys({ ...officialTwoFactorDeviceResponse, response: { clientDataJson, transports } }),
+    ),
+    null,
   );
 });
 
 test('reads padded base64 assertions as base64url, requires client data and keeps only WebAuthn transports', () => {
-  const assertion = { id: 'a+b/c==', rawId: 'a+b/c==', response: { authenticatorData: 'ZGF0YQ==', signature: 's+g/', userHandle: '' } };
+  const assertion = {
+    id: 'a+b/c==',
+    rawId: 'a+b/c==',
+    response: { authenticatorData: 'ZGF0YQ==', signature: 's+g/', userHandle: '' },
+  };
   assert.equal(normalizeAuthenticationResponse(assertion), null);
-  assert.deepEqual(normalizeAuthenticationResponse({ ...assertion, response: { ...assertion.response, clientDataJSON: 'Y2Q=' } }), {
-    id: 'a-b_c',
-    rawId: 'a-b_c',
-    type: 'public-key',
-    clientExtensionResults: {},
-    response: { authenticatorData: 'ZGF0YQ', signature: 's-g_', userHandle: undefined, clientDataJSON: 'Y2Q' },
-  });
+  assert.deepEqual(
+    normalizeAuthenticationResponse({ ...assertion, response: { ...assertion.response, clientDataJSON: 'Y2Q=' } }),
+    {
+      id: 'a-b_c',
+      rawId: 'a-b_c',
+      type: 'public-key',
+      clientExtensionResults: {},
+      response: { authenticatorData: 'ZGF0YQ', signature: 's-g_', userHandle: undefined, clientDataJSON: 'Y2Q' },
+    },
+  );
   assert.deepEqual(normalizeTransports(['usb', 'carrier-pigeon', 'hybrid']), ['usb', 'hybrid']);
   assert.equal(normalizeTransports('usb'), null);
 });

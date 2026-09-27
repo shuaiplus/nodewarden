@@ -34,9 +34,7 @@ export interface WebDavBackupDestination {
   remotePath: string;
 }
 
-export type BackupDestinationConfig =
-  | S3BackupDestination
-  | WebDavBackupDestination;
+export type BackupDestinationConfig = S3BackupDestination | WebDavBackupDestination;
 
 export interface BackupRuntimeState {
   lastAttemptAt: string | null;
@@ -135,7 +133,7 @@ export interface CreateBackupDestinationRecordOptions {
 export function createBackupDestinationRecord(
   type: BackupDestinationType,
   index: number,
-  options: CreateBackupDestinationRecordOptions = {}
+  options: CreateBackupDestinationRecordOptions = {},
 ): BackupDestinationRecord {
   return {
     id: options.id || createBackupRandomId(),
@@ -150,7 +148,7 @@ export function createBackupDestinationRecord(
 
 export function createDefaultBackupSettings(
   timezone: string = BACKUP_DEFAULT_TIMEZONE,
-  options: { destinationName?: string } = {}
+  options: { destinationName?: string } = {},
 ): BackupSettings {
   return {
     destinations: [

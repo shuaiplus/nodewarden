@@ -5,7 +5,15 @@ import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { createOrgInviteToken } from '../utils/jwt';
-import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser } from './support/env';
+import {
+  authedFetch,
+  captureEmail,
+  createTestEnv,
+  drainWaitUntil,
+  failingEmail,
+  MAILABLE_DOMAIN,
+  seedUser,
+} from './support/env';
 import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../handlers/organizations');
@@ -22,13 +30,21 @@ async function setup() {
 // A member with a deliverable address. An invited one has no account bound yet, as after invite.
 function member(env: Env, orgId: string, type: number, status: number) {
   return seedMember(env, orgId, {
-    type, status, accessAll: true, ...(status === MembershipStatus.Invited ? { userId: null } : {}),
+    type,
+    status,
+    accessAll: true,
+    ...(status === MembershipStatus.Invited ? { userId: null } : {}),
     user: { email: `member-${crypto.randomUUID()}@${MAILABLE_DOMAIN}` },
   });
 }
 
 async function post(env: Env, user: User, orgId: string, suffix: string, body: unknown) {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${suffix}`, userId: user.id, body });
+  const response = await authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/${suffix}`,
+    userId: user.id,
+    body,
+  });
   await drainWaitUntil();
   return response;
 }
@@ -42,8 +58,14 @@ test('organization acceptance mails each other confirmed Owner and Admin only', 
   const acceptingOwner = await member(f.env, f.org.id, 0, 0);
   const token = await createOrgInviteToken(f.env.JWT_SECRET, acceptingOwner.memberId, acceptingOwner.user.email);
 
-  assert.equal((await post(f.env, acceptingOwner.user, f.org.id, `${acceptingOwner.memberId}/accept`, { token })).status, 200);
-  assert.deepEqual(f.sent.map(({ to }) => to).sort(), [f.owner.email, admin.user.email, anotherOwner.user.email].sort());
+  assert.equal(
+    (await post(f.env, acceptingOwner.user, f.org.id, `${acceptingOwner.memberId}/accept`, { token })).status,
+    200,
+  );
+  assert.deepEqual(
+    f.sent.map(({ to }) => to).sort(),
+    [f.owner.email, admin.user.email, anotherOwner.user.email].sort(),
+  );
   for (const mail of f.sent) {
     assert.equal(mail.subject, 'Organization invitation accepted');
     assert.match(mail.html, /&lt;Org&gt; x\[dot\]y \[at\]home/);
@@ -54,18 +76,28 @@ test('organization confirmation and bulk confirmation mail only members who succ
   const f = await setup();
   const single = await member(f.env, f.org.id, 2, 1);
   assert.equal((await post(f.env, f.owner, f.org.id, `${single.memberId}/confirm`, { key: KEY })).status, 200);
-  assert.deepEqual(f.sent.map(({ to }) => to), [single.user.email]);
+  assert.deepEqual(
+    f.sent.map(({ to }) => to),
+    [single.user.email],
+  );
   assert.match(f.sent[0].text, /https:\/\/web.example.test\//);
 
   const accepted = await member(f.env, f.org.id, 2, 1);
   const invited = await member(f.env, f.org.id, 2, 0);
   const invalidKey = await member(f.env, f.org.id, 2, 1);
-  const response = await post(f.env, f.owner, f.org.id, 'confirm', { keys: [
-    { id: accepted.memberId, key: KEY }, { id: invited.memberId, key: KEY },
-    { id: invalidKey.memberId, key: 'invalid' }, { id: crypto.randomUUID(), key: KEY },
-  ] });
+  const response = await post(f.env, f.owner, f.org.id, 'confirm', {
+    keys: [
+      { id: accepted.memberId, key: KEY },
+      { id: invited.memberId, key: KEY },
+      { id: invalidKey.memberId, key: 'invalid' },
+      { id: crypto.randomUUID(), key: KEY },
+    ],
+  });
   assert.equal(response.status, 200);
-  assert.deepEqual(f.sent.map(({ to }) => to), [single.user.email, accepted.user.email]);
+  assert.deepEqual(
+    f.sent.map(({ to }) => to),
+    [single.user.email, accepted.user.email],
+  );
   assert.ok(f.sent.every(({ subject }) => subject === 'Organization membership confirmed'));
 });
 

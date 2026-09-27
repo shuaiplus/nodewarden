@@ -18,7 +18,9 @@ export function columnCount(table: Table): number {
 // any parameters every chunk's statement binds besides the rows.
 export function chunkRows<T>(rows: T[], columnsPerRow: number, fixedParameters = 0): T[][] {
   const size = Math.floor((D1_MAX_BOUND_PARAMETERS - fixedParameters) / columnsPerRow);
-  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size));
+  return Array.from({ length: Math.ceil(rows.length / size) }, (_, index) =>
+    rows.slice(index * size, (index + 1) * size),
+  );
 }
 
 // Splits items into chunks small enough that statement(chunk) stays within D1's bound-parameter limit.
@@ -54,7 +56,12 @@ export function abortUnlessChanged(orm: Orm, reason: string) {
 // EXISTS the user's row, narrowed by conditions (undefined ones are skipped). In a WHERE clause it guards a
 // write to another table against a concurrent change to that user, such as a rotated security stamp.
 export function userRowMatches(orm: Orm, userId: string, ...conditions: (SQL | undefined)[]) {
-  return exists(orm.select({ id: users.id }).from(users).where(and(eq(users.id, userId), ...conditions)));
+  return exists(
+    orm
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, userId), ...conditions)),
+  );
 }
 
 // A failed drizzle query's message lists every bound value (password hashes, keys, one-time codes), so

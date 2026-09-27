@@ -57,10 +57,10 @@ export async function listInvites(db: D1Database, includeInactive: boolean = fal
   const rows = includeInactive
     ? await getOrm(db).select().from(invites).orderBy(desc(invites.createdAt))
     : await getOrm(db)
-      .select()
-      .from(invites)
-      .where(and(eq(invites.status, 'active'), gt(invites.expiresAt, now)))
-      .orderBy(desc(invites.createdAt));
+        .select()
+        .from(invites)
+        .where(and(eq(invites.status, 'active'), gt(invites.expiresAt, now)))
+        .orderBy(desc(invites.createdAt));
   return rows.map(mapInvite);
 }
 
@@ -136,7 +136,11 @@ export async function pruneAuditLogs(db: D1Database, beforeIso: string): Promise
 
 export async function pruneAuditLogsToMax(db: D1Database, maxEntries: number): Promise<number> {
   const orm = getOrm(db);
-  const newest = orm.select({ id: auditLogs.id }).from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(Math.max(1, Math.floor(maxEntries)));
+  const newest = orm
+    .select({ id: auditLogs.id })
+    .from(auditLogs)
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(Math.max(1, Math.floor(maxEntries)));
   const result = await orm.delete(auditLogs).where(notInArray(auditLogs.id, newest)).run();
   return Number(result.meta.changes ?? 0);
 }
@@ -152,21 +156,24 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
   const actor = alias(users, 'actor');
   const target = alias(users, 'target');
   const filters = [];
-  if (options.actionPrefix) filters.push(likeEscaped(auditLogs.action, options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'));
+  if (options.actionPrefix)
+    filters.push(likeEscaped(auditLogs.action, options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'));
   if (options.from) filters.push(gte(auditLogs.createdAt, options.from));
   if (options.to) filters.push(lte(auditLogs.createdAt, options.to));
   if (options.category) filters.push(eq(auditLogs.category, options.category));
   if (options.level) filters.push(eq(auditLogs.level, options.level));
   if (options.q) {
     const likePattern = `%${options.q.toLowerCase().slice(0, 48)}%`;
-    filters.push(or(
-      like(lower(auditLogs.action), likePattern),
-      like(lower(coalesce(auditLogs.actorUserId, '')), likePattern),
-      like(lower(coalesce(auditLogs.targetType, '')), likePattern),
-      like(lower(coalesce(auditLogs.targetId, '')), likePattern),
-      like(lower(coalesce(actor.email, '')), likePattern),
-      like(lower(coalesce(target.email, '')), likePattern),
-    ));
+    filters.push(
+      or(
+        like(lower(auditLogs.action), likePattern),
+        like(lower(coalesce(auditLogs.actorUserId, '')), likePattern),
+        like(lower(coalesce(auditLogs.targetType, '')), likePattern),
+        like(lower(coalesce(auditLogs.targetId, '')), likePattern),
+        like(lower(coalesce(actor.email, '')), likePattern),
+        like(lower(coalesce(target.email, '')), likePattern),
+      ),
+    );
   }
 
   const rows = await getOrm(db)
@@ -196,9 +203,10 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
     actorUserId: row.actorUserId ?? null,
     actorEmail: row.actorEmail ?? null,
     action: row.action,
-    category: row.category === 'auth' || row.category === 'security' || row.category === 'device' || row.category === 'data'
-      ? row.category
-      : 'system',
+    category:
+      row.category === 'auth' || row.category === 'security' || row.category === 'device' || row.category === 'data'
+        ? row.category
+        : 'system',
     level: row.level === 'warn' || row.level === 'error' || row.level === 'security' ? row.level : 'info',
     targetType: row.targetType ?? null,
     targetId: row.targetId ?? null,

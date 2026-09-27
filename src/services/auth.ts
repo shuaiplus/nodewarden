@@ -28,7 +28,13 @@ export type Principal =
   | { kind: 'user'; payload: JWTPayload; user: User }
   | { kind: 'serviceAccount'; serviceAccountId: string; orgId: string; accessTokenId: string };
 
-type AccessClaims = JWTPayload & { type?: unknown; scope?: unknown; organization?: unknown; client_id?: unknown; nbf?: unknown };
+type AccessClaims = JWTPayload & {
+  type?: unknown;
+  scope?: unknown;
+  organization?: unknown;
+  client_id?: unknown;
+  nbf?: unknown;
+};
 
 export type RefreshAccessTokenFailureReason =
   | 'token_not_found_or_expired'
@@ -39,7 +45,13 @@ export type RefreshAccessTokenFailureReason =
   | 'device_session_mismatch';
 
 export type RefreshAccessTokenResult =
-  | { ok: true; accessToken: string; user: User; device: { identifier: string; sessionStamp: string } | null; expiresAt: number }
+  | {
+      ok: true;
+      accessToken: string;
+      user: User;
+      device: { identifier: string; sessionStamp: string } | null;
+      expiresAt: number;
+    }
   | {
       ok: false;
       reason: RefreshAccessTokenFailureReason;
@@ -51,8 +63,7 @@ export class AuthService {
   private static userCache = new Map<string, CachedUserEntry>();
   private static deviceCache = new Map<string, CachedDeviceEntry>();
 
-  constructor(private env: Env) {
-  }
+  constructor(private env: Env) {}
 
   static invalidateUserCache(userId: string): void {
     const normalizedUserId = String(userId || '').trim();
@@ -157,7 +168,7 @@ export class AuthService {
         sstamp: user.securityStamp,
         ...(device?.identifier ? { did: device.identifier, dstamp: device.sessionStamp } : {}),
       },
-      this.env.JWT_SECRET
+      this.env.JWT_SECRET,
     );
   }
 
@@ -165,7 +176,7 @@ export class AuthService {
   async generateRefreshToken(
     user: User,
     device?: { identifier: string; sessionStamp: string } | null,
-    clientType: string = 'other'
+    clientType: string = 'other',
   ): Promise<string> {
     const token = createRefreshToken();
     const now = Date.now();
@@ -178,7 +189,7 @@ export class AuthService {
       device?.sessionStamp ?? null,
       user.securityStamp,
       clientType,
-      now + LIMITS.auth.refreshTokenAbsoluteTtlMs
+      now + LIMITS.auth.refreshTokenAbsoluteTtlMs,
     );
     return token;
   }
@@ -193,10 +204,35 @@ export class AuthService {
     if (!payload) return null;
     if (payload.type === 'ServiceAccount') {
       const now = Math.floor(Date.now() / 1000);
-      if (!Array.isArray(payload.scope) || !payload.scope.includes('api.secrets') || typeof payload.organization !== 'string' || typeof payload.client_id !== 'string' || typeof payload.sub !== 'string' || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp) || payload.exp <= now || typeof payload.nbf !== 'number' || payload.nbf > now || payload.iss !== 'nodewarden') return null;
+      if (
+        !Array.isArray(payload.scope) ||
+        !payload.scope.includes('api.secrets') ||
+        typeof payload.organization !== 'string' ||
+        typeof payload.client_id !== 'string' ||
+        typeof payload.sub !== 'string' ||
+        typeof payload.exp !== 'number' ||
+        !Number.isFinite(payload.exp) ||
+        payload.exp <= now ||
+        typeof payload.nbf !== 'number' ||
+        payload.nbf > now ||
+        payload.iss !== 'nodewarden'
+      )
+        return null;
       const token = await getAccessTokenWithAccount(this.env.DB, payload.client_id);
-      if (!token || !token.key || token.serviceAccountId !== payload.sub || token.orgId !== payload.organization || (token.expireAt && !(Date.parse(token.expireAt) > Date.now()))) return null;
-      return { kind: 'serviceAccount', serviceAccountId: token.serviceAccountId, orgId: token.orgId, accessTokenId: token.id };
+      if (
+        !token ||
+        !token.key ||
+        token.serviceAccountId !== payload.sub ||
+        token.orgId !== payload.organization ||
+        (token.expireAt && !(Date.parse(token.expireAt) > Date.now()))
+      )
+        return null;
+      return {
+        kind: 'serviceAccount',
+        serviceAccountId: token.serviceAccountId,
+        orgId: token.orgId,
+        accessTokenId: token.id,
+      };
     }
     const verified = await this.verifyUserPayload(payload);
     return verified ? { kind: 'user', ...verified } : null;
@@ -255,7 +291,12 @@ export class AuthService {
 
     if (record.securityStamp && record.securityStamp !== user.securityStamp) {
       await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
-      return { ok: false, reason: 'security_stamp_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+      return {
+        ok: false,
+        reason: 'security_stamp_mismatch',
+        userId: user.id,
+        deviceIdentifier: record.deviceIdentifier,
+      };
     }
     if (!record.securityStamp) {
       await sessionRepo.bindRefreshTokenSecurityStamp(this.env.DB, refreshToken, user.securityStamp);
@@ -270,7 +311,12 @@ export class AuthService {
       }
       if (record.deviceSessionStamp && boundDevice.sessionStamp !== record.deviceSessionStamp) {
         await sessionRepo.deleteRefreshToken(this.env.DB, refreshToken);
-        return { ok: false, reason: 'device_session_mismatch', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+        return {
+          ok: false,
+          reason: 'device_session_mismatch',
+          userId: user.id,
+          deviceIdentifier: record.deviceIdentifier,
+        };
       }
       if (!record.deviceSessionStamp) {
         await sessionRepo.bindRefreshTokenDeviceStamp(this.env.DB, refreshToken, boundDevice.sessionStamp);
@@ -281,18 +327,23 @@ export class AuthService {
     const now = Date.now();
     const expiresAt = Math.min(
       now + getRefreshTokenSlidingTtlMs(record.clientType),
-      record.absoluteExpiresAt || (now + LIMITS.auth.refreshTokenAbsoluteTtlMs)
+      record.absoluteExpiresAt || now + LIMITS.auth.refreshTokenAbsoluteTtlMs,
     );
     const extended = await sessionRepo.extendRefreshTokenExpiry(this.env.DB, refreshToken, expiresAt, now);
     if (!extended) {
-      return { ok: false, reason: 'token_not_found_or_expired', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+      return {
+        ok: false,
+        reason: 'token_not_found_or_expired',
+        userId: user.id,
+        deviceIdentifier: record.deviceIdentifier,
+      };
     }
     const accessToken = await this.generateAccessToken(user, device);
     return { ok: true, accessToken, user, device, expiresAt };
   }
 
   async refreshAccessToken(
-    refreshToken: string
+    refreshToken: string,
   ): Promise<{ accessToken: string; user: User; device: { identifier: string; sessionStamp: string } | null } | null> {
     const result = await this.refreshAccessTokenDetailed(refreshToken);
     return result.ok ? result : null;

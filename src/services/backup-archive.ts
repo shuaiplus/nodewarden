@@ -5,17 +5,23 @@ import { asc, getColumns, getTableName } from 'drizzle-orm';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
-import { attachments, ciphers, config, domainSettings, folders, userRevisions, users, webauthnCredentials } from '../db/schema';
+import {
+  attachments,
+  ciphers,
+  config,
+  domainSettings,
+  folders,
+  userRevisions,
+  users,
+  webauthnCredentials,
+} from '../db/schema';
 import { unmapped } from '../db/sql';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
 import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
-import {
-  getAttachmentObjectKey,
-  getBlobStorageKind,
-} from './blob-store';
+import { getAttachmentObjectKey, getBlobStorageKind } from './blob-store';
 
 // CONTRACT:
 // This file defines the exported instance-backup archive shape. Keep it in lock
@@ -77,20 +83,29 @@ const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
 // shape is an explicit allowlist: z.object strips extra tables from old or modified archives,
 // especially runtime authentication state.
 const BackupPayloadSchema = z.object({
-  manifest: z.looseObject({
-    formatVersion: z.literal(BACKUP_FORMAT_VERSION, { error: 'Unsupported backup format version' }),
-    attachmentBlobs: z.array(BackupManifestAttachmentBlobSchema).nullish().transform((blobs) => blobs ?? []),
-  }, { error: 'Unsupported backup format version' }),
-  db: z.object({
-    config: sqlRows,
-    users: sqlRows,
-    user_revisions: sqlRows,
-    domain_settings: optionalSqlRows,
-    folders: sqlRows,
-    ciphers: sqlRows,
-    attachments: sqlRows,
-    webauthn_credentials: optionalSqlRows,
-  }, { error: 'Backup archive database payload is invalid' }),
+  manifest: z.looseObject(
+    {
+      formatVersion: z.literal(BACKUP_FORMAT_VERSION, { error: 'Unsupported backup format version' }),
+      attachmentBlobs: z
+        .array(BackupManifestAttachmentBlobSchema)
+        .nullish()
+        .transform((blobs) => blobs ?? []),
+    },
+    { error: 'Unsupported backup format version' },
+  ),
+  db: z.object(
+    {
+      config: sqlRows,
+      users: sqlRows,
+      user_revisions: sqlRows,
+      domain_settings: optionalSqlRows,
+      folders: sqlRows,
+      ciphers: sqlRows,
+      attachments: sqlRows,
+      webauthn_credentials: optionalSqlRows,
+    },
+    { error: 'Backup archive database payload is invalid' },
+  ),
 });
 export type BackupPayload = z.output<typeof BackupPayloadSchema>;
 
@@ -126,7 +141,12 @@ export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgr
 // Archive rows keep database column names, their order and the raw stored values: each listed column
 // is selected through unmapped(), so no drizzle value mapping runs. A name the schema lacks
 // throws instead of exporting undefined.
-async function queryRows(db: D1Database, table: SQLiteTable, columnNames: string[], orderBy: string[]): Promise<SqlRow[]> {
+async function queryRows(
+  db: D1Database,
+  table: SQLiteTable,
+  columnNames: string[],
+  orderBy: string[],
+): Promise<SqlRow[]> {
   const columns = new Map(Object.values(getColumns(table)).map((column) => [column.name, column]));
   const schemaColumn = (name: string) => {
     const column = columns.get(name);
@@ -147,7 +167,7 @@ export function extractBackupFileChecksumPrefix(fileName: string): string | null
 
 export async function inspectBackupArchiveFileNameChecksum(
   bytes: Uint8Array,
-  fileName: string
+  fileName: string,
 ): Promise<BackupFileIntegrityCheckResult> {
   const expectedPrefix = extractBackupFileChecksumPrefix(fileName);
   const actualPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
@@ -181,21 +201,33 @@ function validateBackupEntryName(name: string): void {
   if (normalized !== name || !normalized) {
     throw new Error('Backup archive contains an invalid file name');
   }
-  if (normalized.includes('\\') || normalized.includes('\0') || normalized.startsWith('/') || normalized.includes('//')) {
+  if (
+    normalized.includes('\\') ||
+    normalized.includes('\0') ||
+    normalized.startsWith('/') ||
+    normalized.includes('//')
+  ) {
     throw new Error(`Backup archive contains an unsafe file name: ${normalized}`);
   }
   // Besides the two metadata files, only attachments/<cipher>/<attachment>.bin with safe segments is accepted.
-  const attachmentEntry = normalized.startsWith('attachments/') && normalized.endsWith('.bin')
-    && isSafeBackupAttachmentBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
+  const attachmentEntry =
+    normalized.startsWith('attachments/') &&
+    normalized.endsWith('.bin') &&
+    isSafeBackupAttachmentBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
   if (normalized !== 'manifest.json' && normalized !== 'db.json' && !attachmentEntry) {
     throw new Error(`Backup archive contains an unsupported file: ${normalized}`);
   }
 }
 
-function externalAttachmentPaths(manifest: BackupPayload['manifest'], allowExternalAttachmentBlobs = false): Set<string> {
-  return new Set(allowExternalAttachmentBlobs
-    ? manifest.attachmentBlobs.map(({ cipherId, attachmentId }) => `attachments/${cipherId}/${attachmentId}.bin`)
-    : []);
+function externalAttachmentPaths(
+  manifest: BackupPayload['manifest'],
+  allowExternalAttachmentBlobs = false,
+): Set<string> {
+  return new Set(
+    allowExternalAttachmentBlobs
+      ? manifest.attachmentBlobs.map(({ cipherId, attachmentId }) => `attachments/${cipherId}/${attachmentId}.bin`)
+      : [],
+  );
 }
 
 export interface ParseBackupArchiveOptions {
@@ -204,10 +236,12 @@ export interface ParseBackupArchiveOptions {
 
 export function parseBackupArchive(
   bytes: Uint8Array,
-  options: ParseBackupArchiveOptions = {}
+  options: ParseBackupArchiveOptions = {},
 ): { payload: BackupPayload; files: Record<string, Uint8Array> } {
   if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
-    throw new Error(`Backup archive is too large. The current restore limit is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))} MiB`);
+    throw new Error(
+      `Backup archive is too large. The current restore limit is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))} MiB`,
+    );
   }
   // The filter vets each entry's name and declared size before fflate inflates it; the loop below
   // re-checks the sizes actually extracted.
@@ -276,7 +310,8 @@ export function parseBackupArchive(
   }
 
   const parsed = BackupPayloadSchema.safeParse(rawPayload, {
-    error: ({ path = [] }) => (path[0] === 'db' ? `Backup archive table ${String(path[1])} is invalid` : 'Backup archive manifest is invalid'),
+    error: ({ path = [] }) =>
+      path[0] === 'db' ? `Backup archive table ${String(path[1])} is invalid` : 'Backup archive manifest is invalid',
   });
   if (!parsed.success) throw new Error(parsed.error.issues[0].message);
   const payload = parsed.data;
@@ -305,7 +340,7 @@ export interface ValidateBackupPayloadOptions {
 export function validateBackupPayloadContents(
   payload: BackupPayload,
   files: Record<string, Uint8Array>,
-  options: ValidateBackupPayloadOptions = {}
+  options: ValidateBackupPayloadOptions = {},
 ): void {
   const {
     config: configRows,
@@ -377,7 +412,13 @@ export function validateBackupPayloadContents(
   for (const row of attachmentRows) {
     const id = String(row.id || '').trim();
     const cipherId = String(row.cipher_id || '').trim();
-    if (!id || !cipherId || !isSafeBackupPathSegment(id) || !isSafeBackupPathSegment(cipherId) || !cipherIds.has(cipherId)) {
+    if (
+      !id ||
+      !cipherId ||
+      !isSafeBackupPathSegment(id) ||
+      !isSafeBackupPathSegment(cipherId) ||
+      !cipherIds.has(cipherId)
+    ) {
       throw new Error('Backup archive contains an invalid attachment row');
     }
     const attachmentPath = `attachments/${cipherId}/${id}.bin`;
@@ -394,21 +435,27 @@ export function validateBackupPayloadContents(
     const purpose = row.purpose == null ? 'login' : String(row.purpose || '').trim();
     const credentialId = String(row.credential_id || '').trim();
     const publicKey = String(row.public_key || '').trim();
-    if (!id || !userIds.has(userId) || !credentialId || !publicKey || (purpose !== 'login' && purpose !== 'twoFactor')) {
+    if (
+      !id ||
+      !userIds.has(userId) ||
+      !credentialId ||
+      !publicKey ||
+      (purpose !== 'login' && purpose !== 'twoFactor')
+    ) {
       throw new Error('Backup archive contains an invalid account passkey row');
     }
     if (accountPasskeyIds.has(id)) throw new Error(`Backup archive contains duplicate account passkey id: ${id}`);
-    if (accountPasskeyCredentialIds.has(credentialId)) throw new Error(`Backup archive contains duplicate account passkey credential id: ${credentialId}`);
+    if (accountPasskeyCredentialIds.has(credentialId))
+      throw new Error(`Backup archive contains duplicate account passkey credential id: ${credentialId}`);
     accountPasskeyIds.add(id);
     accountPasskeyCredentialIds.add(credentialId);
   }
-
 }
 
 export async function buildBackupArchive(
   env: Env,
   date: Date = new Date(),
-  options: BuildBackupArchiveOptions = {}
+  options: BuildBackupArchiveOptions = {},
 ): Promise<BackupArchiveBundle> {
   const includeAttachments = options.includeAttachments !== false;
   await options.progress?.({
@@ -421,15 +468,111 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const encoder = new TextEncoder();
-  const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows] = await Promise.all([
+  const [
+    configRows,
+    userRows,
+    domainSettingsRows,
+    revisionRows,
+    folderRows,
+    cipherRows,
+    attachmentRows,
+    accountPasskeyRows,
+  ] = await Promise.all([
     queryRows(env.DB, config, ['key', 'value'], ['key']),
-    queryRows(env.DB, users, ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'], ['created_at']),
-    queryRows(env.DB, domainSettings, ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'], ['user_id']),
+    queryRows(
+      env.DB,
+      users,
+      [
+        'id',
+        'email',
+        'email_verified',
+        'name',
+        'master_password_hint',
+        'master_password_hash',
+        'key',
+        'private_key',
+        'public_key',
+        'kdf_type',
+        'kdf_iterations',
+        'kdf_memory',
+        'kdf_parallelism',
+        'security_stamp',
+        'role',
+        'status',
+        'verify_devices',
+        'totp_secret',
+        'totp_recovery_code',
+        'two_factor_email',
+        'yubikey_key1',
+        'yubikey_key2',
+        'yubikey_key3',
+        'yubikey_key4',
+        'yubikey_key5',
+        'yubikey_nfc',
+        'created_at',
+        'updated_at',
+      ],
+      ['created_at'],
+    ),
+    queryRows(
+      env.DB,
+      domainSettings,
+      [
+        'user_id',
+        'equivalent_domains',
+        'custom_equivalent_domains',
+        'excluded_global_equivalent_domains',
+        'updated_at',
+      ],
+      ['user_id'],
+    ),
     queryRows(env.DB, userRevisions, ['user_id', 'revision_date'], ['user_id']),
     queryRows(env.DB, folders, ['id', 'user_id', 'name', 'created_at', 'updated_at'], ['created_at']),
-    queryRows(env.DB, ciphers, ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'], ['created_at']),
+    queryRows(
+      env.DB,
+      ciphers,
+      [
+        'id',
+        'user_id',
+        'type',
+        'folder_id',
+        'name',
+        'notes',
+        'favorite',
+        'data',
+        'reprompt',
+        'key',
+        'created_at',
+        'updated_at',
+        'archived_at',
+        'deleted_at',
+      ],
+      ['created_at'],
+    ),
     queryRows(env.DB, attachments, ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], ['cipher_id', 'id']),
-    queryRows(env.DB, webauthnCredentials, ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'], ['created_at']),
+    queryRows(
+      env.DB,
+      webauthnCredentials,
+      [
+        'id',
+        'user_id',
+        'purpose',
+        'name',
+        'public_key',
+        'credential_id',
+        'counter',
+        'type',
+        'aa_guid',
+        'transports',
+        'encrypted_user_key',
+        'encrypted_public_key',
+        'encrypted_private_key',
+        'supports_prf',
+        'created_at',
+        'updated_at',
+      ],
+      ['created_at'],
+    ),
   ]);
   // Runner locks and the Yubico bootstrap claim stay with this instance; backup settings leave only as
   // their portable envelope.
@@ -482,16 +625,22 @@ export async function buildBackupArchive(
 
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
-    'db.json': encoder.encode(JSON.stringify({
-      config: exportedConfigRows,
-      users: userRows,
-      domain_settings: domainSettingsRows,
-      user_revisions: revisionRows,
-      folders: folderRows,
-      ciphers: cipherRows,
-      attachments: exportedAttachmentRows,
-      webauthn_credentials: accountPasskeyRows,
-    }, null, BACKUP_JSON_INDENT)),
+    'db.json': encoder.encode(
+      JSON.stringify(
+        {
+          config: exportedConfigRows,
+          users: userRows,
+          domain_settings: domainSettingsRows,
+          user_revisions: revisionRows,
+          folders: folderRows,
+          ciphers: cipherRows,
+          attachments: exportedAttachmentRows,
+          webauthn_credentials: accountPasskeyRows,
+        },
+        null,
+        BACKUP_JSON_INDENT,
+      ),
+    ),
   };
 
   await options.progress?.({
@@ -503,8 +652,14 @@ export async function buildBackupArchive(
       : 'txt_backup_archive_progress_package_detail',
     includeAttachments,
   });
-  const bytes = zipSync(Object.fromEntries(Object.entries(files)
-    .map(([path, content]): [string, [Uint8Array, { level: 0 | 1 | 6 }]] => [path, [content, { level: BACKUP_TEXT_COMPRESSION_LEVEL }]])));
+  const bytes = zipSync(
+    Object.fromEntries(
+      Object.entries(files).map(([path, content]): [string, [Uint8Array, { level: 0 | 1 | 6 }]] => [
+        path,
+        [content, { level: BACKUP_TEXT_COMPRESSION_LEVEL }],
+      ]),
+    ),
+  );
   const fileHashPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: options.timeZone || 'UTC',

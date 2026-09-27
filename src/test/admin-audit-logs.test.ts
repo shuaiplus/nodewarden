@@ -9,7 +9,7 @@ test('non-numeric audit log paging falls back to the default page instead of NaN
   const admin = await seedUser(env, { role: 'admin' });
   const response = await authedFetch(env, { path: '/api/admin/logs?limit=abc&offset=xyz', userId: admin.id });
   assert.equal(response.status, 200);
-  const body = await response.json() as { limit: number; offset: number };
+  const body = (await response.json()) as { limit: number; offset: number };
   assert.deepEqual([body.limit, body.offset], [50, 0]);
 });
 
@@ -17,10 +17,22 @@ test('audit log filters take the action prefix literally, bound the time range a
   const env = await createTestEnv();
   const actor = await seedUser(env, { email: 'Finder@Example.test' });
   const target = await seedUser(env, { email: 'target@example.test' });
-  const entry = (id: string, action: string, createdAt: string, fields: { actorUserId?: string; targetType?: string; targetId?: string } = {}) =>
+  const entry = (
+    id: string,
+    action: string,
+    createdAt: string,
+    fields: { actorUserId?: string; targetType?: string; targetId?: string } = {},
+  ) =>
     createAuditLog(env.DB, {
-      id, action, createdAt, category: 'system', level: 'info', metadata: null,
-      actorUserId: fields.actorUserId ?? null, targetType: fields.targetType ?? null, targetId: fields.targetId ?? null,
+      id,
+      action,
+      createdAt,
+      category: 'system',
+      level: 'info',
+      metadata: null,
+      actorUserId: fields.actorUserId ?? null,
+      targetType: fields.targetType ?? null,
+      targetId: fields.targetId ?? null,
     });
   await entry('underscore', 'user_login', '2024-01-01T00:00:00.000Z', { actorUserId: actor.id });
   await entry('wildcard', 'userXlogin', '2024-06-01T00:00:00.000Z', { targetType: 'user', targetId: target.id });

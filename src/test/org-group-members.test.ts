@@ -38,16 +38,16 @@ test('an owner of X adding their org-Y membership or a missing id to a group in 
 
   const created = await saveGroup(env, owner, orgX.orgId, [orgY.membershipId]);
   assert.equal(created.status, 404);
-  assert.equal((await created.json() as { message: string }).message, RESOURCE_NOT_FOUND);
+  assert.equal(((await created.json()) as { message: string }).message, RESOURCE_NOT_FOUND);
   assert.deepEqual(await orgRepo.listGroupsByOrg(env.DB, orgX.orgId), []);
   const missing = await saveGroup(env, owner, orgX.orgId, [crypto.randomUUID()]);
   assert.equal(missing.status, 404);
-  assert.equal((await missing.json() as { message: string }).message, RESOURCE_NOT_FOUND);
+  assert.equal(((await missing.json()) as { message: string }).message, RESOURCE_NOT_FOUND);
   assert.deepEqual(await orgRepo.listGroupsByOrg(env.DB, orgX.orgId), []);
 
   const saved = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId]);
   assert.equal(saved.status, 200);
-  const { id: groupId } = await saved.json() as { id: string };
+  const { id: groupId } = (await saved.json()) as { id: string };
   const updated = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId, orgY.membershipId], groupId);
   assert.equal(updated.status, 404);
   assert.deepEqual(await orgRepo.listGroupMemberIds(env.DB, groupId), [orgX.membershipId]);
@@ -60,7 +60,7 @@ test('the schema step removes cross-org group members, keeps same-org ones, and 
   const orgX = await ownedOrg(env, owner);
   const orgY = await ownedOrg(env, owner);
   const saved = await saveGroup(env, owner, orgX.orgId, [orgX.membershipId]);
-  const { id: groupId } = await saved.json() as { id: string };
+  const { id: groupId } = (await saved.json()) as { id: string };
   await orgRepo.replaceGroupMembers(env.DB, groupId, [orgX.membershipId, orgY.membershipId]);
 
   await ensureStorageSchema(env.DB);

@@ -6,7 +6,16 @@ import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus as Status } from '../services/storage-emergency-repo';
 import type { Env, User } from '../types';
 import { createEmergencyAccessInviteToken, createRegisterVerifyToken, signHs256Jwt } from '../utils/jwt';
-import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, failingEmail, MAILABLE_DOMAIN, seedUser, type SentEmail } from './support/env';
+import {
+  authedFetch,
+  captureEmail,
+  createTestEnv,
+  drainWaitUntil,
+  failingEmail,
+  MAILABLE_DOMAIN,
+  seedUser,
+  type SentEmail,
+} from './support/env';
 import * as userRepo from '../services/storage-user-repo';
 
 const { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } = await import('../handlers/emergency-access');
@@ -17,17 +26,31 @@ const DAY = 86_400_000;
 async function setup(overrides: Partial<Env> = {}) {
   const capture = captureEmail();
   const env = await createTestEnv({ ...capture.overrides, ...overrides });
-  const grantor = await seedUser(env, { email: `grantor-${crypto.randomUUID()}@${MAILABLE_DOMAIN}`, name: '<Grantor> https://x.y @home\r\n\u202E' });
+  const grantor = await seedUser(env, {
+    email: `grantor-${crypto.randomUUID()}@${MAILABLE_DOMAIN}`,
+    name: '<Grantor> https://x.y @home\r\n\u202E',
+  });
   const grantee = await seedUser(env, { email: `grantee-${crypto.randomUUID()}@${MAILABLE_DOMAIN}` });
   return { env, grantor, grantee, sent: capture.sent };
 }
 
 function invite(env: Env, user: User, email: string, waitTimeDays = 7) {
-  return authedFetch(env, { method: 'POST', path: '/api/emergency-access/invite', userId: user.id, body: { email, type: 0, waitTimeDays }, headers: { 'X-Forwarded-Host': 'evil.test' } });
+  return authedFetch(env, {
+    method: 'POST',
+    path: '/api/emergency-access/invite',
+    userId: user.id,
+    body: { email, type: 0, waitTimeDays },
+    headers: { 'X-Forwarded-Host': 'evil.test' },
+  });
 }
 
 async function action(env: Env, user: User, id: string, name: string, body: unknown = {}) {
-  const response = await authedFetch(env, { method: 'POST', path: `/api/emergency-access/${id}/${name}`, userId: user.id, body });
+  const response = await authedFetch(env, {
+    method: 'POST',
+    path: `/api/emergency-access/${id}/${name}`,
+    userId: user.id,
+    body,
+  });
   await drainWaitUntil();
   return response;
 }
@@ -99,7 +122,15 @@ test('EA accept requires the unexpired dedicated token bound to this record and 
     await createRegisterVerifyToken(f.env.JWT_SECRET, f.grantee.email, null),
     await createEmergencyAccessInviteToken(f.env.JWT_SECRET, crypto.randomUUID(), f.grantee.email),
     await createEmergencyAccessInviteToken(f.env.JWT_SECRET, record.id, f.grantor.email),
-    await signHs256Jwt({ iss: 'nodewarden|emergency_access_invite', sub: record.id, email: f.grantee.email, exp: Math.floor(Date.now() / 1000) - 1 }, f.env.JWT_SECRET),
+    await signHs256Jwt(
+      {
+        iss: 'nodewarden|emergency_access_invite',
+        sub: record.id,
+        email: f.grantee.email,
+        exp: Math.floor(Date.now() / 1000) - 1,
+      },
+      f.env.JWT_SECRET,
+    ),
   ];
   for (const token of invalid) {
     assert.equal((await action(f.env, f.grantee, record.id, 'accept', { token })).status, 400);
@@ -118,7 +149,15 @@ test('EA finish-signup still needs open registration and leaves the invitation p
   const params = inviteParams(f.sent[0]);
   const id = params.get('id')!;
   const token = params.get('token');
-  const body = { email, masterPasswordHash: 'master-password-hash', key: ENCRYPTED, encryptedPrivateKey: ENCRYPTED, publicKey: 'YQ==', acceptEmergencyAccessInviteToken: token, acceptEmergencyAccessId: id };
+  const body = {
+    email,
+    masterPasswordHash: 'master-password-hash',
+    key: ENCRYPTED,
+    encryptedPrivateKey: ENCRYPTED,
+    publicKey: 'YQ==',
+    acceptEmergencyAccessInviteToken: token,
+    acceptEmergencyAccessId: id,
+  };
   const finish = () => authedFetch(f.env, { method: 'POST', path: '/identity/accounts/register/finish', body });
   assert.equal((await finish()).status, 403);
   f.env.ALLOW_OPEN_REGISTRATION = '1';
@@ -158,11 +197,22 @@ test('EA transitions mail each affected party once and sanitize names with an em
   assert.equal(f.sent[3].to, f.grantee.email);
   assert.equal((await action(f.env, f.grantor, record.id, 'reject')).status, 200);
   assert.equal(f.sent[4].to, f.grantee.email);
-  assert.deepEqual(f.sent.map((mail) => mail.subject), [
-    'Emergency contact accepted your invitation', 'Emergency access confirmed', 'Emergency access requested',
-    'Emergency access approved', 'Emergency access request rejected',
-  ]);
-  for (const [user, name] of [[f.grantee, 'confirm'], [f.grantor, 'initiate'], [f.grantor, 'approve'], [f.grantor, 'reject']] as const) {
+  assert.deepEqual(
+    f.sent.map((mail) => mail.subject),
+    [
+      'Emergency contact accepted your invitation',
+      'Emergency access confirmed',
+      'Emergency access requested',
+      'Emergency access approved',
+      'Emergency access request rejected',
+    ],
+  );
+  for (const [user, name] of [
+    [f.grantee, 'confirm'],
+    [f.grantor, 'initiate'],
+    [f.grantor, 'approve'],
+    [f.grantor, 'reject'],
+  ] as const) {
     assert.equal((await action(f.env, user, record.id, name, { key: ENCRYPTED })).status, 400);
   }
   assert.equal(f.sent.length, 5);
@@ -171,9 +221,18 @@ test('EA transitions mail each affected party once and sanitize names with an em
 async function confirmed(f: Awaited<ReturnType<typeof setup>>, waitTimeDays = 7) {
   const now = new Date().toISOString();
   const record: emergencyRepo.EmergencyAccessRecord = {
-    id: crypto.randomUUID(), grantorId: f.grantor.id, granteeId: f.grantee.id, email: null,
-    keyEncrypted: ENCRYPTED, type: 1, status: Status.Confirmed, waitTimeDays,
-    recoveryInitiatedAt: null, lastNotificationAt: null, createdAt: now, updatedAt: now,
+    id: crypto.randomUUID(),
+    grantorId: f.grantor.id,
+    granteeId: f.grantee.id,
+    email: null,
+    keyEncrypted: ENCRYPTED,
+    type: 1,
+    status: Status.Confirmed,
+    waitTimeDays,
+    recoveryInitiatedAt: null,
+    lastNotificationAt: null,
+    createdAt: now,
+    updatedAt: now,
   };
   await emergencyRepo.saveEmergencyAccess(f.env.DB, record);
   return record;
@@ -183,21 +242,33 @@ test('EA wait-zero initiation sends Initiated to the grantor and Approved to the
   const f = await setup();
   const record = await confirmed(f, 0);
   assert.equal((await action(f.env, f.grantee, record.id, 'initiate')).status, 200);
-  assert.deepEqual(f.sent.map(({ to, subject }) => [to, subject]), [
-    [f.grantor.email, 'Emergency access requested'], [f.grantee.email, 'Emergency access approved'],
-  ]);
+  assert.deepEqual(
+    f.sent.map(({ to, subject }) => [to, subject]),
+    [
+      [f.grantor.email, 'Emergency access requested'],
+      [f.grantee.email, 'Emergency access approved'],
+    ],
+  );
   assert.match(f.sent[0].text, /take over your account/);
 });
 
 test('EA timeout approval mails TimedOut to the grantor and Approved to the grantee', async () => {
   const f = await setup();
   const record = await confirmed(f);
-  await emergencyRepo.saveEmergencyAccess(f.env.DB, { ...record, status: Status.RecoveryInitiated, recoveryInitiatedAt: new Date(Date.now() - 8 * DAY).toISOString() });
+  await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+    ...record,
+    status: Status.RecoveryInitiated,
+    recoveryInitiatedAt: new Date(Date.now() - 8 * DAY).toISOString(),
+  });
   await approveExpiredEmergencyAccess(f.env);
   assert.equal((await emergencyRepo.getEmergencyAccess(f.env.DB, record.id))?.status, Status.RecoveryApproved);
-  assert.deepEqual(f.sent.map(({ to, subject }) => [to, subject]), [
-    [f.grantor.email, 'Emergency access waiting period ended'], [f.grantee.email, 'Emergency access approved'],
-  ]);
+  assert.deepEqual(
+    f.sent.map(({ to, subject }) => [to, subject]),
+    [
+      [f.grantor.email, 'Emergency access waiting period ended'],
+      [f.grantee.email, 'Emergency access approved'],
+    ],
+  );
   await approveExpiredEmergencyAccess(f.env);
   assert.equal(f.sent.length, 2);
 });
@@ -216,7 +287,10 @@ test('EA reminder sends once on the final day, even with overlapping cron runs',
   const started = Date.now();
   t.mock.timers.enable({ apis: ['Date'], now: started });
   await emergencyRepo.saveEmergencyAccess(f.env.DB, {
-    ...record, status: Status.RecoveryInitiated, recoveryInitiatedAt: new Date(started).toISOString(), lastNotificationAt: new Date(started).toISOString(),
+    ...record,
+    status: Status.RecoveryInitiated,
+    recoveryInitiatedAt: new Date(started).toISOString(),
+    lastNotificationAt: new Date(started).toISOString(),
   });
   for (let day = 1; day <= 5; day++) {
     t.mock.timers.tick(DAY);
@@ -240,10 +314,17 @@ test('EA reminders skip other statuses, missing notification dates and newly not
   const record = await confirmed(f);
   const started = new Date(Date.now() - 6 * DAY).toISOString();
   for (const [status, lastNotificationAt] of [
-    [Status.Confirmed, started], [Status.RecoveryApproved, started],
-    [Status.RecoveryInitiated, null], [Status.RecoveryInitiated, new Date().toISOString()],
+    [Status.Confirmed, started],
+    [Status.RecoveryApproved, started],
+    [Status.RecoveryInitiated, null],
+    [Status.RecoveryInitiated, new Date().toISOString()],
   ] as const) {
-    await emergencyRepo.saveEmergencyAccess(f.env.DB, { ...record, status, recoveryInitiatedAt: started, lastNotificationAt });
+    await emergencyRepo.saveEmergencyAccess(f.env.DB, {
+      ...record,
+      status,
+      recoveryInitiatedAt: started,
+      lastNotificationAt,
+    });
     await remindPendingEmergencyAccess(f.env);
   }
   assert.equal(f.sent.length, 0);
@@ -252,10 +333,18 @@ test('EA reminders skip other statuses, missing notification dates and newly not
 test('EA reminder claims need the listed recovery start and notification date, and a NULL date never matches', async () => {
   const f = await setup();
   const started = new Date(Date.now() - 6 * DAY).toISOString();
-  const initiated = { ...await confirmed(f), status: Status.RecoveryInitiated, recoveryInitiatedAt: started, lastNotificationAt: started };
+  const initiated = {
+    ...(await confirmed(f)),
+    status: Status.RecoveryInitiated,
+    recoveryInitiatedAt: started,
+    lastNotificationAt: started,
+  };
   await emergencyRepo.saveEmergencyAccess(f.env.DB, initiated);
   const now = new Date().toISOString();
-  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, { ...initiated, recoveryInitiatedAt: now }, now), false);
+  assert.equal(
+    await emergencyRepo.claimRecoveryNotification(f.env.DB, { ...initiated, recoveryInitiatedAt: now }, now),
+    false,
+  );
   assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, initiated, now), true);
   const unnotified = { ...initiated, lastNotificationAt: null };
   await emergencyRepo.saveEmergencyAccess(f.env.DB, unnotified);
@@ -264,7 +353,7 @@ test('EA reminder claims need the listed recovery start and notification date, a
 
 test('EA invite lookup ignores the ASCII case of a stored address, as SQL lower() folds it', async () => {
   const f = await setup();
-  const record = { ...await confirmed(f), email: 'Grantee.ÄÖ@Example.TEST' };
+  const record = { ...(await confirmed(f)), email: 'Grantee.ÄÖ@Example.TEST' };
   await emergencyRepo.saveEmergencyAccess(f.env.DB, record);
   assert.equal((await emergencyRepo.findInvite(f.env.DB, f.grantor.id, 'GRANTEE.ÄÖ@EXAMPLE.TEST'))?.id, record.id);
 });

@@ -63,19 +63,32 @@ function postCipher(env: Env, user: User, organizationId: string | null, collect
   return authedFetch(env, {
     method: 'POST',
     path: '/api/ciphers/create',
-    body: { cipher: { type: LOGIN_TYPE, organizationId, name: ORG_ENCRYPTED, login: { username: ORG_ENCRYPTED } }, collectionIds },
+    body: {
+      cipher: { type: LOGIN_TYPE, organizationId, name: ORG_ENCRYPTED, login: { username: ORG_ENCRYPTED } },
+      collectionIds,
+    },
     userId: user.id,
   });
 }
 
-async function createCipher(env: Env, user: User, organizationId: string | null, collectionIds: string[]): Promise<string> {
+async function createCipher(
+  env: Env,
+  user: User,
+  organizationId: string | null,
+  collectionIds: string[],
+): Promise<string> {
   const response = await postCipher(env, user, organizationId, collectionIds);
   assert.equal(response.status, 200);
   return ((await response.json()) as CipherBody).id;
 }
 
 function putCollections(
-  env: Env, user: User, cipherId: string, route: 'collections_v2' | 'collections-admin', body: unknown, method = 'PUT'
+  env: Env,
+  user: User,
+  cipherId: string,
+  route: 'collections_v2' | 'collections-admin',
+  body: unknown,
+  method = 'PUT',
 ): Promise<Response> {
   return authedFetch(env, { method, path: `/api/ciphers/${cipherId}/${route}`, body, userId: user.id });
 }
@@ -102,7 +115,7 @@ test('PUT /ciphers/{id}/collections_v2 moves an org cipher and answers with opti
   const response = await putCollections(env, owner, cipherId, 'collections_v2', { collectionIds: [collectionB] });
 
   assert.equal(response.status, 200);
-  const body = await response.json() as OptionalCipherBody;
+  const body = (await response.json()) as OptionalCipherBody;
   assert.equal(body.object, 'optionalCipherDetails');
   assert.equal(body.unavailable, false);
   assert.equal(body.cipher?.id, cipherId);
@@ -116,11 +129,23 @@ test('POST /ciphers/{id}/collections_v2 is the deprecated alias', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
 
-  assert.equal((await putCollections(env, owner, cipherId, 'collections_v2', { collectionIds: [collectionA, collectionB] }, 'POST')).status, 200);
+  assert.equal(
+    (
+      await putCollections(
+        env,
+        owner,
+        cipherId,
+        'collections_v2',
+        { collectionIds: [collectionA, collectionB] },
+        'POST',
+      )
+    ).status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA, collectionB].sort());
 });
 
-test('collections_v2 touches only the member\'s writable collections and reports an item it can no longer see', async () => {
+test("collections_v2 touches only the member's writable collections and reports an item it can no longer see", async () => {
   const { env, owner, orgId, collectionA, collectionB, collectionC } = await setup();
   const { user: member } = await seedMember(env, orgId, { collections: [access(collectionB), access(collectionC)] });
   const cipherId = await createCipher(env, owner, orgId, [collectionA, collectionB]);
@@ -146,21 +171,41 @@ test('collections_v2 honours write access granted through a group and keeps read
   assert.ok(membership);
   const now = new Date().toISOString();
   const groupId = crypto.randomUUID();
-  await orgRepo.saveGroup(env.DB, { id: groupId, orgId, name: 'Editors', accessAll: false, externalId: null, createdAt: now, updatedAt: now });
+  await orgRepo.saveGroup(env.DB, {
+    id: groupId,
+    orgId,
+    name: 'Editors',
+    accessAll: false,
+    externalId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
   await orgRepo.replaceGroupMembers(env.DB, groupId, [membership.id]);
-  await Promise.all([collectionB, collectionC].map((collectionId) =>
-    orgRepo.replaceCollectionAccess(env.DB, collectionId, { groups: [{ groupId, readOnly: false, hidePasswords: false, manage: false }] })));
+  await Promise.all(
+    [collectionB, collectionC].map((collectionId) =>
+      orgRepo.replaceCollectionAccess(env.DB, collectionId, {
+        groups: [{ groupId, readOnly: false, hidePasswords: false, manage: false }],
+      }),
+    ),
+  );
   const cipherId = await createCipher(env, owner, orgId, [collectionA, collectionC]);
 
-  assert.equal((await putCollections(env, member, cipherId, 'collections_v2', { collectionIds: [collectionB] })).status, 200);
+  assert.equal(
+    (await putCollections(env, member, cipherId, 'collections_v2', { collectionIds: [collectionB] })).status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA, collectionB].sort());
 });
 
 test('collections_v2 refuses personal items, outsiders, hidden passwords and read-only members', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const outsider = await seedUser(env);
-  const { user: hiddenMember } = await seedMember(env, orgId, { collections: [access(collectionA, { hidePasswords: true })] });
-  const { user: readOnlyMember } = await seedMember(env, orgId, { collections: [access(collectionA, { readOnly: true })] });
+  const { user: hiddenMember } = await seedMember(env, orgId, {
+    collections: [access(collectionA, { hidePasswords: true })],
+  });
+  const { user: readOnlyMember } = await seedMember(env, orgId, {
+    collections: [access(collectionA, { readOnly: true })],
+  });
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
   const personalCipherId = await createCipher(env, owner, null, []);
   const request = { collectionIds: [collectionB] };
@@ -179,29 +224,41 @@ test('PUT /ciphers/{id}/collections-admin reassigns any org collection and answe
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
 
-  const response = await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: [collectionA, collectionB] });
+  const response = await putCollections(env, owner, cipherId, 'collections-admin', {
+    collectionIds: [collectionA, collectionB],
+  });
 
   assert.equal(response.status, 200);
-  const body = await response.json() as CipherBody;
+  const body = (await response.json()) as CipherBody;
   assert.equal(body.object, 'cipherMiniDetails');
   assert.equal(body.id, cipherId);
   assert.deepEqual(body.collectionIds.sort(), [collectionA, collectionB].sort());
   assert.deepEqual(await syncedCollectionIds(env, owner, cipherId), [collectionA, collectionB].sort());
 
-  assert.equal((await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: [collectionB] }, 'POST')).status, 200);
+  assert.equal(
+    (await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: [collectionB] }, 'POST')).status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionB]);
 });
 
 test('collections-admin admits a custom member with editAnyCollection', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const { user: collectionEditor } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
+  const { user: collectionEditor } = await seedMember(env, orgId, {
+    type: MembershipType.Custom,
+    permissions: { editAnyCollection: true },
+  });
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
 
-  assert.equal((await putCollections(env, collectionEditor, cipherId, 'collections-admin', { collectionIds: [collectionB] })).status, 200);
+  assert.equal(
+    (await putCollections(env, collectionEditor, cipherId, 'collections-admin', { collectionIds: [collectionB] }))
+      .status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionB]);
 });
 
-test('collections-admin refuses non-admins, another org\'s collections and personal items', async () => {
+test("collections-admin refuses non-admins, another org's collections and personal items", async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB)] });
   const outsider = await seedUser(env);
@@ -210,16 +267,35 @@ test('collections-admin refuses non-admins, another org\'s collections and perso
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
   const personalCipherId = await createCipher(env, owner, null, []);
 
-  assert.equal((await putCollections(env, member, cipherId, 'collections-admin', { collectionIds: [collectionB] })).status, 404);
-  assert.equal((await putCollections(env, outsider, cipherId, 'collections-admin', { collectionIds: [otherOrgCollectionId] })).status, 404);
-  assert.equal((await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: [collectionB, otherOrgCollectionId] })).status, 404);
-  assert.equal((await putCollections(env, owner, personalCipherId, 'collections-admin', { collectionIds: [collectionB] })).status, 404);
+  assert.equal(
+    (await putCollections(env, member, cipherId, 'collections-admin', { collectionIds: [collectionB] })).status,
+    404,
+  );
+  assert.equal(
+    (await putCollections(env, outsider, cipherId, 'collections-admin', { collectionIds: [otherOrgCollectionId] }))
+      .status,
+    404,
+  );
+  assert.equal(
+    (
+      await putCollections(env, owner, cipherId, 'collections-admin', {
+        collectionIds: [collectionB, otherOrgCollectionId],
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (await putCollections(env, owner, personalCipherId, 'collections-admin', { collectionIds: [collectionB] })).status,
+    404,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
 });
 
 test('creating an org cipher refuses it whole unless the member can write every posted collection', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB, { readOnly: true })] });
+  const { user: member } = await seedMember(env, orgId, {
+    collections: [access(collectionA), access(collectionB, { readOnly: true })],
+  });
   const outsider = await seedUser(env);
   const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
@@ -246,11 +322,24 @@ test('collection changes stay within the D1 bound-parameter limit however many c
   // One delete of this many ids plus the cipher id would bind one parameter too many.
   const manyCollectionIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS }, () => crypto.randomUUID());
   for (const id of manyCollectionIds) {
-    await orgRepo.saveCollection(env.DB, { id, orgId, name: ORG_ENCRYPTED, externalId: null, createdAt: now, updatedAt: now });
+    await orgRepo.saveCollection(env.DB, {
+      id,
+      orgId,
+      name: ORG_ENCRYPTED,
+      externalId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 
-  assert.equal((await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: manyCollectionIds })).status, 200);
+  assert.equal(
+    (await putCollections(env, owner, cipherId, 'collections-admin', { collectionIds: manyCollectionIds })).status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [...manyCollectionIds].sort());
-  assert.equal((await putCollections(env, owner, cipherId, 'collections_v2', { collectionIds: [collectionA] })).status, 200);
+  assert.equal(
+    (await putCollections(env, owner, cipherId, 'collections_v2', { collectionIds: [collectionA] })).status,
+    200,
+  );
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);
 });

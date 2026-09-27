@@ -20,7 +20,11 @@ import * as userRepo from '../services/storage-user-repo';
 
 // Type and wait time coerce like Number(); anything non-finite keeps the current or default value.
 const setting = z.coerce.number().optional().catch(undefined);
-const EmergencyAccessSettings = z.object({ type: setting, waitTimeDays: setting, keyEncrypted: z.string().optional().catch(undefined) });
+const EmergencyAccessSettings = z.object({
+  type: setting,
+  waitTimeDays: setting,
+  keyEncrypted: z.string().optional().catch(undefined),
+});
 const text = z.string().catch('');
 
 function emergencyJson(record: emergencyRepo.EmergencyAccessRecord) {
@@ -63,27 +67,50 @@ function canAct(record: emergencyRepo.EmergencyAccessRecord, userId: string, typ
   return Number.isFinite(started) && Date.now() - started >= record.waitTimeDays * 24 * 60 * 60 * 1000;
 }
 
-async function mailEmergencyAccessInvite(request: Request, env: Env, grantor: User, record: emergencyRepo.EmergencyAccessRecord): Promise<MailOutcome> {
+async function mailEmergencyAccessInvite(
+  request: Request,
+  env: Env,
+  grantor: User,
+  record: emergencyRepo.EmergencyAccessRecord,
+): Promise<MailOutcome> {
   const config = readMailConfig(env);
   if (config.kind !== 'enabled') return config;
   const vaultOrigin = configuredVaultOrigin(request, env);
   if (!vaultOrigin) return { kind: 'disabled' };
   const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(
-    `ea-invite-mail:${grantor.id}`, LIMITS.mail.emergencyAccessInvitesPerGrantorPerHour, 3600,
+    `ea-invite-mail:${grantor.id}`,
+    LIMITS.mail.emergencyAccessInvitesPerGrantorPerHour,
+    3600,
   );
   if (!budget.allowed) return { kind: 'throttled', retryAfterSeconds: budget.retryAfterSeconds ?? 3600 };
   return sendMail(env, record.email!, 'emergencyAccessInvite', {
-    vaultOrigin, id: record.id, grantorName: grantor.name || grantor.email, grantorEmail: grantor.email,
+    vaultOrigin,
+    id: record.id,
+    grantorName: grantor.name || grantor.email,
+    grantorEmail: grantor.email,
     token: await createEmergencyAccessInviteToken(env.JWT_SECRET, record.id, record.email!),
   });
 }
 
-type EmergencyAccessNotice = 'emergencyAccessAccepted' | 'emergencyAccessConfirmed' | 'emergencyAccessRecoveryInitiated'
-  | 'emergencyAccessApproved' | 'emergencyAccessRejected' | 'emergencyAccessTimedOut' | 'emergencyAccessReminder';
+type EmergencyAccessNotice =
+  | 'emergencyAccessAccepted'
+  | 'emergencyAccessConfirmed'
+  | 'emergencyAccessRecoveryInitiated'
+  | 'emergencyAccessApproved'
+  | 'emergencyAccessRejected'
+  | 'emergencyAccessTimedOut'
+  | 'emergencyAccessReminder';
 
-async function sendEmergencyAccessNotice(env: Env, record: emergencyRepo.EmergencyAccessRecord, name: EmergencyAccessNotice, recipient: 'grantor' | 'grantee', daysLeft = record.waitTimeDays): Promise<void> {
+async function sendEmergencyAccessNotice(
+  env: Env,
+  record: emergencyRepo.EmergencyAccessRecord,
+  name: EmergencyAccessNotice,
+  recipient: 'grantor' | 'grantee',
+  daysLeft = record.waitTimeDays,
+): Promise<void> {
   const [grantor, grantee] = await Promise.all([
-    userRepo.getUserById(env.DB, record.grantorId), record.granteeId ? userRepo.getUserById(env.DB, record.granteeId) : null,
+    userRepo.getUserById(env.DB, record.grantorId),
+    record.granteeId ? userRepo.getUserById(env.DB, record.granteeId) : null,
   ]);
   if (!grantor || !grantee) return;
   const [to, other] = recipient === 'grantor' ? [grantor, grantee] : [grantee, grantor];
@@ -99,7 +126,7 @@ export async function handleEmergencyAccessRoute(
   env: Env,
   user: User,
   path: string,
-  method: string
+  method: string,
 ): Promise<Response | null> {
   const normalized = path.replace(/^\/api/, '');
   if (!normalized.startsWith('/emergency-access')) return null;
@@ -127,7 +154,10 @@ export async function handleEmergencyAccessRoute(
     return jsonResponse({ data, object: 'list', continuationToken: null });
   }
   if (normalized === '/emergency-access/invite' && method === 'POST') {
-    const body = await parseBody(request, EmergencyAccessSettings.extend({ email: emailAddress('Email is not valid.') }));
+    const body = await parseBody(
+      request,
+      EmergencyAccessSettings.extend({ email: emailAddress('Email is not valid.') }),
+    );
     if (body instanceof Response) return body;
     const { email } = body;
     if (email === user.email.toLowerCase()) return errorResponse('Cannot invite yourself', 400);
@@ -179,7 +209,7 @@ export async function handleEmergencyAccessRoute(
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
     return jsonResponse(emergencyJson(record));
   }
-  if ((method === 'DELETE' || (method === 'POST' && action === 'delete'))) {
+  if (method === 'DELETE' || (method === 'POST' && action === 'delete')) {
     if (record.grantorId !== user.id && record.granteeId !== user.id) {
       return errorResponse('Emergency access not valid', 404);
     }
@@ -188,7 +218,8 @@ export async function handleEmergencyAccessRoute(
   }
   if (action === 'reinvite' && method === 'POST') {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
-    if (record.status !== EmergencyAccessStatus.Invited || !record.email) return errorResponse('Emergency access not valid', 400);
+    if (record.status !== EmergencyAccessStatus.Invited || !record.email)
+      return errorResponse('Emergency access not valid', 400);
     const outcome = await mailEmergencyAccessInvite(request, env, user, record);
     const check = mailStatusCheck(outcome);
     if (!check.ok) return errorResponse(check.message, check.status, check.headers);
@@ -217,15 +248,20 @@ export async function handleEmergencyAccessRoute(
     const config = readMailConfig(env);
     const check = mailStatusCheck(config.kind === 'enabled' ? { kind: 'sent' } : config);
     if (!check.ok) return errorResponse(check.message, check.status, check.headers);
-    if (config.kind === 'enabled' && configuredVaultOrigin(request, env)
-      && !await verifyEmergencyAccessInviteToken(body.token, env.JWT_SECRET, record.id, email)) {
+    if (
+      config.kind === 'enabled' &&
+      configuredVaultOrigin(request, env) &&
+      !(await verifyEmergencyAccessInviteToken(body.token, env.JWT_SECRET, record.id, email))
+    ) {
       return errorResponse('Emergency access invitation is invalid or expired', 400);
     }
     record.granteeId = user.id;
     record.status = EmergencyAccessStatus.Accepted;
     record.updatedAt = new Date().toISOString();
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
-    runInBackground('emergency-access-accepted', () => sendEmergencyAccessNotice(env, record, 'emergencyAccessAccepted', 'grantor'));
+    runInBackground('emergency-access-accepted', () =>
+      sendEmergencyAccessNotice(env, record, 'emergencyAccessAccepted', 'grantor'),
+    );
     return new Response(null, { status: 200 });
   }
   if (action === 'confirm' && method === 'POST') {
@@ -239,7 +275,9 @@ export async function handleEmergencyAccessRoute(
     record.email = null;
     record.updatedAt = new Date().toISOString();
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
-    runInBackground('emergency-access-confirmed', () => sendEmergencyAccessNotice(env, record, 'emergencyAccessConfirmed', 'grantee'));
+    runInBackground('emergency-access-confirmed', () =>
+      sendEmergencyAccessNotice(env, record, 'emergencyAccessConfirmed', 'grantee'),
+    );
     return jsonResponse(emergencyJson(record));
   }
   if (action === 'initiate' && method === 'POST') {
@@ -249,14 +287,14 @@ export async function handleEmergencyAccessRoute(
     const now = new Date().toISOString();
     record.recoveryInitiatedAt = now;
     record.lastNotificationAt = now;
-    record.status = record.waitTimeDays <= 0
-      ? EmergencyAccessStatus.RecoveryApproved
-      : EmergencyAccessStatus.RecoveryInitiated;
+    record.status =
+      record.waitTimeDays <= 0 ? EmergencyAccessStatus.RecoveryApproved : EmergencyAccessStatus.RecoveryInitiated;
     record.updatedAt = now;
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
     runInBackground('emergency-access-initiated', async () => {
       await sendEmergencyAccessNotice(env, record, 'emergencyAccessRecoveryInitiated', 'grantor');
-      if (record.status === EmergencyAccessStatus.RecoveryApproved) await sendEmergencyAccessNotice(env, record, 'emergencyAccessApproved', 'grantee');
+      if (record.status === EmergencyAccessStatus.RecoveryApproved)
+        await sendEmergencyAccessNotice(env, record, 'emergencyAccessApproved', 'grantee');
     });
     return jsonResponse(emergencyJson(record));
   }
@@ -267,25 +305,35 @@ export async function handleEmergencyAccessRoute(
     record.status = EmergencyAccessStatus.RecoveryApproved;
     record.updatedAt = new Date().toISOString();
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
-    runInBackground('emergency-access-approved', () => sendEmergencyAccessNotice(env, record, 'emergencyAccessApproved', 'grantee'));
+    runInBackground('emergency-access-approved', () =>
+      sendEmergencyAccessNotice(env, record, 'emergencyAccessApproved', 'grantee'),
+    );
     return jsonResponse(emergencyJson(record));
   }
   if (action === 'reject' && method === 'POST') {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
-    if (record.status !== EmergencyAccessStatus.RecoveryInitiated && record.status !== EmergencyAccessStatus.RecoveryApproved) {
+    if (
+      record.status !== EmergencyAccessStatus.RecoveryInitiated &&
+      record.status !== EmergencyAccessStatus.RecoveryApproved
+    ) {
       return errorResponse('Emergency access not valid', 400);
     }
     record.status = EmergencyAccessStatus.Confirmed;
     record.recoveryInitiatedAt = null;
     record.updatedAt = new Date().toISOString();
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
-    runInBackground('emergency-access-rejected', () => sendEmergencyAccessNotice(env, record, 'emergencyAccessRejected', 'grantee'));
+    runInBackground('emergency-access-rejected', () =>
+      sendEmergencyAccessNotice(env, record, 'emergencyAccessRejected', 'grantee'),
+    );
     return jsonResponse(emergencyJson(record));
   }
   if (action === 'view' && method === 'POST') {
     if (!canAct(record, user.id, EmergencyAccessType.View)) return errorResponse('Emergency access not valid', 400);
     const ciphers = await cipherRepo.getAllCiphers(env.DB, record.grantorId);
-    const attachments = await attachmentRepo.getAttachmentsByCipherIds(env.DB, ciphers.map((cipher) => cipher.id));
+    const attachments = await attachmentRepo.getAttachmentsByCipherIds(
+      env.DB,
+      ciphers.map((cipher) => cipher.id),
+    );
     return jsonResponse({
       ciphers: ciphers.map((cipher) => cipherToResponse(cipher, attachments.get(cipher.id) || [])),
       keyEncrypted: record.keyEncrypted,
@@ -321,9 +369,13 @@ export async function handleEmergencyAccessRoute(
     const originalSecurityStamp = grantor.securityStamp;
     grantor.securityStamp = generateUUID();
     grantor.updatedAt = new Date().toISOString();
-    if (!await userRepo.saveUser(env.DB, grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
+    if (
+      !(await userRepo.saveUser(env.DB, grantor, ['masterPasswordHash', 'key', 'securityStamp'], originalSecurityStamp))
+    )
+      return errorResponse('User verification failed.', 400);
     AuthService.invalidateUserCache(grantor.id);
-    if (!await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash, grantor.securityStamp)) return errorResponse('User verification failed.', 400);
+    if (!(await upsertCredentialAccount(env.DB, grantor.id, grantor.masterPasswordHash, grantor.securityStamp)))
+      return errorResponse('User verification failed.', 400);
     await sessionRepo.deleteRefreshTokensByUserId(env.DB, grantor.id);
     return new Response(null, { status: 200 });
   }
@@ -349,8 +401,10 @@ export async function approveExpiredEmergencyAccess(env: Env): Promise<void> {
 export async function remindPendingEmergencyAccess(env: Env): Promise<void> {
   const now = new Date().toISOString();
   for (const record of await emergencyRepo.listRecoveryToNotify(env.DB, now)) {
-    if (!await emergencyRepo.claimRecoveryNotification(env.DB, record, now)) continue;
-    const daysLeft = Math.ceil((Date.parse(record.recoveryInitiatedAt!) + record.waitTimeDays * 86_400_000 - Date.parse(now)) / 86_400_000);
+    if (!(await emergencyRepo.claimRecoveryNotification(env.DB, record, now))) continue;
+    const daysLeft = Math.ceil(
+      (Date.parse(record.recoveryInitiatedAt!) + record.waitTimeDays * 86_400_000 - Date.parse(now)) / 86_400_000,
+    );
     await sendEmergencyAccessNotice(env, record, 'emergencyAccessReminder', 'grantor', daysLeft);
   }
 }

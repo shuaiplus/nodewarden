@@ -14,7 +14,11 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
   if (env?.DB) {
     const memberships = await orgRepo.listMembershipsByUser(env.DB, user.id);
     for (const member of memberships) {
-      if (member.status !== MembershipStatus.Confirmed && member.status !== MembershipStatus.Accepted && member.status !== MembershipStatus.Invited) {
+      if (
+        member.status !== MembershipStatus.Confirmed &&
+        member.status !== MembershipStatus.Accepted &&
+        member.status !== MembershipStatus.Invited
+      ) {
         continue;
       }
       const org = await orgRepo.getOrganization(env.DB, member.orgId);
@@ -24,7 +28,9 @@ export async function buildProfileResponse(user: User, env?: Env): Promise<Profi
   }
   const accountKeys = buildAccountKeys(user);
   const mail = env ? readMailConfig(env) : null;
-  const hasTwoFactorPasskey = env?.DB ? await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0 : false;
+  const hasTwoFactorPasskey = env?.DB
+    ? (await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor')) > 0
+    : false;
 
   return {
     id: user.id,

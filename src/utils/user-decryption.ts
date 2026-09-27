@@ -23,7 +23,7 @@ export function buildAccountKeys(user: Pick<User, 'privateKey' | 'publicKey'>): 
 }
 
 export function buildMasterPasswordUnlock(
-  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>
+  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>,
 ): UserDecryptionOptions['MasterPasswordUnlock'] {
   return {
     Kdf: {
@@ -41,7 +41,7 @@ export function buildMasterPasswordUnlock(
 
 export function buildUserDecryptionOptions(
   user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>,
-  webAuthnPrfOption: WebAuthnPrfDecryptionOption | null = null
+  webAuthnPrfOption: WebAuthnPrfDecryptionOption | null = null,
 ): UserDecryptionOptions {
   return {
     HasMasterPassword: true,
@@ -54,7 +54,7 @@ export function buildUserDecryptionOptions(
 }
 
 export function buildUserDecryptionCompat(
-  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism' | 'userKeyId'>
+  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism' | 'userKeyId'>,
 ): Record<string, unknown> {
   return {
     masterPasswordUnlock: {

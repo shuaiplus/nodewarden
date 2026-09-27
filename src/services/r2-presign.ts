@@ -18,9 +18,14 @@ export function canPresign(env: Env): boolean {
 export async function createR2PresignedPutUrl(
   env: Env,
   objectKey: string,
-  expiresSeconds: number = DEFAULT_EXPIRES_SECONDS
+  expiresSeconds: number = DEFAULT_EXPIRES_SECONDS,
 ): Promise<string> {
-  const { R2_ACCOUNT_ID: accountId, R2_ACCESS_KEY_ID: accessKeyId, R2_SECRET_ACCESS_KEY: secretAccessKey, R2_BUCKET: bucket } = readEnvConfig(env);
+  const {
+    R2_ACCOUNT_ID: accountId,
+    R2_ACCESS_KEY_ID: accessKeyId,
+    R2_SECRET_ACCESS_KEY: secretAccessKey,
+    R2_BUCKET: bucket,
+  } = readEnvConfig(env);
   if (!accountId || !accessKeyId || !secretAccessKey) {
     throw new Error('R2 S3 credentials are not configured');
   }
@@ -30,7 +35,7 @@ export async function createR2PresignedPutUrl(
   // Query signing covers only the host header and leaves the payload unsigned, so the client can PUT any body within the TTL.
   const signed = await client.sign(
     `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${objectPath}?X-Amz-Expires=${expiresSeconds}`,
-    { method: 'PUT', aws: { signQuery: true } }
+    { method: 'PUT', aws: { signQuery: true } },
   );
   return signed.url;
 }

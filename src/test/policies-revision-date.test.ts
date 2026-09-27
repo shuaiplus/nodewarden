@@ -50,21 +50,30 @@ test('saved policies carry the same ISO revisionDate in the PUT response, the or
     userId: owner.id,
   });
   assert.equal(saved.status, 200);
-  const savedPolicy = await saved.json() as PolicyBody;
+  const savedPolicy = (await saved.json()) as PolicyBody;
   assert.ok(savedPolicy.revisionDate, 'PUT response has no revisionDate');
   const { revisionDate } = savedPolicy;
   assertIsoRevisionDate(savedPolicy, revisionDate);
 
   const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/policies`, userId: owner.id });
   assert.equal(listed.status, 200);
-  const { data } = await listed.json() as { data: PolicyBody[] };
-  assertIsoRevisionDate(data.find((policy) => policy.type === PolicyType.MasterPassword), revisionDate);
+  const { data } = (await listed.json()) as { data: PolicyBody[] };
+  assertIsoRevisionDate(
+    data.find((policy) => policy.type === PolicyType.MasterPassword),
+    revisionDate,
+  );
 
   const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
   assert.equal(synced.status, 200);
-  const { policies, policiesNew } = await synced.json() as { policies: PolicyBody[]; policiesNew: PolicyBody[] };
-  assertIsoRevisionDate(policies.find((policy) => policy.type === PolicyType.MasterPassword), revisionDate);
-  assertIsoRevisionDate(policiesNew.find((policy) => policy.type === PolicyType.MasterPassword), revisionDate);
+  const { policies, policiesNew } = (await synced.json()) as { policies: PolicyBody[]; policiesNew: PolicyBody[] };
+  assertIsoRevisionDate(
+    policies.find((policy) => policy.type === PolicyType.MasterPassword),
+    revisionDate,
+  );
+  assertIsoRevisionDate(
+    policiesNew.find((policy) => policy.type === PolicyType.MasterPassword),
+    revisionDate,
+  );
 
   // The banner re-shows and picks the newest policy by revisionDate, so an edit must move it
   // forward. Pin the clock past the first save so the comparison cannot tie within a millisecond.
@@ -76,12 +85,15 @@ test('saved policies carry the same ISO revisionDate in the PUT response, the or
     userId: owner.id,
   });
   assert.equal(edited.status, 200);
-  const editedPolicy = await edited.json() as PolicyBody;
+  const editedPolicy = (await edited.json()) as PolicyBody;
   assert.ok(editedPolicy.revisionDate, 'edited PUT response has no revisionDate');
   assert.ok(Date.parse(editedPolicy.revisionDate) > Date.parse(revisionDate), 'edit did not advance revisionDate');
 
   const relisted = await authedFetch(env, { path: `/api/organizations/${orgId}/policies`, userId: owner.id });
   assert.equal(relisted.status, 200);
-  const { data: relistedData } = await relisted.json() as { data: PolicyBody[] };
-  assertIsoRevisionDate(relistedData.find((policy) => policy.type === PolicyType.MasterPassword), editedPolicy.revisionDate);
+  const { data: relistedData } = (await relisted.json()) as { data: PolicyBody[] };
+  assertIsoRevisionDate(
+    relistedData.find((policy) => policy.type === PolicyType.MasterPassword),
+    editedPolicy.revisionDate,
+  );
 });

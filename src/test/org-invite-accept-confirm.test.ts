@@ -76,7 +76,7 @@ async function invite(env: Env, owner: User, orgId: string, emails: string[], he
 async function listMembers(env: Env, owner: User, orgId: string): Promise<MemberBody[]> {
   const response = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
   assert.equal(response.status, 200);
-  const { data } = await response.json() as { data: MemberBody[] };
+  const { data } = (await response.json()) as { data: MemberBody[] };
   return data;
 }
 
@@ -86,33 +86,67 @@ async function findMember(env: Env, owner: User, orgId: string, email: string): 
   return found;
 }
 
-function accept(env: Env, user: User, orgId: string, memberId: string, body: Record<string, unknown>): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/accept`, body, userId: user.id });
+function accept(
+  env: Env,
+  user: User,
+  orgId: string,
+  memberId: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/${memberId}/accept`,
+    body,
+    userId: user.id,
+  });
 }
 
 async function revisionDate(env: Env, user: User): Promise<number> {
   const response = await authedFetch(env, { path: '/api/accounts/revision-date', userId: user.id });
   assert.equal(response.status, 200);
-  return await response.json() as number;
+  return (await response.json()) as number;
 }
 
 function confirm(env: Env, owner: User, orgId: string, memberId: string, key: string): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/confirm`, body: { key }, userId: owner.id });
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/${memberId}/confirm`,
+    body: { key },
+    userId: owner.id,
+  });
 }
 
 function reinvite(env: Env, caller: User, orgId: string, memberId: string): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${memberId}/reinvite`, userId: caller.id });
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/${memberId}/reinvite`,
+    userId: caller.id,
+  });
 }
 
-function postBulk(env: Env, caller: User, orgId: string, action: 'confirm' | 'reinvite', body: Record<string, unknown>): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/${action}`, body, userId: caller.id });
+function postBulk(
+  env: Env,
+  caller: User,
+  orgId: string,
+  action: 'confirm' | 'reinvite',
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/${action}`,
+    body,
+    userId: caller.id,
+  });
 }
 
 // Upstream OrganizationUserBulkResponseModel list, as [id, error] pairs in response order. Official
 // web counts an entry as done only when its error is the empty string.
 async function bulkErrors(response: Response): Promise<Array<[string, string]>> {
   assert.equal(response.status, 200);
-  const body = await response.json() as { object: string; data: Array<{ id: string; error: string; object: string }> };
+  const body = (await response.json()) as {
+    object: string;
+    data: Array<{ id: string; error: string; object: string }>;
+  };
   assert.equal(body.object, 'list');
   body.data.forEach((entry) => assert.equal(entry.object, BULK_RESULT_OBJECT));
   return body.data.map(({ id, error }) => [id, error]);
@@ -123,7 +157,12 @@ async function memberStatuses(env: Env, owner: User, orgId: string): Promise<Rec
 }
 
 // Invites a fresh account and accepts with its emailed token, leaving an Accepted row to confirm.
-async function acceptedMember(env: Env, sent: SentEmail[], owner: User, orgId: string): Promise<{ id: string; user: User }> {
+async function acceptedMember(
+  env: Env,
+  sent: SentEmail[],
+  owner: User,
+  orgId: string,
+): Promise<{ id: string; user: User }> {
   const invitee = await seedMailableUser(env);
   await invite(env, owner, orgId, [invitee.email]);
   const memberId = (await findMember(env, owner, orgId, invitee.email)).id;
@@ -137,10 +176,20 @@ async function invitedMember(env: Env, owner: User, orgId: string): Promise<{ id
   return { id: (await findMember(env, owner, orgId, email)).id, email };
 }
 
-async function postScimUser(env: Env, owner: User, orgId: string, email: string, body: unknown = { userName: email }): Promise<Response> {
-  const scimKey = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/scim-key`, userId: owner.id });
+async function postScimUser(
+  env: Env,
+  owner: User,
+  orgId: string,
+  email: string,
+  body: unknown = { userName: email },
+): Promise<Response> {
+  const scimKey = await authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/scim-key`,
+    userId: owner.id,
+  });
   assert.equal(scimKey.status, 200);
-  const { token } = await scimKey.json() as { token: string };
+  const { token } = (await scimKey.json()) as { token: string };
   return authedFetch(env, {
     method: 'POST',
     path: `/scim/v2/${orgId}/Users`,
@@ -260,7 +309,11 @@ test('an invite token is bound to its own row and expires, and a revoked invite 
   assert.equal(swapped.status, 400);
   assert.equal(await errorMessage(swapped), 'Invalid token.');
 
-  const revoked = await authedFetch(env, { method: 'PUT', path: `/api/organizations/${orgId}/users/${memberId}/revoke`, userId: owner.id });
+  const revoked = await authedFetch(env, {
+    method: 'PUT',
+    path: `/api/organizations/${orgId}/users/${memberId}/revoke`,
+    userId: owner.id,
+  });
   assert.equal(revoked.status, 200);
   const afterRevoke = await accept(env, invitee, orgId, memberId, { token: tokenFor(invitee.email) });
   assert.equal(afterRevoke.status, 400);
@@ -294,7 +347,10 @@ test('a SCIM-provisioned existing account is mailed an invite token that lets it
   const orgId = await createOrg(env, owner);
 
   await provisionViaScim(env, owner, orgId, invitee.email);
-  assert.deepEqual(capture.sent.map((message) => message.to), [invitee.email]);
+  assert.deepEqual(
+    capture.sent.map((message) => message.to),
+    [invitee.email],
+  );
   const params = inviteParams(capture.sent[0]);
   const memberId = (await findMember(env, owner, orgId, invitee.email)).id;
   assert.equal(params.get('organizationUserId'), memberId);
@@ -331,7 +387,10 @@ test('SCIM answers 409 for an address that is already a member and mails nothing
   assert.equal((await postScimUser(env, owner, orgId, invitee.email.toUpperCase())).status, 409);
   assert.equal((await postScimUser(env, owner, orgId, owner.email)).status, 409);
   assert.equal(capture.sent.length, 1);
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email, invitee.email]);
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [owner.email, invitee.email],
+  );
 });
 
 // Upstream deletes the rows it saved when the send fails. IdPs retry a 5xx, so a kept row would
@@ -339,7 +398,11 @@ test('SCIM answers 409 for an address that is already a member and mails nothing
 test('a failed invite send saves no member row, for member invite and SCIM', async () => {
   const env = await createTestEnv({
     ...captureEmail().overrides,
-    EMAIL: { async send() { throw new Error('recipient suppressed'); } },
+    EMAIL: {
+      async send() {
+        throw new Error('recipient suppressed');
+      },
+    },
   });
   const owner = await seedUser(env);
   const invitee = await seedMailableUser(env);
@@ -348,7 +411,10 @@ test('a failed invite send saves no member row, for member invite and SCIM', asy
   assert.equal((await postInvite(env, owner, orgId, [invitee.email])).status, 502);
   assert.equal((await postScimUser(env, owner, orgId, invitee.email)).status, 502);
   assert.equal((await postScimUser(env, owner, orgId, invitee.email)).status, 502);
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [owner.email],
+  );
 });
 
 test('invite mail only links to a configured web vault and skips documentation addresses', async () => {
@@ -370,7 +436,10 @@ test('invite mail only links to a configured web vault and skips documentation a
   const invitee = await seedMailableUser(env);
   const orgId = await createOrg(env, owner);
   await invite(env, owner, orgId, [reserved.email, invitee.email], forwardedHeaders);
-  assert.deepEqual(capture.sent.map((message) => message.to), [invitee.email]);
+  assert.deepEqual(
+    capture.sent.map((message) => message.to),
+    [invitee.email],
+  );
   inviteParams(capture.sent[0]);
   assert.equal((await findMember(env, owner, orgId, reserved.email)).status, MembershipStatus.Invited);
 });
@@ -385,7 +454,10 @@ test('invite rejects an empty, oversized or malformed email list before saving o
     [[], 'An email is required.'],
     [tooMany, `You can only submit up to ${MAX_INVITE_EMAILS} emails at a time.`],
     [[`ok@${MAILABLE_DOMAIN}`, 'foo@'], 'Email #2 is not valid.'],
-    [[`${'a'.repeat(MAX_INVITE_EMAIL_LENGTH)}@${MAILABLE_DOMAIN}`], `Email #1 is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`],
+    [
+      [`${'a'.repeat(MAX_INVITE_EMAIL_LENGTH)}@${MAILABLE_DOMAIN}`],
+      `Email #1 is longer than ${MAX_INVITE_EMAIL_LENGTH} characters.`,
+    ],
   ];
   for (const [emails, expected] of cases) {
     const response = await postInvite(env, owner, orgId, emails);
@@ -393,7 +465,10 @@ test('invite rejects an empty, oversized or malformed email list before saving o
     assert.equal(await errorMessage(response), expected);
   }
 
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [owner.email],
+  );
   assert.deepEqual(capture.sent, []);
 });
 
@@ -451,11 +526,20 @@ test('invite mail is budgeted per inviter per hour, and a batch that overruns it
   assert.equal(blocked.headers.get('Retry-After'), String(windowSeconds));
   assert.equal(await errorMessage(blocked), `Rate limit exceeded. Try again in ${windowSeconds} seconds.`);
   assert.equal(capture.sent.length, budget - 1);
-  assert.deepEqual((await listMembers(env, owner, otherOrgId)).map((member) => member.email), [owner.email]);
+  assert.deepEqual(
+    (await listMembers(env, owner, otherOrgId)).map((member) => member.email),
+    [owner.email],
+  );
 
   context.mock.timers.tick(windowMs);
   await invite(env, owner, otherOrgId, overrun);
-  assert.deepEqual(capture.sent.slice(budget - 1).map((message) => message.to).sort(), [...overrun].sort());
+  assert.deepEqual(
+    capture.sent
+      .slice(budget - 1)
+      .map((message) => message.to)
+      .sort(),
+    [...overrun].sort(),
+  );
 });
 
 // A SCIM token belongs to the org, so its directory spends the org's own budget rather than the
@@ -499,9 +583,14 @@ test('one invite batch flags only the invitees that already have an account as e
   const orgId = await createOrg(env, owner);
 
   await invite(env, owner, orgId, [registered.email, unregistered]);
-  const existingFlags = Object.fromEntries(capture.sent.map((message) => [message.to, inviteParams(message).get('orgUserHasExistingUser')]));
+  const existingFlags = Object.fromEntries(
+    capture.sent.map((message) => [message.to, inviteParams(message).get('orgUserHasExistingUser')]),
+  );
   assert.deepEqual(existingFlags, { [registered.email]: 'true', [unregistered]: 'false' });
-  assert.notEqual(capture.sent.find(({ to }) => to === registered.email)?.subject, capture.sent.find(({ to }) => to === unregistered)?.subject);
+  assert.notEqual(
+    capture.sent.find(({ to }) => to === registered.email)?.subject,
+    capture.sent.find(({ to }) => to === unregistered)?.subject,
+  );
   for (const mail of capture.sent) {
     const claims = await verifyHs256Jwt(inviteParams(mail).get('token')!, env.JWT_SECRET);
     const displayedExpiry = mail.text.match(/This invitation expires on (.+)\./)?.[1];
@@ -533,8 +622,14 @@ test('invite mails and saves an address listed twice in one request only once', 
   const orgId = await createOrg(env, owner);
 
   await invite(env, owner, orgId, [invitee, invitee.toUpperCase()]);
-  assert.deepEqual(capture.sent.map((message) => message.to), [invitee]);
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email, invitee]);
+  assert.deepEqual(
+    capture.sent.map((message) => message.to),
+    [invitee],
+  );
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [owner.email, invitee],
+  );
 });
 
 // Upstream SelectKnownEmailsAsync matches either the row's invited email or its bound account's
@@ -551,9 +646,19 @@ test('invite skips addresses already in the org by invited or account email and 
   const revisionBeforeReinvite = await revisionDate(env, owner);
 
   await invite(env, owner, orgId, [pending.toUpperCase(), owner.email, renamedOwner.email]);
-  assert.equal(await revisionDate(env, owner), revisionBeforeReinvite, 'an invite with nothing left to invite bumped member revisions');
-  assert.deepEqual(capture.sent.map((message) => message.to), [pending]);
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [renamedOwner.email, pending]);
+  assert.equal(
+    await revisionDate(env, owner),
+    revisionBeforeReinvite,
+    'an invite with nothing left to invite bumped member revisions',
+  );
+  assert.deepEqual(
+    capture.sent.map((message) => message.to),
+    [pending],
+  );
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [renamedOwner.email, pending],
+  );
 });
 
 // Official web's bulk confirm dialog posts every selected Accepted member with the org key wrapped
@@ -579,7 +684,11 @@ test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped 
   context.mock.timers.enable({ apis: ['Date'], now: revisionBeforeConfirm + MS_PER_SECOND });
   const confirmsNobody = await postBulk(env, owner, orgId, 'confirm', { keys: [{ id: missing, key: MEMBER_KEY }] });
   assert.deepEqual(await bulkErrors(confirmsNobody), [[missing, 'User not valid.']]);
-  assert.equal(await revisionDate(env, acceptedUser), revisionBeforeConfirm, 'a bulk confirm that confirmed nobody bumped member revisions');
+  assert.equal(
+    await revisionDate(env, acceptedUser),
+    revisionBeforeConfirm,
+    'a bulk confirm that confirmed nobody bumped member revisions',
+  );
 
   const keys = [
     { id: accepted, key: MEMBER_KEY },
@@ -595,7 +704,10 @@ test('bulk confirm confirms each Accepted member of the org with an RSA-wrapped 
     [foreign, 'User not valid.'],
     [missing, 'User not valid.'],
   ]);
-  assert.ok((await revisionDate(env, acceptedUser)) > revisionBeforeConfirm, 'bulk confirm did not bump the confirmed member revision date');
+  assert.ok(
+    (await revisionDate(env, acceptedUser)) > revisionBeforeConfirm,
+    'bulk confirm did not bump the confirmed member revision date',
+  );
   const statuses = await memberStatuses(env, owner, orgId);
   assert.equal(statuses[accepted], MembershipStatus.Confirmed);
   assert.equal((await orgRepo.getMembership(env.DB, accepted))?.key, MEMBER_KEY);
@@ -622,7 +734,11 @@ test('reinvite mails an Invited member a fresh token once the first has expired,
   const invitee = await seedUser(env, { email: invited.email });
 
   context.mock.timers.enable({ apis: ['Date'], now: Date.now() + ORG_INVITE_TTL_DAYS * MS_PER_DAY + MS_PER_SECOND });
-  const refusals: Array<[string, string]> = [[orgId, ownerMemberId], [otherOrgId, invited.id], [orgId, crypto.randomUUID()]];
+  const refusals: Array<[string, string]> = [
+    [orgId, ownerMemberId],
+    [otherOrgId, invited.id],
+    [orgId, crypto.randomUUID()],
+  ];
   for (const [targetOrgId, memberId] of refusals) {
     const refused = await reinvite(env, owner, targetOrgId, memberId);
     assert.equal(refused.status, 400);
@@ -631,10 +747,16 @@ test('reinvite mails an Invited member a fresh token once the first has expired,
   assert.equal(capture.sent.length, 1);
 
   assert.equal((await reinvite(env, owner, orgId, invited.id)).status, 200);
-  assert.deepEqual(capture.sent.map((message) => message.to), [invited.email, invited.email]);
+  assert.deepEqual(
+    capture.sent.map((message) => message.to),
+    [invited.email, invited.email],
+  );
   const expired = await accept(env, invitee, orgId, invited.id, { token: expiredToken });
   assert.equal(await errorMessage(expired), 'Expired token.');
-  assert.equal((await accept(env, invitee, orgId, invited.id, { token: inviteToken(capture.sent, invited.email) })).status, 200);
+  assert.equal(
+    (await accept(env, invitee, orgId, invited.id, { token: inviteToken(capture.sent, invited.email) })).status,
+    200,
+  );
 
   const afterAccept = await reinvite(env, owner, orgId, invited.id);
   assert.equal(afterAccept.status, 400);
@@ -663,7 +785,13 @@ test('bulk reinvite mails only the Invited members of the org once each and repo
     [second.id, ''],
     ...[accepted, foreign, ...missing].map((id): [string, string] => [id, 'User invalid.']),
   ]);
-  assert.deepEqual(capture.sent.slice(mailedBefore).map((message) => message.to).sort(), [first.email, second.email].sort());
+  assert.deepEqual(
+    capture.sent
+      .slice(mailedBefore)
+      .map((message) => message.to)
+      .sort(),
+    [first.email, second.email].sort(),
+  );
 
   const empty = await postBulk(env, owner, orgId, 'reinvite', {});
   assert.equal(empty.status, 400);
@@ -683,9 +811,16 @@ test('reinvite spends the inviter mail budget, and a resend over it gets 429 wit
 
   for (let spent = 0; spent < budget - 1; spent += MAX_INVITE_EMAILS) {
     const count = Math.min(MAX_INVITE_EMAILS, budget - 1 - spent);
-    await invite(env, owner, orgId, Array.from({ length: count }, () => `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`));
+    await invite(
+      env,
+      owner,
+      orgId,
+      Array.from({ length: count }, () => `${crypto.randomUUID()}@${MAILABLE_DOMAIN}`),
+    );
   }
-  const [first, second] = (await listMembers(env, owner, orgId)).filter(({ status }) => status === MembershipStatus.Invited);
+  const [first, second] = (await listMembers(env, owner, orgId)).filter(
+    ({ status }) => status === MembershipStatus.Invited,
+  );
 
   const bulkBlocked = await postBulk(env, owner, orgId, 'reinvite', { ids: [first.id, second.id] });
   assert.equal(bulkBlocked.status, 429);
@@ -717,7 +852,10 @@ test('bulk confirm and reinvite refuse a member without manageUsers, confirming 
     await reinvite(env, plainMember.user, orgId, invited),
     await postBulk(env, plainMember.user, orgId, 'reinvite', { ids: [invited] }),
   ];
-  assert.deepEqual(refusals.map(({ status }) => status), [403, 403, 403]);
+  assert.deepEqual(
+    refusals.map(({ status }) => status),
+    [403, 403, 403],
+  );
   assert.equal((await memberStatuses(env, owner, orgId))[accepted], MembershipStatus.Accepted);
   assert.equal(capture.sent.length, mailedBefore);
 });
@@ -728,7 +866,10 @@ test('a malformed SCIM user payload gets a 400 SCIM error and saves no row', asy
   const orgId = await createOrg(env, owner);
   const rejected = await postScimUser(env, owner, orgId, '', { userName: 42 });
   assert.equal(rejected.status, 400);
-  const error = await rejected.json() as { schemas: string[]; status: number };
+  const error = (await rejected.json()) as { schemas: string[]; status: number };
   assert.deepEqual([error.schemas, error.status], [['urn:ietf:params:scim:api:messages:2.0:Error'], 400]);
-  assert.deepEqual((await listMembers(env, owner, orgId)).map((member) => member.email), [owner.email]);
+  assert.deepEqual(
+    (await listMembers(env, owner, orgId)).map((member) => member.email),
+    [owner.email],
+  );
 });

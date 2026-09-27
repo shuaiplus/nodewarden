@@ -23,7 +23,9 @@ interface IssuedToken {
 async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token: IssuedToken }> {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
+  const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, {
+    name: ENCRYPTED_FIELD,
+  });
   const token = await postJson<IssuedToken>(env, owner, `/api/service-accounts/${account.id}/access-tokens`, {
     ...TOKEN_FIELDS,
     wrappedOrgKey: PLAINTEXT_ORG_KEY,
@@ -32,7 +34,13 @@ async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token:
 }
 
 async function storedOrgKey(env: Env, tokenId: string): Promise<string | null | undefined> {
-  return (await getOrm(env.DB).select({ wrappedOrgKey: smAccessTokens.wrappedOrgKey }).from(smAccessTokens).where(eq(smAccessTokens.id, tokenId)).get())?.wrappedOrgKey;
+  return (
+    await getOrm(env.DB)
+      .select({ wrappedOrgKey: smAccessTokens.wrappedOrgKey })
+      .from(smAccessTokens)
+      .where(eq(smAccessTokens.id, tokenId))
+      .get()
+  )?.wrappedOrgKey;
 }
 
 // Upstream never holds an org key: the token response carries only `encrypted_payload`, and
@@ -53,20 +61,23 @@ test('a token created with wrappedOrgKey stores NULL and no response carries the
     }),
   });
   assert.equal(identity.status, 200);
-  assert.equal('wrappedOrgKey' in (await identity.json() as object), false);
+  assert.equal('wrappedOrgKey' in ((await identity.json()) as object), false);
 
   const synced = await authedFetch(env, {
     path: `/api/organizations/${orgId}/secrets/sync`,
     headers: { Authorization: `Bearer ${token.id}:${token.clientSecret}` },
   });
   assert.equal(synced.status, 401);
-  assert.equal('wrappedOrgKey' in (await synced.json() as object), false);
+  assert.equal('wrappedOrgKey' in ((await synced.json()) as object), false);
 });
 
 // Earlier builds stored the posted key, so the schema step clears what is already in D1.
 test('the schema step scrubs a stored org key and replays cleanly', async () => {
   const { env, token } = await issueTokenWithOrgKey();
-  await getOrm(env.DB).update(smAccessTokens).set({ wrappedOrgKey: PLAINTEXT_ORG_KEY }).where(eq(smAccessTokens.id, token.id));
+  await getOrm(env.DB)
+    .update(smAccessTokens)
+    .set({ wrappedOrgKey: PLAINTEXT_ORG_KEY })
+    .where(eq(smAccessTokens.id, token.id));
 
   await ensureStorageSchema(env.DB);
   assert.equal(await storedOrgKey(env, token.id), null);

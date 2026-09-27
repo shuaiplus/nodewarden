@@ -15,7 +15,9 @@ export interface YubicoApiCredentials {
 }
 
 export function normalizeYubiKeyOtp(input: string): string {
-  return String(input || '').replace(/\s+/g, '').toLowerCase();
+  return String(input || '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
 }
 
 export function yubiKeyPublicIdFromOtp(input: string): string | null {
@@ -37,13 +39,13 @@ function isYubiKeyOtp(input: string): boolean {
 }
 
 export function userYubiKeyPublicIds(user: User): string[] {
-  return [
-    user.yubikeyKey1,
-    user.yubikeyKey2,
-    user.yubikeyKey3,
-    user.yubikeyKey4,
-    user.yubikeyKey5,
-  ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+  return [user.yubikeyKey1, user.yubikeyKey2, user.yubikeyKey3, user.yubikeyKey4, user.yubikeyKey5]
+    .map((value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
 }
 
 export function isYubiKeyEnabled(user: User): boolean {
@@ -51,13 +53,9 @@ export function isYubiKeyEnabled(user: User): boolean {
 }
 
 async function hmacSha1Base64(base64Key: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    decodeBase64(base64Key),
-    { name: 'HMAC', hash: 'SHA-1' },
-    false,
-    ['sign']
-  );
+  const key = await crypto.subtle.importKey('raw', decodeBase64(base64Key), { name: 'HMAC', hash: 'SHA-1' }, false, [
+    'sign',
+  ]);
   return encodeBase64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message)));
 }
 
@@ -68,12 +66,20 @@ function canonicalQuery(params: URLSearchParams): string {
     .join('&');
 }
 
-export async function requestYubicoApiCredentials(email: string, otpInput: string): Promise<YubicoApiCredentials | null> {
+export async function requestYubicoApiCredentials(
+  email: string,
+  otpInput: string,
+): Promise<YubicoApiCredentials | null> {
   const otp = normalizeYubiKeyOtp(otpInput);
   if (!isYubiKeyOtp(otp)) return null;
 
   const body = new URLSearchParams();
-  body.set('email', String(email || '').trim().toLowerCase());
+  body.set(
+    'email',
+    String(email || '')
+      .trim()
+      .toLowerCase(),
+  );
   body.set('otp', otp);
   body.set('terms_conditions', 'consented');
 
@@ -93,7 +99,7 @@ export async function requestYubicoApiCredentials(email: string, otpInput: strin
 export async function verifyYubicoOtp(
   env: Env,
   otpInput: string,
-  credentials: YubicoApiCredentials | null
+  credentials: YubicoApiCredentials | null,
 ): Promise<boolean> {
   const otp = normalizeYubiKeyOtp(otpInput);
   if (!isYubiKeyOtp(otp)) return false;

@@ -12,7 +12,6 @@ const tlsCert = process.env.OFFICIAL_WEB_CERT || '';
 const tlsKey = process.env.OFFICIAL_WEB_KEY || '';
 const protocol = tlsCert && tlsKey ? 'https' : 'http';
 
-
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -33,45 +32,44 @@ if (!existsSync(join(root, 'index.html'))) {
 const server = (protocol === 'https' ? createHttpsServer : createHttpServer)(
   protocol === 'https' ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) } : undefined,
   async (req, res) => {
-  const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
-  if (isBackendPath(url.pathname)) {
-    const target = `${workerOrigin}${url.pathname}${url.search}`;
-    const headers = new Headers();
-    for (const [name, value] of Object.entries(req.headers)) {
-      if (value && name.toLowerCase() !== 'host') headers.set(name, Array.isArray(value) ? value.join(',') : value);
-    }
-    headers.set('X-Forwarded-Host', `127.0.0.1:${port}`);
-    headers.set('X-Forwarded-Proto', protocol);
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = chunks.length ? Buffer.concat(chunks) : undefined;
-    try {
-      const upstream = await fetch(target, { method: req.method, headers, body });
-      const responseHeaders = {};
-      for (const [name, value] of upstream.headers.entries()) {
-        const lower = name.toLowerCase();
-        if (lower === 'content-encoding' || lower === 'content-length' || lower === 'transfer-encoding') continue;
-        responseHeaders[name] = value;
+    const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
+    if (isBackendPath(url.pathname)) {
+      const target = `${workerOrigin}${url.pathname}${url.search}`;
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(req.headers)) {
+        if (value && name.toLowerCase() !== 'host') headers.set(name, Array.isArray(value) ? value.join(',') : value);
       }
-      const payload = Buffer.from(await upstream.arrayBuffer());
-      responseHeaders['content-length'] = String(payload.length);
-      res.writeHead(upstream.status, responseHeaders);
-      res.end(payload);
-    } catch (error) {
-      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(`Worker proxy failed: ${error instanceof Error ? error.message : String(error)}`);
+      headers.set('X-Forwarded-Host', `127.0.0.1:${port}`);
+      headers.set('X-Forwarded-Proto', protocol);
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = chunks.length ? Buffer.concat(chunks) : undefined;
+      try {
+        const upstream = await fetch(target, { method: req.method, headers, body });
+        const responseHeaders = {};
+        for (const [name, value] of upstream.headers.entries()) {
+          const lower = name.toLowerCase();
+          if (lower === 'content-encoding' || lower === 'content-length' || lower === 'transfer-encoding') continue;
+          responseHeaders[name] = value;
+        }
+        const payload = Buffer.from(await upstream.arrayBuffer());
+        responseHeaders['content-length'] = String(payload.length);
+        res.writeHead(upstream.status, responseHeaders);
+        res.end(payload);
+      } catch (error) {
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Worker proxy failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
     }
-    return;
-  }
 
-  const safePath = normalize(url.pathname).replace(/^(\.\.[/\\])+/, '');
-  const filePath = join(root, safePath === '/' ? 'index.html' : safePath.slice(1));
-  const resolved = existsSync(filePath) && statSync(filePath).isFile()
-    ? filePath
-    : join(root, 'index.html');
-  res.writeHead(200, { 'Content-Type': TYPES[extname(resolved)] || 'application/octet-stream' });
-  createReadStream(resolved).pipe(res);
-});
+    const safePath = normalize(url.pathname).replace(/^(\.\.[/\\])+/, '');
+    const filePath = join(root, safePath === '/' ? 'index.html' : safePath.slice(1));
+    const resolved = existsSync(filePath) && statSync(filePath).isFile() ? filePath : join(root, 'index.html');
+    res.writeHead(200, { 'Content-Type': TYPES[extname(resolved)] || 'application/octet-stream' });
+    createReadStream(resolved).pipe(res);
+  },
+);
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`Official Bitwarden web at ${protocol}://127.0.0.1:${port} → ${workerOrigin}`);

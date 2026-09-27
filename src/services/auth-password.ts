@@ -6,18 +6,10 @@ const LEGACY_PREFIX = '$s$';
 const S2_PREFIX = '$s2$';
 
 async function pbkdf2Hex(password: string, salt: Uint8Array, iterations: number): Promise<string> {
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
-    keyMaterial,
-    256
-  );
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, [
+    'deriveBits',
+  ]);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, keyMaterial, 256);
   return encodeBase64(bits);
 }
 
@@ -38,7 +30,11 @@ export async function verifyPassword(password: string, storedHash: string, email
   }
   if (storedHash.startsWith(LEGACY_PREFIX) && email) {
     // Legacy hashes were salted with the normalized account email.
-    const digest = await pbkdf2Hex(password, new TextEncoder().encode(email.toLowerCase().trim()), SERVER_HASH_ITERATIONS);
+    const digest = await pbkdf2Hex(
+      password,
+      new TextEncoder().encode(email.toLowerCase().trim()),
+      SERVER_HASH_ITERATIONS,
+    );
     return constantTimeEquals(`${LEGACY_PREFIX}${digest}`, storedHash);
   }
   return constantTimeEquals(password, storedHash);

@@ -15,22 +15,47 @@ const MANY_CIPHER_COUNT = D1_MAX_BOUND_PARAMETERS + 1;
 
 function cipher(id: string, userId: string, organizationId: string | null, name: string): Cipher {
   return {
-    id, userId, organizationId, name, type: 1, folderId: null, notes: null, favorite: false, login: null, card: null,
-    identity: null, secureNote: null, sshKey: null, fields: null, passwordHistory: null, reprompt: 0, key: null,
-    createdAt: PAST, updatedAt: PAST, archivedAt: null, deletedAt: null,
+    id,
+    userId,
+    organizationId,
+    name,
+    type: 1,
+    folderId: null,
+    notes: null,
+    favorite: false,
+    login: null,
+    card: null,
+    identity: null,
+    secureNote: null,
+    sshKey: null,
+    fields: null,
+    passwordHistory: null,
+    reprompt: 0,
+    key: null,
+    createdAt: PAST,
+    updatedAt: PAST,
+    archivedAt: null,
+    deletedAt: null,
   };
 }
 
 async function insertOrganization(env: Env): Promise<string> {
   const id = crypto.randomUUID();
   await orgRepo.insertOrganization(env.DB, {
-    id, name: 'Org', billingEmail: 'billing@example.test', identifier: null, privateKey: null, publicKey: null, createdAt: PAST, updatedAt: PAST,
+    id,
+    name: 'Org',
+    billingEmail: 'billing@example.test',
+    identifier: null,
+    privateKey: null,
+    publicKey: null,
+    createdAt: PAST,
+    updatedAt: PAST,
   });
   return id;
 }
 
 // Handlers authorize before saving; this guard is what stops a colliding id from taking over someone else's row.
-test('a colliding cipher upsert overwrites only its own user\'s row or a row already in the incoming organization', async () => {
+test("a colliding cipher upsert overwrites only its own user's row or a row already in the incoming organization", async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const intruder = await seedUser(env);
@@ -43,7 +68,12 @@ test('a colliding cipher upsert overwrites only its own user\'s row or a row alr
     return [row?.userId, row?.organizationId, row?.name];
   };
 
-  const refused = [[personalId, null], [personalId, 'org-a'], [orgItemId, 'org-b'], [orgItemId, null]] as const;
+  const refused = [
+    [personalId, null],
+    [personalId, 'org-a'],
+    [orgItemId, 'org-b'],
+    [orgItemId, null],
+  ] as const;
   for (const [index, [id, organizationId]] of refused.entries()) {
     await cipherRepo.saveCipher(env.DB, cipher(id, intruder.id, organizationId, `overwrite ${index}`));
   }
@@ -61,11 +91,19 @@ test('org items pass to the oldest other confirmed Owner of their own org, else 
   const departing = await seedUser(env);
   const ownersOrg = await insertOrganization(env);
   const membersOrg = await insertOrganization(env);
-  const member = async (orgId: string, type: number, createdAt: string, fields: { id?: string; status?: number } = {}) =>
-    (await seedMember(env, orgId, { type, createdAt, updatedAt: createdAt, ...fields })).user.id;
+  const member = async (
+    orgId: string,
+    type: number,
+    createdAt: string,
+    fields: { id?: string; status?: number } = {},
+  ) => (await seedMember(env, orgId, { type, createdAt, updatedAt: createdAt, ...fields })).user.id;
   // The departing user is the oldest Owner of both orgs, so only excluding them keeps them from inheriting.
   for (const orgId of [ownersOrg, membersOrg]) {
-    await seedMembership(env, orgId, { userId: departing.id, type: MembershipType.Owner, createdAt: '2000-01-01T00:00:00.000Z' });
+    await seedMembership(env, orgId, {
+      userId: departing.id,
+      type: MembershipType.Owner,
+      createdAt: '2000-01-01T00:00:00.000Z',
+    });
   }
   await member(ownersOrg, MembershipType.Owner, '2001-01-01T00:00:00.000Z', { status: MembershipStatus.Accepted });
   await member(ownersOrg, MembershipType.Admin, '2002-01-01T00:00:00.000Z');
@@ -76,8 +114,10 @@ test('org items pass to the oldest other confirmed Owner of their own org, else 
   const memberHeir = await member(membersOrg, MembershipType.User, '2004-01-01T00:00:00.000Z');
   await member(membersOrg, MembershipType.Admin, '2006-01-01T00:00:00.000Z');
   const items = {
-    [ownersOrg]: [departing.id, ownersOrg], [membersOrg]: [departing.id, membersOrg],
-    personal: [departing.id, null], othersItem: [tiedOwner, ownersOrg],
+    [ownersOrg]: [departing.id, ownersOrg],
+    [membersOrg]: [departing.id, membersOrg],
+    personal: [departing.id, null],
+    othersItem: [tiedOwner, ownersOrg],
   } as const;
   for (const [id, [userId, organizationId]] of Object.entries(items)) {
     await cipherRepo.saveCipher(env.DB, cipher(id, userId, organizationId, id));
@@ -85,7 +125,9 @@ test('org items pass to the oldest other confirmed Owner of their own org, else 
 
   await cipherRepo.reassignOrganizationCiphers(env.DB, departing.id, userRowMatches(getOrm(env.DB), departing.id));
 
-  const owners = await Promise.all(Object.keys(items).map(async (id) => (await cipherRepo.getCipher(env.DB, id))?.userId));
+  const owners = await Promise.all(
+    Object.keys(items).map(async (id) => (await cipherRepo.getCipher(env.DB, id))?.userId),
+  );
   assert.deepEqual(owners, [ownerHeir, memberHeir, departing.id, tiedOwner]);
 });
 
@@ -94,8 +136,12 @@ test('bulk cipher writers chunk more ids than one statement can bind', async () 
   const user = await seedUser(env);
   const ids = Array.from({ length: MANY_CIPHER_COUNT }, () => crypto.randomUUID());
   for (const id of ids) await cipherRepo.saveCipher(env.DB, cipher(id, user.id, null, 'item'));
-  const states = async () => (await cipherRepo.getCiphersByIds(env.DB, ids, user.id))
-    .map(({ deletedAt, archivedAt, folderId }) => [Boolean(deletedAt), Boolean(archivedAt), folderId]);
+  const states = async () =>
+    (await cipherRepo.getCiphersByIds(env.DB, ids, user.id)).map(({ deletedAt, archivedAt, folderId }) => [
+      Boolean(deletedAt),
+      Boolean(archivedAt),
+      folderId,
+    ]);
   const everyCipher = (state: unknown[]) => ids.map(() => state);
 
   await cipherRepo.bulkSoftDeleteCiphers(env.DB, ids, user.id);

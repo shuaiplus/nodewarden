@@ -22,13 +22,7 @@ export function fromAccessId(accessId: string): string | null {
   const bytes = base64UrlDecode(accessId);
   if (!bytes || bytes.length !== 16) return null;
   const hex = bytes.toHex();
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join('-');
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20, 32)].join('-');
 }
 
 export async function resolveSendFromIdOrAccessId(db: D1Database, idOrAccessId: string): Promise<Send | null> {
@@ -125,7 +119,7 @@ async function deriveSendPasswordHash(password: string, salt: Uint8Array, iterat
       hash: 'SHA-256',
     },
     key,
-    256
+    256,
   );
   return new Uint8Array(bits);
 }
@@ -203,7 +197,9 @@ export function sendToResponse(send: Send): SendResponse {
   return {
     id: send.id,
     accessId: /^[0-9a-f]{32}$/.test(hex)
-      ? bytesToBase64Url(Uint8Array.from({ length: 16 }, (_, index) => parseInt(hex.slice(index * 2, index * 2 + 2), 16)))
+      ? bytesToBase64Url(
+          Uint8Array.from({ length: 16 }, (_, index) => parseInt(hex.slice(index * 2, index * 2 + 2), 16)),
+        )
       : '',
     type: Number(send.type) || 0,
     name: send.name,
@@ -274,7 +270,7 @@ export function sendPasswordLockedOAuthResponse(retryAfterSeconds: number): Resp
         Object: 'error',
       },
     },
-    429
+    429,
   );
 }
 
@@ -282,16 +278,19 @@ const optionalString = z.string().optional().catch(undefined);
 
 // The access body is optional, so anything unreadable counts as no password. Clients spell the
 // client-side password hash four ways; the first one sent wins.
-const SendAccessBody = z.object({
-  password: optionalString,
-  password_hash_b64: optionalString,
-  passwordHashB64: optionalString,
-  passwordHash: optionalString,
-  password_hash: optionalString,
-}).catch({}).transform(({ password, ...hash }) => ({
-  password,
-  passwordHashB64: hash.password_hash_b64 ?? hash.passwordHashB64 ?? hash.passwordHash ?? hash.password_hash,
-}));
+const SendAccessBody = z
+  .object({
+    password: optionalString,
+    password_hash_b64: optionalString,
+    passwordHashB64: optionalString,
+    passwordHash: optionalString,
+    password_hash: optionalString,
+  })
+  .catch({})
+  .transform(({ password, ...hash }) => ({
+    password,
+    passwordHashB64: hash.password_hash_b64 ?? hash.passwordHashB64 ?? hash.passwordHash ?? hash.password_hash,
+  }));
 
 export async function validatePublicSendAccess(send: Send, body: unknown): Promise<PublicSendAccessValidationResult> {
   if (hasEmailAuth(send)) {
@@ -314,7 +313,8 @@ export async function validatePublicSendAccess(send: Send, body: unknown): Promi
     validPassword = await verifySendPassword(send, password);
   } else {
     const candidate = passwordHashB64 ?? password;
-    if (!candidate) return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
+    if (!candidate)
+      return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
     validPassword = verifySendPasswordHashB64(send, candidate);
   }
   if (!validPassword) {

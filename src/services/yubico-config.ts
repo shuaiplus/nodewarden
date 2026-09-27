@@ -3,10 +3,7 @@ import { and, eq, inArray, lt } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { config } from '../db/schema';
 import { castInteger } from '../db/sql';
-import {
-  requestYubicoApiCredentials,
-  type YubicoApiCredentials,
-} from '../utils/yubico-otp';
+import { requestYubicoApiCredentials, type YubicoApiCredentials } from '../utils/yubico-otp';
 
 export const YUBICO_CLIENT_ID_CONFIG_KEY = 'globalSettings__yubico__clientId';
 export const YUBICO_SECRET_KEY_CONFIG_KEY = 'globalSettings__yubico__key';
@@ -30,18 +27,19 @@ export async function getYubicoCredentials(db: D1Database): Promise<YubicoApiCre
   return clientId && secretKey ? { clientId, secretKey } : null;
 }
 
-export async function replaceYubicoCredentials(
-  db: D1Database,
-  credentials: YubicoApiCredentials
-): Promise<void> {
+export async function replaceYubicoCredentials(db: D1Database, credentials: YubicoApiCredentials): Promise<void> {
   const clientId = String(credentials.clientId || '').trim();
   const secretKey = String(credentials.secretKey || '').trim();
   if (!clientId || !secretKey) throw new Error('Yubico credentials are incomplete');
   const orm = getOrm(db);
   await orm.batch([
-    orm.insert(config).values({ key: YUBICO_CLIENT_ID_CONFIG_KEY, value: clientId })
+    orm
+      .insert(config)
+      .values({ key: YUBICO_CLIENT_ID_CONFIG_KEY, value: clientId })
       .onConflictDoUpdate({ target: config.key, set: { value: clientId } }),
-    orm.insert(config).values({ key: YUBICO_SECRET_KEY_CONFIG_KEY, value: secretKey })
+    orm
+      .insert(config)
+      .values({ key: YUBICO_SECRET_KEY_CONFIG_KEY, value: secretKey })
       .onConflictDoUpdate({ target: config.key, set: { value: secretKey } }),
   ]);
 }
@@ -49,7 +47,7 @@ export async function replaceYubicoCredentials(
 export async function initializeYubicoCredentialsOnce(
   db: D1Database,
   email: string,
-  otp: string
+  otp: string,
 ): Promise<YubicoCredentialInitializationResult | null> {
   const existing = await getYubicoCredentials(db);
   if (existing) return { credentials: existing, created: false };

@@ -9,7 +9,17 @@ test('extending a refresh token never moves its expiry past the absolute expiry 
   const user = await seedUser(env);
   const now = Date.now();
   const absoluteExpiresAt = now + 10_000;
-  await sessionRepo.saveRefreshToken(env.DB, 'refresh-token', user.id, now + 1_000, null, null, null, null, absoluteExpiresAt);
+  await sessionRepo.saveRefreshToken(
+    env.DB,
+    'refresh-token',
+    user.id,
+    now + 1_000,
+    null,
+    null,
+    null,
+    null,
+    absoluteExpiresAt,
+  );
   const extendTo = async (requestedExpiresAt: number) => {
     assert.equal(await sessionRepo.extendRefreshTokenExpiry(env.DB, 'refresh-token', requestedExpiresAt, now), true);
     return (await sessionRepo.getRefreshTokenRecord(env.DB, 'refresh-token'))?.expiresAt;

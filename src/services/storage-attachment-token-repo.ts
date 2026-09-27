@@ -8,7 +8,11 @@ import { shouldRunPeriodicCleanup } from './periodic-cleanup';
 let lastCleanupAt = 0;
 
 // Marks a download token JTI as used; true only on first use.
-export async function consumeAttachmentDownloadToken(db: D1Database, jti: string, expUnixSeconds: number): Promise<boolean> {
+export async function consumeAttachmentDownloadToken(
+  db: D1Database,
+  jti: string,
+  expUnixSeconds: number,
+): Promise<boolean> {
   const orm = getOrm(db);
   const nowMs = Date.now();
   if (shouldRunPeriodicCleanup(lastCleanupAt, LIMITS.cleanup.attachmentTokenCleanupIntervalMs)) {

@@ -30,7 +30,9 @@ import * as attachmentTokenRepo from '../services/storage-attachment-token-repo'
 import * as cipherRepo from '../services/storage-cipher-repo';
 
 const ATTACHMENT_FIELD_REQUIRED = 'fileName and key are required';
-const requiredAttachmentField = z.string({ error: ATTACHMENT_FIELD_REQUIRED }).min(1, { error: ATTACHMENT_FIELD_REQUIRED });
+const requiredAttachmentField = z
+  .string({ error: ATTACHMENT_FIELD_REQUIRED })
+  .min(1, { error: ATTACHMENT_FIELD_REQUIRED });
 
 const CreateAttachmentBody = z.object({
   fileName: requiredAttachmentField,
@@ -40,10 +42,19 @@ const CreateAttachmentBody = z.object({
 });
 
 // Only the sent fields change; a present fileName must not be blank, and a blank key clears it.
-const AttachmentMetadataBody = z.object({
-  fileName: z.unknown().transform((value) => String(value || '').trim()).pipe(z.string().min(1, { error: 'fileName is required' })).optional(),
-  key: z.unknown().transform((value) => String(value || '').trim() || null).optional(),
-}).refine((body) => 'fileName' in body || 'key' in body, { error: 'No metadata fields supplied' });
+const AttachmentMetadataBody = z
+  .object({
+    fileName: z
+      .unknown()
+      .transform((value) => String(value || '').trim())
+      .pipe(z.string().min(1, { error: 'fileName is required' }))
+      .optional(),
+    key: z
+      .unknown()
+      .transform((value) => String(value || '').trim() || null)
+      .optional(),
+  })
+  .refine((body) => 'fileName' in body || 'key' in body, { error: 'No metadata fields supplied' });
 
 // An attachment change is a change to its cipher: the cipher's owner gets a new revision and their
 // devices the cipher update signal. Returns null when the cipher row is gone.
@@ -51,7 +62,7 @@ async function afterAttachmentChange(
   request: Request,
   env: Env,
   cipher: Cipher,
-  cipherId: string
+  cipherId: string,
 ): Promise<{ userId: string; revisionDate: string } | null> {
   const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
   if (revisionInfo) {
@@ -74,7 +85,7 @@ async function processAttachmentUpload(
   env: Env,
   cipher: Cipher,
   attachment: Attachment,
-  cipherId: string
+  cipherId: string,
 ): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.attachment.maxFileSizeBytes);
   const upload = await parseDirectUploadPayload(request, {
@@ -125,9 +136,8 @@ export async function handleCreateAttachment(
   request: Request,
   env: Env,
   userId: string,
-  cipherId: string
+  cipherId: string,
 ): Promise<Response> {
-
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
   const body = await parseBody(request, CreateAttachmentBody);
@@ -187,9 +197,8 @@ export async function handleUploadAttachment(
   env: Env,
   userId: string,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
@@ -205,9 +214,8 @@ export async function handlePublicUploadAttachment(
   request: Request,
   env: Env,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const token = new URL(request.url).searchParams.get('token');
   if (!token) {
     return errorResponse('Token required', 401);
@@ -239,9 +247,8 @@ export async function handleGetAttachment(
   env: Env,
   userId: string,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'read');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
@@ -253,7 +260,7 @@ export async function handleGetAttachment(
 
   // Generate short-lived download token
   const token = await createFileDownloadToken(cipherId, attachmentId, env.JWT_SECRET);
-  
+
   // Generate download URL with token
   const url = new URL(request.url);
   const downloadUrl = `${url.origin}/api/attachments/${cipherId}/${attachmentId}?token=${token}`;
@@ -276,9 +283,8 @@ export async function handleUpdateAttachmentMetadata(
   env: Env,
   userId: string,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
@@ -311,9 +317,8 @@ export async function handlePublicDownloadAttachment(
   request: Request,
   env: Env,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
 
@@ -331,7 +336,6 @@ export async function handlePublicDownloadAttachment(
   if (claims.cipherId !== cipherId || claims.attachmentId !== attachmentId) {
     return errorResponse('Token mismatch', 401);
   }
-
 
   // Verify attachment exists
   const attachment = await attachmentRepo.getAttachment(env.DB, attachmentId);
@@ -368,9 +372,8 @@ export async function handleDeleteAttachment(
   env: Env,
   userId: string,
   cipherId: string,
-  attachmentId: string
+  attachmentId: string,
 ): Promise<Response> {
-
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
@@ -413,31 +416,30 @@ export async function handleDeleteAttachment(
 }
 
 // Delete all attachments for a cipher (used when deleting cipher)
-export async function deleteAllAttachmentsForCipher(
-  env: Env,
-  cipherId: string
-): Promise<void> {
+export async function deleteAllAttachmentsForCipher(env: Env, cipherId: string): Promise<void> {
   await deleteAllAttachmentsForCiphers(env, [cipherId]);
 }
 
-export async function deleteAllAttachmentsForCiphers(
-  env: Env,
-  cipherIds: string[]
-): Promise<void> {
+export async function deleteAllAttachmentsForCiphers(env: Env, cipherIds: string[]): Promise<void> {
   const attachmentsByCipher = await attachmentRepo.getAttachmentsByCipherIds(env.DB, cipherIds);
   const attachments = Array.from(attachmentsByCipher.entries()).flatMap(([ownedCipherId, items]) =>
-    items.map((attachment) => ({ attachment, cipherId: ownedCipherId }))
+    items.map((attachment) => ({ attachment, cipherId: ownedCipherId })),
   );
   if (!attachments.length) return;
 
   // Delete the stored files in batches, so at most `concurrency` deletions run at once.
   const concurrency = Math.max(1, LIMITS.performance.attachmentDeleteConcurrency);
   for (let index = 0; index < attachments.length; index += concurrency) {
-    await Promise.all(attachments.slice(index, index + concurrency).map(async ({ attachment, cipherId }) => {
-      const path = getAttachmentObjectKey(cipherId, attachment.id);
-      await deleteBlobObject(env, path);
-    }));
+    await Promise.all(
+      attachments.slice(index, index + concurrency).map(async ({ attachment, cipherId }) => {
+        const path = getAttachmentObjectKey(cipherId, attachment.id);
+        await deleteBlobObject(env, path);
+      }),
+    );
   }
 
-  await attachmentRepo.bulkDeleteAttachmentsByIds(env.DB, attachments.map(({ attachment }) => attachment.id));
+  await attachmentRepo.bulkDeleteAttachmentsByIds(
+    env.DB,
+    attachments.map(({ attachment }) => attachment.id),
+  );
 }

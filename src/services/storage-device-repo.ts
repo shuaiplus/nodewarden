@@ -30,7 +30,7 @@ export async function upsertDevice(
     encryptedUserKey?: string | null;
     encryptedPublicKey?: string | null;
     encryptedPrivateKey?: string | null;
-  }
+  },
 ): Promise<void> {
   const now = new Date().toISOString();
   const existingDevice = await getDevice(db, userId, deviceIdentifier);
@@ -61,7 +61,11 @@ export async function upsertDevice(
       set: {
         name: effectiveName,
         type,
-        sessionStamp: caseWhen(or(isNull(devices.sessionStamp), eq(devices.sessionStamp, '')), excluded(devices.sessionStamp), devices.sessionStamp),
+        sessionStamp: caseWhen(
+          or(isNull(devices.sessionStamp), eq(devices.sessionStamp, '')),
+          excluded(devices.sessionStamp),
+          devices.sessionStamp,
+        ),
         encryptedUserKey: coalesce(excluded(devices.encryptedUserKey), devices.encryptedUserKey),
         encryptedPublicKey: coalesce(excluded(devices.encryptedPublicKey), devices.encryptedPublicKey),
         encryptedPrivateKey: coalesce(excluded(devices.encryptedPrivateKey), devices.encryptedPrivateKey),
@@ -76,7 +80,7 @@ export async function updateDeviceName(
   db: D1Database,
   userId: string,
   deviceIdentifier: string,
-  name: string
+  name: string,
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(devices)
@@ -86,11 +90,7 @@ export async function updateDeviceName(
   return Number(result.meta.changes ?? 0) > 0;
 }
 
-export async function touchDeviceLastSeen(
-  db: D1Database,
-  userId: string,
-  deviceIdentifier: string
-): Promise<boolean> {
+export async function touchDeviceLastSeen(db: D1Database, userId: string, deviceIdentifier: string): Promise<boolean> {
   const result = await getOrm(db)
     .update(devices)
     .set({ lastSeenAt: new Date().toISOString() })
@@ -103,7 +103,7 @@ export async function rotateDeviceSessionStamp(
   db: D1Database,
   userId: string,
   deviceIdentifier: string,
-  sessionStamp: string
+  sessionStamp: string,
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(devices)
@@ -121,7 +121,7 @@ export async function updateDeviceKeys(
     encryptedUserKey?: string | null;
     encryptedPublicKey?: string | null;
     encryptedPrivateKey?: string | null;
-  }
+  },
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(devices)
@@ -136,24 +136,19 @@ export async function updateDeviceKeys(
   return Number(result.meta.changes ?? 0) > 0;
 }
 
-export async function clearDeviceKeys(
-  db: D1Database,
-  userId: string,
-  deviceIdentifiers: string[]
-): Promise<number> {
-  const uniqueIds = Array.from(
-    new Set(deviceIdentifiers.map((id) => String(id || '').trim()).filter(Boolean))
-  );
+export async function clearDeviceKeys(db: D1Database, userId: string, deviceIdentifiers: string[]): Promise<number> {
+  const uniqueIds = Array.from(new Set(deviceIdentifiers.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return 0;
 
   const orm = getOrm(db);
   const updatedAt = new Date().toISOString();
-  const clear = (chunk: string[]) => orm
-    .update(devices)
-    .set({ encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, updatedAt })
-    .where(and(eq(devices.userId, userId), inArray(devices.deviceIdentifier, chunk)));
+  const clear = (chunk: string[]) =>
+    orm
+      .update(devices)
+      .set({ encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null, updatedAt })
+      .where(and(eq(devices.userId, userId), inArray(devices.deviceIdentifier, chunk)));
   const statements = statementChunks(uniqueIds, clear).map(clear);
-  const results = await orm.batch(statements as [typeof statements[0], ...typeof statements]);
+  const results = await orm.batch(statements as [(typeof statements)[0], ...typeof statements]);
   return results.reduce((total, result) => total + Number(result.meta.changes ?? 0), 0);
 }
 
@@ -182,11 +177,7 @@ export async function getDevicesByUserId(db: D1Database, userId: string): Promis
 }
 
 export async function getDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<Device | null> {
-  const [row] = await getOrm(db)
-    .select()
-    .from(devices)
-    .where(deviceKey(userId, deviceIdentifier))
-    .limit(1);
+  const [row] = await getOrm(db).select().from(devices).where(deviceKey(userId, deviceIdentifier)).limit(1);
   return row ? mapDeviceRow(row) : null;
 }
 
@@ -195,7 +186,7 @@ export async function updateDevicePushToken(
   userId: string,
   deviceIdentifier: string,
   pushUuid: string,
-  pushToken: string
+  pushToken: string,
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(devices)
@@ -208,7 +199,7 @@ export async function updateDevicePushToken(
 export async function getDevicePushUuid(
   db: D1Database,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<string | null> {
   const [row] = await getOrm(db)
     .select({ pushUuid: devices.pushUuid })
@@ -222,11 +213,7 @@ export async function userHasPushDevice(db: D1Database, userId: string): Promise
   const [row] = await getOrm(db)
     .select({ userId: devices.userId })
     .from(devices)
-    .where(and(
-      eq(devices.userId, userId),
-      isNotNull(devices.pushToken),
-      ne(devices.pushToken, ''),
-    ))
+    .where(and(eq(devices.userId, userId), isNotNull(devices.pushToken), ne(devices.pushToken, '')))
     .limit(1);
   return !!row;
 }
@@ -245,7 +232,10 @@ async function deleteExpiredTrustedTokens(db: D1Database, nowMs: number): Promis
   await getOrm(db).delete(trustedTwoFactorDeviceTokens).where(lt(trustedTwoFactorDeviceTokens.expiresAt, nowMs));
 }
 
-export async function getTrustedDeviceTokenSummariesByUserId(db: D1Database, userId: string): Promise<TrustedDeviceTokenSummary[]> {
+export async function getTrustedDeviceTokenSummariesByUserId(
+  db: D1Database,
+  userId: string,
+): Promise<TrustedDeviceTokenSummary[]> {
   const now = Date.now();
   await deleteExpiredTrustedTokens(db, now);
   const rows = await getOrm(db)
@@ -266,13 +256,19 @@ export async function getTrustedDeviceTokenSummariesByUserId(db: D1Database, use
   }));
 }
 
-export async function deleteTrustedTwoFactorTokensByDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<number> {
+export async function deleteTrustedTwoFactorTokensByDevice(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+): Promise<number> {
   const result = await getOrm(db)
     .delete(trustedTwoFactorDeviceTokens)
-    .where(and(
-      eq(trustedTwoFactorDeviceTokens.userId, userId),
-      eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
-    ))
+    .where(
+      and(
+        eq(trustedTwoFactorDeviceTokens.userId, userId),
+        eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
+      ),
+    )
     .run();
   return Number(result.meta.changes ?? 0);
 }
@@ -289,18 +285,20 @@ export async function updateTrustedTwoFactorTokensExpiryByDevice(
   db: D1Database,
   userId: string,
   deviceIdentifier: string,
-  expiresAtMs: number
+  expiresAtMs: number,
 ): Promise<number> {
   const now = Date.now();
   await deleteExpiredTrustedTokens(db, now);
   const result = await getOrm(db)
     .update(trustedTwoFactorDeviceTokens)
     .set({ expiresAt: expiresAtMs })
-    .where(and(
-      eq(trustedTwoFactorDeviceTokens.userId, userId),
-      eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
-      gte(trustedTwoFactorDeviceTokens.expiresAt, now),
-    ))
+    .where(
+      and(
+        eq(trustedTwoFactorDeviceTokens.userId, userId),
+        eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
+        gte(trustedTwoFactorDeviceTokens.expiresAt, now),
+      ),
+    )
     .run();
   return Number(result.meta.changes ?? 0);
 }
@@ -310,7 +308,7 @@ export async function saveTrustedTwoFactorDeviceToken(
   token: string,
   userId: string,
   deviceIdentifier: string,
-  expiresAtMs = Date.now() + TWO_FACTOR_REMEMBER_TTL_MS
+  expiresAtMs = Date.now() + TWO_FACTOR_REMEMBER_TTL_MS,
 ): Promise<void> {
   const tokenKey = await hashedTokenKey(token);
   await deleteExpiredTrustedTokens(db, Date.now());
@@ -326,7 +324,7 @@ export async function saveTrustedTwoFactorDeviceToken(
 export async function getTrustedTwoFactorDeviceTokenUserId(
   db: D1Database,
   token: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<string | null> {
   const now = Date.now();
   const tokenKey = await hashedTokenKey(token);
@@ -336,10 +334,12 @@ export async function getTrustedTwoFactorDeviceTokenUserId(
       expiresAt: trustedTwoFactorDeviceTokens.expiresAt,
     })
     .from(trustedTwoFactorDeviceTokens)
-    .where(and(
-      eq(trustedTwoFactorDeviceTokens.token, tokenKey),
-      eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
-    ))
+    .where(
+      and(
+        eq(trustedTwoFactorDeviceTokens.token, tokenKey),
+        eq(trustedTwoFactorDeviceTokens.deviceIdentifier, deviceIdentifier),
+      ),
+    )
     .limit(1);
 
   if (!row) return null;

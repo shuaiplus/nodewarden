@@ -5,7 +5,13 @@ import { twoFactorProviders } from '../services/two-factor-providers';
 import { getAllUsersWithTwoFactor } from '../services/storage-user-repo';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { deleteUserAccount, setUserStatus } from '../services/account-deletion';
-import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
+import {
+  auditRequestMetadata,
+  getAuditLogSettings,
+  normalizeAuditLogSettings,
+  saveAuditLogSettings,
+  writeAuditEvent,
+} from '../services/audit-events';
 import * as adminRepo from '../services/storage-admin-repo';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -14,19 +20,36 @@ function isAdmin(user: User): boolean {
 }
 
 const PASSWORD_REQUIRED = 'masterPasswordHash is required';
-const PasswordBody = z.object({ masterPasswordHash: z.string({ error: PASSWORD_REQUIRED }).trim().min(1, { error: PASSWORD_REQUIRED }) }, { error: PASSWORD_REQUIRED });
+const PasswordBody = z.object(
+  { masterPasswordHash: z.string({ error: PASSWORD_REQUIRED }).trim().min(1, { error: PASSWORD_REQUIRED }) },
+  { error: PASSWORD_REQUIRED },
+);
 const DEFAULT_INVITE_HOURS = 24 * 7;
 const MAX_INVITE_HOURS = 24 * 30;
 const InviteBody = PasswordBody.extend({
-  expiresInHours: z.coerce.number().catch(DEFAULT_INVITE_HOURS).transform(hours => Math.max(1, Math.min(MAX_INVITE_HOURS, Math.floor(hours)))),
+  expiresInHours: z.coerce
+    .number()
+    .catch(DEFAULT_INVITE_HOURS)
+    .transform((hours) => Math.max(1, Math.min(MAX_INVITE_HOURS, Math.floor(hours)))),
 });
-const StatusBody = PasswordBody.extend({ status: z.enum(['active', 'banned'], { error: 'status must be active or banned' }) });
+const StatusBody = PasswordBody.extend({
+  status: z.enum(['active', 'banned'], { error: 'status must be active or banned' }),
+});
 
 // Every destructive admin action re-proves the master password; unparseable JSON reads as a missing one.
-async function readConfirmedBody<S extends typeof PasswordBody>(request: Request, env: Env, actorUser: User, schema: S): Promise<z.output<S> | Response> {
+async function readConfirmedBody<S extends typeof PasswordBody>(
+  request: Request,
+  env: Env,
+  actorUser: User,
+  schema: S,
+): Promise<z.output<S> | Response> {
   const body = await parseBody(request, schema, PASSWORD_REQUIRED);
   if (body instanceof Response) return body;
-  const valid = await new AuthService(env).verifyPassword(body.masterPasswordHash, actorUser.masterPasswordHash, actorUser.email);
+  const valid = await new AuthService(env).verifyPassword(
+    body.masterPasswordHash,
+    actorUser.masterPasswordHash,
+    actorUser.email,
+  );
   return valid ? body : errorResponse('Invalid password', 400);
 }
 
@@ -37,7 +60,7 @@ async function writeAuditLog(
   targetType: string | null,
   targetId: string | null,
   metadata: Record<string, unknown> | null,
-  request?: Request
+  request?: Request,
 ): Promise<void> {
   await writeAuditEvent(db, {
     actorUserId,
@@ -68,18 +91,14 @@ function toInviteResponse(request: Request, invite: Invite): Record<string, unkn
 }
 
 // GET /api/admin/users
-export async function handleAdminListUsers(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminListUsers(request: Request, env: Env, actorUser: User): Promise<Response> {
   void request;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
 
   const users = await getAllUsersWithTwoFactor(env.DB);
-  const data = users.map(user => {
+  const data = users.map((user) => {
     return {
       id: user.id,
       email: user.email,
@@ -100,11 +119,7 @@ export async function handleAdminListUsers(
 }
 
 // GET /api/admin/logs
-export async function handleAdminListAuditLogs(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminListAuditLogs(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
@@ -114,13 +129,16 @@ export async function handleAdminListAuditLogs(
   const offset = Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
   const category = String(url.searchParams.get('category') || '').trim() || null;
   const level = String(url.searchParams.get('level') || '').trim() || null;
-  const q = String(url.searchParams.get('q') || '').trim().toLowerCase() || null;
+  const q =
+    String(url.searchParams.get('q') || '')
+      .trim()
+      .toLowerCase() || null;
   const from = String(url.searchParams.get('from') || '').trim() || null;
   const to = String(url.searchParams.get('to') || '').trim() || null;
 
   const result = await adminRepo.listAuditLogs(env.DB, { limit, offset, category, level, q, from, to });
   return jsonResponse({
-    data: result.logs.map(log => ({
+    data: result.logs.map((log) => ({
       id: log.id,
       actorUserId: log.actorUserId,
       actorEmail: log.actorEmail,
@@ -144,18 +162,14 @@ export async function handleAdminListAuditLogs(
 }
 
 // GET /api/admin/logs/settings
-export async function handleAdminGetAuditLogSettings(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminGetAuditLogSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   void request;
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
   return jsonResponse({
     object: 'auditLogSettings',
-    ...await getAuditLogSettings(env.DB),
+    ...(await getAuditLogSettings(env.DB)),
   });
 }
 
@@ -163,7 +177,7 @@ export async function handleAdminGetAuditLogSettings(
 export async function handleAdminUpdateAuditLogSettings(
   request: Request,
   env: Env,
-  actorUser: User
+  actorUser: User,
 ): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
@@ -179,27 +193,27 @@ export async function handleAdminUpdateAuditLogSettings(
 }
 
 // DELETE /api/admin/logs
-export async function handleAdminClearAuditLogs(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminClearAuditLogs(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
   const deleted = await adminRepo.clearAuditLogs(env.DB);
-  await writeAuditLog(env.DB, actorUser.id, 'admin.audit.clear', 'auditLog', null, {
-    deleted,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.audit.clear',
+    'auditLog',
+    null,
+    {
+      deleted,
+    },
+    request,
+  );
   return jsonResponse({ object: 'auditLogClear', deleted });
 }
 
 // POST /api/admin/invites
-export async function handleAdminCreateInvite(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminCreateInvite(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
@@ -220,19 +234,23 @@ export async function handleAdminCreateInvite(
   };
 
   await adminRepo.createInvite(env.DB, invite);
-  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.create', 'invite', null, {
-    expiresInHours,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.invite.create',
+    'invite',
+    null,
+    {
+      expiresInHours,
+    },
+    request,
+  );
 
   return jsonResponse(toInviteResponse(request, invite), 201);
 }
 
 // GET /api/admin/invites
-export async function handleAdminListInvites(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminListInvites(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
@@ -241,7 +259,7 @@ export async function handleAdminListInvites(
   const includeInactive = url.searchParams.get('includeInactive') === 'true';
   const invites = await adminRepo.listInvites(env.DB, includeInactive);
   return jsonResponse({
-    data: invites.map(invite => toInviteResponse(request, invite)),
+    data: invites.map((invite) => toInviteResponse(request, invite)),
     object: 'list',
     continuationToken: null,
   });
@@ -252,7 +270,7 @@ export async function handleAdminDeleteInvite(
   request: Request,
   env: Env,
   actorUser: User,
-  code: string
+  code: string,
 ): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
@@ -266,18 +284,22 @@ export async function handleAdminDeleteInvite(
     return errorResponse('Invite not found', 404);
   }
 
-  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete', 'invite', null, {
-    code,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.invite.delete',
+    'invite',
+    null,
+    {
+      code,
+    },
+    request,
+  );
   return new Response(null, { status: 204 });
 }
 
 // DELETE /api/admin/invites
-export async function handleAdminDeleteAllInvites(
-  request: Request,
-  env: Env,
-  actorUser: User
-): Promise<Response> {
+export async function handleAdminDeleteAllInvites(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
   }
@@ -288,17 +310,33 @@ export async function handleAdminDeleteAllInvites(
   const url = new URL(request.url);
   if (url.searchParams.get('scope') === 'invalid') {
     const deleted = await adminRepo.deleteInvalidInvites(env.DB);
-    await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete_invalid', 'invite', null, {
-      deleted,
-    }, request);
+    await writeAuditLog(
+      env.DB,
+      actorUser.id,
+      'admin.invite.delete_invalid',
+      'invite',
+      null,
+      {
+        deleted,
+      },
+      request,
+    );
 
     return jsonResponse({ deleted }, 200);
   }
 
   const deleted = await adminRepo.deleteAllInvites(env.DB);
-  await writeAuditLog(env.DB, actorUser.id, 'admin.invite.delete_all', 'invite', null, {
-    deleted,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.invite.delete_all',
+    'invite',
+    null,
+    {
+      deleted,
+    },
+    request,
+  );
 
   return jsonResponse({ deleted }, 200);
 }
@@ -308,7 +346,7 @@ export async function handleAdminSetUserStatus(
   request: Request,
   env: Env,
   actorUser: User,
-  targetUserId: string
+  targetUserId: string,
 ): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);
@@ -327,12 +365,17 @@ export async function handleAdminSetUserStatus(
   }
 
   const outcome = await setUserStatus(env, target.id, nextStatus, {
-    actorUserId: actorUser.id, action: 'admin.user.status', category: 'security', level: 'security',
-    targetType: 'user', targetId: target.id,
+    actorUserId: actorUser.id,
+    action: 'admin.user.status',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: target.id,
     metadata: { status: nextStatus, ...auditRequestMetadata(request) },
   });
   if (outcome.kind === 'not-found') return errorResponse('User not found', 404);
-  if (outcome.kind === 'last-vault-admin') return errorResponse('Cannot disable the last active instance administrator.', 400);
+  if (outcome.kind === 'last-vault-admin')
+    return errorResponse('Cannot disable the last active instance administrator.', 400);
 
   return jsonResponse({
     id: target.id,
@@ -348,7 +391,7 @@ export async function handleAdminDeleteUser(
   request: Request,
   env: Env,
   actorUser: User,
-  targetUserId: string
+  targetUserId: string,
 ): Promise<Response> {
   if (!isAdmin(actorUser)) {
     return errorResponse('Forbidden', 403);

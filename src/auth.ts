@@ -28,18 +28,20 @@ export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, re
       ? drizzleAdapter(orm as never, { provider: 'sqlite', schema: AUTH_TABLES, transaction: false })
       : undefined,
     // Sessions stay in D1 so disable/delete revocation cannot be undone by stale KV entries.
-    rateLimit: env?.CACHE_KV ? {
-      customStorage: {
-        get: async (key) => {
-          const value = await env.CACHE_KV!.get(key);
-          return value ? JSON.parse(value) : null;
-        },
-        set: async (key, value) => {
-          // ponytail: built-in windows are at most 60s; raise this with any longer custom rule.
-          await env.CACHE_KV!.put(key, JSON.stringify(value), { expirationTtl: 60 });
-        },
-      },
-    } : undefined,
+    rateLimit: env?.CACHE_KV
+      ? {
+          customStorage: {
+            get: async (key) => {
+              const value = await env.CACHE_KV!.get(key);
+              return value ? JSON.parse(value) : null;
+            },
+            set: async (key, value) => {
+              // ponytail: built-in windows are at most 60s; raise this with any longer custom rule.
+              await env.CACHE_KV!.put(key, JSON.stringify(value), { expirationTtl: 60 });
+            },
+          },
+        }
+      : undefined,
     emailAndPassword: {
       enabled: true,
       password: {

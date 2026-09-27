@@ -3,10 +3,7 @@ import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import type { Env, JWTPayload } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import {
-  createWebSocketConnectionToken,
-  verifyWebSocketConnectionToken,
-} from '../utils/websocket-connection-token';
+import { createWebSocketConnectionToken, verifyWebSocketConnectionToken } from '../utils/websocket-connection-token';
 import * as authRequestRepo from '../services/storage-auth-request-repo';
 
 const WEBSOCKET_CONNECTION_TOKEN_TTL_MS = 60 * 1000;
@@ -53,7 +50,7 @@ export async function handleNotificationsNegotiate(request: Request, env: Env): 
       ],
     },
     200,
-    { 'Cache-Control': 'no-store' }
+    { 'Cache-Control': 'no-store' },
   );
 }
 

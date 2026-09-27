@@ -14,14 +14,17 @@ export const OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS = [
 // Bitwarden desktop is migrating from file:// to this privileged Electron
 // origin. Official clients keep the legacy file:// path as a compatibility
 // fallback while self-hosted servers add CORS support for the new origin.
-export const OFFICIAL_BITWARDEN_DESKTOP_ORIGINS = [
-  'bw-desktop-file://bundle',
-] as const;
+export const OFFICIAL_BITWARDEN_DESKTOP_ORIGINS = ['bw-desktop-file://bundle'] as const;
 
 export function requestPublicOrigin(request: Request): string {
-  const forwardedHost = String(request.headers.get('X-Forwarded-Host') || '').split(',')[0].trim();
+  const forwardedHost = String(request.headers.get('X-Forwarded-Host') || '')
+    .split(',')[0]
+    .trim();
   if (forwardedHost) {
-    const forwardedProto = String(request.headers.get('X-Forwarded-Proto') || 'https').split(',')[0].trim() || 'https';
+    const forwardedProto =
+      String(request.headers.get('X-Forwarded-Proto') || 'https')
+        .split(',')[0]
+        .trim() || 'https';
     return `${forwardedProto}://${forwardedHost}`;
   }
   return new URL(request.url).origin;
@@ -29,49 +32,48 @@ export function requestPublicOrigin(request: Request): string {
 
 export function isBrowserExtensionOrigin(origin: unknown): boolean {
   const normalized = normalizeOrigin(origin);
-  return !!normalized && (
-    normalized.startsWith('chrome-extension://')
-    || normalized.startsWith('moz-extension://')
-    || normalized.startsWith('safari-web-extension://')
+  return (
+    !!normalized &&
+    (normalized.startsWith('chrome-extension://') ||
+      normalized.startsWith('moz-extension://') ||
+      normalized.startsWith('safari-web-extension://'))
   );
 }
 
 export function isOfficialBitwardenDesktopOrigin(origin: unknown): boolean {
   const normalized = normalizeOrigin(origin);
-  return !!normalized && OFFICIAL_BITWARDEN_DESKTOP_ORIGINS.includes(
-    normalized as (typeof OFFICIAL_BITWARDEN_DESKTOP_ORIGINS)[number]
+  return (
+    !!normalized &&
+    OFFICIAL_BITWARDEN_DESKTOP_ORIGINS.includes(normalized as (typeof OFFICIAL_BITWARDEN_DESKTOP_ORIGINS)[number])
   );
 }
 
-export function getConfiguredWebVaultOrigins(
-  env: Pick<Env, 'WEB_VAULT_ORIGINS'>
-): string[] {
+export function getConfiguredWebVaultOrigins(env: Pick<Env, 'WEB_VAULT_ORIGINS'>): string[] {
   return readEnvConfig(env).WEB_VAULT_ORIGINS;
 }
 
-export function isConfiguredWebVaultOrigin(
-  env: Pick<Env, 'WEB_VAULT_ORIGINS'>,
-  origin: unknown
-): boolean {
+export function isConfiguredWebVaultOrigin(env: Pick<Env, 'WEB_VAULT_ORIGINS'>, origin: unknown): boolean {
   const normalized = normalizeOrigin(origin);
   return !!normalized && getConfiguredWebVaultOrigins(env).includes(normalized);
 }
 
 export function getConfiguredWebAuthnAllowedOrigins(
-  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>
+  env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>,
 ): string[] {
   const config = readEnvConfig(env);
-  return [...new Set([
-    ...OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS,
-    ...OFFICIAL_BITWARDEN_DESKTOP_ORIGINS,
-    ...config.WEB_VAULT_ORIGINS,
-    ...config.WEBAUTHN_ALLOWED_ORIGINS,
-  ])];
+  return [
+    ...new Set([
+      ...OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS,
+      ...OFFICIAL_BITWARDEN_DESKTOP_ORIGINS,
+      ...config.WEB_VAULT_ORIGINS,
+      ...config.WEBAUTHN_ALLOWED_ORIGINS,
+    ]),
+  ];
 }
 
 export function isConfiguredWebAuthnAllowedOrigin(
   env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS' | 'WEB_VAULT_ORIGINS'>,
-  origin: unknown
+  origin: unknown,
 ): boolean {
   const normalized = normalizeOrigin(origin);
   return !!normalized && getConfiguredWebAuthnAllowedOrigins(env).includes(normalized);

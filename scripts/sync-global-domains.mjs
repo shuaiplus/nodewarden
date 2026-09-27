@@ -42,25 +42,26 @@ for (let argIndex = 0; argIndex < cliArgs.length; argIndex += 1) {
 const enumUrl = rawUrl(ref, ENUM_PATH);
 const staticStoreUrl = rawUrl(ref, STATIC_STORE_PATH);
 
-const [enumSource, staticStoreSource] = await Promise.all([
-  fetchText(enumUrl),
-  fetchText(staticStoreUrl),
-]);
+const [enumSource, staticStoreSource] = await Promise.all([fetchText(enumUrl), fetchText(staticStoreUrl)]);
 
 const enumMatch = enumSource.match(/enum\s+GlobalEquivalentDomainsType\b[\s\S]*?\{([\s\S]*?)\}/);
 if (!enumMatch) {
   throw new Error('GlobalEquivalentDomainsType enum was not found');
 }
-const enumTypes = new Map(Array.from(
-  enumMatch[1].replace(/\/\/.*$/gm, '').matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)\b/g),
-  ([, name, value]) => [name, Number(value)],
-));
+const enumTypes = new Map(
+  Array.from(
+    enumMatch[1].replace(/\/\/.*$/gm, '').matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\d+)\b/g),
+    ([, name, value]) => [name, Number(value)],
+  ),
+);
 if (!enumTypes.size) {
   throw new Error('No enum values were parsed from GlobalEquivalentDomainsType');
 }
 
 const rules = Array.from(
-  staticStoreSource.matchAll(/GlobalDomains\.Add\s*\(\s*GlobalEquivalentDomainsType\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*new\s+List(?:<\s*string\s*>)?\s*\{([\s\S]*?)\}\s*\)\s*;/g),
+  staticStoreSource.matchAll(
+    /GlobalDomains\.Add\s*\(\s*GlobalEquivalentDomainsType\.([A-Za-z_][A-Za-z0-9_]*)\s*,\s*new\s+List(?:<\s*string\s*>)?\s*\{([\s\S]*?)\}\s*\)\s*;/g,
+  ),
   ([, name, domainList]) => {
     const type = enumTypes.get(name);
     if (!Number.isInteger(type)) {
@@ -68,10 +69,13 @@ const rules = Array.from(
     }
 
     // Each C# string literal in the list, unescaped and lowercased, deduplicated in source order.
-    const domains = Array.from(new Set(Array.from(
-      domainList.matchAll(/"((?:\\.|[^"\\])*)"/g),
-      ([, domain]) => domain.replace(/\\"/g, '"').trim().toLowerCase(),
-    ).filter(Boolean)));
+    const domains = Array.from(
+      new Set(
+        Array.from(domainList.matchAll(/"((?:\\.|[^"\\])*)"/g), ([, domain]) =>
+          domain.replace(/\\"/g, '"').trim().toLowerCase(),
+        ).filter(Boolean),
+      ),
+    );
     if (domains.length < 2) {
       throw new Error(`GlobalDomains.${name} has fewer than two domains`);
     }
@@ -105,19 +109,12 @@ const unchangedRef = existingMeta?.ref === ref;
 const meta = {
   source: 'https://github.com/bitwarden/server',
   ref,
-  generatedAt: unchangedRules && unchangedRef && existingMeta?.generatedAt
-    ? existingMeta.generatedAt
-    : new Date().toISOString(),
+  generatedAt:
+    unchangedRules && unchangedRef && existingMeta?.generatedAt ? existingMeta.generatedAt : new Date().toISOString(),
   rulesCount: rules.length,
   domainsCount,
-  sourceFiles: [
-    ENUM_PATH,
-    STATIC_STORE_PATH,
-  ],
-  sourceUrls: [
-    enumUrl,
-    staticStoreUrl,
-  ],
+  sourceFiles: [ENUM_PATH, STATIC_STORE_PATH],
+  sourceUrls: [enumUrl, staticStoreUrl],
 };
 
 await mkdir(OUTPUT_DIR, { recursive: true });

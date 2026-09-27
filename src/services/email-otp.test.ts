@@ -8,11 +8,21 @@ import { unmapped } from '../db/sql';
 import { createTestEnv } from '../test/support/env';
 import { LIMITS } from '../config/limits';
 import { hmacSha256Base64Url } from '../utils/jwt';
-import { issueEmailOtp, purgeExpiredEmailOtps, redeemEmailOtp, spendEmailOtpIssueBudget, type EmailOtpTarget } from './email-otp';
+import {
+  issueEmailOtp,
+  purgeExpiredEmailOtps,
+  redeemEmailOtp,
+  spendEmailOtpIssueBudget,
+  type EmailOtpTarget,
+} from './email-otp';
 import type { MailOutcome } from './mail';
 
 const NOW = 1_800_000_000_000;
-const target: EmailOtpTarget = { purpose: 'two-factor-setup', subject: 'user@example.test', binding: 'stamp:setup@example.test' };
+const target: EmailOtpTarget = {
+  purpose: 'two-factor-setup',
+  subject: 'user@example.test',
+  binding: 'stamp:setup@example.test',
+};
 
 test('OTP generation rejects biased draws, pads six digits and stores only HMAC-protected identifiers and values', async (t) => {
   const env = await createTestEnv();
@@ -25,16 +35,27 @@ test('OTP generation rejects biased draws, pads six digits and stores only HMAC-
   });
   for (const expected of ['999999', '000000', '000042']) {
     const current = { ...target, subject: `${target.subject}:${expected}` };
-    assert.deepEqual(await issueEmailOtp(env, current, async code => {
-      assert.equal(code, expected);
-      return { kind: 'sent' };
-    }), { kind: 'sent' });
+    assert.deepEqual(
+      await issueEmailOtp(env, current, async (code) => {
+        assert.equal(code, expected);
+        return { kind: 'sent' };
+      }),
+      { kind: 'sent' },
+    );
     const id = `otp:${current.purpose}:${await hmacSha256Base64Url(env.JWT_SECRET, `${current.purpose}\n${current.subject}`)}`;
-    const row = await getOrm(env.DB).select({
-      id: verification.id, identifier: verification.identifier, value: verification.value, expiresAt: unmapped<number>(verification.expiresAt),
-    }).from(verification).where(eq(verification.id, id)).get();
+    const row = await getOrm(env.DB)
+      .select({
+        id: verification.id,
+        identifier: verification.identifier,
+        value: verification.value,
+        expiresAt: unmapped<number>(verification.expiresAt),
+      })
+      .from(verification)
+      .where(eq(verification.id, id))
+      .get();
     assert.deepEqual(row, {
-      id, identifier: id,
+      id,
+      identifier: id,
       value: await hmacSha256Base64Url(env.JWT_SECRET, `${id}\n${current.binding}\n${expected}`),
       expiresAt: NOW + LIMITS.auth.emailOtpTtlSeconds * 1000,
     });
@@ -48,7 +69,10 @@ test('redemption binds purpose, subject and stamp/email, preserves typos, and co
   const env = await createTestEnv();
   t.mock.method(Date, 'now', () => NOW);
   let code = '';
-  await issueEmailOtp(env, target, async value => { code = value; return { kind: 'sent' }; });
+  await issueEmailOtp(env, target, async (value) => {
+    code = value;
+    return { kind: 'sent' };
+  });
   const prepare = t.mock.method(env.DB, 'prepare');
   for (const invalid of ['', '12345', '1234567', '123 456', '１２３４５６']) {
     assert.equal(await redeemEmailOtp(env, target, invalid), false);
@@ -68,23 +92,44 @@ test('failed or throttled delivery preserves the previous code and successful re
   const env = await createTestEnv();
   t.mock.method(Date, 'now', () => NOW);
   let draw = 100;
-  t.mock.method(crypto, 'getRandomValues', (bytes: Uint32Array) => { bytes[0] = draw++; return bytes; });
+  t.mock.method(crypto, 'getRandomValues', (bytes: Uint32Array) => {
+    bytes[0] = draw++;
+    return bytes;
+  });
   let first = '';
-  await issueEmailOtp(env, target, async code => { first = code; return { kind: 'sent' }; });
+  await issueEmailOtp(env, target, async (code) => {
+    first = code;
+    return { kind: 'sent' };
+  });
   const original = await getOrm(env.DB).select().from(verification).get();
-  for (const outcome of [{ kind: 'failed', code: 'E_TEST' }, { kind: 'throttled', retryAfterSeconds: 60 }] satisfies MailOutcome[]) {
+  for (const outcome of [
+    { kind: 'failed', code: 'E_TEST' },
+    { kind: 'throttled', retryAfterSeconds: 60 },
+  ] satisfies MailOutcome[]) {
     assert.deepEqual(await issueEmailOtp(env, target, async () => outcome), outcome);
     assert.deepEqual(await getOrm(env.DB).select().from(verification).get(), original);
   }
   assert.equal(await redeemEmailOtp(env, target, first), true);
   let replacement = '';
-  await issueEmailOtp(env, target, async code => { replacement = code; return { kind: 'sent' }; });
+  await issueEmailOtp(env, target, async (code) => {
+    replacement = code;
+    return { kind: 'sent' };
+  });
   let latest = '';
-  await issueEmailOtp(env, target, async code => { latest = code; return { kind: 'sent' }; });
+  await issueEmailOtp(env, target, async (code) => {
+    latest = code;
+    return { kind: 'sent' };
+  });
   assert.equal(await getOrm(env.DB).$count(verification), 1);
   assert.equal(await redeemEmailOtp(env, target, replacement), false);
   let sentAfterLimit = false;
-  assert.deepEqual(await issueEmailOtp(env, target, async () => { sentAfterLimit = true; return { kind: 'sent' }; }), { kind: 'throttled', retryAfterSeconds: 3600 });
+  assert.deepEqual(
+    await issueEmailOtp(env, target, async () => {
+      sentAfterLimit = true;
+      return { kind: 'sent' };
+    }),
+    { kind: 'throttled', retryAfterSeconds: 3600 },
+  );
   assert.equal(sentAfterLimit, false);
   assert.equal(await redeemEmailOtp(env, target, latest), true);
 });
@@ -92,24 +137,35 @@ test('failed or throttled delivery preserves the previous code and successful re
 test('issue budgets separate purposes and subjects, with larger sign-in limits and stable binding-independent attempts', async (t) => {
   const env = await createTestEnv();
   t.mock.method(Date, 'now', () => NOW);
-  for (const purpose of ['two-factor-setup', 'email-change', 'send-access', 'two-factor-login', 'new-device'] as const) {
+  for (const purpose of [
+    'two-factor-setup',
+    'email-change',
+    'send-access',
+    'two-factor-login',
+    'new-device',
+  ] as const) {
     const current = { ...target, purpose };
-    const limit = purpose === 'two-factor-login' || purpose === 'new-device'
-      ? LIMITS.rateLimit.emailSignInCodeIssuesPerHour : LIMITS.rateLimit.emailOtpIssuesPerHour;
+    const limit =
+      purpose === 'two-factor-login' || purpose === 'new-device'
+        ? LIMITS.rateLimit.emailSignInCodeIssuesPerHour
+        : LIMITS.rateLimit.emailOtpIssuesPerHour;
     for (let index = 0; index < limit; index++) assert.equal(await spendEmailOtpIssueBudget(env, current), true);
     assert.equal(await spendEmailOtpIssueBudget(env, { ...current, binding: 'changed' }), false);
     assert.equal(await spendEmailOtpIssueBudget(env, { ...current, subject: 'another-user' }), true);
   }
   const current = { ...target, subject: 'attempt-budget' };
   let code = '';
-  await issueEmailOtp(env, current, async value => { code = value; return { kind: 'sent' }; });
+  await issueEmailOtp(env, current, async (value) => {
+    code = value;
+    return { kind: 'sent' };
+  });
   for (let index = 0; index < LIMITS.rateLimit.emailOtpAttemptsPerWindow; index++) {
     assert.equal(await redeemEmailOtp(env, { ...current, binding: `wrong-${index}` }, code), false);
   }
   assert.equal(await redeemEmailOtp(env, current, code), false);
   assert.equal(await getOrm(env.DB).$count(verification), 1);
   const buckets = await getOrm(env.DB).select({ bucketKey: rateLimitBuckets.bucketKey }).from(rateLimitBuckets);
-  assert.ok(buckets.every(row => !row.bucketKey.includes(target.subject)));
+  assert.ok(buckets.every((row) => !row.bucketKey.includes(target.subject)));
 });
 
 test('codes expire at the TTL and purge removes only expired OTP identifiers', async (t) => {
@@ -117,7 +173,10 @@ test('codes expire at the TTL and purge removes only expired OTP identifiers', a
   let now = NOW;
   t.mock.method(Date, 'now', () => now);
   let code = '';
-  await issueEmailOtp(env, target, async value => { code = value; return { kind: 'sent' }; });
+  await issueEmailOtp(env, target, async (value) => {
+    code = value;
+    return { kind: 'sent' };
+  });
   now += LIMITS.auth.emailOtpTtlSeconds * 1000;
   assert.equal(await redeemEmailOtp(env, target, code), false);
   now++;
@@ -133,5 +192,8 @@ test('codes expire at the TTL and purge removes only expired OTP identifiers', a
   }
   await purgeExpiredEmailOtps(env);
   const remaining = await getOrm(env.DB).select({ id: verification.id }).from(verification).orderBy(verification.id);
-  assert.deepEqual(remaining.map(row => row.id), ['boundary-otp', 'live-otp', 'other-purpose', 'plain-prefix', 'prefix-neighbor']);
+  assert.deepEqual(
+    remaining.map((row) => row.id),
+    ['boundary-otp', 'live-otp', 'other-purpose', 'plain-prefix', 'prefix-neighbor'],
+  );
 });

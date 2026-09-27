@@ -71,35 +71,49 @@ const REVOKED_MESSAGE = `Your access to the ${ORG_NAME} vault has been revoked.`
 
 test('only an Invited row whose email matches the user can be accepted', () => {
   const invited = member({ status: MembershipStatus.Invited, userId: null });
-  assert.deepEqual(acceptInviteCheck(invited, INVITEE_EMAIL.toUpperCase(), null, ORG_NAME), { ok: true, member: invited });
-  assert.deepEqual(
-    acceptInviteCheck(invited, 'b@example.com', null, ORG_NAME),
-    { ok: false, message: 'User email does not match invite.' },
-  );
+  assert.deepEqual(acceptInviteCheck(invited, INVITEE_EMAIL.toUpperCase(), null, ORG_NAME), {
+    ok: true,
+    member: invited,
+  });
+  assert.deepEqual(acceptInviteCheck(invited, 'b@example.com', null, ORG_NAME), {
+    ok: false,
+    message: 'User email does not match invite.',
+  });
   assert.deepEqual(
     acceptInviteCheck(member({ status: MembershipStatus.Invited, email: null }), INVITEE_EMAIL, null, ORG_NAME),
     { ok: false, message: 'User email does not match invite.' },
   );
   [MembershipStatus.Accepted, MembershipStatus.Confirmed, MembershipStatus.Staged].forEach((status) => {
-    assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), { ok: false, message: 'Already accepted.' });
+    assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), {
+      ok: false,
+      message: 'Already accepted.',
+    });
   });
 });
 
 test('a revoked member cannot un-revoke themselves by accepting again', () => {
-  [revokeStatus(MembershipStatus.Confirmed), revokeStatus(MembershipStatus.Invited), MembershipStatus.Revoked].forEach((status) => {
-    assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), { ok: false, message: REVOKED_MESSAGE });
-  });
+  [revokeStatus(MembershipStatus.Confirmed), revokeStatus(MembershipStatus.Invited), MembershipStatus.Revoked].forEach(
+    (status) => {
+      assert.deepEqual(acceptInviteCheck(member({ status }), INVITEE_EMAIL, null, ORG_NAME), {
+        ok: false,
+        message: REVOKED_MESSAGE,
+      });
+    },
+  );
 });
 
 test('a user who already belongs to the org cannot accept a second invite', () => {
   const existing = member({ id: 'm0', status: MembershipStatus.Confirmed });
-  assert.deepEqual(
-    acceptInviteCheck(member({ status: MembershipStatus.Invited }), INVITEE_EMAIL, existing, ORG_NAME),
-    { ok: false, message: 'You are already part of this organization.' },
-  );
+  assert.deepEqual(acceptInviteCheck(member({ status: MembershipStatus.Invited }), INVITEE_EMAIL, existing, ORG_NAME), {
+    ok: false,
+    message: 'You are already part of this organization.',
+  });
   assert.deepEqual(
     acceptInviteCheck(member({ status: MembershipStatus.Accepted }), INVITEE_EMAIL, existing, ORG_NAME),
-    { ok: false, message: 'Invitation already accepted. You will receive an email when your organization membership is confirmed.' },
+    {
+      ok: false,
+      message: 'Invitation already accepted. You will receive an email when your organization membership is confirmed.',
+    },
   );
 });
 
@@ -120,10 +134,16 @@ test('only Owners touch Owner roles, and Custom managers stay within Users, Cust
   const allowed = { ok: true };
   const onlyOwners = { ok: false, message: "Only an Owner can manage another Owner's account." };
   const notAdmins = { ok: false, message: 'Custom users can not manage Admins or Owners.' };
-  const ownPermissions = { ok: false, message: 'Custom users can only grant the same custom permissions that they have.' };
+  const ownPermissions = {
+    ok: false,
+    message: 'Custom users can only grant the same custom permissions that they have.',
+  };
   const owner = member({ type: Owner });
   const admin = member({ type: Admin });
-  const manager = member({ type: Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, accessReports: true } });
+  const manager = member({
+    type: Custom,
+    permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, accessReports: true },
+  });
   const reports = { ...EMPTY_PERMISSIONS, accessReports: true };
   const policies = { ...EMPTY_PERMISSIONS, managePolicies: true };
   const cases: Array<[MembershipRecord, number, number, OrgPermissions, object]> = [
@@ -142,7 +162,11 @@ test('only Owners touch Owner roles, and Custom managers stay within Users, Cust
     [member({ type: Custom, permissions: reports }), User, User, EMPTY_PERMISSIONS, notAdmins],
   ];
   cases.forEach(([actor, currentType, newType, permissions, expected]) => {
-    assert.deepEqual(memberRoleChangeCheck(actor, currentType, newType, permissions, 'update'), expected, `${actor.type}: ${currentType} -> ${newType}`);
+    assert.deepEqual(
+      memberRoleChangeCheck(actor, currentType, newType, permissions, 'update'),
+      expected,
+      `${actor.type}: ${currentType} -> ${newType}`,
+    );
   });
   assert.deepEqual(memberRoleChangeCheck(admin, Owner, Owner, EMPTY_PERMISSIONS, 'invite'), {
     ok: false,
@@ -152,38 +176,60 @@ test('only Owners touch Owner roles, and Custom managers stay within Users, Cust
 
 // Upstream CollectionCipher_UpdateCollections and 1aed7ce03: collections outside `available` survive.
 test('planCollectionAssignment adds and drops only the collections the caller may change', () => {
-  assert.deepEqual(
-    planCollectionAssignment({ current: ['A', 'B'], requested: ['C'], available: ['B', 'C'] }),
-    { insert: ['C'], remove: ['B'] }
-  );
-  assert.deepEqual(
-    planCollectionAssignment({ current: ['A'], requested: ['A', 'D'], available: ['B'] }),
-    { insert: [], remove: [] }
-  );
+  assert.deepEqual(planCollectionAssignment({ current: ['A', 'B'], requested: ['C'], available: ['B', 'C'] }), {
+    insert: ['C'],
+    remove: ['B'],
+  });
+  assert.deepEqual(planCollectionAssignment({ current: ['A'], requested: ['A', 'D'], available: ['B'] }), {
+    insert: [],
+    remove: [],
+  });
 });
 
 // Upstream GetAuthorizedCollectionsToSaveAsync with allowAdminAccessToAllCollectionItems off: the actor
 // manages M, has only "Can edit" on E, and the target already holds E and H.
 test('memberCollectionsCheck grants only managed collections, accepts unchanged entries and keeps the rest', () => {
-  const access = (collectionId: string, manage = false): CollectionAccess => ({ collectionId, readOnly: false, hidePasswords: false, manage });
-  const manager = member({ type: MembershipType.Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true } });
-  const editor = member({ type: MembershipType.Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, editAnyCollection: true } });
-  const check = (overrides: Partial<Parameters<typeof memberCollectionsCheck>[0]>) => memberCollectionsCheck({
-    actor: manager,
-    actorAccess: [access('M', true), access('E')],
-    requested: [],
-    current: [access('E'), access('H')],
-    restrictSelf: false,
-    ...overrides,
+  const access = (collectionId: string, manage = false): CollectionAccess => ({
+    collectionId,
+    readOnly: false,
+    hidePasswords: false,
+    manage,
   });
+  const manager = member({ type: MembershipType.Custom, permissions: { ...EMPTY_PERMISSIONS, manageUsers: true } });
+  const editor = member({
+    type: MembershipType.Custom,
+    permissions: { ...EMPTY_PERMISSIONS, manageUsers: true, editAnyCollection: true },
+  });
+  const check = (overrides: Partial<Parameters<typeof memberCollectionsCheck>[0]>) =>
+    memberCollectionsCheck({
+      actor: manager,
+      actorAccess: [access('M', true), access('E')],
+      requested: [],
+      current: [access('E'), access('H')],
+      restrictSelf: false,
+      ...overrides,
+    });
   const notFound = { ok: false, status: 404, message: 'Resource not found.' };
 
-  assert.deepEqual(check({ requested: [access('M', true), access('E')] }), { ok: true, collections: [access('M', true), access('E'), access('H')] });
+  assert.deepEqual(check({ requested: [access('M', true), access('E')] }), {
+    ok: true,
+    collections: [access('M', true), access('E'), access('H')],
+  });
   assert.deepEqual(check({ requested: [] }), { ok: true, collections: [access('E'), access('H')] });
   assert.deepEqual(check({ requested: [access('E', true)] }), notFound);
   assert.deepEqual(check({ requested: [access('X')] }), notFound);
   assert.deepEqual(check({ requested: [access('E'), access('E', true)] }), notFound);
-  assert.deepEqual(check({ restrictSelf: true, requested: [access('M', true)] }), { ok: false, status: 400, message: 'You cannot add yourself to a collection.' });
-  assert.deepEqual(check({ restrictSelf: true, requested: [access('E')] }), { ok: true, collections: [access('E'), access('H')] });
-  assert.deepEqual(check({ actor: editor, requested: [access('X', true)] }), { ok: true, collections: [access('X', true)] });
+  assert.deepEqual(check({ restrictSelf: true, requested: [access('M', true)] }), {
+    ok: false,
+    status: 400,
+    message: 'You cannot add yourself to a collection.',
+  });
+  assert.deepEqual(check({ restrictSelf: true, requested: [access('E')] }), {
+    ok: true,
+    collections: [access('E'), access('H')],
+  });
+  assert.deepEqual(check({ actor: editor, requested: [access('X', true)] }), {
+    ok: true,
+    collections: [access('X', true)],
+  });
 });

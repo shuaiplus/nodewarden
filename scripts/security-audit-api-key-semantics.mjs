@@ -105,7 +105,10 @@ assert(rotateBody.apiKey !== 'ExistingReadableApiKey1234567', 'Rotation returned
 assert(rotate.state.user.api_key === rotateBody.apiKey, 'Rotation did not persist the returned API key');
 assert(rotate.state.user.security_stamp === 'security-stamp-original', 'Rotation changed securityStamp');
 assert(rotate.state.refreshDeletes === 0, 'Rotation revoked unrelated refresh tokens');
-assert(!(await verifyApiKey('ExistingReadableApiKey1234567', rotate.state.user.api_key)), 'Old API key still authenticates');
+assert(
+  !(await verifyApiKey('ExistingReadableApiKey1234567', rotate.state.user.api_key)),
+  'Old API key still authenticates',
+);
 assert(await verifyApiKey(rotateBody.apiKey, rotate.state.user.api_key), 'Rotated API key does not authenticate');
 
 const legacyPlain = 'LegacyHashedApiKey123456789';

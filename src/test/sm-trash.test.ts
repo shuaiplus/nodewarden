@@ -16,32 +16,58 @@ async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
   const { user: a } = await seedMember(env, orgId);
-  const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
-  const request = (userId: string, path: string, method = 'GET', body?: unknown) => authedFetch(env, { userId, path, method, body });
+  const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, {
+    name: ENCRYPTED_FIELD,
+  });
+  const request = (userId: string, path: string, method = 'GET', body?: unknown) =>
+    authedFetch(env, { userId, path, method, body });
   return { env, orgId, owner, a, account, request, trashPath: `/api/secrets/${orgId}/trash` };
 }
 
 test('trash is admin-only, validates the whole org set, restores policies, and empties by cascading grants', async () => {
   const { env, orgId, owner, a, account, request, trashPath } = await setup();
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
-  const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, { ...FIELDS, accessPoliciesRequests: { userAccessPolicyRequests: [{ granteeId: member.id, read: true, write: false }], groupAccessPolicyRequests: [], serviceAccountAccessPolicyRequests: [{ granteeId: account.id, read: true, write: false }] } });
+  const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, {
+    ...FIELDS,
+    accessPoliciesRequests: {
+      userAccessPolicyRequests: [{ granteeId: member.id, read: true, write: false }],
+      groupAccessPolicyRequests: [],
+      serviceAccountAccessPolicyRequests: [{ granteeId: account.id, read: true, write: false }],
+    },
+  });
   const active = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, FIELDS);
   assert.equal((await request(owner.id, '/api/secrets/delete', 'POST', [secret.id])).status, 200);
-  for (const [path, method] of [[trashPath, 'GET'], [`${trashPath}/restore`, 'POST'], [`${trashPath}/empty`, 'POST']]) {
+  for (const [path, method] of [
+    [trashPath, 'GET'],
+    [`${trashPath}/restore`, 'POST'],
+    [`${trashPath}/empty`, 'POST'],
+  ]) {
     assert.equal((await request(a.id, path, method, method === 'POST' ? [secret.id] : undefined)).status, 404);
   }
   const listed = await request(owner.id, trashPath);
   assert.equal(listed.status, 200);
-  const body = await listed.json() as any;
+  const body = (await listed.json()) as any;
   assert.equal(body.object, 'SecretsWithProjectsList');
-  assert.deepEqual(body.secrets.map((item: any) => [item.id, item.read, item.write]), [[secret.id, true, true]]);
+  assert.deepEqual(
+    body.secrets.map((item: any) => [item.id, item.read, item.write]),
+    [[secret.id, true, true]],
+  );
   assert.deepEqual(body.projects, []);
   assert.equal((await request(a.id, `/api/secrets/${secret.id}`)).status, 404);
   const foreign = await seedSmOrg(env);
-  const outside = await postJson<{ id: string }>(env, foreign.owner, `/api/organizations/${foreign.orgId}/secrets`, FIELDS);
+  const outside = await postJson<{ id: string }>(
+    env,
+    foreign.owner,
+    `/api/organizations/${foreign.orgId}/secrets`,
+    FIELDS,
+  );
   assert.equal((await request(foreign.owner.id, '/api/secrets/delete', 'POST', [outside.id])).status, 200);
   for (const action of ['restore', 'empty']) {
-    for (const ids of [[secret.id, active.id], [secret.id, outside.id], [secret.id, crypto.randomUUID()]]) {
+    for (const ids of [
+      [secret.id, active.id],
+      [secret.id, outside.id],
+      [secret.id, crypto.randomUUID()],
+    ]) {
       assert.equal((await request(owner.id, `${trashPath}/${action}`, 'POST', ids)).status, 404);
       assert.ok((await smRepo.getSecret(env.DB, secret.id))!.deletedAt);
     }
@@ -55,17 +81,25 @@ test('trash is admin-only, validates the whole org set, restores policies, and e
   assert.equal(await restored.text(), '');
   assert.equal((await request(a.id, `/api/secrets/${secret.id}`)).status, 200);
   assert.ok(await orm.select().from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id)).get());
-  assert.ok(await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get());
+  assert.ok(
+    await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(),
+  );
   assert.ok((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt > before);
-  assert.deepEqual((await (await request(owner.id, trashPath)).json() as any).secrets, []);
+  assert.deepEqual(((await (await request(owner.id, trashPath)).json()) as any).secrets, []);
   assert.equal((await request(owner.id, '/api/secrets/delete', 'POST', [secret.id])).status, 200);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, account.id));
   const emptied = await request(owner.id, `${trashPath}/empty`, 'POST', [secret.id]);
   assert.equal(emptied.status, 200);
   assert.equal(await emptied.text(), '');
   assert.equal(await smRepo.getSecret(env.DB, secret.id), null);
-  assert.equal(await orm.select().from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id)).get(), undefined);
-  assert.equal(await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(), undefined);
+  assert.equal(
+    await orm.select().from(smSecretMembers).where(eq(smSecretMembers.secretId, secret.id)).get(),
+    undefined,
+  );
+  assert.equal(
+    await orm.select().from(smSecretServiceAccounts).where(eq(smSecretServiceAccounts.secretId, secret.id)).get(),
+    undefined,
+  );
   assert.ok((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt > before);
   assert.ok(await smRepo.getSecret(env.DB, outside.id));
 });
@@ -78,9 +112,15 @@ test('emptying 150 trash rows stays under the D1 cap and rolls back every chunk 
   const orm = getOrm(env.DB);
   await orm.batch([
     orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, account.id)),
-    ...ids.map(id => orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: now, updatedAt: now, deletedAt: now })),
+    ...ids.map((id) =>
+      orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: now, updatedAt: now, deletedAt: now }),
+    ),
   ]);
-  const removeFault = await abortWrites(env, { table: smSecrets, event: 'DELETE', rowId: ids[ids.length - 1] }, 'test trash rollback');
+  const removeFault = await abortWrites(
+    env,
+    { table: smSecrets, event: 'DELETE', rowId: ids[ids.length - 1] },
+    'test trash rollback',
+  );
   assert.equal((await request(owner.id, `${trashPath}/empty`, 'POST', ids)).status, 500);
   assert.equal(await orm.$count(smSecrets, eq(smSecrets.orgId, orgId)), ids.length);
   assert.equal((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt, before);
@@ -97,7 +137,18 @@ test('scheduled trash purge removes 31-day rows while preserving 29-day trash an
   const now = Date.parse('2026-09-27T12:00:00.000Z');
   const day = 86_400_000;
   const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
-  await getOrm(env.DB).insert(smSecrets).values([31, 29, null].map((age, index) => ({ id: ids[index], orgId, ...FIELDS, createdAt: new Date(now - 40 * day).toISOString(), updatedAt: new Date(now - 40 * day).toISOString(), deletedAt: age === null ? null : new Date(now - age * day).toISOString() })));
+  await getOrm(env.DB)
+    .insert(smSecrets)
+    .values(
+      [31, 29, null].map((age, index) => ({
+        id: ids[index],
+        orgId,
+        ...FIELDS,
+        createdAt: new Date(now - 40 * day).toISOString(),
+        updatedAt: new Date(now - 40 * day).toISOString(),
+        deletedAt: age === null ? null : new Date(now - age * day).toISOString(),
+      })),
+    );
   await smRepo.purgeSecretsTrash(env.DB, now);
   assert.equal(await smRepo.getSecret(env.DB, ids[0]), null);
   assert.ok((await smRepo.getSecret(env.DB, ids[1]))!.deletedAt);

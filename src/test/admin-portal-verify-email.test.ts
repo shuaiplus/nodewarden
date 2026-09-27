@@ -15,13 +15,18 @@ test('portal verifies listed/unlisted accounts and names the vault-admin promoti
   const listed = await seedUser(env, { email: ADMIN, emailVerified: false });
   const unlisted = await seedUser(env, { emailVerified: false });
   const auth = await signInToAdminPortal(env, ADMIN);
-  for (const [user, label, role] of [[listed, 'Verify email and grant vault admin', 'admin'], [unlisted, 'Verify email', 'user']] as const) {
+  for (const [user, label, role] of [
+    [listed, 'Verify email and grant vault admin', 'admin'],
+    [unlisted, 'Verify email', 'user'],
+  ] as const) {
     const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
     const html = await view.text();
     assert.ok(html.includes(label));
     assert.match(html, /registered without an emailed token/);
     const response = await portalFetch(env, {
-      method: 'POST', path: `/admin/users/${user.id}/verify-email`, cookie: auth.cookie,
+      method: 'POST',
+      path: `/admin/users/${user.id}/verify-email`,
+      cookie: auth.cookie,
       form: { csrf: auth.csrf, confirmation: user.email.toUpperCase() },
     });
     assert.equal(response.status, 303);
@@ -32,7 +37,9 @@ test('portal verifies listed/unlisted accounts and names the vault-admin promoti
     const after = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: auth.cookie });
     assert.doesNotMatch(await after.text(), /\/verify-email/);
   }
-  const events = await getOrm(env.DB).select({ actorUserId: auditLogs.actorUserId, metadata: auditLogs.metadata }).from(auditLogs)
+  const events = await getOrm(env.DB)
+    .select({ actorUserId: auditLogs.actorUserId, metadata: auditLogs.metadata })
+    .from(auditLogs)
     .where(eq(auditLogs.action, 'admin.portal.user.email_verified'));
   assert.equal(events.length, 2);
   assert.equal(events[0].actorUserId, null);
@@ -47,7 +54,10 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
   const post = (form: Record<string, string>) => portalFetch(env, { method: 'POST', path, cookie: auth.cookie, form });
   assert.equal((await post({ confirmation: user.email })).status, 403);
   assert.equal((await post({ csrf: auth.csrf, confirmation: 'wrong@x.io' })).status, 400);
-  await getOrm(env.DB).update(verification).set({ value: jsonSet(verification.value, '$.authTime', 0) }).where(like(verification.id, 'admin-session:%'));
+  await getOrm(env.DB)
+    .update(verification)
+    .set({ value: jsonSet(verification.value, '$.authTime', 0) })
+    .where(like(verification.id, 'admin-session:%'));
   const stale = await post({ csrf: auth.csrf, confirmation: user.email });
   assert.equal(stale.status, 303);
   assert.match(stale.headers.get('Location')!, /m=reauth/);
@@ -55,11 +65,21 @@ test('portal email verification enforces CSRF, typed email, recent sign-in and t
   auth = await signInToAdminPortal(env, ADMIN);
   for (let index = 0; index < 20; index++) {
     const target = await seedUser(env, { emailVerified: false });
-    const response = await portalFetch(env, { method: 'POST', path: `/admin/users/${target.id}/verify-email`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: target.email } });
+    const response = await portalFetch(env, {
+      method: 'POST',
+      path: `/admin/users/${target.id}/verify-email`,
+      cookie: auth.cookie,
+      form: { csrf: auth.csrf, confirmation: target.email },
+    });
     assert.equal(response.status, 303);
   }
   assert.equal((await post({ csrf: auth.csrf, confirmation: user.email })).status, 429);
-  const deletion = await portalFetch(env, { method: 'POST', path: `/admin/users/delete/${user.id}`, cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
+  const deletion = await portalFetch(env, {
+    method: 'POST',
+    path: `/admin/users/delete/${user.id}`,
+    cookie: auth.cookie,
+    form: { csrf: auth.csrf, confirmation: user.email },
+  });
   assert.equal(deletion.status, 429);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, false);
 });

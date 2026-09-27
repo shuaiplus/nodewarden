@@ -13,7 +13,9 @@ export const bound = <T>(value: T): SQL<T> => sql<T>`${value}`;
 // Plain values as the one-row source of an INSERT ... SELECT, each bound and aliased by its key:
 // insert(table).select(orm.select(boundRow(values)).from(SINGLE_ROW).where(guard)).
 export const boundRow = <T extends Record<string, unknown>>(values: T) =>
-  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, bound(value).as(key)])) as { [K in keyof T]: SQL.Aliased<T[K]> };
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, bound(value).as(key)])) as {
+    [K in keyof T]: SQL.Aliased<T[K]>;
+  };
 
 // A column read as its stored D1 value, skipping drizzle's mode mapping (booleans, JSON, timestamps).
 export const unmapped = <T>(column: unknown): SQL<T> => sql<T>`${column}`;
@@ -27,7 +29,11 @@ export const excluded = <T>(column: { name: string }): SQL<T> => sql<T>`excluded
 export const plus = (left: unknown, right: unknown): SQL<number> => sql<number>`${left} + ${right}`;
 export const lower = (value: unknown): SQL<string> => sql<string>`lower(${value})`;
 export const castInteger = (value: unknown): SQL<number> => sql<number>`cast(${value} as integer)`;
-export const coalesce = <T>(...values: unknown[]): SQL<T> => sql<T>`coalesce(${sql.join(values.map((value) => sql`${value}`), sql`, `)})`;
+export const coalesce = <T>(...values: unknown[]): SQL<T> =>
+  sql<T>`coalesce(${sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  )})`;
 export const nullIf = <T>(value: unknown, empty: unknown): SQL<T | null> => sql<T | null>`nullif(${value}, ${empty})`;
 
 // A missing otherwise yields SQL NULL.
@@ -37,7 +43,8 @@ export const caseWhen = <T>(condition: unknown, then: unknown, otherwise?: unkno
     : sql<T>`CASE WHEN ${condition} THEN ${then} ELSE ${otherwise} END`;
 
 // LIKE with backslash as the escape character; callers escape %, _ and \ in user input.
-export const likeEscaped = (value: unknown, pattern: string): SQL<boolean> => sql<boolean>`${value} LIKE ${pattern} ESCAPE '\\'`;
+export const likeEscaped = (value: unknown, pattern: string): SQL<boolean> =>
+  sql<boolean>`${value} LIKE ${pattern} ESCAPE '\\'`;
 
 // Rows changed by the previous statement of the same connection (the preceding statement of a batch).
 export const changes = (): SQL<number> => sql<number>`changes()`;
@@ -45,10 +52,15 @@ export const changes = (): SQL<number> => sql<number>`changes()`;
 export const json = (value: unknown): SQL<unknown> => sql`json(${value})`;
 
 export const jsonExtract = <T>(document: unknown, path: string): SQL<T> => sql<T>`json_extract(${document}, ${path})`;
-export const jsonSet = (document: unknown, path: string, value: unknown): SQL<string> => sql<string>`json_set(${document}, ${path}, ${value})`;
+export const jsonSet = (document: unknown, path: string, value: unknown): SQL<string> =>
+  sql<string>`json_set(${document}, ${path}, ${value})`;
 export const jsonRemove = (document: unknown, ...paths: string[]): SQL<string> =>
-  sql<string>`json_remove(${document}, ${sql.join(paths.map((path) => sql`${path}`), sql`, `)})`;
+  sql<string>`json_remove(${document}, ${sql.join(
+    paths.map((path) => sql`${path}`),
+    sql`, `,
+  )})`;
 
 // A whole list as one bound JSON parameter, for IN / NOT IN over lists that could exceed D1's 100
 // bound parameters: inArray(column, jsonValues(ids)).
-export const jsonValues = (values: readonly unknown[]): SQL<unknown> => sql`(SELECT value FROM json_each(${JSON.stringify(values)}))`;
+export const jsonValues = (values: readonly unknown[]): SQL<unknown> =>
+  sql`(SELECT value FROM json_each(${JSON.stringify(values)}))`;

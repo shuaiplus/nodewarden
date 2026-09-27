@@ -19,26 +19,33 @@ interface UserVerificationTokenPayload {
 export async function createPasskeyUserVerificationToken(
   env: Env,
   userId: string,
-  purpose: UserVerificationPurpose
+  purpose: UserVerificationPurpose,
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return signHs256Jwt({
-    typ: USER_VERIFICATION_TOKEN_TYPE,
-    userId,
-    method: 'passkey',
-    purpose,
-    iat: now,
-    exp: now + USER_VERIFICATION_TOKEN_TTL_SECONDS,
-  } satisfies UserVerificationTokenPayload, env.JWT_SECRET);
+  return signHs256Jwt(
+    {
+      typ: USER_VERIFICATION_TOKEN_TYPE,
+      userId,
+      method: 'passkey',
+      purpose,
+      iat: now,
+      exp: now + USER_VERIFICATION_TOKEN_TTL_SECONDS,
+    } satisfies UserVerificationTokenPayload,
+    env.JWT_SECRET,
+  );
 }
 
 export async function verifyPasskeyUserVerificationToken(
   env: Env,
   token: string,
   userId: string,
-  purpose: UserVerificationPurpose
+  purpose: UserVerificationPurpose,
 ): Promise<boolean> {
   const payload = await verifyHs256Jwt<UserVerificationTokenPayload>(token, env.JWT_SECRET);
-  return payload?.typ === USER_VERIFICATION_TOKEN_TYPE
-    && payload.userId === userId && payload.purpose === purpose && payload.method === 'passkey';
+  return (
+    payload?.typ === USER_VERIFICATION_TOKEN_TYPE &&
+    payload.userId === userId &&
+    payload.purpose === purpose &&
+    payload.method === 'passkey'
+  );
 }

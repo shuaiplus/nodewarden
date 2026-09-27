@@ -5,7 +5,9 @@ const RECOVERY_ALPHABET_LENGTH = RECOVERY_ALPHABET.length;
 const RECOVERY_MAX_UNBIASED_BYTE = Math.floor(256 / RECOVERY_ALPHABET_LENGTH) * RECOVERY_ALPHABET_LENGTH;
 
 function normalizeRecoveryCode(raw: string): string {
-  return String(raw || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  return String(raw || '')
+    .toUpperCase()
+    .replace(/[^A-Z2-7]/g, '');
 }
 
 export function createRecoveryCode(): string {
@@ -19,7 +21,10 @@ export function createRecoveryCode(): string {
     }
   }
   // Shown in groups of four characters.
-  return compact.slice(0, 32).replace(/(.{4})/g, '$1 ').trim();
+  return compact
+    .slice(0, 32)
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
 }
 
 export function recoveryCodeEquals(input: string, storedCode: string | null | undefined): boolean {

@@ -15,7 +15,8 @@ import { normalizeEquivalentDomain } from '../../shared/domain-normalize';
 
 // Domain rules are advisory: malformed entries are dropped rather than failing the whole list, so legacy
 // rows and older clients still load whatever rules remain valid.
-const DomainGroup = z.array(z.unknown())
+const DomainGroup = z
+  .array(z.unknown())
   .transform((group) => Array.from(new Set(group.map(normalizeEquivalentDomain).filter(Boolean))))
   .refine((domains) => domains.length >= 2);
 const excludedFlag = z.unknown().optional().transform(Boolean);
@@ -23,7 +24,14 @@ const GlobalDomain = z.object({ type: z.coerce.number().int(), domains: DomainGr
 // A bare domain list is an included rule whose id is derived from its domains.
 const CustomDomain = z.union([
   DomainGroup.transform((domains) => ({ id: '', domains, excluded: false })),
-  z.object({ id: z.unknown().optional().transform((id) => String(id ?? '').trim()), domains: DomainGroup, excluded: excludedFlag }),
+  z.object({
+    id: z
+      .unknown()
+      .optional()
+      .transform((id) => String(id ?? '').trim()),
+    domains: DomainGroup,
+    excluded: excludedFlag,
+  }),
 ]);
 // An object entry names a type and whether it is excluded; any other entry is an excluded type number.
 const ExcludedType = z.union([
@@ -51,10 +59,7 @@ function normalizeGlobalDomains(input: unknown): GlobalEquivalentDomain[] {
 const bitwardenGlobalDomains = normalizeGlobalDomains(bitwardenGlobalDomainsRaw);
 const customGlobalDomains = normalizeGlobalDomains(customGlobalDomainsRaw);
 
-export const globalDomains: readonly GlobalEquivalentDomain[] = [
-  ...bitwardenGlobalDomains,
-  ...customGlobalDomains,
-];
+export const globalDomains: readonly GlobalEquivalentDomain[] = [...bitwardenGlobalDomains, ...customGlobalDomains];
 
 export function normalizeEquivalentDomains(input: unknown): string[][] {
   return uniqueEntries(input, DomainGroup, groupKey).map(([domains]) => domains);
@@ -103,48 +108,48 @@ export function mergeEquivalentDomainGroups(input: string[][]): string[][] {
 
 export function expandCustomEquivalentDomainsWithGlobals(
   customGroups: string[][],
-  activeGlobalGroups: string[][]
+  activeGlobalGroups: string[][],
 ): string[][] {
   const normalizedCustomGroups = normalizeEquivalentDomains(customGroups);
   if (!normalizedCustomGroups.length) return [];
 
   const customDomains = new Set(normalizedCustomGroups.flat());
-  return mergeEquivalentDomainGroups([
-    ...activeGlobalGroups,
-    ...normalizedCustomGroups,
-  ]).filter((group) => group.some((domain) => customDomains.has(domain)));
+  return mergeEquivalentDomainGroups([...activeGlobalGroups, ...normalizedCustomGroups]).filter((group) =>
+    group.some((domain) => customDomains.has(domain)),
+  );
 }
 
 export function normalizeCustomEquivalentDomains(input: unknown): CustomEquivalentDomain[] {
-  return uniqueEntries(input, CustomDomain, (rule) => groupKey(rule.domains))
-    .map(([rule, index]) => ({ ...rule, id: rule.id || `custom:${rule.domains.slice().sort().join('|')}:${index}` }));
+  return uniqueEntries(input, CustomDomain, (rule) => groupKey(rule.domains)).map(([rule, index]) => ({
+    ...rule,
+    id: rule.id || `custom:${rule.domains.slice().sort().join('|')}:${index}`,
+  }));
 }
 
 export function customRulesToActiveEquivalentDomains(rules: CustomEquivalentDomain[]): string[][] {
-  return mergeEquivalentDomainGroups(rules
-    .filter((rule) => !rule.excluded)
-    .map((rule) => rule.domains));
+  return mergeEquivalentDomainGroups(rules.filter((rule) => !rule.excluded).map((rule) => rule.domains));
 }
 
 export function normalizeExcludedGlobalTypes(input: unknown): number[] {
   const knownTypes = new Set(globalDomains.map((entry) => entry.type));
-  return uniqueEntries(input, ExcludedType.refine((type) => knownTypes.has(type)), (type) => type).map(([type]) => type);
+  return uniqueEntries(
+    input,
+    ExcludedType.refine((type) => knownTypes.has(type)),
+    (type) => type,
+  ).map(([type]) => type);
 }
 
 export function buildDomainsResponse(
   equivalentDomains: string[][],
   customEquivalentDomains: CustomEquivalentDomain[],
   excludedGlobalEquivalentDomains: number[],
-  options: { omitExcludedGlobals?: boolean } = {}
+  options: { omitExcludedGlobals?: boolean } = {},
 ): DomainRulesResponse {
   const excluded = new Set(excludedGlobalEquivalentDomains);
   const activeGlobalDomainGroups = globalDomains
     .filter((entry) => !excluded.has(entry.type))
     .map((entry) => entry.domains);
-  const mergedEquivalentDomains = expandCustomEquivalentDomainsWithGlobals(
-    equivalentDomains,
-    activeGlobalDomainGroups
-  );
+  const mergedEquivalentDomains = expandCustomEquivalentDomainsWithGlobals(equivalentDomains, activeGlobalDomainGroups);
   const globals = globalDomains
     .map((entry) => ({
       type: entry.type,

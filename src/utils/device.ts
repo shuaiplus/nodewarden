@@ -8,7 +8,10 @@ const DEVICE_TEXT_MAX_LENGTH = 128;
 
 // Device fields come from form posts, JSON bodies and headers. Each is clipped to its column width
 // and falls back to a default instead of failing the sign-in it rides on.
-export const deviceText = z.string().trim().transform((text) => text.slice(0, DEVICE_TEXT_MAX_LENGTH));
+export const deviceText = z
+  .string()
+  .trim()
+  .transform((text) => text.slice(0, DEVICE_TEXT_MAX_LENGTH));
 const deviceType = z.coerce.number().int().min(0);
 const DeviceIdentifierSchema = deviceText.transform((text) => text || null).catch(null);
 export const DeviceInfoSchema = z.object({
@@ -24,7 +27,12 @@ const firstPresent = (...values: unknown[]) => values.find((value) => value != n
 // The body wins over the headers, field by field; official clients name the device in Device-Identifier.
 export function readAuthRequestDeviceInfo(body: Record<string, unknown>, request: Request): AuthRequestDeviceInfo {
   return DeviceInfoSchema.parse({
-    deviceIdentifier: firstPresent(body.deviceIdentifier, body.device_identifier, request.headers.get('Device-Identifier'), request.headers.get('X-Device-Identifier')),
+    deviceIdentifier: firstPresent(
+      body.deviceIdentifier,
+      body.device_identifier,
+      request.headers.get('Device-Identifier'),
+      request.headers.get('X-Device-Identifier'),
+    ),
     deviceName: firstPresent(body.deviceName, body.device_name, request.headers.get('X-Device-Name')),
     deviceType: firstPresent(body.deviceType, body.device_type, request.headers.get('Device-Type')),
   });
@@ -95,4 +103,3 @@ export function deviceTypeName(type: number): string {
   };
   return names[type] || `Device ${type}`;
 }
-

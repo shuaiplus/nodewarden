@@ -1,6 +1,9 @@
 // Node stand-in for the workerd-only `cloudflare:workers` module (see env.ts).
 export class DurableObject<TEnv = unknown> {
-  constructor(protected readonly ctx: DurableObjectState, protected readonly env: TEnv) {}
+  constructor(
+    protected readonly ctx: DurableObjectState,
+    protected readonly env: TEnv,
+  ) {}
 }
 
 // The importable env; src/test/support/env.ts fills in the bindings src reads through it.

@@ -35,16 +35,23 @@ const namedCache = (cacheName: string) => ({
 // The [[ratelimits]] bindings wrangler.toml declares, counting every call per key in fixed windows of
 // their period.
 const rateLimitCounts = new Map<string, number>();
-const rateLimitBindings = Object.fromEntries([...readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8')
-  .matchAll(/name = "(\w+)"\s+namespace_id = "\d+"\s+simple = \{ limit = (\d+), period = (\d+) \}/g)]
-  .map(([, name, limit, period]): [string, RateLimit] => [name, {
-    async limit({ key }) {
-      const counter = `${name} ${key} ${Math.floor(Date.now() / 1000 / Number(period))}`;
-      const count = (rateLimitCounts.get(counter) ?? 0) + 1;
-      rateLimitCounts.set(counter, count);
-      return { success: count <= Number(limit) };
+const rateLimitBindings = Object.fromEntries(
+  [
+    ...readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8').matchAll(
+      /name = "(\w+)"\s+namespace_id = "\d+"\s+simple = \{ limit = (\d+), period = (\d+) \}/g,
+    ),
+  ].map(([, name, limit, period]): [string, RateLimit] => [
+    name,
+    {
+      async limit({ key }) {
+        const counter = `${name} ${key} ${Math.floor(Date.now() / 1000 / Number(period))}`;
+        const count = (rateLimitCounts.get(counter) ?? 0) + 1;
+        rateLimitCounts.set(counter, count);
+        return { success: count <= Number(limit) };
+      },
     },
-  }]));
+  ]),
+);
 
 Object.assign(globalThis, {
   caches: { default: namedCache('default') },
@@ -57,9 +64,10 @@ Object.assign(globalThis, {
 // Static imports link before this module body runs, so the Worker entry loads dynamically.
 const cloudflareWorkersStandIn = new URL('./cloudflare-workers.ts', import.meta.url).href;
 registerHooks({
-  resolve: (specifier, context, nextResolve) => (specifier === 'cloudflare:workers'
-    ? { url: cloudflareWorkersStandIn, shortCircuit: true }
-    : nextResolve(specifier, context)),
+  resolve: (specifier, context, nextResolve) =>
+    specifier === 'cloudflare:workers'
+      ? { url: cloudflareWorkersStandIn, shortCircuit: true }
+      : nextResolve(specifier, context),
 });
 const { default: worker } = await import('../../index');
 
@@ -94,8 +102,12 @@ export function memoryKv(): { binding: KVNamespace; values: Map<string, string> 
   const values = new Map<string, string>();
   const binding = {
     get: async (key: string) => values.get(key) ?? null,
-    put: async (key: string, value: string) => { values.set(key, value); },
-    delete: async (key: string) => { values.delete(key); },
+    put: async (key: string, value: string) => {
+      values.set(key, value);
+    },
+    delete: async (key: string) => {
+      values.delete(key);
+    },
   } as KVNamespace;
   return { binding, values };
 }
@@ -149,7 +161,10 @@ export interface WorkerRequest {
 }
 
 // Calls the real Worker fetch handler, so routing, auth and CORS all run.
-export async function authedFetch(env: Env, { method = 'GET', path, body, userId, headers }: WorkerRequest): Promise<Response> {
+export async function authedFetch(
+  env: Env,
+  { method = 'GET', path, body, userId, headers }: WorkerRequest,
+): Promise<Response> {
   const requestHeaders = new Headers({ 'CF-Connecting-IP': TEST_CLIENT_IP });
   if (userId) {
     const user = await userRepo.getUserById(env.DB, userId);
@@ -176,7 +191,12 @@ export function captureEmail(): { overrides: Partial<Env>; sent: SentEmail[] } {
   return {
     sent,
     overrides: {
-      EMAIL: { async send(message) { sent.push(message); return { messageId: crypto.randomUUID() }; } },
+      EMAIL: {
+        async send(message) {
+          sent.push(message);
+          return { messageId: crypto.randomUUID() };
+        },
+      },
       EMAIL_FROM: `noreply@${MAILABLE_DOMAIN}`,
       WEB_VAULT_ORIGINS: 'https://web.example.test',
     },
@@ -184,50 +204,79 @@ export function captureEmail(): { overrides: Partial<Env>; sent: SentEmail[] } {
 }
 
 export function failingEmail(code: string): NonNullable<Env['EMAIL']> {
-  return { async send() { throw Object.assign(new Error('x'), { code }); } };
+  return {
+    async send() {
+      throw Object.assign(new Error('x'), { code });
+    },
+  };
 }
 export { drainWaitUntil } from './cloudflare-workers';
 
-export function portalFetch(env: Env, { method = 'GET', path, form, cookie, headers }: { method?: string; path: string; form?: Record<string, string>; cookie?: string; headers?: HeadersInit }): Promise<Response> {
+export function portalFetch(
+  env: Env,
+  {
+    method = 'GET',
+    path,
+    form,
+    cookie,
+    headers,
+  }: { method?: string; path: string; form?: Record<string, string>; cookie?: string; headers?: HeadersInit },
+): Promise<Response> {
   const requestHeaders = new Headers(headers);
   if (method === 'POST' && !requestHeaders.has('Origin')) requestHeaders.set('Origin', TEST_ORIGIN);
   if (cookie) requestHeaders.set('Cookie', cookie);
-  return authedFetch(env, { method, path, body: form ? new URLSearchParams(form) : undefined, headers: requestHeaders });
+  return authedFetch(env, {
+    method,
+    path,
+    body: form ? new URLSearchParams(form) : undefined,
+    headers: requestHeaders,
+  });
 }
 
 export async function signInToAdminPortal(env: Env, email: string): Promise<{ cookie: string; csrf: string }> {
-  const { parseAdminDirectory, createAdminSession, adminCookie, ADMIN_COOKIE } = await import('../../services/admin-portal-auth');
+  const { parseAdminDirectory, createAdminSession, adminCookie, ADMIN_COOKIE } =
+    await import('../../services/admin-portal-auth');
   const directory = parseAdminDirectory(env);
-  if (directory.kind !== 'enabled' || !directory.admins.has(email)) throw new Error('Test administrator is not configured');
+  if (directory.kind !== 'enabled' || !directory.admins.has(email))
+    throw new Error('Test administrator is not configured');
   const session = await createAdminSession(env, email, directory.admins.get(email)!);
   return { cookie: adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds), csrf: session.csrf };
 }
 
 // The tests' one seam onto the raw binding: every statement drizzle prepares from now on passes through
 // wrap, which may read its SQL text, fail it by throwing, or return a wrapped statement. Returns the undo.
-export function wrapStatements(env: Env, wrap: (query: string, statement: D1PreparedStatement) => D1PreparedStatement): () => void {
+export function wrapStatements(
+  env: Env,
+  wrap: (query: string, statement: D1PreparedStatement) => D1PreparedStatement,
+): () => void {
   // eslint-disable-next-line nodewarden/no-raw-sql -- test seam: forwards the statements drizzle prepares
   const prepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = (query: string) => wrap(query, prepare(query));
-  return () => { env.DB.prepare = prepare; };
+  return () => {
+    env.DB.prepare = prepare;
+  };
 }
 
 // Runs `before` right before the first statement matching `pattern` executes, so a test can slip a
 // competing request into the window between a handler's read and its guarded write.
 export function interceptStatement(env: Env, pattern: RegExp, before: () => Promise<void>): void {
   let pending = true;
-  const intercept = (statement: D1PreparedStatement): D1PreparedStatement => new Proxy(statement, {
-    get(target, property) {
-      const value = Reflect.get(target, property);
-      if (property === 'bind') return (...values: unknown[]) => intercept(target.bind(...values));
-      if (typeof value !== 'function') return value;
-      if (!['run', 'first', 'all', 'raw'].includes(String(property))) return value.bind(target);
-      return async (...args: unknown[]) => {
-        if (pending) { pending = false; await before(); }
-        return value.apply(target, args);
-      };
-    },
-  });
+  const intercept = (statement: D1PreparedStatement): D1PreparedStatement =>
+    new Proxy(statement, {
+      get(target, property) {
+        const value = Reflect.get(target, property);
+        if (property === 'bind') return (...values: unknown[]) => intercept(target.bind(...values));
+        if (typeof value !== 'function') return value;
+        if (!['run', 'first', 'all', 'raw'].includes(String(property))) return value.bind(target);
+        return async (...args: unknown[]) => {
+          if (pending) {
+            pending = false;
+            await before();
+          }
+          return value.apply(target, args);
+        };
+      },
+    });
   wrapStatements(env, (query, statement) => (pattern.test(query) ? intercept(statement) : statement));
 }
 
@@ -242,9 +291,14 @@ export async function abortWrites(env: Env, write: FailingWrite, message: string
   const name = `abort_${crypto.randomUUID().replaceAll('-', '')}`;
   const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
   const event = write.event === 'UPDATE' && write.column ? `UPDATE OF "${write.column.name}"` : write.event;
-  const onRow = write.rowId === undefined ? '' : ` WHEN ${write.event === 'DELETE' ? 'OLD' : 'NEW'}.id = ${literal(write.rowId)}`;
+  const onRow =
+    write.rowId === undefined ? '' : ` WHEN ${write.event === 'DELETE' ? 'OLD' : 'NEW'}.id = ${literal(write.rowId)}`;
   // eslint-disable-next-line nodewarden/no-raw-sql -- test fault injection: drizzle cannot build triggers
-  await env.DB.exec(`CREATE TRIGGER ${name} BEFORE ${event} ON "${getTableName(write.table)}"${onRow} BEGIN SELECT RAISE(ABORT, ${literal(message)}); END`);
-  // eslint-disable-next-line nodewarden/no-raw-sql -- drops the trigger created above
-  return async () => { await env.DB.exec(`DROP TRIGGER ${name}`); };
+  await env.DB.exec(
+    `CREATE TRIGGER ${name} BEFORE ${event} ON "${getTableName(write.table)}"${onRow} BEGIN SELECT RAISE(ABORT, ${literal(message)}); END`,
+  );
+  return async () => {
+    // eslint-disable-next-line nodewarden/no-raw-sql -- drops the trigger created above
+    await env.DB.exec(`DROP TRIGGER ${name}`);
+  };
 }

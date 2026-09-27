@@ -10,11 +10,7 @@ import {
   handleDownloadSendFile,
 } from './handlers/sends';
 import { handleKnownDevice } from './handlers/devices';
-import {
-  handleDigitalAssetLinkCheck,
-  handleFillAssistForms,
-  handleFillAssistManifest,
-} from './handlers/fill-assist';
+import { handleDigitalAssetLinkCheck, handleFillAssistForms, handleFillAssistManifest } from './handlers/fill-assist';
 import { handleToken, handlePrelogin, handleRevocation } from './handlers/identity';
 import { handleOidcSignin, handleSsoAuthorize, handleSsoPrevalidate } from './handlers/sso';
 import { handleScimRoute } from './handlers/scim';
@@ -30,10 +26,7 @@ import {
   handleDeleteRecover,
   handleDeleteRecoverToken,
 } from './handlers/accounts';
-import {
-  handleCreateAuthRequest,
-  handleGetAuthRequestResponse,
-} from './handlers/auth-requests';
+import { handleCreateAuthRequest, handleGetAuthRequestResponse } from './handlers/auth-requests';
 import { handlePublicDownloadAttachment } from './handlers/attachments';
 import { handlePublicUploadAttachment } from './handlers/attachments';
 import {
@@ -106,7 +99,7 @@ export function tooManyRequests(retryAfterSeconds: number | undefined): Response
         'Retry-After': String(retryAfterSeconds || 60),
         'X-RateLimit-Remaining': '0',
       },
-    }
+    },
   );
 }
 
@@ -114,7 +107,7 @@ async function enforcePublicRateLimit(
   request: Request,
   env: Env,
   category: string = 'public',
-  maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute
+  maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute,
 ): Promise<Response | null> {
   const clientId = getClientIdentifier(request);
   if (!clientId) {
@@ -126,7 +119,7 @@ async function enforcePublicRateLimit(
       {
         status: 403,
         headers: { 'Content-Type': 'application/json' },
-      }
+      },
     );
   }
 
@@ -138,11 +131,13 @@ async function enforcePublicRateLimit(
   return check.allowed ? null : tooManyRequests(check.retryAfterSeconds);
 }
 
-const publicRateLimit = (category?: string, maxRequests?: number): MiddlewareHandler<AppEnv> => async (c, next) => {
-  const blocked = await enforcePublicRateLimit(c.req.raw, c.env, category, maxRequests);
-  if (blocked) return blocked;
-  await next();
-};
+const publicRateLimit =
+  (category?: string, maxRequests?: number): MiddlewareHandler<AppEnv> =>
+  async (c, next) => {
+    const blocked = await enforcePublicRateLimit(c.req.raw, c.env, category, maxRequests);
+    if (blocked) return blocked;
+    await next();
+  };
 
 const publicRead = publicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
 const publicSensitive = publicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
@@ -181,148 +176,185 @@ export const publicRoutes = new Hono<AppEnv>();
 publicRoutes.on('ALL', ['/api/auth', '/api/auth/*'], (c) => createAuth(c.env, c.req.raw).handler(c.req.raw));
 
 publicRoutes.get('/fill-assist/manifest.json', publicRead, () => handleFillAssistManifest());
-publicRoutes.on('GET', ['/v1/assetlinks:check', '/api/v1/assetlinks:check'], publicRead, () => handleDigitalAssetLinkCheck());
+publicRoutes.on('GET', ['/v1/assetlinks:check', '/api/v1/assetlinks:check'], publicRead, () =>
+  handleDigitalAssetLinkCheck(),
+);
 publicRoutes.get('/fill-assist/:filename', publicRead, (c) => handleFillAssistForms(c.req.param('filename')));
-publicRoutes.get('/icons/:host/icon.png', publicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute), async (c) => {
-  const fallbackMode = c.req.query('fallback') === '404' ? 'not-found' : 'default';
-  // Only a host that decodes to exactly its own URL hostname is looked up upstream.
-  let normalizedHost: string | null;
-  try {
-    const decoded = decodeURIComponent(String(c.req.param('host') || '').trim()).toLowerCase().replace(/\.+$/, '');
-    normalizedHost = decoded && !decoded.includes('/') && !decoded.includes('\\') && new URL(`https://${decoded}`).hostname === decoded ? decoded : null;
-  } catch {
-    normalizedHost = null;
-  }
-  if (!normalizedHost) return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
-
-  const encodedHost = encodeURIComponent(normalizedHost);
-  const requestHeaders = { 'User-Agent': 'NodeWarden/1.0' };
-  const upstreamSources: IconSource[] = [
-    {
-      url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
-      headers: requestHeaders,
-    },
-    {
-      url: `https://icons.bitwarden.net/${encodedHost}/icon.png`,
-      rejectImage: {
-        byteLength: BITWARDEN_DEFAULT_GLOBE_ICON_BYTES,
-        sha256: BITWARDEN_DEFAULT_GLOBE_ICON_SHA256,
-      },
-      headers: requestHeaders,
-    },
-  ];
-
-  for (const source of upstreamSources) {
+publicRoutes.get(
+  '/icons/:host/icon.png',
+  publicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute),
+  async (c) => {
+    const fallbackMode = c.req.query('fallback') === '404' ? 'not-found' : 'default';
+    // Only a host that decodes to exactly its own URL hostname is looked up upstream.
+    let normalizedHost: string | null;
     try {
-      const controller = new AbortController();
-      const fetchTimeout = setTimeout(() => controller.abort(), ICON_UPSTREAM_TIMEOUT_MS);
-      let resp: Response;
+      const decoded = decodeURIComponent(String(c.req.param('host') || '').trim())
+        .toLowerCase()
+        .replace(/\.+$/, '');
+      normalizedHost =
+        decoded &&
+        !decoded.includes('/') &&
+        !decoded.includes('\\') &&
+        new URL(`https://${decoded}`).hostname === decoded
+          ? decoded
+          : null;
+    } catch {
+      normalizedHost = null;
+    }
+    if (!normalizedHost) return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
+
+    const encodedHost = encodeURIComponent(normalizedHost);
+    const requestHeaders = { 'User-Agent': 'NodeWarden/1.0' };
+    const upstreamSources: IconSource[] = [
+      {
+        url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
+        headers: requestHeaders,
+      },
+      {
+        url: `https://icons.bitwarden.net/${encodedHost}/icon.png`,
+        rejectImage: {
+          byteLength: BITWARDEN_DEFAULT_GLOBE_ICON_BYTES,
+          sha256: BITWARDEN_DEFAULT_GLOBE_ICON_SHA256,
+        },
+        headers: requestHeaders,
+      },
+    ];
+
+    for (const source of upstreamSources) {
       try {
-        resp = await fetch(source.url, {
-          headers: source.headers,
-          redirect: 'follow',
-          signal: controller.signal,
-          cf: {
-            cacheEverything: true,
-            cacheTtl: LIMITS.cache.iconTtlSeconds,
-          },
-        } as RequestInit & { cf: { cacheEverything: boolean; cacheTtl: number } });
-      } finally {
-        clearTimeout(fetchTimeout);
-      }
-
-      if (!resp.ok) continue;
-      const contentType = String(resp.headers.get('Content-Type') || '').toLowerCase();
-      if (!isSafeWebsiteIconContentType(contentType)) continue;
-
-      const declaredLength = Number(resp.headers.get('Content-Length'));
-      if (Number.isFinite(declaredLength) && declaredLength > ICON_MAX_BUFFER_BYTES) continue;
-
-      // Buffer at most ICON_MAX_BUFFER_BYTES, and give up on an upstream that stalls.
-      if (!resp.body) continue;
-      const reader = resp.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-      let timedOut = false;
-      const readTimeout = setTimeout(() => {
-        timedOut = true;
-        void reader.cancel().catch(() => undefined);
-      }, ICON_UPSTREAM_TIMEOUT_MS);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!value) continue;
-
-          totalBytes += value.byteLength;
-          if (totalBytes > ICON_MAX_BUFFER_BYTES) {
-            await reader.cancel().catch(() => undefined);
-            break;
-          }
-          chunks.push(value);
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), ICON_UPSTREAM_TIMEOUT_MS);
+        let resp: Response;
+        try {
+          resp = await fetch(source.url, {
+            headers: source.headers,
+            redirect: 'follow',
+            signal: controller.signal,
+            cf: {
+              cacheEverything: true,
+              cacheTtl: LIMITS.cache.iconTtlSeconds,
+            },
+          } as RequestInit & { cf: { cacheEverything: boolean; cacheTtl: number } });
+        } finally {
+          clearTimeout(fetchTimeout);
         }
+
+        if (!resp.ok) continue;
+        const contentType = String(resp.headers.get('Content-Type') || '').toLowerCase();
+        if (!isSafeWebsiteIconContentType(contentType)) continue;
+
+        const declaredLength = Number(resp.headers.get('Content-Length'));
+        if (Number.isFinite(declaredLength) && declaredLength > ICON_MAX_BUFFER_BYTES) continue;
+
+        // Buffer at most ICON_MAX_BUFFER_BYTES, and give up on an upstream that stalls.
+        if (!resp.body) continue;
+        const reader = resp.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        let timedOut = false;
+        const readTimeout = setTimeout(() => {
+          timedOut = true;
+          void reader.cancel().catch(() => undefined);
+        }, ICON_UPSTREAM_TIMEOUT_MS);
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+
+            totalBytes += value.byteLength;
+            if (totalBytes > ICON_MAX_BUFFER_BYTES) {
+              await reader.cancel().catch(() => undefined);
+              break;
+            }
+            chunks.push(value);
+          }
+        } catch {
+          continue;
+        } finally {
+          clearTimeout(readTimeout);
+        }
+        if (timedOut || totalBytes === 0 || totalBytes > ICON_MAX_BUFFER_BYTES) continue;
+
+        const iconBuffer = new ArrayBuffer(totalBytes);
+        const iconBytes = new Uint8Array(iconBuffer);
+        let offset = 0;
+        for (const chunk of chunks) {
+          iconBytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        if (
+          source.rejectImage &&
+          iconBuffer.byteLength === source.rejectImage.byteLength &&
+          (await sha256(iconBuffer)) === source.rejectImage.sha256
+        ) {
+          continue;
+        }
+
+        return new Response(iconBuffer, {
+          status: 200,
+          headers: {
+            'Content-Type': resp.headers.get('Content-Type') || 'image/png',
+            'Cache-Control': `public, max-age=${LIMITS.cache.iconTtlSeconds}, immutable`,
+            'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; sandbox",
+          },
+        });
       } catch {
         continue;
-      } finally {
-        clearTimeout(readTimeout);
       }
-      if (timedOut || totalBytes === 0 || totalBytes > ICON_MAX_BUFFER_BYTES) continue;
-
-      const iconBuffer = new ArrayBuffer(totalBytes);
-      const iconBytes = new Uint8Array(iconBuffer);
-      let offset = 0;
-      for (const chunk of chunks) {
-        iconBytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      if (
-        source.rejectImage &&
-        iconBuffer.byteLength === source.rejectImage.byteLength &&
-        (await sha256(iconBuffer)) === source.rejectImage.sha256
-      ) {
-        continue;
-      }
-
-      return new Response(iconBuffer, {
-        status: 200,
-        headers: {
-          'Content-Type': resp.headers.get('Content-Type') || 'image/png',
-          'Cache-Control': `public, max-age=${LIMITS.cache.iconTtlSeconds}, immutable`,
-          'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; sandbox",
-        },
-      });
-    } catch {
-      continue;
     }
-  }
 
-  return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
-});
+    return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
+  },
+);
 
-publicRoutes.get('/api/attachments/:cipherId{[a-f0-9-]+}/:attachmentId{[a-f0-9-]+}', (c) => handlePublicDownloadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId')));
+publicRoutes.get('/api/attachments/:cipherId{[a-f0-9-]+}/:attachmentId{[a-f0-9-]+}', (c) =>
+  handlePublicDownloadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId')),
+);
 // Token-bearing uploads are anonymous; without a token the same paths fall through to the
 // authenticated upload routes.
-publicRoutes.on(['POST', 'PUT'], '/api/ciphers/:cipherId{[a-f0-9-]+}/attachment/:attachmentId{[a-f0-9-]+}', async (c, next) => {
-  if (!hasUploadToken(c.req.raw)) return next();
-  return handlePublicUploadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId'));
-});
+publicRoutes.on(
+  ['POST', 'PUT'],
+  '/api/ciphers/:cipherId{[a-f0-9-]+}/attachment/:attachmentId{[a-f0-9-]+}',
+  async (c, next) => {
+    if (!hasUploadToken(c.req.raw)) return next();
+    return handlePublicUploadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId'));
+  },
+);
 publicRoutes.on(['POST', 'PUT'], '/api/sends/:sendId/file/:fileId', async (c, next) => {
   if (!hasUploadToken(c.req.raw)) return next();
   return handlePublicUploadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId'));
 });
 
-publicRoutes.post('/api/sends/access/:accessId', publicRateLimit(), (c) => handleAccessSend(c.req.raw, c.env, c.req.param('accessId')));
+publicRoutes.post('/api/sends/access/:accessId', publicRateLimit(), (c) =>
+  handleAccessSend(c.req.raw, c.env, c.req.param('accessId')),
+);
 publicRoutes.post('/api/sends/access', publicRateLimit(), (c) => handleAccessSendV2(c.req.raw, c.env));
-publicRoutes.post('/api/sends/access/file/:fileId', publicRateLimit(), (c) => handleAccessSendFileV2(c.req.raw, c.env, c.req.param('fileId')));
-publicRoutes.post('/api/sends/:sendId/access/file/:fileId', publicRateLimit(), (c) => handleAccessSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')));
-publicRoutes.get('/api/sends/:sendId/:fileId', (c) => handleDownloadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')));
+publicRoutes.post('/api/sends/access/file/:fileId', publicRateLimit(), (c) =>
+  handleAccessSendFileV2(c.req.raw, c.env, c.req.param('fileId')),
+);
+publicRoutes.post('/api/sends/:sendId/access/file/:fileId', publicRateLimit(), (c) =>
+  handleAccessSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')),
+);
+publicRoutes.get('/api/sends/:sendId/:fileId', (c) =>
+  handleDownloadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')),
+);
 
-publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, (c) => handleCreateAuthRequest(c.req.raw, c.env));
-publicRoutes.on('GET', ['/api/auth-requests/:id{[a-f0-9-]+}/response', '/auth-requests/:id{[a-f0-9-]+}/response'], publicSensitive, (c) => handleGetAuthRequestResponse(c.req.raw, c.env, c.req.param('id')));
+publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, (c) =>
+  handleCreateAuthRequest(c.req.raw, c.env),
+);
+publicRoutes.on(
+  'GET',
+  ['/api/auth-requests/:id{[a-f0-9-]+}/response', '/auth-requests/:id{[a-f0-9-]+}/response'],
+  publicSensitive,
+  (c) => handleGetAuthRequestResponse(c.req.raw, c.env, c.req.param('id')),
+);
 
 publicRoutes.post('/identity/connect/token', (c) => handleToken(c.req.raw, c.env));
 publicRoutes.on('GET', ['/identity/sso/prevalidate', '/sso/prevalidate'], (c) => handleSsoPrevalidate(c.env));
-publicRoutes.on('GET', ['/identity/connect/authorize', '/connect/authorize'], (c) => handleSsoAuthorize(c.req.raw, c.env));
+publicRoutes.on('GET', ['/identity/connect/authorize', '/connect/authorize'], (c) =>
+  handleSsoAuthorize(c.req.raw, c.env),
+);
 publicRoutes.on('GET', ['/identity/oidc-signin', '/oidc-signin'], (c) => handleOidcSignin(c.req.raw, c.env));
 
 publicRoutes.use(async (c, next) => {
@@ -331,47 +363,105 @@ publicRoutes.use(async (c, next) => {
   await next();
 });
 
-publicRoutes.get('/api/devices/knowndevice', async (c) => (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c.req.raw, c.env));
-publicRoutes.on(['PUT', 'POST'], '/api/devices/identifier/:deviceId/clear-token', () => new Response(null, { status: 200 }));
+publicRoutes.get('/api/devices/knowndevice', async (c) =>
+  (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c.req.raw, c.env),
+);
+publicRoutes.on(
+  ['PUT', 'POST'],
+  '/api/devices/identifier/:deviceId/clear-token',
+  () => new Response(null, { status: 200 }),
+);
 
-publicRoutes.on('POST', ['/identity/connect/revocation', '/identity/connect/revoke'], publicSensitive, (c) => handleRevocation(c.req.raw, c.env));
-publicRoutes.on('POST', ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'], publicSensitive, (c) => handlePrelogin(c.req.raw, c.env));
-publicRoutes.get('/identity/accounts/webauthn/assertion-options', publicSensitive, (c) => handleGetAccountPasskeyAssertionOptions(c.req.raw, c.env));
-publicRoutes.on('POST', ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'], publicSensitive, (c) => handleRecoverTwoFactor(c.req.raw, c.env));
-publicRoutes.on('POST', ['/api/two-factor/send-email-login', '/two-factor/send-email-login'], publicSensitive, (c) => handleSendTwoFactorEmailLogin(c.req.raw, c.env));
-publicRoutes.on('POST', ['/api/accounts/resend-new-device-otp', '/accounts/resend-new-device-otp'], publicSensitive, (c) => handleResendNewDeviceOtp(c.req.raw, c.env));
-publicRoutes.on('POST', ['/api/accounts/delete-recover', '/accounts/delete-recover'], publicSensitive, (c) => handleDeleteRecover(c.req.raw, c.env));
-publicRoutes.on('POST', ['/api/accounts/delete-recover-token', '/accounts/delete-recover-token'], publicSensitive, (c) => handleDeleteRecoverToken(c.req.raw, c.env));
+publicRoutes.on('POST', ['/identity/connect/revocation', '/identity/connect/revoke'], publicSensitive, (c) =>
+  handleRevocation(c.req.raw, c.env),
+);
+publicRoutes.on('POST', ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'], publicSensitive, (c) =>
+  handlePrelogin(c.req.raw, c.env),
+);
+publicRoutes.get('/identity/accounts/webauthn/assertion-options', publicSensitive, (c) =>
+  handleGetAccountPasskeyAssertionOptions(c.req.raw, c.env),
+);
+publicRoutes.on('POST', ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'], publicSensitive, (c) =>
+  handleRecoverTwoFactor(c.req.raw, c.env),
+);
+publicRoutes.on('POST', ['/api/two-factor/send-email-login', '/two-factor/send-email-login'], publicSensitive, (c) =>
+  handleSendTwoFactorEmailLogin(c.req.raw, c.env),
+);
+publicRoutes.on(
+  'POST',
+  ['/api/accounts/resend-new-device-otp', '/accounts/resend-new-device-otp'],
+  publicSensitive,
+  (c) => handleResendNewDeviceOtp(c.req.raw, c.env),
+);
+publicRoutes.on('POST', ['/api/accounts/delete-recover', '/accounts/delete-recover'], publicSensitive, (c) =>
+  handleDeleteRecover(c.req.raw, c.env),
+);
+publicRoutes.on(
+  'POST',
+  ['/api/accounts/delete-recover-token', '/accounts/delete-recover-token'],
+  publicSensitive,
+  (c) => handleDeleteRecoverToken(c.req.raw, c.env),
+);
 
-publicRoutes.on('POST', [
-  '/api/accounts/register/verification-email-clicked',
-  '/accounts/register/verification-email-clicked',
-  '/identity/accounts/register/verification-email-clicked',
-  '/api/accounts/verify-email-token',
-  '/accounts/verify-email-token',
-], publicSensitive, () => unsupportedResponse('Email delivery is not supported by this server.'));
+publicRoutes.on(
+  'POST',
+  [
+    '/api/accounts/register/verification-email-clicked',
+    '/accounts/register/verification-email-clicked',
+    '/identity/accounts/register/verification-email-clicked',
+    '/api/accounts/verify-email-token',
+    '/accounts/verify-email-token',
+  ],
+  publicSensitive,
+  () => unsupportedResponse('Email delivery is not supported by this server.'),
+);
 
-publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, (c) => handleGetPasswordHint(c.req.raw, c.env));
+publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, (c) =>
+  handleGetPasswordHint(c.req.raw, c.env),
+);
 
-publicRoutes.on('GET', ['/alive', '/api/alive'], () => new Response('OK', {
-  status: 200,
-  headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-}));
-publicRoutes.on('GET', ['/config', '/api/config'], publicRead, (c) => jsonResponse(buildConfigResponse(requestPublicOrigin(c.req.raw)), 200, { 'Cache-Control': 'no-store' }));
+publicRoutes.on(
+  'GET',
+  ['/alive', '/api/alive'],
+  () =>
+    new Response('OK', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    }),
+);
+publicRoutes.on('GET', ['/config', '/api/config'], publicRead, (c) =>
+  jsonResponse(buildConfigResponse(requestPublicOrigin(c.req.raw)), 200, { 'Cache-Control': 'no-store' }),
+);
 publicRoutes.get('/api/version', publicRead, () => jsonResponse(LIMITS.compatibility.bitwardenServerVersion));
 
-publicRoutes.on('POST', [
-  '/api/accounts/register/send-verification-email',
-  '/accounts/register/send-verification-email',
-  '/identity/accounts/register/send-verification-email',
-], register, requireSameOriginWrite, (c) => handleRegisterSendVerificationEmail(c.req.raw, c.env));
-publicRoutes.on('POST', [
-  '/api/accounts/register/finish',
-  '/accounts/register/finish',
-  '/identity/accounts/register/finish',
-], register, requireSameOriginWrite, (c) => handleRegisterFinish(c.req.raw, c.env));
-publicRoutes.on('POST', ['/api/accounts/register', '/identity/accounts/register'], register, requireSameOriginWrite, (c) => handleRegister(c.req.raw, c.env));
+publicRoutes.on(
+  'POST',
+  [
+    '/api/accounts/register/send-verification-email',
+    '/accounts/register/send-verification-email',
+    '/identity/accounts/register/send-verification-email',
+  ],
+  register,
+  requireSameOriginWrite,
+  (c) => handleRegisterSendVerificationEmail(c.req.raw, c.env),
+);
+publicRoutes.on(
+  'POST',
+  ['/api/accounts/register/finish', '/accounts/register/finish', '/identity/accounts/register/finish'],
+  register,
+  requireSameOriginWrite,
+  (c) => handleRegisterFinish(c.req.raw, c.env),
+);
+publicRoutes.on(
+  'POST',
+  ['/api/accounts/register', '/identity/accounts/register'],
+  register,
+  requireSameOriginWrite,
+  (c) => handleRegister(c.req.raw, c.env),
+);
 
 publicRoutes.post('/notifications/hub/negotiate', (c) => handleNotificationsNegotiate(c.req.raw, c.env));
 publicRoutes.get('/notifications/hub', (c) => handleNotificationsHub(c.req.raw, c.env));
-publicRoutes.get('/notifications/anonymous-hub', publicSensitive, (c) => handleAnonymousNotificationsHub(c.req.raw, c.env));
+publicRoutes.get('/notifications/anonymous-hub', publicSensitive, (c) =>
+  handleAnonymousNotificationsHub(c.req.raw, c.env),
+);

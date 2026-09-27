@@ -31,42 +31,69 @@ interface CrossOrgFixture {
 }
 
 async function createProject(env: Env, user: User, orgId: string): Promise<string> {
-  return (await postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD })).id;
+  return (await postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD }))
+    .id;
 }
 
 async function seedCrossOrg(): Promise<CrossOrgFixture> {
   const env = await createTestEnv();
   const { orgId: yOrgId, admin } = await seedSmOrg(env);
-  const { id: xOrgId } = await postJson<{ id: string }>(env, admin, '/api/organizations', { name: 'Acme', key: TEST_ORG_KEY });
+  const { id: xOrgId } = await postJson<{ id: string }>(env, admin, '/api/organizations', {
+    name: 'Acme',
+    key: TEST_ORG_KEY,
+  });
   const yProjectId = await createProject(env, admin, yOrgId);
-  const { id: ySecretId } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/secrets`, { ...SECRET_FIELDS, projectIds: [yProjectId] });
+  const { id: ySecretId } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/secrets`, {
+    ...SECRET_FIELDS,
+    projectIds: [yProjectId],
+  });
   return { env, admin, yOrgId, yProjectId, ySecretId, xProjectId: await createProject(env, admin, xOrgId) };
 }
 
 async function getJson<T>(env: Env, user: User, path: string): Promise<T> {
   const response = await authedFetch(env, { path, userId: user.id });
   assert.equal(response.status, 200, `${path} answered ${response.status}`);
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
 // Y's secrets with their project links, and Y's machine accounts, as the API reports them.
 async function yOrgState({ env, admin, yOrgId }: CrossOrgFixture) {
   const { secrets } = await getJson<{ secrets: unknown[] }>(env, admin, `/api/organizations/${yOrgId}/secrets`);
-  const { data: serviceAccounts } = await getJson<{ data: unknown[] }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`);
+  const { data: serviceAccounts } = await getJson<{ data: unknown[] }>(
+    env,
+    admin,
+    `/api/organizations/${yOrgId}/service-accounts`,
+  );
   return { secrets, serviceAccounts };
 }
 
 const PROJECT_WRITES = [
-  ['creating a secret', ({ env, admin, yOrgId }: CrossOrgFixture, projectIds: string[]) =>
-    authedFetch(env, { method: 'POST', path: `/api/organizations/${yOrgId}/secrets`, body: { ...SECRET_FIELDS, projectIds }, userId: admin.id })],
-  ['moving a secret', ({ env, admin, ySecretId }: CrossOrgFixture, projectIds: string[]) =>
-    authedFetch(env, { method: 'PUT', path: `/api/secrets/${ySecretId}`, body: { ...SECRET_FIELDS, projectIds }, userId: admin.id })],
+  [
+    'creating a secret',
+    ({ env, admin, yOrgId }: CrossOrgFixture, projectIds: string[]) =>
+      authedFetch(env, {
+        method: 'POST',
+        path: `/api/organizations/${yOrgId}/secrets`,
+        body: { ...SECRET_FIELDS, projectIds },
+        userId: admin.id,
+      }),
+  ],
+  [
+    'moving a secret',
+    ({ env, admin, ySecretId }: CrossOrgFixture, projectIds: string[]) =>
+      authedFetch(env, {
+        method: 'PUT',
+        path: `/api/secrets/${ySecretId}`,
+        body: { ...SECRET_FIELDS, projectIds },
+        userId: admin.id,
+      }),
+  ],
 ] as const;
 
 const REJECTED_PROJECT_IDS = [
-  ['another org\'s project', (fixture: CrossOrgFixture) => [fixture.xProjectId]],
+  ["another org's project", (fixture: CrossOrgFixture) => [fixture.xProjectId]],
   ['a nonexistent project', () => [crypto.randomUUID()]],
-  ['Y\'s project twice', (fixture: CrossOrgFixture) => [fixture.yProjectId, fixture.yProjectId]],
+  ["Y's project twice", (fixture: CrossOrgFixture) => [fixture.yProjectId, fixture.yProjectId]],
 ] as const;
 
 // Upstream ProjectsAreInOrganization: a secret project must belong to the target's org.
@@ -79,21 +106,29 @@ for (const [write, send] of PROJECT_WRITES) {
       const response = await send(fixture, projectIds(fixture));
       const tooMany = target === "Y's project twice";
       assert.equal(response.status, tooMany ? 400 : 404);
-      assert.equal((await response.json() as { message: string }).message, tooMany ? 'Only one project assignment is supported.' : RESOURCE_NOT_FOUND);
+      assert.equal(
+        ((await response.json()) as { message: string }).message,
+        tooMany ? 'Only one project assignment is supported.' : RESOURCE_NOT_FOUND,
+      );
       assert.deepEqual(await yOrgState(fixture), before);
     });
   }
 }
 
 // Every chunk also binds the org id, so ids filling the whole cap must still split.
-test('projectsInOrg keeps only the org\'s projects from a cap-length id list', async () => {
+test("projectsInOrg keeps only the org's projects from a cap-length id list", async () => {
   const { env, yOrgId, yProjectId, xProjectId } = await seedCrossOrg();
   const ids = [yProjectId, xProjectId];
   const missingIds = Array.from({ length: D1_MAX_BOUND_PARAMETERS - ids.length }, () => crypto.randomUUID());
   assert.deepEqual(await smRepo.projectsInOrg(env.DB, yOrgId, [...ids, ...missingIds]), new Set([yProjectId]));
 });
 
-async function linkedProjectIds(env: Env, table: typeof smSecretProjects | typeof smServiceAccountProjects, column: typeof smSecretProjects.secretId | typeof smServiceAccountProjects.serviceAccountId, id: string): Promise<string[]> {
+async function linkedProjectIds(
+  env: Env,
+  table: typeof smSecretProjects | typeof smServiceAccountProjects,
+  column: typeof smSecretProjects.secretId | typeof smServiceAccountProjects.serviceAccountId,
+  id: string,
+): Promise<string[]> {
   const rows = await getOrm(env.DB).select({ projectId: table.projectId }).from(table).where(eq(column, id));
   return rows.map((row) => row.projectId);
 }
@@ -104,9 +139,19 @@ test('a seeded cross-org secret link never appears in projects[], and the schema
   await getOrm(env.DB).insert(smSecretProjects).values({ secretId: ySecretId, projectId: xProjectId });
 
   const secret = await getJson<{ projects: { id: string }[] }>(env, admin, `/api/secrets/${ySecretId}`);
-  assert.deepEqual(secret.projects.map((project) => project.id), [yProjectId]);
-  const { secrets } = await getJson<{ secrets: { id: string; projects: { id: string }[] }[] }>(env, admin, `/api/organizations/${yOrgId}/secrets`);
-  assert.deepEqual(secrets.map((listed) => [listed.id, listed.projects.map((project) => project.id)]), [[ySecretId, [yProjectId]]]);
+  assert.deepEqual(
+    secret.projects.map((project) => project.id),
+    [yProjectId],
+  );
+  const { secrets } = await getJson<{ secrets: { id: string; projects: { id: string }[] }[] }>(
+    env,
+    admin,
+    `/api/organizations/${yOrgId}/secrets`,
+  );
+  assert.deepEqual(
+    secrets.map((listed) => [listed.id, listed.projects.map((project) => project.id)]),
+    [[ySecretId, [yProjectId]]],
+  );
 
   await ensureStorageSchema(env.DB);
   assert.deepEqual(await linkedProjectIds(env, smSecretProjects, smSecretProjects.secretId, ySecretId), [yProjectId]);
@@ -117,18 +162,31 @@ test('a seeded cross-org secret link never appears in projects[], and the schema
 test('the schema step removes cross-org and unreadable machine-account project grants and replays cleanly', async () => {
   const { env, admin, yOrgId, yProjectId, xProjectId } = await seedCrossOrg();
   const createAccount = async () => {
-    const { id } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`, { name: ENCRYPTED_FIELD });
+    const { id } = await postJson<{ id: string }>(env, admin, `/api/organizations/${yOrgId}/service-accounts`, {
+      name: ENCRYPTED_FIELD,
+    });
     await smRepo.replaceServiceAccountProjects(env.DB, id, [yProjectId]);
     return id;
   };
   const [granted, unreadable] = [await createAccount(), await createAccount()];
   const orm = getOrm(env.DB);
-  await orm.insert(smServiceAccountProjects).values({ serviceAccountId: granted, projectId: xProjectId, readAccess: 1, writeAccess: 0 });
-  await orm.update(smServiceAccountProjects).set({ readAccess: 0 }).where(eq(smServiceAccountProjects.serviceAccountId, unreadable));
+  await orm
+    .insert(smServiceAccountProjects)
+    .values({ serviceAccountId: granted, projectId: xProjectId, readAccess: 1, writeAccess: 0 });
+  await orm
+    .update(smServiceAccountProjects)
+    .set({ readAccess: 0 })
+    .where(eq(smServiceAccountProjects.serviceAccountId, unreadable));
 
   const assertOnlyReadableSameOrgGrants = async () => {
-    assert.deepEqual(await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, granted), [yProjectId]);
-    assert.deepEqual(await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, unreadable), []);
+    assert.deepEqual(
+      await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, granted),
+      [yProjectId],
+    );
+    assert.deepEqual(
+      await linkedProjectIds(env, smServiceAccountProjects, smServiceAccountProjects.serviceAccountId, unreadable),
+      [],
+    );
   };
   await ensureStorageSchema(env.DB);
   await assertOnlyReadableSameOrgGrants();
@@ -141,11 +199,20 @@ test(`an owner lists ${LARGE_ORG_SECRET_COUNT} secrets without exceeding D1 para
   const { orgId, owner } = await seedSmOrg(env);
   const projectId = await createProject(env, owner, orgId);
   const now = new Date().toISOString();
-  await Promise.all(Array.from({ length: LARGE_ORG_SECRET_COUNT }, () => smRepo.saveSecret(env.DB, {
-    id: crypto.randomUUID(), orgId, ...SECRET_FIELDS, projectIds: [projectId], createdAt: now, updatedAt: now, deletedAt: null,
-  })));
+  await Promise.all(
+    Array.from({ length: LARGE_ORG_SECRET_COUNT }, () =>
+      smRepo.saveSecret(env.DB, {
+        id: crypto.randomUUID(),
+        orgId,
+        ...SECRET_FIELDS,
+        projectIds: [projectId],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      }),
+    ),
+  );
 
   const { secrets } = await getJson<{ secrets: unknown[] }>(env, owner, `/api/organizations/${orgId}/secrets`);
   assert.equal(secrets.length, LARGE_ORG_SECRET_COUNT);
-
 });

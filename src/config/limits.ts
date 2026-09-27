@@ -203,7 +203,9 @@
 } as const;
 
 export function getRefreshTokenSlidingTtlMs(clientType?: string | null): number {
-  const normalized = String(clientType || '').trim().toLowerCase();
+  const normalized = String(clientType || '')
+    .trim()
+    .toLowerCase();
   if (normalized === 'web') return LIMITS.auth.refreshTokenWebSlidingTtlMs;
   if (normalized === 'mobile') return LIMITS.auth.refreshTokenMobileSlidingTtlMs;
   return LIMITS.auth.refreshTokenDefaultSlidingTtlMs;

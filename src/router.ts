@@ -58,11 +58,15 @@ const BODY_LIMIT_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use(async (c, next) => {
   const request = c.req.raw;
   const path = c.req.path;
-  if (BODY_LIMIT_METHODS.has(c.req.method) && !(
-    /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path) ||
-    /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path) ||
-    path === '/api/admin/backup/import'
-  ) && request.body) {
+  if (
+    BODY_LIMIT_METHODS.has(c.req.method) &&
+    !(
+      /^\/api\/ciphers\/[a-f0-9-]+\/attachment\/[a-f0-9-]+$/i.test(path) ||
+      /^\/api\/sends\/[a-f0-9-]+\/file\/[a-f0-9-]+$/i.test(path) ||
+      path === '/api/admin/backup/import'
+    ) &&
+    request.body
+  ) {
     const contentLengthRaw = request.headers.get('Content-Length');
     const contentLength = Number(contentLengthRaw);
     if (contentLengthRaw && Number.isFinite(contentLength) && contentLength > LIMITS.request.maxBodyBytes) {
@@ -113,12 +117,16 @@ app.use(async (c, next) => {
   if (jwtSecretUnsafeReason(c.env)) {
     const { path, method } = c.req;
     // Only the public config, fill-assist, asset-link and icon reads are served until JWT_SECRET is fixed.
-    const servable = method === 'GET' && (
-      path === '/config' || path === '/api/config' || path === '/api/version' ||
-      path === '/fill-assist/manifest.json' || /^\/fill-assist\/[^/]+$/i.test(path) ||
-      path === '/v1/assetlinks:check' || path === '/api/v1/assetlinks:check' ||
-      /^\/icons\/[^/]+\/icon\.png$/i.test(path)
-    );
+    const servable =
+      method === 'GET' &&
+      (path === '/config' ||
+        path === '/api/config' ||
+        path === '/api/version' ||
+        path === '/fill-assist/manifest.json' ||
+        /^\/fill-assist\/[^/]+$/i.test(path) ||
+        path === '/v1/assetlinks:check' ||
+        path === '/api/v1/assetlinks:check' ||
+        /^\/icons\/[^/]+\/icon\.png$/i.test(path));
     if (!servable) return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
   }
   await next();
@@ -132,8 +140,12 @@ app.use(async (c, next) => {
   c.set('principal', verified);
 
   if (verified.kind === 'serviceAccount') {
-    const budget = await new RateLimitService(c.env).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
-    if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
+    const budget = await new RateLimitService(c.env).consumeBudget(
+      `sa:${verified.serviceAccountId}:api`,
+      LIMITS.rateLimit.apiRequestsPerMinute,
+    );
+    if (!budget.allowed)
+      return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
     if (!isMachineAllowedRoute(c.req.path, c.req.method)) return errorResponse('Not found', 404);
     return next();
   }
@@ -148,7 +160,10 @@ app.use(async (c, next) => {
 
   if (user.status !== 'active') return errorResponse('Account is disabled', 403);
 
-  const budget = await new RateLimitService(c.env).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+  const budget = await new RateLimitService(c.env).consumeBudget(
+    `${payload.sub}:api`,
+    LIMITS.rateLimit.apiRequestsPerMinute,
+  );
   if (!budget.allowed) return tooManyRequests(budget.retryAfterSeconds);
 
   c.set('userId', payload.sub);

@@ -62,9 +62,12 @@ export async function handleGetFolder(request: Request, env: Env, userId: string
 
 // POST /api/folders
 export async function handleCreateFolder(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, z.object({
-    name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
-  }));
+  const body = await parseBody(
+    request,
+    z.object({
+      name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
+    }),
+  );
   if (body instanceof Response) return body;
 
   const now = new Date().toISOString();
@@ -79,7 +82,12 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
   await folderRepo.saveFolder(env.DB, folder);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserFolderCreate(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+  notifyUserFolderCreate(env, {
+    userId,
+    folderId: folder.id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(request),
+  });
 
   return jsonResponse(folderToResponse(folder), 200);
 }
@@ -103,7 +111,12 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
   await folderRepo.saveFolder(env.DB, folder);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  notifyUserFolderUpdate(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+  notifyUserFolderUpdate(env, {
+    userId,
+    folderId: folder.id,
+    revisionDate,
+    contextId: readActingDeviceIdentifier(request),
+  });
 
   return jsonResponse(folderToResponse(folder));
 }
@@ -135,16 +148,23 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
   const { ids } = body;
 
   const folders = (
-    await Promise.all(ids.map(async (id) => {
-      const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
-      return folder;
-    }))
+    await Promise.all(
+      ids.map(async (id) => {
+        const folder = await folderRepo.getFolderForUser(env.DB, id, userId);
+        return folder;
+      }),
+    )
   ).filter((folder): folder is Folder => !!folder);
   const revisionDate = await folderRepo.bulkDeleteFolders(env.DB, ids, userId);
   if (revisionDate) {
     notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const folder of folders) {
-      notifyUserFolderDelete(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
+      notifyUserFolderDelete(env, {
+        userId,
+        folderId: folder.id,
+        revisionDate,
+        contextId: readActingDeviceIdentifier(request),
+      });
     }
     await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete.bulk', {
       count: ids.length,

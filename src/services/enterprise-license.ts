@@ -6,11 +6,16 @@ export const ENTERPRISE_PRODUCT_TIER = 3;
 
 // Official license files are PascalCase and dummy ones may be empty or not an object at all, so each
 // field falls back on its own rather than rejecting the upload.
-const OrganizationLicense = z.preprocess(normalizeJsonKeys, z.object({
-  name: z.string().trim().catch(''),
-  billingEmail: z.string().trim().toLowerCase().includes('@').nullable().catch(null),
-  planType: z.coerce.number().positive().catch(ENTERPRISE_PLAN_TYPE),
-}).catch({ name: '', billingEmail: null, planType: ENTERPRISE_PLAN_TYPE }));
+const OrganizationLicense = z.preprocess(
+  normalizeJsonKeys,
+  z
+    .object({
+      name: z.string().trim().catch(''),
+      billingEmail: z.string().trim().toLowerCase().includes('@').nullable().catch(null),
+      planType: z.coerce.number().positive().catch(ENTERPRISE_PLAN_TYPE),
+    })
+    .catch({ name: '', billingEmail: null, planType: ENTERPRISE_PLAN_TYPE }),
+);
 
 export function buildNodeWardenEnterpriseLicense(options?: {
   name?: string;
@@ -87,10 +92,7 @@ export function enterprisePlansResponse() {
   };
   return {
     object: 'list',
-    data: [
-      enterprise,
-      { ...enterprise, product: 1, bitwardenProduct: 1, name: 'Secrets Manager' },
-    ],
+    data: [enterprise, { ...enterprise, product: 1, bitwardenProduct: 1, name: 'Secrets Manager' }],
     continuationToken: null,
   };
 }

@@ -25,7 +25,12 @@ async function setup() {
 test('deletion recovery conceals account existence and status and puts all token parameters in the configured fragment', async () => {
   const f = await setup();
   for (const email of [f.active.email, f.banned.email, `unknown@${MAILABLE_DOMAIN}`]) {
-    const response = await authedFetch(f.env, { method: 'POST', path: requestPath, body: { email }, headers: { 'X-Forwarded-Host': 'evil.test' } });
+    const response = await authedFetch(f.env, {
+      method: 'POST',
+      path: requestPath,
+      body: { email },
+      headers: { 'X-Forwarded-Host': 'evil.test' },
+    });
     assert.equal(response.status, 200);
     assert.equal(await response.json(), '');
   }
@@ -50,7 +55,7 @@ test('deletion recovery conceals account existence and status and puts all token
   assert.equal(await userRepo.getUserById(f.env.DB, f.active.id), null);
   const replay = await authedFetch(f.env, { method: 'POST', path: tokenPath, body });
   assert.equal(replay.status, 400);
-  assert.equal((await replay.json() as { error: string }).error, 'Invalid token.');
+  assert.equal(((await replay.json()) as { error: string }).error, 'Invalid token.');
   await drainWaitUntil();
 });
 
@@ -70,14 +75,22 @@ test('mail-disabled or origin-missing recovery gives the same 503 for every addr
 
 test('unknown, banned, expired, foreign and revoked deletion tokens have identical failures', async () => {
   const f = await setup();
-  const claim = { iss: 'nodewarden|delete_recover', sub: f.active.id, sst: await sha256Base64Url(f.active.securityStamp), exp: Math.floor(Date.now() / 1000) + 60 };
+  const claim = {
+    iss: 'nodewarden|delete_recover',
+    sub: f.active.id,
+    sst: await sha256Base64Url(f.active.securityStamp),
+    exp: Math.floor(Date.now() / 1000) + 60,
+  };
   const beforeChange = await createDeleteRecoverToken(f.env, f.active);
   let failure: unknown;
   for (const body of [
     { userId: 'missing', token: beforeChange },
     { userId: f.banned.id, token: await createDeleteRecoverToken(f.env, f.banned) },
     { userId: f.active.id, token: await createDeleteRecoverToken(f.env, f.banned) },
-    { userId: f.active.id, token: await signHs256Jwt({ ...claim, exp: Math.floor(Date.now() / 1000) - 1 }, f.env.JWT_SECRET) },
+    {
+      userId: f.active.id,
+      token: await signHs256Jwt({ ...claim, exp: Math.floor(Date.now() / 1000) - 1 }, f.env.JWT_SECRET),
+    },
     { userId: f.active.id, token: await signHs256Jwt({ ...claim, iss: 'nodewarden' }, f.env.JWT_SECRET) },
     { userId: f.active.id, token: await signHs256Jwt({ ...claim, exp: undefined }, f.env.JWT_SECRET) },
     { userId: f.active.id, token: 'garbage' },
@@ -89,22 +102,38 @@ test('unknown, banned, expired, foreign and revoked deletion tokens have identic
     assert.deepEqual(payload, failure);
   }
   await getOrm(f.env.DB).update(users).set({ securityStamp: crypto.randomUUID() }).where(eq(users.id, f.active.id));
-  const revoked = await authedFetch(f.env, { method: 'POST', path: tokenPath, body: { userId: f.active.id, token: beforeChange } });
+  const revoked = await authedFetch(f.env, {
+    method: 'POST',
+    path: tokenPath,
+    body: { userId: f.active.id, token: beforeChange },
+  });
   assert.deepEqual(await revoked.json(), failure);
 });
 
 test('sole Owners and the last administrator remain protected, and the sixth request is rate-limited', async () => {
   const f = await setup();
   await createOwnedOrganization(f.env, f.active, { name: 'Sole Owner', key: '4.dGVzdA==' });
-  const owner = await authedFetch(f.env, { method: 'POST', path: tokenPath, body: { userId: f.active.id, token: await createDeleteRecoverToken(f.env, f.active) } });
+  const owner = await authedFetch(f.env, {
+    method: 'POST',
+    path: tokenPath,
+    body: { userId: f.active.id, token: await createDeleteRecoverToken(f.env, f.active) },
+  });
   assert.equal(owner.status, 400);
   assert.match(await owner.text(), /sole owner/);
   const admin = await seedUser(f.env, { role: 'admin' });
-  const lastAdmin = await authedFetch(f.env, { method: 'POST', path: tokenPath, body: { userId: admin.id, token: await createDeleteRecoverToken(f.env, admin) } });
+  const lastAdmin = await authedFetch(f.env, {
+    method: 'POST',
+    path: tokenPath,
+    body: { userId: admin.id, token: await createDeleteRecoverToken(f.env, admin) },
+  });
   assert.equal(lastAdmin.status, 400);
   assert.match(await lastAdmin.text(), /last instance administrator/);
   for (let index = 0; index < 6; index++) {
-    const response = await authedFetch(f.env, { method: 'POST', path: requestPath, body: { email: `unknown@${MAILABLE_DOMAIN}` } });
+    const response = await authedFetch(f.env, {
+      method: 'POST',
+      path: requestPath,
+      body: { email: `unknown@${MAILABLE_DOMAIN}` },
+    });
     assert.equal(response.status, index < 5 ? 200 : 429);
     if (index === 5) assert.ok(response.headers.get('Retry-After'));
   }
@@ -118,12 +147,14 @@ test('a mid-flight security-stamp change prevents self or recovery deletion with
     const token = await createDeleteRecoverToken(f.env, f.active);
     const batch = f.env.DB.batch.bind(f.env.DB);
     const newStamp = crypto.randomUUID();
-    f.env.DB.batch = async statements => {
+    f.env.DB.batch = async (statements) => {
       await getOrm(f.env.DB).update(users).set({ securityStamp: newStamp }).where(eq(users.id, f.active.id));
       return batch(statements);
     };
     const response = await authedFetch(f.env, {
-      method: recover ? 'POST' : 'DELETE', path: recover ? tokenPath : '/api/accounts', userId: recover ? undefined : f.active.id,
+      method: recover ? 'POST' : 'DELETE',
+      path: recover ? tokenPath : '/api/accounts',
+      userId: recover ? undefined : f.active.id,
       body: recover ? { userId: f.active.id, token } : { masterPasswordHash: f.active.masterPasswordHash },
     });
     assert.equal(response.status, recover ? 400 : 404);

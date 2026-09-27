@@ -95,21 +95,43 @@ export async function getAllUsers(db: D1Database): Promise<User[]> {
   return rows.map(mapUserRow);
 }
 
-export async function getAllUsersWithTwoFactor(db: D1Database): Promise<Array<User & { hasTwoFactorPasskey: boolean }>> {
+export async function getAllUsersWithTwoFactor(
+  db: D1Database,
+): Promise<Array<User & { hasTwoFactorPasskey: boolean }>> {
   const orm = getOrm(db);
-  const rows = await orm.select({ user: users, hasTwoFactorPasskey: hasTwoFactorPasskey(orm) }).from(users).orderBy(asc(users.createdAt));
+  const rows = await orm
+    .select({ user: users, hasTwoFactorPasskey: hasTwoFactorPasskey(orm) })
+    .from(users)
+    .orderBy(asc(users.createdAt));
   return rows.map(({ user, hasTwoFactorPasskey }) => ({ ...mapUserRow(user), hasTwoFactorPasskey }));
 }
 
-export type UserUpdateField = Exclude<keyof ReturnType<typeof userValues>,
-  'id' | 'email' | 'emailVerified' | 'role' | 'status' | 'createdAt' | 'updatedAt' | 'twoFactorEmail' | 'totpRecoveryCode'>;
+export type UserUpdateField = Exclude<
+  keyof ReturnType<typeof userValues>,
+  | 'id'
+  | 'email'
+  | 'emailVerified'
+  | 'role'
+  | 'status'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'twoFactorEmail'
+  | 'totpRecoveryCode'
+>;
 
 // Snapshot saves update only the intended fields and can never recreate a deleted account.
-export async function saveUser(db: D1Database, user: User, fields: readonly UserUpdateField[] = ['name', 'masterPasswordHint'], originalSecurityStamp = user.securityStamp): Promise<boolean> {
+export async function saveUser(
+  db: D1Database,
+  user: User,
+  fields: readonly UserUpdateField[] = ['name', 'masterPasswordHint'],
+  originalSecurityStamp = user.securityStamp,
+): Promise<boolean> {
   const values = userValues(user);
-  const result = await getOrm(db).update(users)
-    .set({ ...Object.fromEntries(fields.map(field => [field, values[field]])), updatedAt: new Date().toISOString() })
-    .where(and(eq(users.id, user.id), eq(users.securityStamp, originalSecurityStamp))).run();
+  const result = await getOrm(db)
+    .update(users)
+    .set({ ...Object.fromEntries(fields.map((field) => [field, values[field]])), updatedAt: new Date().toISOString() })
+    .where(and(eq(users.id, user.id), eq(users.securityStamp, originalSecurityStamp)))
+    .run();
   return (result.meta.changes ?? 0) > 0;
 }
 
@@ -121,8 +143,14 @@ export async function createUser(db: D1Database, user: User): Promise<void> {
 // create the first (administrator) account.
 export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
   const orm = getOrm(db);
-  const result = await orm.insert(users)
-    .select(orm.select(boundRow(userValues(user))).from(SINGLE_ROW).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
+  const result = await orm
+    .insert(users)
+    .select(
+      orm
+        .select(boundRow(userValues(user)))
+        .from(SINGLE_ROW)
+        .where(notExists(orm.select({ id: users.id }).from(users).limit(1))),
+    )
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
@@ -146,13 +174,34 @@ export async function deleteUserById(db: D1Database, id: string): Promise<boolea
 export async function searchUsersByEmailPrefix(db: D1Database, prefix: string, offset: number, limit: number) {
   const pattern = prefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
   const orm = getOrm(db);
-  const rows = await orm.select({
-    user: { id: users.id, email: users.email, name: users.name, createdAt: users.createdAt, status: users.status, role: users.role },
-    providers: {
-      totpSecret: users.totpSecret, twoFactorEmail: users.twoFactorEmail, yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2,
-      yubikeyKey3: users.yubikeyKey3, yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
-    },
-    hasTwoFactorPasskey: hasTwoFactorPasskey(orm),
-  }).from(users).where(likeEscaped(users.email, pattern)).orderBy(asc(users.email)).limit(limit + 1).offset(offset);
-  return rows.map(({ user, providers, hasTwoFactorPasskey }) => ({ ...user, twoFactor: twoFactorProviders(providers, hasTwoFactorPasskey).length > 0 }));
+  const rows = await orm
+    .select({
+      user: {
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        createdAt: users.createdAt,
+        status: users.status,
+        role: users.role,
+      },
+      providers: {
+        totpSecret: users.totpSecret,
+        twoFactorEmail: users.twoFactorEmail,
+        yubikeyKey1: users.yubikeyKey1,
+        yubikeyKey2: users.yubikeyKey2,
+        yubikeyKey3: users.yubikeyKey3,
+        yubikeyKey4: users.yubikeyKey4,
+        yubikeyKey5: users.yubikeyKey5,
+      },
+      hasTwoFactorPasskey: hasTwoFactorPasskey(orm),
+    })
+    .from(users)
+    .where(likeEscaped(users.email, pattern))
+    .orderBy(asc(users.email))
+    .limit(limit + 1)
+    .offset(offset);
+  return rows.map(({ user, providers, hasTwoFactorPasskey }) => ({
+    ...user,
+    twoFactor: twoFactorProviders(providers, hasTwoFactorPasskey).length > 0,
+  }));
 }

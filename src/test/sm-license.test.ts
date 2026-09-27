@@ -34,18 +34,26 @@ const MEMBER_ACCESS_CASES = [
 async function assertSecretsManagerOn(env: Env, orgId: string, members: User[]): Promise<void> {
   for (const member of members) {
     const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
-    const { profile } = await synced.json() as { profile: { organizations: ProfileOrganization[] } };
+    const { profile } = (await synced.json()) as { profile: { organizations: ProfileOrganization[] } };
     const { useSecretsManager, accessSecretsManager } = profile.organizations.find((org) => org.id === orgId) ?? {};
-    assert.deepEqual({ useSecretsManager, accessSecretsManager }, { useSecretsManager: true, accessSecretsManager: true });
+    assert.deepEqual(
+      { useSecretsManager, accessSecretsManager },
+      { useSecretsManager: true, accessSecretsManager: true },
+    );
   }
   const organization = await authedFetch(env, { path: `/api/organizations/${orgId}`, userId: members[0].id });
-  assert.equal((await organization.json() as { useSecretsManager: boolean }).useSecretsManager, true);
+  assert.equal(((await organization.json()) as { useSecretsManager: boolean }).useSecretsManager, true);
 }
 
 async function assertNoSecretsManagerLimits(env: Env, orgId: string, owner: User): Promise<void> {
   for (const collection of ['projects', 'service-accounts']) {
     for (let created = 0; created < ITEMS_PAST_LICENSE; created += 1) {
-      const response = await authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/${collection}`, body: { name: ENCRYPTED_FIELD }, userId: owner.id });
+      const response = await authedFetch(env, {
+        method: 'POST',
+        path: `/api/organizations/${orgId}/${collection}`,
+        body: { name: ENCRYPTED_FIELD },
+        userId: owner.id,
+      });
       assert.equal(response.status, 200, `${collection} #${created + 1}`);
     }
   }
@@ -79,7 +87,12 @@ test('creating an org from a license switching Secrets Manager off with zero sea
 test('uploading a license switching Secrets Manager off with zero seats changes nothing', async () => {
   const env = await createTestEnv();
   const { orgId, owner, admin } = await seedSmOrg(env);
-  const uploaded = await authedFetch(env, { method: 'POST', path: `/api/organizations/licenses/self-hosted/${orgId}`, body: smOffLicenseForm(), userId: owner.id });
+  const uploaded = await authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/licenses/self-hosted/${orgId}`,
+    body: smOffLicenseForm(),
+    userId: owner.id,
+  });
   assert.equal(uploaded.status, 200);
   await assertSecretsManagerOn(env, orgId, [owner, admin]);
   await assertNoSecretsManagerLimits(env, orgId, owner);
@@ -93,14 +106,22 @@ for (const { role, type, status, access } of MEMBER_ACCESS_CASES) {
     // Where official web reads a member's Secrets Manager access: the member's own sync profile, and
     // the member list and edit-member dialog an owner opens.
     const synced = await authedFetch(env, { path: '/api/sync', userId: member.id });
-    const { profile } = await synced.json() as { profile: { organizations: ProfileOrganization[] } };
+    const { profile } = (await synced.json()) as { profile: { organizations: ProfileOrganization[] } };
     const listed = await authedFetch(env, { path: `/api/organizations/${orgId}/users`, userId: owner.id });
-    const listEntry = (await listed.json() as { data: MemberAccess[] }).data.find((entry) => entry.userId === member.id);
-    const detail = await authedFetch(env, { path: `/api/organizations/${orgId}/users/${listEntry?.id}`, userId: owner.id });
-    assert.deepEqual({
-      profile: profile.organizations.find((org) => org.id === orgId)?.accessSecretsManager,
-      list: listEntry?.accessSecretsManager,
-      detail: (await detail.json() as MemberAccess).accessSecretsManager,
-    }, { profile: access, list: access, detail: access });
+    const listEntry = ((await listed.json()) as { data: MemberAccess[] }).data.find(
+      (entry) => entry.userId === member.id,
+    );
+    const detail = await authedFetch(env, {
+      path: `/api/organizations/${orgId}/users/${listEntry?.id}`,
+      userId: owner.id,
+    });
+    assert.deepEqual(
+      {
+        profile: profile.organizations.find((org) => org.id === orgId)?.accessSecretsManager,
+        list: listEntry?.accessSecretsManager,
+        detail: ((await detail.json()) as MemberAccess).accessSecretsManager,
+      },
+      { profile: access, list: access, detail: access },
+    );
   });
 }

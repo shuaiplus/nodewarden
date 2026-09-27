@@ -72,7 +72,10 @@ const exportedDb = JSON.parse(new TextDecoder().decode(exportedZip['db.json']));
 for (const table of forbiddenRuntimeTables) {
   assert(!(table in exportedDb), `Export contains forbidden runtime table: ${table}`);
   assert(!(table in exportedManifest.tableCounts), `Manifest counts forbidden runtime table: ${table}`);
-  assert(!exportMock.preparedSql.some((sql) => sqlTouchesTable(sql, table)), `Export queried forbidden runtime table: ${table}`);
+  assert(
+    !exportMock.preparedSql.some((sql) => sqlTouchesTable(sql, table)),
+    `Export queried forbidden runtime table: ${table}`,
+  );
 }
 
 const legacyDb = {
@@ -92,26 +95,31 @@ const legacyDb = {
   used_attachment_download_tokens: [{ token_hash: 'download-secret' }],
 };
 const encoder = new TextEncoder();
-const legacyArchive = zipSync({
-  'manifest.json': encoder.encode(JSON.stringify({
-    formatVersion: 1,
-    exportedAt: new Date(0).toISOString(),
-    appVersion: 'test',
-    storageKind: null,
-    tableCounts: {
-      devices: 1,
-      refresh_tokens: 1,
-      auth_requests: 1,
-      trusted_two_factor_device_tokens: 1,
-      account_passkey_challenges: 1,
-      used_attachment_download_tokens: 1,
-    },
-    includes: { attachments: false },
-    blobSummary: { attachmentFiles: 0, totalBytes: 0, largestObjectBytes: 0 },
-    attachmentBlobs: [],
-  })),
-  'db.json': encoder.encode(JSON.stringify(legacyDb)),
-}, { level: 0 });
+const legacyArchive = zipSync(
+  {
+    'manifest.json': encoder.encode(
+      JSON.stringify({
+        formatVersion: 1,
+        exportedAt: new Date(0).toISOString(),
+        appVersion: 'test',
+        storageKind: null,
+        tableCounts: {
+          devices: 1,
+          refresh_tokens: 1,
+          auth_requests: 1,
+          trusted_two_factor_device_tokens: 1,
+          account_passkey_challenges: 1,
+          used_attachment_download_tokens: 1,
+        },
+        includes: { attachments: false },
+        blobSummary: { attachmentFiles: 0, totalBytes: 0, largestObjectBytes: 0 },
+        attachmentBlobs: [],
+      }),
+    ),
+    'db.json': encoder.encode(JSON.stringify(legacyDb)),
+  },
+  { level: 0 },
+);
 const parsedLegacy = parseBackupArchive(legacyArchive);
 validateBackupPayloadContents(parsedLegacy.payload, parsedLegacy.files);
 for (const table of forbiddenRuntimeTables) {
@@ -123,7 +131,7 @@ await importBackupArchiveBytes(legacyArchive, { DB: restoreMock.db }, 'actor', f
 for (const table of forbiddenRuntimeTables) {
   assert(
     !restoreMock.preparedSql.some((sql) => sqlTouchesTable(sql, table)),
-    `Restore touched forbidden runtime table: ${table}`
+    `Restore touched forbidden runtime table: ${table}`,
   );
 }
 

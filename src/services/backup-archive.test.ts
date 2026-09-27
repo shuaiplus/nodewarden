@@ -8,7 +8,10 @@ const tables = { config: [], users: [], user_revisions: [], folders: [], ciphers
 
 function archive(manifest: unknown, db: unknown): Uint8Array {
   const encoder = new TextEncoder();
-  return zipSync({ 'manifest.json': encoder.encode(JSON.stringify(manifest)), 'db.json': encoder.encode(JSON.stringify(db)) });
+  return zipSync({
+    'manifest.json': encoder.encode(JSON.stringify(manifest)),
+    'db.json': encoder.encode(JSON.stringify(db)),
+  });
 }
 
 test('parseBackupArchive keeps only allowlisted tables and defaults the optional ones', () => {
@@ -23,7 +26,11 @@ test('parseBackupArchive names the first malformed table or manifest field', () 
     [null, tables, 'Unsupported backup format version'],
     [{ formatVersion: 1 }, [], 'Backup archive database payload is invalid'],
     [{ formatVersion: 1 }, { ...tables, users: {} }, 'Backup archive table users is invalid'],
-    [{ formatVersion: 1 }, { ...tables, ciphers: [{ data: { nested: true } }] }, 'Backup archive table ciphers is invalid'],
+    [
+      { formatVersion: 1 },
+      { ...tables, ciphers: [{ data: { nested: true } }] },
+      'Backup archive table ciphers is invalid',
+    ],
     [{ formatVersion: 1, attachmentBlobs: [{ cipherId: 'c1' }] }, tables, 'Backup archive manifest is invalid'],
   ];
   for (const [manifest, db, message] of cases) {

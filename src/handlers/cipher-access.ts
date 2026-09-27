@@ -22,7 +22,7 @@ export async function loadAccessibleCipher(
   db: D1Database,
   userId: string,
   id: string,
-  access: CipherAccess
+  access: CipherAccess,
 ): Promise<Cipher | null> {
   const personal = access === 'admin-edit' ? null : await cipherRepo.getCipherForUser(db, id, userId);
   if (personal) return personal;
@@ -34,13 +34,18 @@ export async function loadAccessibleCipher(
   if (!isActiveMember(member)) return null;
 
   const assigned = await orgRepo.listUserCollectionAccess(env.DB, userId, candidate.organizationId);
-  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, candidate.id, access === 'admin-edit' ? candidate.organizationId : undefined);
+  const collectionIds = await orgRepo.listCipherCollectionIds(
+    env.DB,
+    candidate.id,
+    access === 'admin-edit' ? candidate.organizationId : undefined,
+  );
   const assignedMap = new Map(assigned.map((item) => [item.collectionId, item]));
-  const allowed = access === 'admin-edit'
-    ? resolvePermissions(member).editAnyCollection
-    : access === 'read'
-      ? hasFullCollectionAccess(member) || canViewCipher(member, collectionIds, assignedMap)
-      : canEditCipher(member, collectionIds, assignedMap);
+  const allowed =
+    access === 'admin-edit'
+      ? resolvePermissions(member).editAnyCollection
+      : access === 'read'
+        ? hasFullCollectionAccess(member) || canViewCipher(member, collectionIds, assignedMap)
+        : canEditCipher(member, collectionIds, assignedMap);
   if (!allowed) return null;
 
   (candidate as { collectionIds?: string[] }).collectionIds = collectionIds;
@@ -67,14 +72,16 @@ export async function checkCollectionAssignment(
   env: Env,
   userId: string,
   orgId: string,
-  collectionIds: string[]
+  collectionIds: string[],
 ): Promise<CollectionAssignment> {
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
   if (!isActiveMember(member)) return { ok: false, status: 404, message: 'Organization not found' };
   const fullAccess = hasFullCollectionAccess(member);
-  const writable = new Set(fullAccess
-    ? await listOrgCollectionIds(env, orgId)
-    : writableCollectionIds(await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)));
+  const writable = new Set(
+    fullAccess
+      ? await listOrgCollectionIds(env, orgId)
+      : writableCollectionIds(await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)),
+  );
   const allowed = collectionIds.length ? collectionIds.every((collectionId) => writable.has(collectionId)) : fullAccess;
   return allowed ? { ok: true } : NO_EDIT_PERMISSION;
 }
@@ -102,7 +109,7 @@ export async function planCipherCollectionChange(
   userId: string,
   id: string,
   requested: string[],
-  mode: CollectionChangeMode
+  mode: CollectionChangeMode,
 ): Promise<CollectionChange> {
   const cipher = await cipherRepo.getCipher(db, id);
   const organizationId = cipher?.organizationId;
@@ -110,8 +117,12 @@ export async function planCipherCollectionChange(
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, organizationId);
   if (!isActiveMember(member)) return CIPHER_NOT_FOUND;
   const current = await orgRepo.listCipherCollectionIds(env.DB, cipher.id);
-  const planned = (available: string[]): CollectionChange =>
-    ({ ok: true, cipher, organizationId, plan: planCollectionAssignment({ current, requested, available }) });
+  const planned = (available: string[]): CollectionChange => ({
+    ok: true,
+    cipher,
+    organizationId,
+    plan: planCollectionAssignment({ current, requested, available }),
+  });
 
   if (mode === 'admin') {
     if (!resolvePermissions(member).editAnyCollection) return CIPHER_NOT_FOUND;
@@ -130,11 +141,7 @@ export async function planCipherCollectionChange(
   return planned(writableCollectionIds(accesses));
 }
 
-export async function deleteAuthorizedCipher(
-  db: D1Database,
-  cipher: Cipher,
-  userId: string
-): Promise<void> {
+export async function deleteAuthorizedCipher(db: D1Database, cipher: Cipher, userId: string): Promise<void> {
   if (cipher.organizationId) {
     await cipherRepo.deleteCipherById(db, cipher.id);
     return;
@@ -143,7 +150,12 @@ export async function deleteAuthorizedCipher(
 }
 
 // Upstream separates report/export reads of the whole encrypted vault from single-item admin reads.
-export async function canReadOrganizationCiphers(env: Env, userId: string, orgId: string, scope: 'all' | 'admin'): Promise<boolean> {
+export async function canReadOrganizationCiphers(
+  env: Env,
+  userId: string,
+  orgId: string,
+  scope: 'all' | 'admin',
+): Promise<boolean> {
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
   if (!isActiveMember(member)) return false;
   const permissions = resolvePermissions(member);

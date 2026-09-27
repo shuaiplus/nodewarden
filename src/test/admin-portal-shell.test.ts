@@ -24,7 +24,11 @@ test('portal remains on the Worker origin and independent of vault/JWT configura
   const home = await portalFetch(env, { path: '/admin' });
   assert.equal(home.headers.get('Location'), '/admin/login?returnUrl=%2Fadmin');
   for (const method of ['GET', 'OPTIONS']) {
-    const response = await portalFetch(env, { method, path: '/admin/login', headers: { Origin: 'https://web.example.test' } });
+    const response = await portalFetch(env, {
+      method,
+      path: '/admin/login',
+      headers: { Origin: 'https://web.example.test' },
+    });
     assert.ok(![...response.headers.keys()].some((key) => key.startsWith('access-control-')));
   }
   for (const path of ['/admin-panel', '/administrator', '/ADMIN']) assert.equal(isAdminPortalPath(path), false);
@@ -34,6 +38,17 @@ test('portal remains on the Worker origin and independent of vault/JWT configura
 test('portal rejects fetch and cross-origin form requests', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: 'admin@x.io' });
   assert.equal((await portalFetch(env, { path: '/admin/login', headers: { 'Sec-Fetch-Mode': 'cors' } })).status, 403);
-  for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.io' }, {}]) assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', headers })).status, 403);
-  assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', body: new URLSearchParams({ email: 'bad' }), headers: { 'Sec-Fetch-Site': 'same-origin' } })).status, 400);
+  for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.io' }, {}])
+    assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', headers })).status, 403);
+  assert.equal(
+    (
+      await authedFetch(env, {
+        path: '/admin/login',
+        method: 'POST',
+        body: new URLSearchParams({ email: 'bad' }),
+        headers: { 'Sec-Fetch-Site': 'same-origin' },
+      })
+    ).status,
+    400,
+  );
 });

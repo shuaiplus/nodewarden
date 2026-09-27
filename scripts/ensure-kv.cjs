@@ -14,12 +14,12 @@ const path = require('node:path');
 const CONFIG = path.resolve(__dirname, '..', 'wrangler.kv.toml');
 const BINDING = 'ATTACHMENTS_KV';
 
-const wrangler = (args) =>
-  execSync(`npx wrangler ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+const wrangler = (args) => execSync(`npx wrangler ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
 
 const toml = fs.readFileSync(CONFIG, 'utf8');
-const bindingBlock = (toml.match(/\[\[kv_namespaces\]\][^[]*/g) || [])
-  .find((entry) => new RegExp(`binding\\s*=\\s*"${BINDING}"`).test(entry));
+const bindingBlock = (toml.match(/\[\[kv_namespaces\]\][^[]*/g) || []).find((entry) =>
+  new RegExp(`binding\\s*=\\s*"${BINDING}"`).test(entry),
+);
 if (bindingBlock && /^\s*id\s*=/m.test(bindingBlock)) {
   console.log(`[ensure-kv] ${BINDING} already pinned in wrangler.kv.toml; nothing to do`);
 } else {
@@ -42,9 +42,9 @@ if (bindingBlock && /^\s*id\s*=/m.test(bindingBlock)) {
     console.log(`[ensure-kv] created namespace "${title}" (${id})`);
   }
 
-  fs.writeFileSync(CONFIG, toml.replace(
-    new RegExp(`(\\[\\[kv_namespaces\\]\\]\\s*\\n\\s*binding\\s*=\\s*"${BINDING}")`),
-    `$1\nid = "${id}"`
-  ));
+  fs.writeFileSync(
+    CONFIG,
+    toml.replace(new RegExp(`(\\[\\[kv_namespaces\\]\\]\\s*\\n\\s*binding\\s*=\\s*"${BINDING}")`), `$1\nid = "${id}"`),
+  );
   console.log('[ensure-kv] pinned id into wrangler.kv.toml for this build');
 }

@@ -40,8 +40,9 @@ export function sanitizeDownloadContentType(contentType: string | null | undefin
 // A quote or line break would end the quoted file name early, so each becomes an underscore, and a
 // blank name falls back to the caller's default.
 export function contentDispositionAttachment(fileName: string | null | undefined, fallback: string): string {
-  const value = String(fileName || fallback)
-    .replace(/[\r\n"]/g, '_')
-    .trim() || fallback;
+  const value =
+    String(fileName || fallback)
+      .replace(/[\r\n"]/g, '_')
+      .trim() || fallback;
   return `attachment; filename="${value}"`;
 }

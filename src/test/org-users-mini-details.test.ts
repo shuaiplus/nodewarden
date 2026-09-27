@@ -32,7 +32,7 @@ function miniDetails(env: Env, actor: User, orgId: string): Promise<Response> {
 // requireMember's 404 message, which the router's catch-all 404 ('Not found') does not share.
 async function assertOrganizationNotFound(response: Response): Promise<void> {
   assert.equal(response.status, 404);
-  assert.equal((await response.json() as { error: string }).error, 'Organization not found');
+  assert.equal(((await response.json()) as { error: string }).error, 'Organization not found');
 }
 
 test('mini-details lists every member, invited and revoked ones included, with exactly the upstream keys', async () => {
@@ -51,7 +51,7 @@ test('mini-details lists every member, invited and revoked ones included, with e
 
   const response = await miniDetails(env, owner, orgId);
   assert.equal(response.status, 200);
-  const body = await response.json() as { object: string; data: MiniDetails[]; continuationToken: null };
+  const body = (await response.json()) as { object: string; data: MiniDetails[]; continuationToken: null };
   assert.equal(body.object, 'list');
   assert.equal(body.continuationToken, null);
   assert.equal(body.data.length, 3);

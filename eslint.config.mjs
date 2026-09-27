@@ -24,10 +24,13 @@ const noRawSql = {
     type: 'problem',
     docs: { description: 'Forbid string SQL against D1 and Durable Object storage; build queries with drizzle.' },
     messages: {
-      binding: '{{type}}.{{method}}() runs hand-written SQL. Use the drizzle query builder through getOrm(db) (drizzle-orm/durable-sqlite in Durable Objects).',
-      statement: '{{method}}() on the drizzle database runs a hand-written statement. Build it with the drizzle query builder instead.',
+      binding:
+        '{{type}}.{{method}}() runs hand-written SQL. Use the drizzle query builder through getOrm(db) (drizzle-orm/durable-sqlite in Durable Objects).',
+      statement:
+        '{{method}}() on the drizzle database runs a hand-written statement. Build it with the drizzle query builder instead.',
       sqlRaw: 'sql.raw() splices unescaped text into SQL. Use sql`...` parameters or the query builder.',
-      entryPoint: '{{type}}.{{method}} read as a value hands out the raw SQL entry point. Build queries with drizzle; tests observe statements through wrapStatements (src/test/support/env.ts).',
+      entryPoint:
+        '{{type}}.{{method}} read as a value hands out the raw SQL entry point. Build queries with drizzle; tests observe statements through wrapStatements (src/test/support/env.ts).',
     },
     schema: [],
   },
@@ -41,10 +44,12 @@ const noRawSql = {
     };
     const typeNames = (node) => typeParts(node).map((part) => part.getSymbol()?.getName());
     const rawSqlOwner = (object, method) => typeNames(object).find((name) => RAW_SQL_METHODS.get(name)?.has(method));
-    const memberName = (member) => (member.computed ? member.property.type === 'Literal' && member.property.value : member.property.name);
+    const memberName = (member) =>
+      member.computed ? member.property.type === 'Literal' && member.property.value : member.property.name;
     const isHandWrittenStatement = (query, receiver) =>
       typeNames(query).includes('SQL') ||
-      (typeParts(query).every((part) => part.flags & ts.TypeFlags.StringLike) && typeNames(receiver).some((name) => DRIZZLE_DATABASES.has(name)));
+      (typeParts(query).every((part) => part.flags & ts.TypeFlags.StringLike) &&
+        typeNames(receiver).some((name) => DRIZZLE_DATABASES.has(name)));
     return {
       CallExpression(node) {
         const { callee } = node;
@@ -52,7 +57,11 @@ const noRawSql = {
         const method = memberName(callee);
         if (method === 'raw' && callee.object.type === 'Identifier' && callee.object.name === 'sql') {
           context.report({ node, messageId: 'sqlRaw' });
-        } else if (DRIZZLE_STATEMENT_EXECUTORS.has(method) && node.arguments[0] && isHandWrittenStatement(node.arguments[0], callee.object)) {
+        } else if (
+          DRIZZLE_STATEMENT_EXECUTORS.has(method) &&
+          node.arguments[0] &&
+          isHandWrittenStatement(node.arguments[0], callee.object)
+        ) {
           context.report({ node, messageId: 'statement', data: { method } });
         } else {
           const type = rawSqlOwner(callee.object, method);
@@ -63,7 +72,11 @@ const noRawSql = {
         const method = memberName(node);
         if (!RAW_SQL_ENTRY_POINTS.has(method)) return;
         const { parent } = node;
-        if ((parent.type === 'CallExpression' && parent.callee === node) || (parent.type === 'AssignmentExpression' && parent.left === node)) return;
+        if (
+          (parent.type === 'CallExpression' && parent.callee === node) ||
+          (parent.type === 'AssignmentExpression' && parent.left === node)
+        )
+          return;
         const type = rawSqlOwner(node.object, method);
         if (type) context.report({ node, messageId: 'entryPoint', data: { type, method } });
       },
@@ -87,7 +100,11 @@ const noSingleUseFunction = {
     const exportedNames = new Set();
     const functionBody = (definition) => {
       if (definition.type === 'FunctionName' && definition.node.type === 'FunctionDeclaration') return definition.node;
-      if (definition.type === 'Variable' && definition.parent.kind === 'const' && FUNCTION_VALUES.has(definition.node.init?.type)) {
+      if (
+        definition.type === 'Variable' &&
+        definition.parent.kind === 'const' &&
+        FUNCTION_VALUES.has(definition.node.init?.type)
+      ) {
         return definition.node.init;
       }
       return null;
@@ -106,10 +123,15 @@ const noSingleUseFunction = {
             const definition = variable.defs.find(functionBody);
             if (!definition || isExported(definition) || exportedNames.has(variable.name)) continue;
             const body = functionBody(definition);
-            const insideBody = ({ identifier: { range: [start, end] } }) => start >= body.range[0] && end <= body.range[1];
+            const insideBody = ({
+              identifier: {
+                range: [start, end],
+              },
+            }) => start >= body.range[0] && end <= body.range[1];
             // A recursive function needs its name to call itself, so it cannot be inlined.
             if (variable.references.some(insideBody)) continue;
-            if (variable.references.length === 1) context.report({ node: definition.name, messageId: 'singleUse', data: { name: variable.name } });
+            if (variable.references.length === 1)
+              context.report({ node: definition.name, messageId: 'singleUse', data: { name: variable.name } });
           }
         }
       },
@@ -132,13 +154,17 @@ export default defineConfig([
       '@typescript-eslint/no-unused-expressions': 'error',
       'nodewarden/no-single-use-function': 'error',
       // Hand-written SQL lives only in src/db/sql.ts as typed helpers; everything else composes drizzle.
-      'no-restricted-imports': ['error', {
-        paths: ['drizzle-orm', 'drizzle-orm/sql'].map((name) => ({
-          name,
-          importNames: ['sql'],
-          message: 'Build queries with drizzle operators or the typed helpers in src/db/sql.ts; sql templates are not allowed elsewhere.',
-        })),
-      }],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: ['drizzle-orm', 'drizzle-orm/sql'].map((name) => ({
+            name,
+            importNames: ['sql'],
+            message:
+              'Build queries with drizzle operators or the typed helpers in src/db/sql.ts; sql templates are not allowed elsewhere.',
+          })),
+        },
+      ],
     },
   },
   {

@@ -45,7 +45,12 @@ async function errorOf(response: Response): Promise<{ status: number; error: str
 }
 
 function publicKeys(env: Env, actor: User, orgId: string, body: unknown): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: `/api/organizations/${orgId}/users/public-keys`, body, userId: actor.id });
+  return authedFetch(env, {
+    method: 'POST',
+    path: `/api/organizations/${orgId}/users/public-keys`,
+    body,
+    userId: actor.id,
+  });
 }
 
 test('an emergency access grantor reads the grantee public key and confirms with it', async () => {
@@ -71,7 +76,7 @@ test('an emergency access grantor reads the grantee public key and confirms with
 
   const response = await authedFetch(env, { path: `/api/users/${grantee.id}/public-key`, userId: grantor.id });
   assert.equal(response.status, 200);
-  const body = await response.json() as UserKey;
+  const body = (await response.json()) as UserKey;
   assert.deepEqual(body, { userId: grantee.id, publicKey: PUBLIC_KEY, object: 'userKey' });
 
   const confirmed = await authedFetch(env, {
@@ -90,8 +95,14 @@ test('a user public key is 404 for an unknown user or one without keys, and need
 
   // The router's own fall-through is also a 404, so the upstream message proves the route ran.
   const notFound = { status: 404, error: NOT_FOUND };
-  assert.deepEqual(await errorOf(await authedFetch(env, { path: `/api/users/${crypto.randomUUID()}/public-key`, userId: caller.id })), notFound);
-  assert.deepEqual(await errorOf(await authedFetch(env, { path: `/api/users/${keyless.id}/public-key`, userId: caller.id })), notFound);
+  assert.deepEqual(
+    await errorOf(await authedFetch(env, { path: `/api/users/${crypto.randomUUID()}/public-key`, userId: caller.id })),
+    notFound,
+  );
+  assert.deepEqual(
+    await errorOf(await authedFetch(env, { path: `/api/users/${keyless.id}/public-key`, userId: caller.id })),
+    notFound,
+  );
   assert.equal((await authedFetch(env, { path: `/api/users/${keyless.id}/public-key` })).status, 401);
 });
 
@@ -108,19 +119,30 @@ test('bulk member public keys list only Accepted members of this organization, t
   const foreign = await addMember(env, otherOrgId, MembershipStatus.Accepted);
 
   const unknownIds = Array.from({ length: MANY_IDS }, () => crypto.randomUUID());
-  const ids = [...unknownIds, ...[accepted, confirmed, keyless, invited, revoked, foreign].map(({ memberId }) => memberId)];
+  const ids = [
+    ...unknownIds,
+    ...[accepted, confirmed, keyless, invited, revoked, foreign].map(({ memberId }) => memberId),
+  ];
   const response = await publicKeys(env, owner, orgId, { ids });
   assert.equal(response.status, 200);
-  const body = await response.json() as { data: MemberPublicKey[]; object: string };
+  const body = (await response.json()) as { data: MemberPublicKey[]; object: string };
   assert.equal(body.object, 'list');
   // An Accepted member without keys is still listed, with a null key, as upstream.
-  const expected = [[accepted, PUBLIC_KEY], [keyless, null]] as const;
-  assert.deepEqual(body.data.toSorted(byId), expected.map(([member, key]) => ({
-    id: member.memberId,
-    userId: member.user.id,
-    key,
-    object: 'organizationUserPublicKeyResponseModel',
-  })).toSorted(byId));
+  const expected = [
+    [accepted, PUBLIC_KEY],
+    [keyless, null],
+  ] as const;
+  assert.deepEqual(
+    body.data.toSorted(byId),
+    expected
+      .map(([member, key]) => ({
+        id: member.memberId,
+        userId: member.user.id,
+        key,
+        object: 'organizationUserPublicKeyResponseModel',
+      }))
+      .toSorted(byId),
+  );
 
   const confirm = await authedFetch(env, {
     method: 'POST',
@@ -146,5 +168,8 @@ test('bulk member public keys need manageUsers, an organization membership and a
   const tooFew = { status: 400, error: ONE_ID_REQUIRED };
   assert.deepEqual(await errorOf(await publicKeys(env, owner, orgId, { ids: [] })), tooFew);
   assert.deepEqual(await errorOf(await publicKeys(env, owner, orgId, {})), tooFew);
-  assert.deepEqual(await errorOf(await publicKeys(env, owner, orgId, { ids: null })), { status: 400, error: IDS_REQUIRED });
+  assert.deepEqual(await errorOf(await publicKeys(env, owner, orgId, { ids: null })), {
+    status: 400,
+    error: IDS_REQUIRED,
+  });
 });

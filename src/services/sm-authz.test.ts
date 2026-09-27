@@ -3,7 +3,14 @@ import test from 'node:test';
 import { grantsFromRows, projectAccess } from './sm-authz';
 
 test('project grants merge direct and group access and admins bypass policy checks', () => {
-  const grants = grantsFromRows({ projects: [{ id: 'p', write_access: 0 }, { id: 'p', write_access: 1 }], secrets: [], serviceAccounts: [] });
+  const grants = grantsFromRows({
+    projects: [
+      { id: 'p', write_access: 0 },
+      { id: 'p', write_access: 1 },
+    ],
+    secrets: [],
+    serviceAccounts: [],
+  });
   assert.equal(projectAccess({ kind: 'user', membershipId: 'u' }, grants, 'p'), 'write');
   assert.equal(projectAccess({ kind: 'user', membershipId: 'u' }, grants, 'other'), 'none');
   assert.equal(projectAccess({ kind: 'admin', membershipId: 'a' }, grants, 'other'), 'write');
@@ -13,7 +20,14 @@ test('project grants merge direct and group access and admins bypass policy chec
 test('secret writes require destination write but preserve directly granted projectless edits', async () => {
   const { secretAccess, canCreateSecret, canUpdateSecret } = await import('./sm-authz');
   const user = { kind: 'user', membershipId: 'u' } as const;
-  const grants = grantsFromRows({ projects: [{ id: 'read', write_access: 0 }, { id: 'write', write_access: 1 }], secrets: [{ id: 's', write_access: 1 }], serviceAccounts: [] });
+  const grants = grantsFromRows({
+    projects: [
+      { id: 'read', write_access: 0 },
+      { id: 'write', write_access: 1 },
+    ],
+    secrets: [{ id: 's', write_access: 1 }],
+    serviceAccounts: [],
+  });
   assert.equal(secretAccess(user, grants, { id: 'other', projectIds: ['read'] }), 'read');
   assert.equal(canCreateSecret(user, grants, undefined), false);
   assert.equal(canCreateSecret(user, grants, 'write'), true);
@@ -35,13 +49,46 @@ test('machine-account management is human-only and its people grants always allo
 test('policy parsing validates read/write, canonical uniqueness, and machine-account RW', async () => {
   const { parsePolicyRequests } = await import('./sm-authz');
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: true, write: false }], 'granteeId', false), { ok: true, value: new Map([[id, 'read']]) });
-  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: true }, { granteeId: id.toUpperCase(), read: true }], 'granteeId', false), { ok: false, message: 'Resources must be unique' });
-  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', false), { ok: false, message: 'Resources must be Read = true' });
-  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', true), { ok: false, message: 'Machine account access must be Can read, write' });
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: true, write: false }], 'granteeId', false), {
+    ok: true,
+    value: new Map([[id, 'read']]),
+  });
+  assert.deepEqual(
+    parsePolicyRequests(
+      [
+        { granteeId: id, read: true },
+        { granteeId: id.toUpperCase(), read: true },
+      ],
+      'granteeId',
+      false,
+    ),
+    { ok: false, message: 'Resources must be unique' },
+  );
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', false), {
+    ok: false,
+    message: 'Resources must be Read = true',
+  });
+  assert.deepEqual(parsePolicyRequests([{ granteeId: id, read: false, write: true }], 'granteeId', true), {
+    ok: false,
+    message: 'Machine account access must be Can read, write',
+  });
 });
 
 test('policy diffs exclude unchanged grants and distinguish create from update', async () => {
   const { diffPolicies } = await import('./sm-authz');
-  assert.deepEqual(diffPolicies(new Map([['same', 'read'], ['changed', 'read'], ['gone', 'write']]), new Map([['same', 'read'], ['changed', 'write'], ['new', 'read']])), { created: ['new'], updated: ['changed'], deleted: ['gone'] });
+  assert.deepEqual(
+    diffPolicies(
+      new Map([
+        ['same', 'read'],
+        ['changed', 'read'],
+        ['gone', 'write'],
+      ]),
+      new Map([
+        ['same', 'read'],
+        ['changed', 'write'],
+        ['new', 'read'],
+      ]),
+    ),
+    { created: ['new'], updated: ['changed'], deleted: ['gone'] },
+  );
 });

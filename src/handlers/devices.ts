@@ -1,4 +1,9 @@
-import type { Device, DevicePendingAuthRequest, DeviceResponse, ProtectedDeviceResponse as ProtectedDeviceWireResponse } from '../types';
+import type {
+  Device,
+  DevicePendingAuthRequest,
+  DeviceResponse,
+  ProtectedDeviceResponse as ProtectedDeviceWireResponse,
+} from '../types';
 import { Env } from '../types';
 import { getOnlineUserDevices, notifyUserLogout } from '../durable/notifications-hub';
 import { AuthService } from '../services/auth';
@@ -18,7 +23,9 @@ function normalizeIdentifier(value: string | null | undefined): string {
   return String(value || '').trim();
 }
 
-function buildDevicePendingAuthRequest(value?: { id?: string | null; creationDate?: string | null } | null): DevicePendingAuthRequest | null {
+function buildDevicePendingAuthRequest(
+  value?: { id?: string | null; creationDate?: string | null } | null,
+): DevicePendingAuthRequest | null {
   if (!value?.id || !value.creationDate) return null;
   return {
     id: String(value.id),
@@ -71,7 +78,11 @@ function buildDeviceResponse(device: Device): DeviceResponse {
 }
 
 const storedKey = z.string().nullable().optional();
-const DeviceKeysSchema = z.object({ encryptedUserKey: storedKey, encryptedPublicKey: storedKey, encryptedPrivateKey: storedKey });
+const DeviceKeysSchema = z.object({
+  encryptedUserKey: storedKey,
+  encryptedPublicKey: storedKey,
+  encryptedPrivateKey: storedKey,
+});
 
 // A key the body leaves out keeps the stored value; an explicit null clears it.
 function withStoredKeys(keys: z.output<typeof DeviceKeysSchema>, stored?: Device) {
@@ -92,12 +103,14 @@ const DeviceFieldsSchema = z.looseObject({}).transform((body) => ({
 }));
 
 const DEVICE_REQUIRED = { error: 'Device identifier and type are required' };
-const RegisterDeviceSchema = DeviceFieldsSchema.pipe(DeviceKeysSchema.extend({
-  deviceIdentifier: z.string(DEVICE_REQUIRED).trim().min(1, DEVICE_REQUIRED),
-  deviceName: DeviceInfoSchema.shape.deviceName,
-  deviceType: z.coerce.number(DEVICE_REQUIRED).int(DEVICE_REQUIRED).min(0, DEVICE_REQUIRED),
-  pushToken: z.string().trim().catch(''),
-}));
+const RegisterDeviceSchema = DeviceFieldsSchema.pipe(
+  DeviceKeysSchema.extend({
+    deviceIdentifier: z.string(DEVICE_REQUIRED).trim().min(1, DEVICE_REQUIRED),
+    deviceName: DeviceInfoSchema.shape.deviceName,
+    deviceType: z.coerce.number(DEVICE_REQUIRED).int(DEVICE_REQUIRED).min(0, DEVICE_REQUIRED),
+    pushToken: z.string().trim().catch(''),
+  }),
+);
 
 const NAME_REQUIRED = { error: 'Device name is required' };
 const DeviceNameSchema = z.object({ name: z.string(NAME_REQUIRED).trim().min(1, NAME_REQUIRED).pipe(deviceText) });
@@ -108,7 +121,9 @@ const UpdateTrustSchema = z.object({
 });
 
 const PASSWORD_REQUIRED = { error: 'masterPasswordHash is required' };
-const MasterPasswordSchema = z.object({ masterPasswordHash: z.string(PASSWORD_REQUIRED).trim().min(1, PASSWORD_REQUIRED) });
+const MasterPasswordSchema = z.object({
+  masterPasswordHash: z.string(PASSWORD_REQUIRED).trim().min(1, PASSWORD_REQUIRED),
+});
 
 const PUSH_TOKEN_INVALID = { error: 'Invalid push token' };
 const PushTokenSchema = z.object({ pushToken: z.string(PUSH_TOKEN_INVALID).trim().min(1, PUSH_TOKEN_INVALID) });
@@ -204,7 +219,7 @@ export async function handleGetDeviceByIdentifier(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = normalizeIdentifier(deviceIdentifier);
@@ -223,7 +238,7 @@ export async function handleGetDevice(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   return handleGetDeviceByIdentifier(request, env, userId, deviceIdentifier);
 }
@@ -245,7 +260,7 @@ export async function handleGetAuthorizedDevices(request: Request, env: Env, use
   }
 
   const knownIdentifiers = new Set<string>();
-  const data = devices.map(device => {
+  const data = devices.map((device) => {
     knownIdentifiers.add(device.deviceIdentifier);
     const trustedInfo = trustedByIdentifier.get(device.deviceIdentifier);
     return {
@@ -308,7 +323,7 @@ export async function handleRevokeTrustedDevice(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = String(deviceIdentifier || '').trim();
@@ -333,13 +348,18 @@ export async function handleTrustDevicePermanently(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 
-  const updated = await deviceRepo.updateTrustedTwoFactorTokensExpiryByDevice(env.DB, userId, normalized, PERMANENT_TRUST_EXPIRES_AT_MS);
+  const updated = await deviceRepo.updateTrustedTwoFactorTokensExpiryByDevice(
+    env.DB,
+    userId,
+    normalized,
+    PERMANENT_TRUST_EXPIRES_AT_MS,
+  );
   if (!updated) return errorResponse('Device is not currently trusted', 409);
   await writeAuditEvent(env.DB, {
     actorUserId: userId,
@@ -363,7 +383,7 @@ export async function handleDeleteDevice(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = String(deviceIdentifier || '').trim();
@@ -395,7 +415,7 @@ export async function handleUpdateDeviceName(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
@@ -438,7 +458,8 @@ export async function handleDeleteAllDevices(request: Request, env: Env, userId:
   const originalSecurityStamp = user.securityStamp;
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
-  if (!await userRepo.saveUser(env.DB, user, ['securityStamp'], originalSecurityStamp)) return errorResponse('User verification failed.', 400);
+  if (!(await userRepo.saveUser(env.DB, user, ['securityStamp'], originalSecurityStamp)))
+    return errorResponse('User verification failed.', 400);
   const [removedTrusted, removedSessions, removedDevices] = await Promise.all([
     deviceRepo.deleteTrustedTwoFactorTokensByUserId(env.DB, userId),
     sessionRepo.deleteRefreshTokensByUserId(env.DB, userId),
@@ -463,7 +484,7 @@ export async function handleUpdateDeviceKeys(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
@@ -485,24 +506,22 @@ export async function handleUpdateDeviceKeys(
 }
 
 // POST /api/devices/update-trust
-export async function handleUpdateDeviceTrust(
-  request: Request,
-  env: Env,
-  userId: string
-): Promise<Response> {
+export async function handleUpdateDeviceTrust(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await parseBody(request, UpdateTrustSchema);
   if (body instanceof Response) return body;
   const currentDeviceIdentifier =
     normalizeIdentifier(request.headers.get('Device-Identifier')) ||
     normalizeIdentifier(request.headers.get('X-Device-Identifier'));
   const requested = [
-    ...(currentDeviceIdentifier && body.currentDevice ? [{ ...body.currentDevice, deviceId: currentDeviceIdentifier }] : []),
+    ...(currentDeviceIdentifier && body.currentDevice
+      ? [{ ...body.currentDevice, deviceId: currentDeviceIdentifier }]
+      : []),
     ...(body.otherDevices ?? []).filter((item) => item.deviceId),
   ];
 
   let updatedCount = 0;
   for (const { deviceId, ...keys } of requested) {
-    const stored = await deviceRepo.getDevice(env.DB, userId, deviceId) || undefined;
+    const stored = (await deviceRepo.getDevice(env.DB, userId, deviceId)) || undefined;
     if (await deviceRepo.updateDeviceKeys(env.DB, userId, deviceId, withStoredKeys(keys, stored))) updatedCount++;
   }
 
@@ -510,11 +529,7 @@ export async function handleUpdateDeviceTrust(
 }
 
 // POST /api/devices/untrust
-export async function handleUntrustDevices(
-  request: Request,
-  env: Env,
-  userId: string
-): Promise<Response> {
+export async function handleUntrustDevices(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await parseBody(request, z.object({ devices: z.array(z.coerce.string().trim()).default([]) }));
   if (body instanceof Response) return body;
   const { devices } = body;
@@ -540,7 +555,7 @@ export async function handleRetrieveDeviceKeys(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = normalizeIdentifier(deviceIdentifier);
@@ -579,7 +594,7 @@ export async function handleDeactivateDevice(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   const normalized = normalizeIdentifier(deviceIdentifier);
@@ -612,7 +627,7 @@ export async function handleUpdateDeviceToken(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   const normalized = normalizeIdentifier(deviceIdentifier);
   if (!normalized) return errorResponse('Invalid device identifier', 400);
@@ -644,7 +659,7 @@ export async function handleUpdateDeviceWebPushAuth(
   request: Request,
   env: Env,
   userId: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response> {
   void request;
   void env;

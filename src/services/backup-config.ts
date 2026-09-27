@@ -1,4 +1,9 @@
-import { convertIPv4MappedIPv6ToIPv4, convertIPv4ToBinary, convertIPv6ToBinary, isIPv4MappedIPv6 } from 'hono/utils/ipaddr';
+import {
+  convertIPv4MappedIPv6ToIPv4,
+  convertIPv4ToBinary,
+  convertIPv6ToBinary,
+  isIPv4MappedIPv6,
+} from 'hono/utils/ipaddr';
 import { z } from 'zod';
 import type { Env, User } from '../types';
 import {
@@ -55,11 +60,31 @@ function asTrimmedString(value: unknown): string {
 
 // Backup destinations must not reach private, loopback, link-local, carrier-grade NAT, benchmarking,
 // documentation, multicast or reserved space (SSRF). An IPv4-mapped IPv6 address is judged by its IPv4.
-const BLOCKED_IPV4 = ([['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
-  ['192.0.0.0', 16], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]] as const)
-  .map(([network, prefix]) => [convertIPv4ToBinary(network), prefix] as const);
-const BLOCKED_IPV6 = ([['::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['2001:db8::', 32]] as const)
-  .map(([network, prefix]) => [convertIPv6ToBinary(network), prefix] as const);
+const BLOCKED_IPV4 = (
+  [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 16],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['198.51.100.0', 24],
+    ['203.0.113.0', 24],
+    ['224.0.0.0', 3],
+  ] as const
+).map(([network, prefix]) => [convertIPv4ToBinary(network), prefix] as const);
+const BLOCKED_IPV6 = (
+  [
+    ['::', 16],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['ff00::', 8],
+    ['2001:db8::', 32],
+  ] as const
+).map(([network, prefix]) => [convertIPv6ToBinary(network), prefix] as const);
 // URL parsing canonicalises IPv4 hosts to dotted quads; anything else with dots is a DNS name.
 const IPV4_LITERAL = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
@@ -82,7 +107,11 @@ export function normalizeBackupEndpointUrl(value: string, label: string): string
   if (parsed.search || parsed.hash) {
     throw new Error(`${label} must not include query or fragment`);
   }
-  const normalized = parsed.hostname.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const normalized = parsed.hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
   if (!normalized) throw new Error(`${label} host is required`);
   if (
     normalized === 'localhost' ||
@@ -166,26 +195,33 @@ function endpointUrl(label: string) {
 }
 
 // A scheduled destination needs every credential; an unscheduled one may be saved half-filled.
-function requireWhenScheduled(enabled: boolean, context: z.RefinementCtx, fields: Array<[field: string, value: string, message: string]>): void {
+function requireWhenScheduled(
+  enabled: boolean,
+  context: z.RefinementCtx,
+  fields: Array<[field: string, value: string, message: string]>,
+): void {
   if (!enabled) return;
   fields
     .filter(([, value]) => !value)
     .forEach(([field, , message]) => context.addIssue({ code: 'custom', message, path: ['destination', field] }));
 }
 
-const BackupRuntimeSchema = z.preprocess((runtime) => (isPlainObject(runtime) ? runtime : {}), z.object({
-  lastAttemptAt: isoTimestamp,
-  lastAttemptLocalDate: nullableText,
-  lastSuccessAt: isoTimestamp,
-  lastErrorAt: isoTimestamp,
-  lastErrorMessage: nullableText,
-  lastUploadedFileName: nullableText,
-  lastUploadedSizeBytes: z.preprocess((size) => {
-    const bytes = size === null || size === '' ? Number.NaN : Number(size);
-    return Number.isFinite(bytes) && bytes >= 0 ? Math.floor(bytes) : null;
-  }, z.number().nullable()),
-  lastUploadedDestination: nullableText,
-}));
+const BackupRuntimeSchema = z.preprocess(
+  (runtime) => (isPlainObject(runtime) ? runtime : {}),
+  z.object({
+    lastAttemptAt: isoTimestamp,
+    lastAttemptLocalDate: nullableText,
+    lastSuccessAt: isoTimestamp,
+    lastErrorAt: isoTimestamp,
+    lastErrorMessage: nullableText,
+    lastUploadedFileName: nullableText,
+    lastUploadedSizeBytes: z.preprocess((size) => {
+      const bytes = size === null || size === '' ? Number.NaN : Number(size);
+      return Number.isFinite(bytes) && bytes >= 0 ? Math.floor(bytes) : null;
+    }, z.number().nullable()),
+    lastUploadedDestination: nullableText,
+  }),
+);
 
 const destinationRecordFields = {
   id: z.string(),
@@ -194,7 +230,8 @@ const destinationRecordFields = {
   schedule: z.object({
     enabled: z.preprocess(Boolean, z.boolean()),
     intervalHours: integerBetween(1, 99, 'Backup interval hours must be between 1 and 99'),
-    startTime: z.string()
+    startTime: z
+      .string()
       .regex(/^([01]?\d|2[0-3])(?::[0-5]?\d)?$/, { error: 'Backup start time must be in HH:mm format' })
       .transform((time) => {
         const [hour, minute = '0'] = time.split(':');
@@ -203,85 +240,116 @@ const destinationRecordFields = {
     timezone: z.string().refine(isValidTimeZone, { error: 'Invalid backup timezone' }),
     retentionCount: z.preprocess(
       (count) => (count === null || String(count).trim() === '' ? null : count),
-      integerBetween(1, 1000, 'Backup retention count must be between 1 and 1000').nullable()
+      integerBetween(1, 1000, 'Backup retention count must be between 1 and 1000').nullable(),
     ),
   }),
   runtime: BackupRuntimeSchema,
 };
 
-const BackupDestinationRecordSchema = z.discriminatedUnion('type', [
-  z.object({
-    ...destinationRecordFields,
-    type: z.literal('s3'),
-    destination: z.object({
-      endpoint: endpointUrl('S3 endpoint'),
-      bucket: text,
-      addressingStyle: text.transform((style): S3BackupAddressingStyle => (style === 'virtual-hosted-style' ? style : 'path-style')),
-      region: text.transform((region) => region || BACKUP_DEFAULT_S3_REGION),
-      accessKeyId: text,
-      secretAccessKey: text,
-      rootPath: remotePath,
-    }),
-  }).superRefine(({ schedule, destination }, context) => requireWhenScheduled(schedule.enabled, context, [
-    ['endpoint', destination.endpoint, 'S3 endpoint is required'],
-    ['bucket', destination.bucket, 'S3 bucket is required'],
-    ['accessKeyId', destination.accessKeyId, 'S3 access key is required'],
-    ['secretAccessKey', destination.secretAccessKey, 'S3 secret key is required'],
-  ])),
-  z.object({
-    ...destinationRecordFields,
-    type: z.literal('webdav'),
-    destination: z.object({
-      baseUrl: endpointUrl('WebDAV server URL'),
-      username: text,
-      password: z.preprocess((password) => String(password ?? ''), z.string()),
-      remotePath,
-    }),
-  }).superRefine(({ schedule, destination }, context) => requireWhenScheduled(schedule.enabled, context, [
-    ['baseUrl', destination.baseUrl, 'WebDAV server URL is required'],
-    ['username', destination.username, 'WebDAV username is required'],
-    ['password', destination.password, 'WebDAV password is required'],
-  ])),
-], { error: (issue) => (issue.code === 'invalid_union' ? 'Backup destination type is invalid' : 'Backup destination is invalid') });
+const BackupDestinationRecordSchema = z.discriminatedUnion(
+  'type',
+  [
+    z
+      .object({
+        ...destinationRecordFields,
+        type: z.literal('s3'),
+        destination: z.object({
+          endpoint: endpointUrl('S3 endpoint'),
+          bucket: text,
+          addressingStyle: text.transform((style): S3BackupAddressingStyle =>
+            style === 'virtual-hosted-style' ? style : 'path-style',
+          ),
+          region: text.transform((region) => region || BACKUP_DEFAULT_S3_REGION),
+          accessKeyId: text,
+          secretAccessKey: text,
+          rootPath: remotePath,
+        }),
+      })
+      .superRefine(({ schedule, destination }, context) =>
+        requireWhenScheduled(schedule.enabled, context, [
+          ['endpoint', destination.endpoint, 'S3 endpoint is required'],
+          ['bucket', destination.bucket, 'S3 bucket is required'],
+          ['accessKeyId', destination.accessKeyId, 'S3 access key is required'],
+          ['secretAccessKey', destination.secretAccessKey, 'S3 secret key is required'],
+        ]),
+      ),
+    z
+      .object({
+        ...destinationRecordFields,
+        type: z.literal('webdav'),
+        destination: z.object({
+          baseUrl: endpointUrl('WebDAV server URL'),
+          username: text,
+          password: z.preprocess((password) => String(password ?? ''), z.string()),
+          remotePath,
+        }),
+      })
+      .superRefine(({ schedule, destination }, context) =>
+        requireWhenScheduled(schedule.enabled, context, [
+          ['baseUrl', destination.baseUrl, 'WebDAV server URL is required'],
+          ['username', destination.username, 'WebDAV username is required'],
+          ['password', destination.password, 'WebDAV password is required'],
+        ]),
+      ),
+  ],
+  {
+    error: (issue) =>
+      issue.code === 'invalid_union' ? 'Backup destination type is invalid' : 'Backup destination is invalid',
+  },
+);
 
 function backupSettingsSchema(previousById: ReadonlyMap<string, BackupDestinationRecord>, fallbackTimezone: string) {
   return z.object({
-    destinations: z.array(z.unknown(), { error: 'Backup destinations are invalid' })
+    destinations: z
+      .array(z.unknown(), { error: 'Backup destinations are invalid' })
       .max(MAX_BACKUP_DESTINATIONS, { error: `You can save up to ${MAX_BACKUP_DESTINATIONS} backup destinations` })
       // A save may omit fields: they keep the values of the stored destination with the same id (or the
       // defaults), and a blank or redacted secret keeps the stored secret. The schema then validates the
       // merged record. Entries that are not objects or name an unknown type pass through for the schema
       // to reject.
-      .transform((entries) => entries.map((input, index): unknown => {
-        if (!isPlainObject(input)) return input;
-        const requestedType = asTrimmedString(input.type);
-        const type = requestedType === 'e3' ? 's3' : requestedType;
-        if (type !== 's3' && type !== 'webdav') return input;
+      .transform((entries) =>
+        entries.map((input, index): unknown => {
+          if (!isPlainObject(input)) return input;
+          const requestedType = asTrimmedString(input.type);
+          const type = requestedType === 'e3' ? 's3' : requestedType;
+          if (type !== 's3' && type !== 'webdav') return input;
 
-        const id = asTrimmedString(input.id) || createBackupRandomId();
-        const previous = previousById.get(id);
-        const previousSchedule = previous?.schedule ?? createDefaultBackupScheduleConfig(fallbackTimezone);
-        const schedule = isPlainObject(input.schedule) ? input.schedule : {};
-        const destination = isPlainObject(input.destination) ? input.destination : {};
-        const secretField = type === 's3' ? 'secretAccessKey' : 'password';
-        const previousDestination: Record<string, unknown> = previous?.type === type ? { ...previous.destination } : {};
-        const keepSecret = ['', REDACTED_BACKUP_SECRET].includes(String(destination[secretField] ?? ''));
-        return {
-          id,
-          name: asTrimmedString(input.name) || previous?.name || createDefaultBackupDestinationName(type, index + 1),
-          type,
-          includeAttachments: typeof input.includeAttachments === 'boolean' ? input.includeAttachments : previous?.includeAttachments ?? false,
-          destination: keepSecret ? { ...destination, [secretField]: previousDestination[secretField] || '' } : destination,
-          schedule: {
-            enabled: schedule.enabled ?? previousSchedule.enabled,
-            intervalHours: schedule.intervalHours == null || schedule.intervalHours === '' ? previousSchedule.intervalHours : schedule.intervalHours,
-            startTime: asTrimmedString(schedule.startTime) || previousSchedule.startTime,
-            timezone: asTrimmedString(schedule.timezone ?? previousSchedule.timezone) || fallbackTimezone,
-            retentionCount: Object.hasOwn(schedule, 'retentionCount') ? schedule.retentionCount : previousSchedule.retentionCount,
-          },
-          runtime: previous?.runtime ?? input.runtime,
-        };
-      }))
+          const id = asTrimmedString(input.id) || createBackupRandomId();
+          const previous = previousById.get(id);
+          const previousSchedule = previous?.schedule ?? createDefaultBackupScheduleConfig(fallbackTimezone);
+          const schedule = isPlainObject(input.schedule) ? input.schedule : {};
+          const destination = isPlainObject(input.destination) ? input.destination : {};
+          const secretField = type === 's3' ? 'secretAccessKey' : 'password';
+          const previousDestination: Record<string, unknown> =
+            previous?.type === type ? { ...previous.destination } : {};
+          const keepSecret = ['', REDACTED_BACKUP_SECRET].includes(String(destination[secretField] ?? ''));
+          return {
+            id,
+            name: asTrimmedString(input.name) || previous?.name || createDefaultBackupDestinationName(type, index + 1),
+            type,
+            includeAttachments:
+              typeof input.includeAttachments === 'boolean'
+                ? input.includeAttachments
+                : (previous?.includeAttachments ?? false),
+            destination: keepSecret
+              ? { ...destination, [secretField]: previousDestination[secretField] || '' }
+              : destination,
+            schedule: {
+              enabled: schedule.enabled ?? previousSchedule.enabled,
+              intervalHours:
+                schedule.intervalHours == null || schedule.intervalHours === ''
+                  ? previousSchedule.intervalHours
+                  : schedule.intervalHours,
+              startTime: asTrimmedString(schedule.startTime) || previousSchedule.startTime,
+              timezone: asTrimmedString(schedule.timezone ?? previousSchedule.timezone) || fallbackTimezone,
+              retentionCount: Object.hasOwn(schedule, 'retentionCount')
+                ? schedule.retentionCount
+                : previousSchedule.retentionCount,
+            },
+            runtime: previous?.runtime ?? input.runtime,
+          };
+        }),
+      )
       .pipe(z.array(BackupDestinationRecordSchema))
       .refine((destinations) => new Set(destinations.map(({ id }) => id)).size === destinations.length, {
         error: 'Backup destination ids must be unique',
@@ -326,7 +394,9 @@ export function parseBackupSettings(raw: string | null, fallbackTimezone: string
 
 export function normalizeBackupSettingsInput(destinations: unknown, previous: BackupSettings) {
   const previousById = new Map(previous.destinations.map((destination) => [destination.id, destination]));
-  return backupSettingsSchema(previousById, BACKUP_DEFAULT_TIMEZONE).safeParse({ destinations: destinations ?? previous.destinations });
+  return backupSettingsSchema(previousById, BACKUP_DEFAULT_TIMEZONE).safeParse({
+    destinations: destinations ?? previous.destinations,
+  });
 }
 
 // Runtime state is stored in its own config row, so the settings row keeps only the defaults.
@@ -364,7 +434,11 @@ export function redactBackupSettingsSecrets(settings: BackupSettings): BackupSet
   };
 }
 
-export async function loadBackupSettings(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettings> {
+export async function loadBackupSettings(
+  db: D1Database,
+  env: Env,
+  fallbackTimezone: string = 'UTC',
+): Promise<BackupSettings> {
   const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   const mergeRuntime = async (settings: BackupSettings): Promise<BackupSettings> => {
     const runtimes = await loadBackupRuntimeStates(db);
@@ -404,31 +478,43 @@ export async function saveBackupSettings(db: D1Database, env: Env, settings: Bac
 }
 
 export async function saveBackupRuntimeStates(db: D1Database, settings: BackupSettings): Promise<void> {
-  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
-    version: 1,
-    destinations: Object.fromEntries(
-      settings.destinations.map((destination) => [destination.id, BackupRuntimeSchema.parse(destination.runtime)])
-    ),
-  }));
+  await configRepo.setConfigValue(
+    db,
+    BACKUP_RUNTIME_CONFIG_KEY,
+    JSON.stringify({
+      version: 1,
+      destinations: Object.fromEntries(
+        settings.destinations.map((destination) => [destination.id, BackupRuntimeSchema.parse(destination.runtime)]),
+      ),
+    }),
+  );
 }
 
 export async function updateBackupDestinationRuntime(
   db: D1Database,
   destinationId: string,
-  mutator: (runtime: BackupRuntimeState) => BackupRuntimeState
+  mutator: (runtime: BackupRuntimeState) => BackupRuntimeState,
 ): Promise<BackupRuntimeState> {
   const runtimes = await loadBackupRuntimeStates(db);
   const current = runtimes.get(destinationId) || createDefaultBackupRuntimeState();
   const next = BackupRuntimeSchema.parse(mutator(current));
   runtimes.set(destinationId, next);
-  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
-    version: 1,
-    destinations: Object.fromEntries(runtimes.entries()),
-  }));
+  await configRepo.setConfigValue(
+    db,
+    BACKUP_RUNTIME_CONFIG_KEY,
+    JSON.stringify({
+      version: 1,
+      destinations: Object.fromEntries(runtimes.entries()),
+    }),
+  );
   return next;
 }
 
-export async function normalizeImportedBackupSettings(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<void> {
+export async function normalizeImportedBackupSettings(
+  db: D1Database,
+  env: Env,
+  fallbackTimezone: string = 'UTC',
+): Promise<void> {
   const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   if (!raw) return;
   const users = await userRepo.getAllUsers(db);
@@ -442,7 +528,7 @@ export async function normalizeImportedBackupSettingsValue(
   raw: string | null,
   env: Env,
   users: Pick<User, 'id' | 'publicKey' | 'role' | 'status'>[],
-  fallbackTimezone: string = 'UTC'
+  fallbackTimezone: string = 'UTC',
 ): Promise<string | null> {
   if (!raw) return null;
   const envelope = parseBackupSettingsEnvelope(raw);
@@ -460,7 +546,11 @@ export async function normalizeImportedBackupSettingsValue(
   return encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
 }
 
-export async function getBackupSettingsRepairState(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettingsRepairState> {
+export async function getBackupSettingsRepairState(
+  db: D1Database,
+  env: Env,
+  fallbackTimezone: string = 'UTC',
+): Promise<BackupSettingsRepairState> {
   const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
   if (!raw) {
     const settings = getDefaultBackupSettings(fallbackTimezone);
@@ -492,14 +582,17 @@ export async function repairBackupSettings(db: D1Database, env: Env, settings: B
 
 export function findBackupDestination(
   settings: BackupSettings,
-  destinationId: string | null | undefined
+  destinationId: string | null | undefined,
 ): BackupDestinationRecord | null {
   const normalizedId = asTrimmedString(destinationId);
   if (!normalizedId) return null;
   return settings.destinations.find((destination) => destination.id === normalizedId) || null;
 }
 
-export function requireBackupDestination(settings: BackupSettings, destinationId?: string | null): BackupDestinationRecord {
+export function requireBackupDestination(
+  settings: BackupSettings,
+  destinationId?: string | null,
+): BackupDestinationRecord {
   const destination = destinationId ? findBackupDestination(settings, destinationId) : settings.destinations[0] || null;
   if (!destination) {
     throw new Error('Backup destination not found');
@@ -507,7 +600,10 @@ export function requireBackupDestination(settings: BackupSettings, destinationId
   return destination;
 }
 
-function getDateTimeParts(date: Date, timezone: string): { year: string; month: string; day: string; hour: string; minute: string } {
+function getDateTimeParts(
+  date: Date,
+  timezone: string,
+): { year: string; month: string; day: string; hour: string; minute: string } {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
     year: 'numeric',
@@ -538,7 +634,14 @@ export function getBackupLocalTime(date: Date, timezone: string): string {
   return `${parts.hour}:${parts.minute}`;
 }
 
-function getUtcDateForLocalTime(timezone: string, year: number, month: number, day: number, hour: number, minute: number): Date {
+function getUtcDateForLocalTime(
+  timezone: string,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): Date {
   const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   const actual = getDateTimeParts(new Date(utcGuess), timezone);
   const actualUtc = Date.UTC(
@@ -548,7 +651,7 @@ function getUtcDateForLocalTime(timezone: string, year: number, month: number, d
     Number(actual.hour),
     Number(actual.minute),
     0,
-    0
+    0,
   );
   const desiredUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   return new Date(utcGuess - (actualUtc - desiredUtc));
@@ -558,7 +661,7 @@ function getBackupSlotStartsForLocalDay(
   dateKey: string,
   timezone: string,
   startTime: string,
-  intervalHours: number
+  intervalHours: number,
 ): Date[] {
   const dateMatch = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const parsedTime = startTime.split(':').map((value) => Number(value));
@@ -575,7 +678,7 @@ function getBackupSlotStartsForLocalDay(
     nextLocalDay.getUTCMonth() + 1,
     nextLocalDay.getUTCDate(),
     0,
-    0
+    0,
   );
   const intervalMs = intervalHours * 60 * 60 * 1000;
   const slots: Date[] = [];
@@ -589,7 +692,7 @@ function getBackupSlotStartsForLocalDay(
 export function hasBackupSlotBetween(
   destination: BackupDestinationRecord,
   startInclusive: Date,
-  endExclusive: Date
+  endExclusive: Date,
 ): boolean {
   if (!destination.schedule.enabled) return false;
   const startMs = startInclusive.getTime();
@@ -597,9 +700,8 @@ export function hasBackupSlotBetween(
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return false;
 
   const lastSuccessAt = destination.runtime.lastSuccessAt ? new Date(destination.runtime.lastSuccessAt) : null;
-  const lastSuccessMs = lastSuccessAt && Number.isFinite(lastSuccessAt.getTime())
-    ? lastSuccessAt.getTime()
-    : Number.NEGATIVE_INFINITY;
+  const lastSuccessMs =
+    lastSuccessAt && Number.isFinite(lastSuccessAt.getTime()) ? lastSuccessAt.getTime() : Number.NEGATIVE_INFINITY;
 
   const dayCursor = new Date(startMs);
   dayCursor.setUTCHours(0, 0, 0, 0);
@@ -615,7 +717,7 @@ export function hasBackupSlotBetween(
         localDateKey,
         destination.schedule.timezone,
         destination.schedule.startTime,
-        destination.schedule.intervalHours
+        destination.schedule.intervalHours,
       );
       for (const slotStart of slotStarts) {
         const slotStartMs = slotStart.getTime();
@@ -633,20 +735,19 @@ export function hasBackupSlotBetween(
 export function isBackupDueNow(
   destination: BackupDestinationRecord,
   now: Date,
-  windowMinutes: number = BACKUP_SCHEDULER_WINDOW_MINUTES
+  windowMinutes: number = BACKUP_SCHEDULER_WINDOW_MINUTES,
 ): boolean {
   if (!destination.schedule.enabled) return false;
   const toleranceMs = Math.max(1, windowMinutes) * 60 * 1000;
   const lastSuccessAt = destination.runtime.lastSuccessAt ? new Date(destination.runtime.lastSuccessAt) : null;
-  const lastSuccessMs = lastSuccessAt && Number.isFinite(lastSuccessAt.getTime())
-    ? lastSuccessAt.getTime()
-    : Number.NEGATIVE_INFINITY;
+  const lastSuccessMs =
+    lastSuccessAt && Number.isFinite(lastSuccessAt.getTime()) ? lastSuccessAt.getTime() : Number.NEGATIVE_INFINITY;
   const localDateKey = getBackupLocalDateKey(now, destination.schedule.timezone);
   const slotStarts = getBackupSlotStartsForLocalDay(
     localDateKey,
     destination.schedule.timezone,
     destination.schedule.startTime,
-    destination.schedule.intervalHours
+    destination.schedule.intervalHours,
   );
 
   for (const slotStart of slotStarts) {

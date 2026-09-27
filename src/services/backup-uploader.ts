@@ -121,7 +121,12 @@ function extractXmlFirst(xml: string, tagName: string): string | null {
   const match = xml.match(pattern);
   // Decode XML's predefined entities; any other reference stays as written.
   return match?.[1]
-    ? match[1].trim().replace(/&(amp|lt|gt|quot|#39);/g, (_match, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[entity]!)
+    ? match[1]
+        .trim()
+        .replace(
+          /&(amp|lt|gt|quot|#39);/g,
+          (_match, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" })[entity]!,
+        )
     : null;
 }
 
@@ -145,7 +150,7 @@ async function putToWebDav(
   relativePath: string,
   bytes: Uint8Array,
   options: RemoteBackupFilePutOptions = {},
-  ensuredDirectories?: Set<string>
+  ensuredDirectories?: Set<string>,
 ): Promise<void> {
   const authHeader = toBasicAuthHeader(config.username, config.password);
   const remoteFilePath = buildJoinedPath(config.remotePath, relativePath);
@@ -188,7 +193,10 @@ async function putToWebDav(
   }
 }
 
-async function statWebDavFile(config: WebDavBackupDestination, relativePath: string): Promise<RemoteBackupFileStat | null> {
+async function statWebDavFile(
+  config: WebDavBackupDestination,
+  relativePath: string,
+): Promise<RemoteBackupFileStat | null> {
   const authHeader = toBasicAuthHeader(config.username, config.password);
   const remotePath = webDavFullPath(config, relativePath);
   const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
@@ -239,7 +247,7 @@ async function signedS3Request(
   method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
   url: URL,
   body?: Uint8Array,
-  contentType?: string
+  contentType?: string,
 ): Promise<Response> {
   // aws4fetch retries 5xx/429 by default; callers already surface failures, so keep a single attempt.
   const client = new AwsClient({
@@ -251,9 +259,13 @@ async function signedS3Request(
   });
   // Upload bodies are signed by hash, as before aws4fetch, so a plain-http endpoint cannot swap the archive
   // in transit; reads keep aws4fetch's UNSIGNED-PAYLOAD default.
-  const headers: Record<string, string> = method === 'PUT' && body
-    ? { 'Content-Type': contentType || 'application/octet-stream', 'X-Amz-Content-Sha256': (await sha256(body)) ?? 'UNSIGNED-PAYLOAD' }
-    : {};
+  const headers: Record<string, string> =
+    method === 'PUT' && body
+      ? {
+          'Content-Type': contentType || 'application/octet-stream',
+          'X-Amz-Content-Sha256': (await sha256(body)) ?? 'UNSIGNED-PAYLOAD',
+        }
+      : {};
   return client.fetch(url, { method, headers, body });
 }
 
@@ -277,12 +289,23 @@ async function statS3File(config: S3BackupDestination, relativePath: string): Pr
 interface ConfiguredDestinationAdapter {
   provider: 'webdav' | 's3';
   config: WebDavBackupDestination | S3BackupDestination;
-  putFile: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string, bytes: Uint8Array, options?: RemoteBackupFilePutOptions) => Promise<void>;
-  list: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupListResult>;
+  putFile: (
+    config: WebDavBackupDestination | S3BackupDestination,
+    relativePath: string,
+    bytes: Uint8Array,
+    options?: RemoteBackupFilePutOptions,
+  ) => Promise<void>;
+  list: (
+    config: WebDavBackupDestination | S3BackupDestination,
+    relativePath: string,
+  ) => Promise<RemoteBackupListResult>;
   download: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupFile>;
   deleteFile: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<void>;
   exists: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<boolean>;
-  stat: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupFileStat | null>;
+  stat: (
+    config: WebDavBackupDestination | S3BackupDestination,
+    relativePath: string,
+  ) => Promise<RemoteBackupFileStat | null>;
 }
 
 export interface RemoteBackupTransferSession {
@@ -297,9 +320,7 @@ export interface RemoteBackupTransferSession {
 }
 
 // Every transfer re-checks the destination first, including the SSRF policy on its endpoint.
-function resolveConfiguredDestinationAdapter(
-  destination: BackupDestinationRecord
-): ConfiguredDestinationAdapter {
+function resolveConfiguredDestinationAdapter(destination: BackupDestinationRecord): ConfiguredDestinationAdapter {
   if (destination.type === 'webdav') {
     const webdav = destination.destination as WebDavBackupDestination;
     if (!String(webdav.baseUrl || '').trim()) throw new Error('WebDAV server URL is required');
@@ -309,7 +330,8 @@ function resolveConfiguredDestinationAdapter(
     return {
       provider: 'webdav',
       config: webdav,
-      putFile: (config, relativePath, bytes, options) => putToWebDav(config as WebDavBackupDestination, relativePath, bytes, options),
+      putFile: (config, relativePath, bytes, options) =>
+        putToWebDav(config as WebDavBackupDestination, relativePath, bytes, options),
       list: async (destinationConfig, relativePath) => {
         const config = destinationConfig as WebDavBackupDestination;
         const currentPath = normalizeRelativePath(relativePath);
@@ -351,7 +373,9 @@ function resolveConfiguredDestinationAdapter(
             ? entryPath
             : entryPath === basePath
               ? ''
-              : entryPath.startsWith(`${basePath}/`) ? entryPath.slice(basePath.length + 1) : entryPath;
+              : entryPath.startsWith(`${basePath}/`)
+                ? entryPath.slice(basePath.length + 1)
+                : entryPath;
           const fullPath = trimSlashes(serverRelativePath);
           if (!fullPath) continue;
           if (fullPath === targetFullPath) continue;
@@ -424,7 +448,8 @@ function resolveConfiguredDestinationAdapter(
           throw new Error(`WebDAV delete failed: ${response.status}`);
         }
       },
-      exists: async (config, relativePath) => (await statWebDavFile(config as WebDavBackupDestination, relativePath)) !== null,
+      exists: async (config, relativePath) =>
+        (await statWebDavFile(config as WebDavBackupDestination, relativePath)) !== null,
       stat: (config, relativePath) => statWebDavFile(config as WebDavBackupDestination, relativePath),
     };
   }
@@ -567,7 +592,11 @@ export function createRemoteBackupTransferSession(destination: BackupDestination
   const adapter = resolveConfiguredDestinationAdapter(destination);
   const ensuredDirectories = adapter.provider === 'webdav' ? new Set<string>() : null;
 
-  const putFile = async (relativePath: string, bytes: Uint8Array, options: RemoteBackupFilePutOptions = {}): Promise<void> => {
+  const putFile = async (
+    relativePath: string,
+    bytes: Uint8Array,
+    options: RemoteBackupFilePutOptions = {},
+  ): Promise<void> => {
     const normalized = normalizeRelativePath(relativePath);
     if (adapter.provider === 'webdav' && ensuredDirectories) {
       await putToWebDav(adapter.config as WebDavBackupDestination, normalized, bytes, options, ensuredDirectories);
@@ -582,9 +611,10 @@ export function createRemoteBackupTransferSession(destination: BackupDestination
       await putFile(fileName, archive, { contentType: 'application/zip' });
       return {
         provider: adapter.provider,
-        remotePath: adapter.provider === 'webdav'
-          ? buildJoinedPath((adapter.config as WebDavBackupDestination).remotePath, fileName)
-          : normalizeS3ObjectKey(adapter.config as S3BackupDestination, fileName),
+        remotePath:
+          adapter.provider === 'webdav'
+            ? buildJoinedPath((adapter.config as WebDavBackupDestination).remotePath, fileName)
+            : normalizeS3ObjectKey(adapter.config as S3BackupDestination, fileName),
       };
     },
     putFile,
@@ -599,25 +629,37 @@ export function createRemoteBackupTransferSession(destination: BackupDestination
 export async function uploadBackupArchive(
   destination: BackupDestinationRecord,
   archive: Uint8Array,
-  fileName: string
+  fileName: string,
 ): Promise<BackupUploadResult> {
   return createRemoteBackupTransferSession(destination).uploadArchive(archive, fileName);
 }
 
-export async function listRemoteBackupEntries(destination: BackupDestinationRecord, relativePath: string): Promise<RemoteBackupListResult> {
+export async function listRemoteBackupEntries(
+  destination: BackupDestinationRecord,
+  relativePath: string,
+): Promise<RemoteBackupListResult> {
   return createRemoteBackupTransferSession(destination).list(relativePath);
 }
 
-export async function downloadRemoteBackupFile(destination: BackupDestinationRecord, relativePath: string): Promise<RemoteBackupFile> {
+export async function downloadRemoteBackupFile(
+  destination: BackupDestinationRecord,
+  relativePath: string,
+): Promise<RemoteBackupFile> {
   return createRemoteBackupTransferSession(destination).download(relativePath);
 }
 
-export async function deleteRemoteBackupFile(destination: BackupDestinationRecord, relativePath: string): Promise<void> {
+export async function deleteRemoteBackupFile(
+  destination: BackupDestinationRecord,
+  relativePath: string,
+): Promise<void> {
   const normalized = ensureRemoteRestoreCandidate(relativePath);
   await createRemoteBackupTransferSession(destination).deleteFile(normalized);
 }
 
-export async function remoteBackupFileExists(destination: BackupDestinationRecord, relativePath: string): Promise<boolean> {
+export async function remoteBackupFileExists(
+  destination: BackupDestinationRecord,
+  relativePath: string,
+): Promise<boolean> {
   const normalized = normalizeRelativePath(relativePath);
   return createRemoteBackupTransferSession(destination).exists(normalized);
 }
@@ -626,7 +668,7 @@ export async function uploadRemoteBackupFile(
   destination: BackupDestinationRecord,
   relativePath: string,
   bytes: Uint8Array,
-  options: RemoteBackupFilePutOptions = {}
+  options: RemoteBackupFilePutOptions = {},
 ): Promise<void> {
   const normalized = normalizeRelativePath(relativePath);
   await createRemoteBackupTransferSession(destination).putFile(normalized, bytes, options);
@@ -635,7 +677,7 @@ export async function uploadRemoteBackupFile(
 export async function pruneRemoteBackupArchives(
   destination: BackupDestinationRecord,
   retentionCount: number | null,
-  preferredFileName?: string
+  preferredFileName?: string,
 ): Promise<number> {
   if (retentionCount === null) return 0;
   const adapter = resolveConfiguredDestinationAdapter(destination);

@@ -16,21 +16,62 @@ test('portal organization searches use literal names and either member email; de
   const owner = await seedUser(env);
   const org = await createOwnedOrganization(env, owner, { name: '<img src=x onerror=bad()> 50%', key: '4.dGVzdA==' });
   const other = await createOwnedOrganization(env, await seedUser(env), { name: 'other', key: '4.dGVzdA==' });
-  await getOrm(env.DB).update(organizations).set({ privateKey: 'DO-NOT-RENDER-PRIVATE-KEY', publicKey: 'DO-NOT-RENDER-PUBLIC-KEY' }).where(eq(organizations.id, org.id));
+  await getOrm(env.DB)
+    .update(organizations)
+    .set({ privateKey: 'DO-NOT-RENDER-PRIVATE-KEY', publicKey: 'DO-NOT-RENDER-PUBLIC-KEY' })
+    .where(eq(organizations.id, org.id));
   await seedMembership(env, org.id, { email: 'invitee@x.io', status: MembershipStatus.Invited });
   // A membership row without an email of its own is found through its account.
   const { user: accountOnly } = await seedMember(env, org.id, { email: null });
   for (const memberEmail of ['invitee@x.io', owner.email.toUpperCase(), accountOnly.email.toUpperCase()]) {
     const rows = await orgRepo.searchOrganizations(env.DB, { memberEmail, nameContains: '', offset: 0, limit: 25 });
-    assert.deepEqual(rows.map((row) => row.id), [org.id]);
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      [org.id],
+    );
   }
-  assert.deepEqual((await orgRepo.searchOrganizations(env.DB, { memberEmail: '', nameContains: '%', offset: 0, limit: 25 })).map((row) => row.id), [org.id]);
-  await getOrm(env.DB).insert(smProjects).values({ id: crypto.randomUUID(), orgId: org.id, name: 'ENCRYPTED-PROJECT-NAME', createdAt: org.createdAt, updatedAt: org.updatedAt });
-  await getOrm(env.DB).insert(smSecrets).values([
-    { id: crypto.randomUUID(), orgId: org.id, key: 'ENCRYPTED-SECRET-KEY', value: 'ENCRYPTED-SECRET-VALUE', createdAt: org.createdAt, updatedAt: org.updatedAt },
-    { id: crypto.randomUUID(), orgId: org.id, key: 'ENCRYPTED-SECRET-KEY', value: 'ENCRYPTED-SECRET-VALUE', createdAt: org.createdAt, updatedAt: org.updatedAt, deletedAt: org.updatedAt },
-    { id: crypto.randomUUID(), orgId: other.id, key: 'OTHER-SECRET', value: 'OTHER-SECRET', createdAt: org.createdAt, updatedAt: org.updatedAt },
-  ]);
+  assert.deepEqual(
+    (await orgRepo.searchOrganizations(env.DB, { memberEmail: '', nameContains: '%', offset: 0, limit: 25 })).map(
+      (row) => row.id,
+    ),
+    [org.id],
+  );
+  await getOrm(env.DB).insert(smProjects).values({
+    id: crypto.randomUUID(),
+    orgId: org.id,
+    name: 'ENCRYPTED-PROJECT-NAME',
+    createdAt: org.createdAt,
+    updatedAt: org.updatedAt,
+  });
+  await getOrm(env.DB)
+    .insert(smSecrets)
+    .values([
+      {
+        id: crypto.randomUUID(),
+        orgId: org.id,
+        key: 'ENCRYPTED-SECRET-KEY',
+        value: 'ENCRYPTED-SECRET-VALUE',
+        createdAt: org.createdAt,
+        updatedAt: org.updatedAt,
+      },
+      {
+        id: crypto.randomUUID(),
+        orgId: org.id,
+        key: 'ENCRYPTED-SECRET-KEY',
+        value: 'ENCRYPTED-SECRET-VALUE',
+        createdAt: org.createdAt,
+        updatedAt: org.updatedAt,
+        deletedAt: org.updatedAt,
+      },
+      {
+        id: crypto.randomUUID(),
+        orgId: other.id,
+        key: 'OTHER-SECRET',
+        value: 'OTHER-SECRET',
+        createdAt: org.createdAt,
+        updatedAt: org.updatedAt,
+      },
+    ]);
   const response = await portalFetch(env, { path: `/admin/organizations/view/${org.id}`, cookie: auth.cookie });
   assert.equal(response.status, 200);
   const body = await response.text();
@@ -47,10 +88,36 @@ test('portal organization deletion validates confirmation and audits the atomic 
   const auth = await signInToAdminPortal(env, email);
   const org = await createOwnedOrganization(env, await seedUser(env), { name: 'Delete me', key: '4.dGVzdA==' });
   const path = `/admin/organizations/delete/${org.id}`;
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: 'wrong' } })).status, 400);
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: org.name } })).status, 403);
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: org.name } })).status, 303);
+  assert.equal(
+    (
+      await portalFetch(env, {
+        path,
+        method: 'POST',
+        cookie: auth.cookie,
+        form: { csrf: auth.csrf, confirmation: 'wrong' },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: org.name } })).status,
+    403,
+  );
+  assert.equal(
+    (
+      await portalFetch(env, {
+        path,
+        method: 'POST',
+        cookie: auth.cookie,
+        form: { csrf: auth.csrf, confirmation: org.name },
+      })
+    ).status,
+    303,
+  );
   assert.equal(await orgRepo.getOrganization(env.DB, org.id), null);
   assert.ok(await getOrm(env.DB).$count(auditLogs, eq(auditLogs.action, 'admin.portal.org.delete')));
-  assert.equal((await portalFetch(env, { path: `/admin/organizations/view/${org.id}`, cookie: auth.cookie })).status, 404);
+  assert.equal(
+    (await portalFetch(env, { path: `/admin/organizations/view/${org.id}`, cookie: auth.cookie })).status,
+    404,
+  );
 });

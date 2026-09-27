@@ -8,7 +8,14 @@ import { getOrm } from '../db/client';
 import { webauthnCredentials } from '../db/schema';
 import { AuthService } from '../services/auth';
 import type { Env, User } from '../types';
-import { authedFetch, createTestEnv, interceptStatement, seedUser, portalFetch, signInToAdminPortal } from './support/env';
+import {
+  authedFetch,
+  createTestEnv,
+  interceptStatement,
+  seedUser,
+  portalFetch,
+  signInToAdminPortal,
+} from './support/env';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as userRepo from '../services/storage-user-repo';
 
@@ -43,41 +50,61 @@ type CborValue = Parameters<typeof isoCBOR.encode>[0];
 const base64Url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
 
 // A software authenticator's 'none' attestation for the challenge the Worker just issued.
-async function officialEnrollment(context?: Pick<Enrollment, 'env' | 'user' | 'userVerificationToken'>): Promise<Enrollment> {
-  const env = context?.env ?? await createTestEnv();
-  const user = context?.user ?? await seedUser(env, { masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH) });
-  const userVerificationToken = context?.userVerificationToken ?? await authedFetch(env, {
-    method: 'POST', path: '/api/two-factor/get-webauthn', userId: user.id,
-    body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH },
-  }).then(async response => {
-    assert.equal(response.status, 200);
-    const body = await response.json() as { WebAuthn: { Enabled: boolean; Keys: unknown[] }; UserVerificationToken: string };
-    assert.equal(body.WebAuthn.Enabled, false);
-    assert.deepEqual(body.WebAuthn.Keys, []);
-    assert.ok(body.UserVerificationToken);
-    return body.UserVerificationToken;
-  });
+async function officialEnrollment(
+  context?: Pick<Enrollment, 'env' | 'user' | 'userVerificationToken'>,
+): Promise<Enrollment> {
+  const env = context?.env ?? (await createTestEnv());
+  const user =
+    context?.user ??
+    (await seedUser(env, {
+      masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH),
+    }));
+  const userVerificationToken =
+    context?.userVerificationToken ??
+    (await authedFetch(env, {
+      method: 'POST',
+      path: '/api/two-factor/get-webauthn',
+      userId: user.id,
+      body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH },
+    }).then(async (response) => {
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as {
+        WebAuthn: { Enabled: boolean; Keys: unknown[] };
+        UserVerificationToken: string;
+      };
+      assert.equal(body.WebAuthn.Enabled, false);
+      assert.deepEqual(body.WebAuthn.Keys, []);
+      assert.ok(body.UserVerificationToken);
+      return body.UserVerificationToken;
+    }));
   const options = await authedFetch(env, {
     method: 'POST',
     path: '/api/two-factor/get-webauthn-challenge',
     body: { userVerificationToken },
     userId: user.id,
-  }).then(async response => {
+  }).then(async (response) => {
     assert.equal(response.status, 200);
-    const body = await response.json() as { Options: { challenge: string; rp: { id: string }; excludeCredentials: unknown[] } };
+    const body = (await response.json()) as {
+      Options: { challenge: string; rp: { id: string }; excludeCredentials: unknown[] };
+    };
     assert.ok(Array.isArray(body.Options.excludeCredentials));
     return body.Options;
   });
 
-  const { publicKey } = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const { publicKey } = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+    'sign',
+    'verify',
+  ]);
   const { x, y } = await crypto.subtle.exportKey('jwk', publicKey);
-  const coseKey = isoCBOR.encode(new Map<number, CborValue>([
-    [cose.COSEKEYS.kty, cose.COSEKTY.EC2],
-    [cose.COSEKEYS.alg, cose.COSEALG.ES256],
-    [cose.COSEKEYS.crv, cose.COSECRV.P256],
-    [cose.COSEKEYS.x, Buffer.from(x!, 'base64url')],
-    [cose.COSEKEYS.y, Buffer.from(y!, 'base64url')],
-  ]));
+  const coseKey = isoCBOR.encode(
+    new Map<number, CborValue>([
+      [cose.COSEKEYS.kty, cose.COSEKTY.EC2],
+      [cose.COSEKEYS.alg, cose.COSEALG.ES256],
+      [cose.COSEKEYS.crv, cose.COSECRV.P256],
+      [cose.COSEKEYS.x, Buffer.from(x!, 'base64url')],
+      [cose.COSEKEYS.y, Buffer.from(y!, 'base64url')],
+    ]),
+  );
   const credentialId = crypto.getRandomValues(new Uint8Array(CREDENTIAL_ID_BYTES));
   const credentialIdLength = new Uint8Array(CREDENTIAL_ID_LENGTH_BYTES);
   new DataView(credentialIdLength.buffer).setUint16(0, credentialId.length);
@@ -90,11 +117,13 @@ async function officialEnrollment(context?: Pick<Enrollment, 'env' | 'user' | 'u
     credentialId,
     coseKey,
   ]);
-  const attestationObject = isoCBOR.encode(new Map<string, CborValue>([
-    ['fmt', 'none'],
-    ['attStmt', new Map()],
-    ['authData', authData],
-  ]));
+  const attestationObject = isoCBOR.encode(
+    new Map<string, CborValue>([
+      ['fmt', 'none'],
+      ['attStmt', new Map()],
+      ['authData', authData],
+    ]),
+  );
   // The Worker serves itself as the RP, so the vault origin is the RP ID over https.
   const clientData = { type: 'webauthn.create', challenge: options.challenge, origin: `https://${options.rp.id}` };
 
@@ -129,35 +158,54 @@ test('official web enrolls a WebAuthn two-step-login key with a PascalCase Attes
   const enrollment = await officialEnrollment();
   const response = await putWebAuthn(enrollment, enrollment.deviceResponse);
   assert.equal(response.status, 200);
-  const body = await response.json() as { WebAuthn: { Enabled: boolean; Keys: { Name: string }[] } };
+  const body = (await response.json()) as { WebAuthn: { Enabled: boolean; Keys: { Name: string }[] } };
   assert.equal(body.WebAuthn.Enabled, true);
-  assert.deepEqual(body.WebAuthn.Keys.map(({ Name }) => Name), ['Security key']);
+  assert.deepEqual(
+    body.WebAuthn.Keys.map(({ Name }) => Name),
+    ['Security key'],
+  );
 
   // The dialog keeps the original token through enrollment and deletion.
   const second = await officialEnrollment(enrollment);
   assert.equal((await putWebAuthn(second, second.deviceResponse)).status, 200);
   const removed = await authedFetch(enrollment.env, {
-    method: 'DELETE', path: '/api/two-factor/webauthn', userId: enrollment.user.id,
+    method: 'DELETE',
+    path: '/api/two-factor/webauthn',
+    userId: enrollment.user.id,
     body: { id: 1, userVerificationToken: enrollment.userVerificationToken },
   });
   assert.equal(removed.status, 200);
-  assert.equal((await removed.json() as { WebAuthn: { Keys: unknown[] } }).WebAuthn.Keys.length, 1);
+  assert.equal(((await removed.json()) as { WebAuthn: { Keys: unknown[] } }).WebAuthn.Keys.length, 1);
   const lastKey = await authedFetch(enrollment.env, {
-    method: 'DELETE', path: '/api/two-factor/webauthn', userId: enrollment.user.id,
+    method: 'DELETE',
+    path: '/api/two-factor/webauthn',
+    userId: enrollment.user.id,
     body: { id: 1, userVerificationToken: enrollment.userVerificationToken },
   });
   assert.equal(lastKey.status, 400);
 
   const { env, user, userVerificationToken } = enrollment;
   await getOrm(env.DB).insert(webauthnCredentials).values({
-    id: 'login-key', userId: user.id, purpose: 'login', name: 'Login key', publicKey: 'cHVibGlj', credentialId: 'login-credential', createdAt: user.createdAt, updatedAt: user.updatedAt,
+    id: 'login-key',
+    userId: user.id,
+    purpose: 'login',
+    name: 'Login key',
+    publicKey: 'cHVibGlj',
+    credentialId: 'login-credential',
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
   });
   const disabled = await authedFetch(env, {
-    method: 'DELETE', path: '/api/two-factor/webauthn/all', userId: user.id, body: { userVerificationToken },
+    method: 'DELETE',
+    path: '/api/two-factor/webauthn/all',
+    userId: user.id,
+    body: { userVerificationToken },
   });
   assert.equal(disabled.status, 204);
   assert.equal(await disabled.text(), '');
-  const remaining = await getOrm(env.DB).select({ id: webauthnCredentials.id, purpose: webauthnCredentials.purpose }).from(webauthnCredentials)
+  const remaining = await getOrm(env.DB)
+    .select({ id: webauthnCredentials.id, purpose: webauthnCredentials.purpose })
+    .from(webauthnCredentials)
     .where(eq(webauthnCredentials.userId, user.id));
   assert.deepEqual(remaining, [{ id: 'login-key', purpose: 'login' }]);
 });
@@ -180,9 +228,20 @@ for (const action of ['reset', 'delete'] as const) {
     let interrupted = false;
     interceptStatement(env, /insert into "webauthn_credentials"/i, async () => {
       interrupted = true;
-      const response = action === 'reset'
-        ? await portalFetch(env, { method: 'POST', path: `/admin/users/${user.id}/remove-2fa`, cookie: portal.cookie, form: { csrf: portal.csrf, confirmation: user.email } })
-        : await authedFetch(env, { method: 'DELETE', path: '/api/accounts', userId: user.id, body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH } });
+      const response =
+        action === 'reset'
+          ? await portalFetch(env, {
+              method: 'POST',
+              path: `/admin/users/${user.id}/remove-2fa`,
+              cookie: portal.cookie,
+              form: { csrf: portal.csrf, confirmation: user.email },
+            })
+          : await authedFetch(env, {
+              method: 'DELETE',
+              path: '/api/accounts',
+              userId: user.id,
+              body: { masterPasswordHash: CLIENT_MASTER_PASSWORD_HASH },
+            });
       assert.equal(response.status, action === 'reset' ? 303 : 200);
     });
     const result = await putWebAuthn(enrollment, enrollment.deviceResponse);
@@ -191,6 +250,9 @@ for (const action of ['reset', 'delete'] as const) {
     assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 0);
     const current = await userRepo.getUserById(env.DB, user.id);
     if (action === 'delete') assert.equal(current, null);
-    else { assert.equal(current!.totpSecret, null); assert.equal(current!.totpRecoveryCode, null); }
+    else {
+      assert.equal(current!.totpSecret, null);
+      assert.equal(current!.totpRecoveryCode, null);
+    }
   });
 }

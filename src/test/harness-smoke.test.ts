@@ -15,7 +15,7 @@ test('authenticated sync through the Worker returns the seeded profile', async (
   const response = await authedFetch(env, { path: '/api/sync', userId: user.id });
 
   assert.equal(response.status, 200);
-  const body = await response.json() as { profile: { id: string } };
+  const body = (await response.json()) as { profile: { id: string } };
   assert.equal(body.profile.id, user.id);
 });
 
@@ -36,10 +36,16 @@ test('the SQLite D1 keeps D1 batch atomicity, INTEGER binding and the bound-para
   assert.equal(await orm.$count(usedAttachmentDownloadTokens), 0);
 
   await insert(1);
-  assert.deepEqual(await orm.select({ jti: usedAttachmentDownloadTokens.jti }).from(usedAttachmentDownloadTokens).values(), [['1']]);
+  assert.deepEqual(
+    await orm.select({ jti: usedAttachmentDownloadTokens.jti }).from(usedAttachmentDownloadTokens).values(),
+    [['1']],
+  );
 
   const tooManyBindings = D1_MAX_BOUND_PARAMETERS + 1;
-  const overCap = orm.select().from(usedAttachmentDownloadTokens).where(inArray(usedAttachmentDownloadTokens.jti, Array(tooManyBindings).fill('probe')));
+  const overCap = orm
+    .select()
+    .from(usedAttachmentDownloadTokens)
+    .where(inArray(usedAttachmentDownloadTokens.jti, Array(tooManyBindings).fill('probe')));
   // drizzle wraps a failed direct query; the D1 error is its cause.
   await assert.rejects(overCap, (error: Error) => /too many SQL variables/.test(String(error.cause)));
 });

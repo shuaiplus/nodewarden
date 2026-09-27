@@ -29,7 +29,12 @@ test('enabling the first verified listed account synchronizes roles and revokes 
   assert.equal((await authedFetch(env, { path: '/api/admin/users', headers })).status, 200);
 
   const portal = await signInToAdminPortal(env, listed.email);
-  const enabled = await portalFetch(env, { method: 'POST', path: `/admin/users/${listed.id}/enable`, cookie: portal.cookie, form: { csrf: portal.csrf } });
+  const enabled = await portalFetch(env, {
+    method: 'POST',
+    path: `/admin/users/${listed.id}/enable`,
+    cookie: portal.cookie,
+    form: { csrf: portal.csrf },
+  });
   assert.equal(enabled.status, 303);
   assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
   assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
@@ -40,8 +45,18 @@ for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', '
   test(`directory ${config} obeys the verified active-account guard`, async () => {
     const env = await createTestEnv();
     const legacy = await seedUser(env, { role: 'admin' });
-    const listed = await seedUser(env, { emailVerified: config !== 'unverified', status: config === 'banned' ? 'banned' : 'active' });
-    env.ADMIN_EMAILS = config === 'disabled' ? undefined : config === 'invalid' ? 'invalid' : config === 'absent' ? 'missing@x.io' : listed.email;
+    const listed = await seedUser(env, {
+      emailVerified: config !== 'unverified',
+      status: config === 'banned' ? 'banned' : 'active',
+    });
+    env.ADMIN_EMAILS =
+      config === 'disabled'
+        ? undefined
+        : config === 'invalid'
+          ? 'invalid'
+          : config === 'absent'
+            ? 'missing@x.io'
+            : listed.email;
     await syncVaultAdminRoles(env);
     assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, config === 'enabled' ? 'user' : 'admin');
     assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, config === 'enabled' ? 'admin' : 'user');
@@ -58,10 +73,19 @@ for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', '
 test('only validated registration tokens verify an email; listing a claimed address later cannot promote it', async () => {
   const env = await createTestEnv({ ALLOW_OPEN_REGISTRATION: '1' });
   const firstEmail = 'first@x.io';
-  const register = (email: string, token?: string) => authedFetch(env, {
-    method: 'POST', path: '/identity/accounts/register/finish',
-    body: { email, masterPasswordHash: 'password-hash', key: ENCRYPTED, encryptedPrivateKey: ENCRYPTED, publicKey: 'public-key', emailVerificationToken: token },
-  });
+  const register = (email: string, token?: string) =>
+    authedFetch(env, {
+      method: 'POST',
+      path: '/identity/accounts/register/finish',
+      body: {
+        email,
+        masterPasswordHash: 'password-hash',
+        key: ENCRYPTED,
+        encryptedPrivateKey: ENCRYPTED,
+        publicKey: 'public-key',
+        emailVerificationToken: token,
+      },
+    });
   env.ADMIN_EMAILS = firstEmail;
   assert.equal((await register(firstEmail)).status, 200);
   const first = (await userRepo.getUser(env.DB, firstEmail))!;
@@ -86,7 +110,7 @@ test('only validated registration tokens verify an email; listing a claimed addr
   assert.equal(invalid.status, 400);
   assert.equal(await userRepo.getUser(env.DB, 'wrong@x.io'), null);
   const profile = await authedFetch(env, { path: '/api/accounts/profile', userId: claimed.id });
-  assert.equal((await profile.json() as { emailVerified: boolean }).emailVerified, true);
+  assert.equal(((await profile.json()) as { emailVerified: boolean }).emailVerified, true);
 });
 
 test('markEmailVerified grants a listed account once and stale saves cannot clear verification', async () => {
@@ -105,15 +129,29 @@ test('markEmailVerified grants a listed account once and stale saves cannot clea
 
 test('role changes re-wrap live backup settings for the derived administrator', async () => {
   const env = await createTestEnv();
-  const { publicKey } = await crypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' }, true, ['encrypt', 'decrypt']);
+  const { publicKey } = await crypto.subtle.generateKey(
+    { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' },
+    true,
+    ['encrypt', 'decrypt'],
+  );
   const spki = Buffer.from(await crypto.subtle.exportKey('spki', publicKey)).toString('base64');
   const old = await seedUser(env, { role: 'admin', publicKey: spki });
   const listed = await seedUser(env, { publicKey: spki });
   await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
-  assert.deepEqual(parseBackupSettingsEnvelope(await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [old.id]);
+  assert.deepEqual(
+    parseBackupSettingsEnvelope(
+      await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY),
+    )!.portable.wraps.map((w) => w.userId),
+    [old.id],
+  );
   env.ADMIN_EMAILS = listed.email;
   await syncVaultAdminRoles(env);
-  assert.deepEqual(parseBackupSettingsEnvelope(await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY))!.portable.wraps.map(w => w.userId), [listed.id]);
+  assert.deepEqual(
+    parseBackupSettingsEnvelope(
+      await configRepo.getConfigValue(env.DB, BACKUP_SETTINGS_CONFIG_KEY),
+    )!.portable.wraps.map((w) => w.userId),
+    [listed.id],
+  );
 });
 
 test('local and remote backup restore preserve verified state, default legacy rows and correct imported roles', async () => {

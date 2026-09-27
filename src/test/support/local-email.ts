@@ -11,7 +11,9 @@ export function readLocalEmailCode(logPath: string, recipient: string, after: nu
       const text = readFileSync(path, 'utf8');
       const code = text.match(setup ? /set up email two-step login: (\d{6})/ : /Your sign-in code is: (\d{6})/)?.[1];
       if (code) return { code, text, path };
-    } catch { /* The local simulator may still be writing the message. */ }
+    } catch {
+      /* The local simulator may still be writing the message. */
+    }
   }
   return null;
 }

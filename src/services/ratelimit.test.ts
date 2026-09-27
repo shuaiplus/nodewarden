@@ -12,7 +12,10 @@ test('each failed login counts once against its key until the key locks out', as
     assert.deepEqual(await limiter.recordFailedLogin('guessing-client'), { locked: false });
     assert.equal((await limiter.checkLoginAttempt('guessing-client')).remainingAttempts, loginMaxAttempts - attempt);
   }
-  assert.deepEqual(await limiter.recordFailedLogin('guessing-client'), { locked: true, retryAfterSeconds: loginLockoutMinutes * 60 });
+  assert.deepEqual(await limiter.recordFailedLogin('guessing-client'), {
+    locked: true,
+    retryAfterSeconds: loginLockoutMinutes * 60,
+  });
   assert.equal((await limiter.checkLoginAttempt('guessing-client')).allowed, false);
   assert.equal((await limiter.checkLoginAttempt('other-client')).allowed, true);
 });

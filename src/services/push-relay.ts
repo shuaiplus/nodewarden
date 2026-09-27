@@ -1,8 +1,5 @@
 import type { Env } from '../types';
-import {
-  getConfigValue as getStoredConfigValue,
-  setConfigValue as saveConfigValue,
-} from './storage-config-repo';
+import { getConfigValue as getStoredConfigValue, setConfigValue as saveConfigValue } from './storage-config-repo';
 import { getDevicePushUuid, userHasPushDevice } from './storage-device-repo';
 
 const PUSH_RELAY_URI = 'https://push.bitwarden.com';
@@ -33,10 +30,12 @@ async function fetchPushEndpoint(url: string, init: RequestInit, errorMessage: s
 }
 
 export async function ensurePushInstallationCredentials(db: D1Database): Promise<{ id: string; key: string } | null> {
-  const [storedId, storedKey] = (await Promise.all([
-    getStoredConfigValue(db, PUSH_INSTALLATION_ID_KEY),
-    getStoredConfigValue(db, PUSH_INSTALLATION_KEY_KEY),
-  ])).map((value) => String(value || '').trim());
+  const [storedId, storedKey] = (
+    await Promise.all([
+      getStoredConfigValue(db, PUSH_INSTALLATION_ID_KEY),
+      getStoredConfigValue(db, PUSH_INSTALLATION_KEY_KEY),
+    ])
+  ).map((value) => String(value || '').trim());
   if (storedId && storedKey) return { id: storedId, key: storedKey };
 
   const response = await fetchPushEndpoint(
@@ -51,16 +50,27 @@ export async function ensurePushInstallationCredentials(db: D1Database): Promise
         email: `${Array.from(crypto.getRandomValues(new Uint8Array(10)), (byte) => (byte % 36).toString(36)).join('')}@nodewarden.app`,
       }),
     },
-    'Failed to request Bitwarden push installation:'
+    'Failed to request Bitwarden push installation:',
   );
   if (!response) return null;
 
   if (!response.ok) {
-    console.error('Failed to request Bitwarden push installation:', response.status, await response.text().catch(() => ''));
+    console.error(
+      'Failed to request Bitwarden push installation:',
+      response.status,
+      await response.text().catch(() => ''),
+    );
     return null;
   }
 
-  const body = (await response.json().catch(() => null)) as { id?: string; Id?: string; key?: string; Key?: string; enabled?: boolean; Enabled?: boolean } | null;
+  const body = (await response.json().catch(() => null)) as {
+    id?: string;
+    Id?: string;
+    key?: string;
+    Key?: string;
+    enabled?: boolean;
+    Enabled?: boolean;
+  } | null;
   const id = String(body?.id || body?.Id || '').trim();
   const key = String(body?.key || body?.Key || '').trim();
   if (!id || !key) {
@@ -102,16 +112,23 @@ async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<
         },
         body: params.toString(),
       },
-      'Failed to get Bitwarden push relay token:'
+      'Failed to get Bitwarden push relay token:',
     );
     if (!tokenResponse) return false;
 
     if (!tokenResponse.ok) {
-      console.error('Failed to get Bitwarden push relay token:', tokenResponse.status, await tokenResponse.text().catch(() => ''));
+      console.error(
+        'Failed to get Bitwarden push relay token:',
+        tokenResponse.status,
+        await tokenResponse.text().catch(() => ''),
+      );
       return false;
     }
 
-    const tokenBody = (await tokenResponse.json().catch(() => null)) as { access_token?: string; expires_in?: number } | null;
+    const tokenBody = (await tokenResponse.json().catch(() => null)) as {
+      access_token?: string;
+      expires_in?: number;
+    } | null;
     token = String(tokenBody?.access_token || '').trim();
     if (!token) {
       console.error('Bitwarden push relay token response did not include an access_token');
@@ -136,7 +153,7 @@ async function postToPushRelay(env: Env, path: string, body?: unknown): Promise<
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     },
-    `Bitwarden push relay request failed: ${path}`
+    `Bitwarden push relay request failed: ${path}`,
   );
   if (!response) return false;
 
@@ -156,7 +173,7 @@ export async function registerMobilePushDevice(
     type: number;
     pushUuid: string;
     pushToken: string;
-  }
+  },
 ): Promise<boolean> {
   const credentials = await ensurePushInstallationCredentials(env.DB);
   if (!credentials) return false;
@@ -185,13 +202,11 @@ export async function notifyMobilePush(
     revisionDate: string;
     contextId: string | null;
     payload: Record<string, unknown> | null | undefined;
-  }
+  },
 ): Promise<void> {
   if (!(await userHasPushDevice(env.DB, input.userId))) return;
 
-  const actingPushUuid = input.contextId
-    ? await getDevicePushUuid(env.DB, input.userId, input.contextId)
-    : null;
+  const actingPushUuid = input.contextId ? await getDevicePushUuid(env.DB, input.userId, input.contextId) : null;
 
   // Reshape the SignalR payload (PascalCase or camelCase keys) for mobile push: an item change
   // carries its id and scope, anything else only the user and date.
@@ -203,18 +218,19 @@ export async function notifyMobilePush(
     deviceId: actingPushUuid,
     identifier: input.contextId,
     type: input.updateType,
-    payload: id != null
-      ? {
-        id,
-        userId: source.UserId ?? source.userId ?? input.userId,
-        organizationId: source.OrganizationId ?? source.organizationId ?? null,
-        collectionIds: source.CollectionIds ?? source.collectionIds ?? null,
-        revisionDate: source.RevisionDate ?? source.revisionDate ?? input.revisionDate,
-      }
-      : {
-        userId: source.UserId ?? source.userId ?? input.userId,
-        date: source.Date ?? source.date ?? input.revisionDate,
-      },
+    payload:
+      id != null
+        ? {
+            id,
+            userId: source.UserId ?? source.userId ?? input.userId,
+            organizationId: source.OrganizationId ?? source.organizationId ?? null,
+            collectionIds: source.CollectionIds ?? source.collectionIds ?? null,
+            revisionDate: source.RevisionDate ?? source.revisionDate ?? input.revisionDate,
+          }
+        : {
+            userId: source.UserId ?? source.userId ?? input.userId,
+            date: source.Date ?? source.date ?? input.revisionDate,
+          },
     clientType: null,
     installationId: null,
   });

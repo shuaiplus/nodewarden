@@ -16,7 +16,10 @@ test('presigned R2 PUT URLs keep the path-style key encoding and host-only query
   mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 8, 27, 12, 34, 56) });
   try {
     const signed = new URL(await createR2PresignedPutUrl(env, 'cipher-1/attachment 1.bin', 900));
-    assert.equal(signed.origin + signed.pathname, 'https://account123.r2.cloudflarestorage.com/vault-files/cipher-1/attachment%201.bin');
+    assert.equal(
+      signed.origin + signed.pathname,
+      'https://account123.r2.cloudflarestorage.com/vault-files/cipher-1/attachment%201.bin',
+    );
     assert.deepEqual(Object.fromEntries(signed.searchParams), {
       'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
       'X-Amz-Credential': 'AKIDEXAMPLE/20260927/auto/s3/aws4_request',

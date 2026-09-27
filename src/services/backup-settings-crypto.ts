@@ -49,13 +49,7 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
 
 async function deriveRuntimeKey(secret: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    'HKDF',
-    false,
-    ['deriveBits']
-  );
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(secret), 'HKDF', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
     {
       name: 'HKDF',
@@ -64,20 +58,17 @@ async function deriveRuntimeKey(secret: string): Promise<CryptoKey> {
       info: encoder.encode(RUNTIME_INFO),
     },
     keyMaterial,
-    256
+    256,
   );
   return crypto.subtle.importKey('raw', bits, { name: AES_GCM_ALGORITHM }, false, ['encrypt', 'decrypt']);
 }
 
-async function encryptAesGcm(plaintext: Uint8Array, key: CryptoKey): Promise<{ iv: Uint8Array; ciphertext: Uint8Array }> {
+async function encryptAesGcm(
+  plaintext: Uint8Array,
+  key: CryptoKey,
+): Promise<{ iv: Uint8Array; ciphertext: Uint8Array }> {
   const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
-  const ciphertext = new Uint8Array(
-    await crypto.subtle.encrypt(
-      { name: AES_GCM_ALGORITHM, iv },
-      key,
-      plaintext
-    )
-  );
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: AES_GCM_ALGORITHM, iv }, key, plaintext));
   return { iv, ciphertext };
 }
 
@@ -132,24 +123,25 @@ export function exportPortableBackupSettingsEnvelope(raw: string | null): string
 export async function encryptBackupSettingsEnvelope(
   plaintext: string,
   env: Env,
-  users: Pick<User, 'id' | 'publicKey' | 'role' | 'status'>[]
+  users: Pick<User, 'id' | 'publicKey' | 'role' | 'status'>[],
 ): Promise<string> {
   const encoder = new TextEncoder();
   // Only active admins with a public key can unwrap the portable copy.
-  const eligibleUsers = users.filter((user) =>
-    user.role === 'admin' && user.status === 'active' && typeof user.publicKey === 'string' && user.publicKey.trim().length > 0);
+  const eligibleUsers = users.filter(
+    (user) =>
+      user.role === 'admin' &&
+      user.status === 'active' &&
+      typeof user.publicKey === 'string' &&
+      user.publicKey.trim().length > 0,
+  );
 
   const runtimeKey = await deriveRuntimeKey(env.JWT_SECRET);
   const runtime = await encryptAesGcm(encoder.encode(plaintext), runtimeKey);
 
   const portableDek = crypto.getRandomValues(new Uint8Array(PORTABLE_DEK_BYTES));
-  const portableKey = await crypto.subtle.importKey(
-    'raw',
-    portableDek,
-    { name: AES_GCM_ALGORITHM },
-    false,
-    ['encrypt']
-  );
+  const portableKey = await crypto.subtle.importKey('raw', portableDek, { name: AES_GCM_ALGORITHM }, false, [
+    'encrypt',
+  ]);
   const portableCipher = await encryptAesGcm(encoder.encode(plaintext), portableKey);
 
   const wraps: BackupSettingsPortableWrap[] = [];
@@ -160,13 +152,9 @@ export async function encryptBackupSettingsEnvelope(
         decodeBase64(user.publicKey!),
         { name: PORTABLE_ALGORITHM, hash: PORTABLE_HASH },
         false,
-        ['encrypt']
+        ['encrypt'],
       );
-      const wrappedKey = await crypto.subtle.encrypt(
-        { name: PORTABLE_ALGORITHM },
-        publicKey,
-        portableDek
-      );
+      const wrappedKey = await crypto.subtle.encrypt({ name: PORTABLE_ALGORITHM }, publicKey, portableDek);
       wraps.push({
         userId: user.id,
         wrappedKey: encodeBase64(wrappedKey),

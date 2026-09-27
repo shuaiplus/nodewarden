@@ -6,7 +6,6 @@ import { plus } from '../db/sql';
 import type { Send } from '../types';
 import { updateRevisionDate } from './storage-revision-repo';
 
-
 function mapSendRow(row: typeof sends.$inferSelect): Send {
   return {
     id: row.id,
@@ -105,26 +104,34 @@ export async function incrementSendAccessCount(db: D1Database, sendId: string): 
       accessCount: plus(sends.accessCount, 1),
       updatedAt: now,
     })
-    .where(and(
-      eq(sends.id, sendId),
-      eq(sends.disabled, 0),
-      or(isNull(sends.maxAccessCount), lt(sends.accessCount, sends.maxAccessCount)),
-      or(isNull(sends.expirationDate), gt(sends.expirationDate, now)),
-      gt(sends.deletionDate, now),
-    ))
+    .where(
+      and(
+        eq(sends.id, sendId),
+        eq(sends.disabled, 0),
+        or(isNull(sends.maxAccessCount), lt(sends.accessCount, sends.maxAccessCount)),
+        or(isNull(sends.expirationDate), gt(sends.expirationDate, now)),
+        gt(sends.deletionDate, now),
+      ),
+    )
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
 
 export async function deleteSend(db: D1Database, id: string, userId: string): Promise<void> {
-  await getOrm(db).delete(sends).where(and(eq(sends.id, id), eq(sends.userId, userId)));
+  await getOrm(db)
+    .delete(sends)
+    .where(and(eq(sends.id, id), eq(sends.userId, userId)));
 }
 
 export async function getSendsByIds(db: D1Database, ids: string[], userId: string): Promise<Send[]> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return [];
   const orm = getOrm(db);
-  const read = (chunk: string[]) => orm.select().from(sends).where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
+  const read = (chunk: string[]) =>
+    orm
+      .select()
+      .from(sends)
+      .where(and(eq(sends.userId, userId), inArray(sends.id, chunk)));
   const out: Send[] = [];
 
   for (const chunk of statementChunks(uniqueIds, read)) {
@@ -147,11 +154,7 @@ export async function bulkDeleteSends(db: D1Database, ids: string[], userId: str
 }
 
 export async function getAllSends(db: D1Database, userId: string): Promise<Send[]> {
-  const rows = await getOrm(db)
-    .select()
-    .from(sends)
-    .where(eq(sends.userId, userId))
-    .orderBy(desc(sends.updatedAt));
+  const rows = await getOrm(db).select().from(sends).where(eq(sends.userId, userId)).orderBy(desc(sends.updatedAt));
   return rows.map(mapSendRow);
 }
 

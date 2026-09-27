@@ -36,7 +36,7 @@ function mapCredentialRow(row: typeof webauthnCredentials.$inferSelect): Account
 export async function saveAccountPasskeyCredential(
   db: D1Database,
   credential: AccountPasskeyCredential,
-  securityStamp?: string
+  securityStamp?: string,
 ): Promise<boolean> {
   const values = {
     id: credential.id,
@@ -59,35 +59,49 @@ export async function saveAccountPasskeyCredential(
   const orm = getOrm(db);
   const insert = orm.insert(webauthnCredentials);
   // A two-factor key also needs the user to hold a recovery code at that stamp.
-  const write = securityStamp === undefined ? insert.values(values) : insert.select(orm.select(boundRow(values)).from(SINGLE_ROW).where(
-    userRowMatches(orm, values.userId, eq(users.securityStamp, securityStamp),
-      values.purpose === 'twoFactor' ? ne(coalesce(users.totpRecoveryCode, ''), '') : undefined),
-  ));
-  const result = await write.onConflictDoUpdate({
-    target: webauthnCredentials.id,
-    set: {
-      purpose: values.purpose,
-      name: values.name,
-      publicKey: values.publicKey,
-      credentialId: values.credentialId,
-      counter: values.counter,
-      type: values.type,
-      aaGuid: values.aaGuid,
-      transports: values.transports,
-      encryptedUserKey: values.encryptedUserKey,
-      encryptedPublicKey: values.encryptedPublicKey,
-      encryptedPrivateKey: values.encryptedPrivateKey,
-      supportsPrf: values.supportsPrf,
-      updatedAt: values.updatedAt,
-    },
-  }).run();
+  const write =
+    securityStamp === undefined
+      ? insert.values(values)
+      : insert.select(
+          orm
+            .select(boundRow(values))
+            .from(SINGLE_ROW)
+            .where(
+              userRowMatches(
+                orm,
+                values.userId,
+                eq(users.securityStamp, securityStamp),
+                values.purpose === 'twoFactor' ? ne(coalesce(users.totpRecoveryCode, ''), '') : undefined,
+              ),
+            ),
+        );
+  const result = await write
+    .onConflictDoUpdate({
+      target: webauthnCredentials.id,
+      set: {
+        purpose: values.purpose,
+        name: values.name,
+        publicKey: values.publicKey,
+        credentialId: values.credentialId,
+        counter: values.counter,
+        type: values.type,
+        aaGuid: values.aaGuid,
+        transports: values.transports,
+        encryptedUserKey: values.encryptedUserKey,
+        encryptedPublicKey: values.encryptedPublicKey,
+        encryptedPrivateKey: values.encryptedPrivateKey,
+        supportsPrf: values.supportsPrf,
+        updatedAt: values.updatedAt,
+      },
+    })
+    .run();
   return (result.meta.changes ?? 0) > 0;
 }
 
 export async function listAccountPasskeyCredentialsByUserId(
   db: D1Database,
   userId: string,
-  purpose: AccountPasskeyCredential['purpose'] = 'login'
+  purpose: AccountPasskeyCredential['purpose'] = 'login',
 ): Promise<AccountPasskeyCredential[]> {
   const rows = await getOrm(db)
     .select()
@@ -100,7 +114,7 @@ export async function listAccountPasskeyCredentialsByUserId(
 export async function getAccountPasskeyCredentialById(
   db: D1Database,
   userId: string,
-  id: string
+  id: string,
 ): Promise<AccountPasskeyCredential | null> {
   const [row] = await getOrm(db)
     .select()
@@ -112,7 +126,7 @@ export async function getAccountPasskeyCredentialById(
 
 export async function getAccountPasskeyCredentialByCredentialId(
   db: D1Database,
-  credentialId: string
+  credentialId: string,
 ): Promise<AccountPasskeyCredential | null> {
   const [row] = await getOrm(db)
     .select()
@@ -125,7 +139,7 @@ export async function getAccountPasskeyCredentialByCredentialId(
 export async function countAccountPasskeyCredentialsByUserId(
   db: D1Database,
   userId: string,
-  purpose: AccountPasskeyCredential['purpose'] = 'login'
+  purpose: AccountPasskeyCredential['purpose'] = 'login',
 ): Promise<number> {
   const [row] = await getOrm(db)
     .select({ count: count() })
@@ -139,7 +153,7 @@ export async function updateAccountPasskeyCounter(
   userId: string,
   credentialId: string,
   counter: number,
-  updatedAt = new Date().toISOString()
+  updatedAt = new Date().toISOString(),
 ): Promise<void> {
   await getOrm(db)
     .update(webauthnCredentials)
@@ -154,7 +168,7 @@ export async function updateAccountPasskeyEncryption(
   encryptedUserKey: string,
   encryptedPublicKey: string,
   encryptedPrivateKey: string,
-  updatedAt = new Date().toISOString()
+  updatedAt = new Date().toISOString(),
 ): Promise<boolean> {
   const result = await getOrm(db)
     .update(webauthnCredentials)
@@ -165,11 +179,13 @@ export async function updateAccountPasskeyEncryption(
       supportsPrf: 1,
       updatedAt,
     })
-    .where(and(
-      eq(webauthnCredentials.userId, userId),
-      eq(webauthnCredentials.credentialId, credentialId),
-      eq(webauthnCredentials.purpose, 'login'),
-    ))
+    .where(
+      and(
+        eq(webauthnCredentials.userId, userId),
+        eq(webauthnCredentials.credentialId, credentialId),
+        eq(webauthnCredentials.purpose, 'login'),
+      ),
+    )
     .run();
   return Number(result.meta.changes || 0) > 0;
 }
@@ -178,23 +194,22 @@ export async function deleteAccountPasskeyCredential(
   db: D1Database,
   userId: string,
   id: string,
-  purpose: AccountPasskeyCredential['purpose'] = 'login'
+  purpose: AccountPasskeyCredential['purpose'] = 'login',
 ): Promise<boolean> {
   const result = await getOrm(db)
     .delete(webauthnCredentials)
-    .where(and(
-      eq(webauthnCredentials.userId, userId),
-      eq(webauthnCredentials.id, id),
-      eq(webauthnCredentials.purpose, purpose),
-    ))
+    .where(
+      and(
+        eq(webauthnCredentials.userId, userId),
+        eq(webauthnCredentials.id, id),
+        eq(webauthnCredentials.purpose, purpose),
+      ),
+    )
     .run();
   return Number(result.meta.changes || 0) > 0;
 }
 
-export async function saveAccountPasskeyChallenge(
-  db: D1Database,
-  challenge: AccountPasskeyChallenge
-): Promise<void> {
+export async function saveAccountPasskeyChallenge(db: D1Database, challenge: AccountPasskeyChallenge): Promise<void> {
   const orm = getOrm(db);
   await orm
     .delete(webauthnChallenges)
@@ -226,7 +241,7 @@ export async function consumeAccountPasskeyChallenge(
   challengeHash: string,
   scope: AccountPasskeyChallengeScope,
   userId: string | null,
-  nowMs = Date.now()
+  nowMs = Date.now(),
 ): Promise<AccountPasskeyChallenge | null> {
   const orm = getOrm(db);
   const [row] = await orm

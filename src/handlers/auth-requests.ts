@@ -17,7 +17,12 @@ const AUTH_REQUEST_TYPE_UNLOCK = 1;
 const AUTH_REQUEST_TYPE_ADMIN_APPROVAL = 2;
 
 // Fields are clipped to their column widths; a value of the wrong type reads as empty.
-const clippedText = (maxLength: number) => z.string().trim().transform((text) => text.slice(0, maxLength)).catch('');
+const clippedText = (maxLength: number) =>
+  z
+    .string()
+    .trim()
+    .transform((text) => text.slice(0, maxLength))
+    .catch('');
 
 const AuthRequestCreateSchema = z.looseObject({
   email: clippedText(320).transform((email) => email.toLowerCase()),
@@ -34,9 +39,7 @@ const AuthRequestUpdateSchema = z.object({
 
 function getClientIp(request: Request): string | null {
   return (
-    request.headers.get('CF-Connecting-IP') ||
-    request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
-    null
+    request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || null
   );
 }
 
@@ -98,7 +101,7 @@ async function enforceAuthRequestCreateRateLimit(
   request: Request,
   env: Env,
   email: string,
-  deviceIdentifier: string
+  deviceIdentifier: string,
 ): Promise<Response | null> {
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier) return errorResponse('Client IP is required', 403);
@@ -169,7 +172,7 @@ export async function handleCreateAdminAuthRequest(
   request: Request,
   env: Env,
   userId: string,
-  userEmail: string
+  userEmail: string,
 ): Promise<Response> {
   const body = await parseBody(request, AuthRequestCreateSchema, 'Invalid request payload');
   if (body instanceof Response) return body;
@@ -244,14 +247,25 @@ export async function handleListAuthRequests(request: Request, env: Env, userId:
 export async function handleListPendingAuthRequests(request: Request, env: Env, userId: string): Promise<Response> {
   await authRequestRepo.pruneExpiredAuthRequests(env.DB);
   const authRequests = await authRequestRepo.listPendingAuthRequestsByUserId(env.DB, userId);
-  const rows = await Promise.all(authRequests.map(async (authRequest) => {
-    const device = await deviceRepo.getDevice(env.DB, userId, authRequest.requestDeviceIdentifier);
-    return toAuthRequestResponse(request, authRequest, device?.deviceIdentifier ?? authRequest.requestDeviceIdentifier);
-  }));
+  const rows = await Promise.all(
+    authRequests.map(async (authRequest) => {
+      const device = await deviceRepo.getDevice(env.DB, userId, authRequest.requestDeviceIdentifier);
+      return toAuthRequestResponse(
+        request,
+        authRequest,
+        device?.deviceIdentifier ?? authRequest.requestDeviceIdentifier,
+      );
+    }),
+  );
   return jsonResponse(listResponse(rows));
 }
 
-export async function handleUpdateAuthRequest(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+export async function handleUpdateAuthRequest(
+  request: Request,
+  env: Env,
+  userId: string,
+  id: string,
+): Promise<Response> {
   const body = await parseBody(request, AuthRequestUpdateSchema, 'Invalid request payload');
   if (body instanceof Response) return body;
 
@@ -264,16 +278,15 @@ export async function handleUpdateAuthRequest(request: Request, env: Env, userId
   }
 
   const latestForUser = await authRequestRepo.listPendingAuthRequestsByUserId(env.DB, userId);
-  const latestForDevice = latestForUser.find((item) => item.requestDeviceIdentifier === authRequest.requestDeviceIdentifier);
+  const latestForDevice = latestForUser.find(
+    (item) => item.requestDeviceIdentifier === authRequest.requestDeviceIdentifier,
+  );
   if (latestForDevice?.id !== authRequest.id) {
     return errorResponse('This request is no longer valid. Make sure to approve the most recent request.', 400);
   }
 
   const { requestApproved: approved, key } = body;
-  const responseDeviceIdentifier =
-    body.deviceIdentifier ||
-    readActingDeviceIdentifier(request) ||
-    'web';
+  const responseDeviceIdentifier = body.deviceIdentifier || readActingDeviceIdentifier(request) || 'web';
 
   if (approved && !key) {
     return errorResponse('Encrypted key is required to approve the request.', 400);

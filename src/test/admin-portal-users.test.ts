@@ -12,13 +12,21 @@ const adminEmail = 'portal@x.io';
 test('portal user search escapes LIKE wildcards, bounds paging and safely renders 101 users', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: adminEmail });
   const auth = await signInToAdminPortal(env, adminEmail);
-  for (let i = 0; i < 101; i++) await seedUser(env, { email: `u${String(i).padStart(3, '0')}@x.io`, name: '<script>bad()</script>', totpSecret: i === 0 ? 'SECRET' : null });
+  for (let i = 0; i < 101; i++)
+    await seedUser(env, {
+      email: `u${String(i).padStart(3, '0')}@x.io`,
+      name: '<script>bad()</script>',
+      totpSecret: i === 0 ? 'SECRET' : null,
+    });
   await seedUser(env, { email: 'a_b@x.io' });
   await seedUser(env, { email: 'axb@x.io' });
   assert.equal((await searchUsersByEmailPrefix(env.DB, 'A_B@', 0, 10)).length, 1);
   assert.equal((await searchUsersByEmailPrefix(env.DB, '%', 0, 10)).length, 0);
   for (const page of ['0', '-1', 'abc', 'Infinity']) {
-    const response = await portalFetch(env, { path: `/admin/users?email=u&count=1000&page=${page}`, cookie: auth.cookie });
+    const response = await portalFetch(env, {
+      path: `/admin/users?email=u&count=1000&page=${page}`,
+      cookie: auth.cookie,
+    });
     assert.equal(response.status, 200);
     const body = await response.text();
     assert.equal((body.match(/\/admin\/users\/view\//g) ?? []).length, 100);
@@ -28,7 +36,10 @@ test('portal user search escapes LIKE wildcards, bounds paging and safely render
     assert.doesNotMatch(body, /<script>/);
     assert.match(body, /<td>Yes<\/td>/);
   }
-  assert.match(await (await portalFetch(env, { path: '/admin/users?email=u&count=100&page=2', cookie: auth.cookie })).text(), /Previous/);
+  assert.match(
+    await (await portalFetch(env, { path: '/admin/users?email=u&count=100&page=2', cookie: auth.cookie })).text(),
+    /Previous/,
+  );
 });
 
 test('portal delete requires CSRF, recent login and matching email; logs successful deletion', async () => {
@@ -37,22 +48,62 @@ test('portal delete requires CSRF, recent login and matching email; logs success
   const user = await seedUser(env, { name: '<script>bad()</script>' });
   const path = `/admin/users/delete/${user.id}`;
   assert.equal((await portalFetch(env, { path, cookie: auth.cookie })).status, 405);
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: user.email } })).status, 403);
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: 'wrong' } })).status, 400);
-  await getOrm(env.DB).update(verification).set({ value: jsonSet(verification.value, '$.authTime', 0) }).where(like(verification.id, 'admin-session:%'));
-  const stale = await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { csrf: auth.csrf, confirmation: user.email } });
+  assert.equal(
+    (await portalFetch(env, { path, method: 'POST', cookie: auth.cookie, form: { confirmation: user.email } })).status,
+    403,
+  );
+  assert.equal(
+    (
+      await portalFetch(env, {
+        path,
+        method: 'POST',
+        cookie: auth.cookie,
+        form: { csrf: auth.csrf, confirmation: 'wrong' },
+      })
+    ).status,
+    400,
+  );
+  await getOrm(env.DB)
+    .update(verification)
+    .set({ value: jsonSet(verification.value, '$.authTime', 0) })
+    .where(like(verification.id, 'admin-session:%'));
+  const stale = await portalFetch(env, {
+    path,
+    method: 'POST',
+    cookie: auth.cookie,
+    form: { csrf: auth.csrf, confirmation: user.email },
+  });
   assert.equal(stale.status, 303);
   assert.match(stale.headers.get('Location')!, /m=reauth/);
   const fresh = await signInToAdminPortal(env, adminEmail);
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: fresh.cookie });
   assert.match(await view.text(), /&lt;script&gt;/);
-  assert.equal((await portalFetch(env, { path, method: 'POST', cookie: fresh.cookie, form: { csrf: fresh.csrf, confirmation: user.email.toUpperCase() } })).status, 303);
+  assert.equal(
+    (
+      await portalFetch(env, {
+        path,
+        method: 'POST',
+        cookie: fresh.cookie,
+        form: { csrf: fresh.csrf, confirmation: user.email.toUpperCase() },
+      })
+    ).status,
+    303,
+  );
   assert.equal(await getOrm(env.DB).$count(users, eq(users.id, user.id)), 0);
-  const audit = await getOrm(env.DB).select({ metadata: auditLogs.metadata }).from(auditLogs).where(eq(auditLogs.action, 'admin.portal.user.delete')).get();
+  const audit = await getOrm(env.DB)
+    .select({ metadata: auditLogs.metadata })
+    .from(auditLogs)
+    .where(eq(auditLogs.action, 'admin.portal.user.delete'))
+    .get();
   assert.equal(JSON.parse(audit!.metadata!).adminEmail, adminEmail);
   assert.equal((await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: fresh.cookie })).status, 404);
   const lastAdmin = await seedUser(env, { role: 'admin' });
-  const refused = await portalFetch(env, { path: `/admin/users/delete/${lastAdmin.id}`, method: 'POST', cookie: fresh.cookie, form: { csrf: fresh.csrf, confirmation: lastAdmin.email } });
+  const refused = await portalFetch(env, {
+    path: `/admin/users/delete/${lastAdmin.id}`,
+    method: 'POST',
+    cookie: fresh.cookie,
+    form: { csrf: fresh.csrf, confirmation: lastAdmin.email },
+  });
   assert.equal(refused.status, 400);
   assert.match(await refused.text(), /last active instance administrator/);
 });

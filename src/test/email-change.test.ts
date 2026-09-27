@@ -9,7 +9,16 @@ import { AuthService } from '../services/auth';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { hashPassword, verifyPassword } from '../services/auth-password';
 import type { Env, User } from '../types';
-import { abortWrites, authedFetch, captureEmail, createTestEnv, drainWaitUntil, interceptStatement, MAILABLE_DOMAIN, seedUser } from './support/env';
+import {
+  abortWrites,
+  authedFetch,
+  captureEmail,
+  createTestEnv,
+  drainWaitUntil,
+  interceptStatement,
+  MAILABLE_DOMAIN,
+  seedUser,
+} from './support/env';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as userRepo from '../services/storage-user-repo';
@@ -23,22 +32,46 @@ const NEW_KEY = '2.bmV3|bmV3|bmV3';
 async function setup(overrides: Partial<User> = {}, envOverrides: Partial<Env> = {}) {
   const mail = captureEmail();
   const env = await createTestEnv({ ...mail.overrides, ...envOverrides });
-  const user = await seedUser(env, { email: OLD_EMAIL, masterPasswordHash: await hashPassword(OLD_HASH), ...overrides });
+  const user = await seedUser(env, {
+    email: OLD_EMAIL,
+    masterPasswordHash: await hashPassword(OLD_HASH),
+    ...overrides,
+  });
   await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash);
-  const requestCode = (email = NEW_EMAIL, hash = OLD_HASH) => authedFetch(env, {
-    method: 'POST', path: '/api/accounts/email-token', userId: user.id, body: { masterPasswordHash: hash, newEmail: email },
-  });
-  const code = () => String(mail.sent.filter(message => String(message.subject).includes('verification code')).at(-1)?.text).match(/\b\d{6}\b/)![0];
-  const change = (extra: Record<string, unknown> = {}) => authedFetch(env, {
-    method: 'POST', path: '/api/accounts/email', userId: user.id,
-    body: { masterPasswordHash: OLD_HASH, newEmail: NEW_EMAIL, newMasterPasswordHash: NEW_HASH, key: NEW_KEY, token: code(), ...extra },
-  });
+  const requestCode = (email = NEW_EMAIL, hash = OLD_HASH) =>
+    authedFetch(env, {
+      method: 'POST',
+      path: '/api/accounts/email-token',
+      userId: user.id,
+      body: { masterPasswordHash: hash, newEmail: email },
+    });
+  const code = () =>
+    String(mail.sent.filter((message) => String(message.subject).includes('verification code')).at(-1)?.text).match(
+      /\b\d{6}\b/,
+    )![0];
+  const change = (extra: Record<string, unknown> = {}) =>
+    authedFetch(env, {
+      method: 'POST',
+      path: '/api/accounts/email',
+      userId: user.id,
+      body: {
+        masterPasswordHash: OLD_HASH,
+        newEmail: NEW_EMAIL,
+        newMasterPasswordHash: NEW_HASH,
+        key: NEW_KEY,
+        token: code(),
+        ...extra,
+      },
+    });
   return { env, user, mail, requestCode, code, change };
 }
 
 async function credentialPassword(env: Env, userId: string) {
-  const row = await getOrm(env.DB).select({ password: account.password }).from(account)
-    .where(and(eq(account.userId, userId), eq(account.providerId, 'credential'))).get();
+  const row = await getOrm(env.DB)
+    .select({ password: account.password })
+    .from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, 'credential')))
+    .get();
   return row?.password;
 }
 
@@ -56,7 +89,9 @@ test('email-token verifies the old password, conceals taken addresses, and uses 
   const existing = await seedUser(f.env, { email: `taken@${MAILABLE_DOMAIN}` });
   const wrong = await f.requestCode(NEW_EMAIL, 'wrong');
   assert.equal(wrong.status, 400);
-  assert.deepEqual((await wrong.json() as { validationErrors: unknown }).validationErrors, { MasterPasswordHash: ['Invalid password.'] });
+  assert.deepEqual(((await wrong.json()) as { validationErrors: unknown }).validationErrors, {
+    MasterPasswordHash: ['Invalid password.'],
+  });
   assert.equal(f.mail.sent.length, 0);
   const taken = await f.requestCode(existing.email);
   assert.equal(taken.status, 200);
@@ -73,7 +108,7 @@ test('email-token verifies the old password, conceals taken addresses, and uses 
   assert.equal((await f.requestCode(existing.email)).status, 429);
   assert.equal((await f.requestCode(NEW_EMAIL)).status, 429);
   assert.equal(f.mail.sent.length, 5);
-  assert.ok(f.mail.sent.slice(1).every(message => !/\b\d{6}\b/.test(String(message.subject))));
+  assert.ok(f.mail.sent.slice(1).every((message) => !/\b\d{6}\b/.test(String(message.subject))));
 });
 
 test('malformed key/KDF changes do not burn the code, which is bound to the normalized new address', async () => {
@@ -87,7 +122,7 @@ test('malformed key/KDF changes do not burn the code, which is bound to the norm
   }
   const wrongAddress = await f.change({ newEmail: `other@${MAILABLE_DOMAIN}` });
   assert.equal(wrongAddress.status, 400);
-  assert.equal((await wrongAddress.json() as { error: string }).error, 'Invalid token.');
+  assert.equal(((await wrongAddress.json()) as { error: string }).error, 'Invalid token.');
   assert.equal((await f.change({ newEmail: ` ${NEW_EMAIL.toUpperCase()} ` })).status, 200);
   assert.equal((await userRepo.getUserById(f.env.DB, f.user.id))?.email, NEW_EMAIL);
   await drainWaitUntil();
@@ -113,38 +148,68 @@ test('legacy old-email password proof becomes a new-email hash/key and revokes o
   assert.equal(await verifyPassword(NEW_HASH, updated.masterPasswordHash, NEW_EMAIL), true);
   assert.equal(await credentialPassword(f.env, f.user.id), updated.masterPasswordHash);
   assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'old-refresh'), null);
-  assert.equal((await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } })).status, 401);
-  for (const [username, password, status] of [[OLD_EMAIL, OLD_HASH, 400], [NEW_EMAIL, NEW_HASH, 200]] as const) {
-    const login = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username, password } });
+  assert.equal(
+    (await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${oldJwt}` } }))
+      .status,
+    401,
+  );
+  for (const [username, password, status] of [
+    [OLD_EMAIL, OLD_HASH, 400],
+    [NEW_EMAIL, NEW_HASH, 200],
+  ] as const) {
+    const login = await authedFetch(f.env, {
+      method: 'POST',
+      path: '/identity/connect/token',
+      body: { grant_type: 'password', username, password },
+    });
     assert.equal(login.status, status);
   }
-  const prelogin = await authedFetch(f.env, { method: 'POST', path: '/identity/accounts/prelogin', body: { email: NEW_EMAIL } });
-  assert.equal((await prelogin.json() as { Salt: string }).Salt, NEW_EMAIL);
-  const betterAuth = await authedFetch(f.env, { method: 'POST', path: '/api/auth/sign-in/email', body: { email: NEW_EMAIL, password: NEW_HASH } });
+  const prelogin = await authedFetch(f.env, {
+    method: 'POST',
+    path: '/identity/accounts/prelogin',
+    body: { email: NEW_EMAIL },
+  });
+  assert.equal(((await prelogin.json()) as { Salt: string }).Salt, NEW_EMAIL);
+  const betterAuth = await authedFetch(f.env, {
+    method: 'POST',
+    path: '/api/auth/sign-in/email',
+    body: { email: NEW_EMAIL, password: NEW_HASH },
+  });
   assert.equal(betterAuth.status, 200);
   await drainWaitUntil();
-  const notice = f.mail.sent.filter(message => String(message.subject).includes('email address changed'));
+  const notice = f.mail.sent.filter((message) => String(message.subject).includes('email address changed'));
   assert.equal(notice.length, 1);
   assert.equal(notice[0].to, OLD_EMAIL);
   assert.match(String(notice[0].text), /Time \(UTC\).*IP address/);
   assert.equal(await getOrm(f.env.DB).$count(auditLogs, eq(auditLogs.action, 'user.email.change')), 1);
 
-  const separate = await setup({ twoFactorEmail: `factor@${MAILABLE_DOMAIN}`, apiKey: 'same-api-key', privateKey: 'same-private-key', publicKey: 'same-public-key' });
+  const separate = await setup({
+    twoFactorEmail: `factor@${MAILABLE_DOMAIN}`,
+    apiKey: 'same-api-key',
+    privateKey: 'same-private-key',
+    publicKey: 'same-public-key',
+  });
   await separate.requestCode();
   assert.equal((await separate.change()).status, 200);
   const preserved = (await userRepo.getUserById(separate.env.DB, separate.user.id))!;
-  for (const field of ['twoFactorEmail', 'apiKey', 'privateKey', 'publicKey', 'kdfType', 'kdfIterations'] as const) assert.equal(preserved[field], separate.user[field]);
+  for (const field of ['twoFactorEmail', 'apiKey', 'privateKey', 'publicKey', 'kdfType', 'kdfIterations'] as const)
+    assert.equal(preserved[field], separate.user[field]);
   await drainWaitUntil();
 });
 
 test('email-change codes expire with a changed stamp and enforce a five-attempt budget', async () => {
   const f = await setup();
   await f.requestCode();
-  const changedPassword = await authedFetch(f.env, { method: 'POST', path: '/api/accounts/password', userId: f.user.id, body: { masterPasswordHash: OLD_HASH, newMasterPasswordHash: 'interim-hash', key: f.user.key } });
+  const changedPassword = await authedFetch(f.env, {
+    method: 'POST',
+    path: '/api/accounts/password',
+    userId: f.user.id,
+    body: { masterPasswordHash: OLD_HASH, newMasterPasswordHash: 'interim-hash', key: f.user.key },
+  });
   assert.equal(changedPassword.status, 200);
   const stale = await f.change({ masterPasswordHash: 'interim-hash' });
   assert.equal(stale.status, 400);
-  assert.equal((await stale.json() as { error: string }).error, 'Invalid token.');
+  assert.equal(((await stale.json()) as { error: string }).error, 'Invalid token.');
   const attempts = await setup();
   await attempts.requestCode();
   const wrong = attempts.code() === '000000' ? '111111' : '000000';
@@ -161,14 +226,16 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     const revision = await revisionRepo.getRevisionDate(f.env.DB, f.user.id);
     if (kind === 'audit') await abortWrites(f.env, { table: auditLogs, event: 'INSERT' }, 'forced email audit failure');
     const batch = f.env.DB.batch.bind(f.env.DB);
-    f.env.DB.batch = async statements => {
+    f.env.DB.batch = async (statements) => {
       if (kind === 'duplicate') await seedUser(f.env, { email: NEW_EMAIL });
-      if (kind === 'stamp') await getOrm(f.env.DB).update(users).set({ securityStamp: 'newer-stamp' }).where(eq(users.id, f.user.id));
+      if (kind === 'stamp')
+        await getOrm(f.env.DB).update(users).set({ securityStamp: 'newer-stamp' }).where(eq(users.id, f.user.id));
       return batch(statements);
     };
     const response = await f.change();
     assert.equal(response.status, kind === 'audit' ? 500 : 400, kind);
-    if (kind === 'duplicate') assert.equal((await response.json() as { error: string }).error, 'Email already in use.');
+    if (kind === 'duplicate')
+      assert.equal(((await response.json()) as { error: string }).error, 'Email already in use.');
     if (kind === 'stamp') {
       const user = (await userRepo.getUserById(f.env.DB, f.user.id))!;
       assert.equal(user.securityStamp, 'newer-stamp');
@@ -179,7 +246,7 @@ test('duplicate-email and audit failures roll back the entire account mutation; 
     assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.user.id), revision);
     assert.equal(await getOrm(f.env.DB).$count(auditLogs), 0);
     await drainWaitUntil();
-    assert.equal(f.mail.sent.filter(message => String(message.subject).includes('email address changed')).length, 0);
+    assert.equal(f.mail.sent.filter((message) => String(message.subject).includes('email address changed')).length, 0);
   }
 });
 
@@ -203,11 +270,20 @@ test('an old password-change mirror cannot overwrite a later atomic email change
     interrupted = true;
     assert.equal((await f.requestCode(NEW_EMAIL, 'interim-hash')).status, 200);
     assert.equal((await f.change({ masterPasswordHash: 'interim-hash' })).status, 200);
-    const login = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: NEW_EMAIL, password: NEW_HASH } });
+    const login = await authedFetch(f.env, {
+      method: 'POST',
+      path: '/identity/connect/token',
+      body: { grant_type: 'password', username: NEW_EMAIL, password: NEW_HASH },
+    });
     assert.equal(login.status, 200);
-    newRefresh = (await login.json() as { refresh_token: string }).refresh_token;
+    newRefresh = ((await login.json()) as { refresh_token: string }).refresh_token;
   });
-  const delayed = await authedFetch(f.env, { method: 'POST', path: '/api/accounts/password', userId: f.user.id, body: { masterPasswordHash: OLD_HASH, newMasterPasswordHash: 'interim-hash', key: f.user.key } });
+  const delayed = await authedFetch(f.env, {
+    method: 'POST',
+    path: '/api/accounts/password',
+    userId: f.user.id,
+    body: { masterPasswordHash: OLD_HASH, newMasterPasswordHash: 'interim-hash', key: f.user.key },
+  });
   assert.equal(interrupted, true);
   assert.equal(delayed.status, 400);
   const updated = (await userRepo.getUserById(f.env.DB, f.user.id))!;

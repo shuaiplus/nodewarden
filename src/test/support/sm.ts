@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type CollectionAccess, type MembershipRecord, type OrgPermissions } from '../../services/org-types';
+import {
+  EMPTY_PERMISSIONS,
+  MembershipStatus,
+  MembershipType,
+  type CollectionAccess,
+  type MembershipRecord,
+  type OrgPermissions,
+} from '../../services/org-types';
 import { AuthService, type Principal } from '../../services/auth';
 import * as orgRepo from '../../services/storage-org-repo';
 import type { Env, User } from '../../types';
@@ -18,7 +25,16 @@ export const ENCRYPTED_FIELD = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 export const TOKEN_FIELDS = { name: ENCRYPTED_FIELD, encryptedPayload: ENCRYPTED_FIELD, key: ENCRYPTED_FIELD };
 
 export function smLogin(env: Env, tokenId: string, secret: string): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'api.secrets', client_id: tokenId, client_secret: secret }) });
+  return authedFetch(env, {
+    method: 'POST',
+    path: '/identity/connect/token',
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: 'api.secrets',
+      client_id: tokenId,
+      client_secret: secret,
+    }),
+  });
 }
 
 export async function smUser(env: Env, user: User): Promise<Principal> {
@@ -43,7 +59,7 @@ export interface SmOrg {
 export async function postJson<T>(env: Env, owner: User, path: string, body: unknown): Promise<T> {
   const response = await authedFetch(env, { method: 'POST', path, body, userId: owner.id });
   assert.equal(response.status, 200, `${path} answered ${response.status}`);
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
 // Column overrides for one membership row, plus the member's direct collection access. Partial
@@ -56,7 +72,11 @@ export type MembershipSeed = Omit<Partial<MembershipRecord>, 'permissions'> & {
 // One membership row of `orgId`: a confirmed plain User with no account bound, unless overridden.
 // Only confirming a member stores the org key, so other statuses keep it empty as the invite flow
 // does. Returns the membership id.
-export async function seedMembership(env: Env, orgId: string, { collections, permissions = null, ...fields }: MembershipSeed = {}): Promise<string> {
+export async function seedMembership(
+  env: Env,
+  orgId: string,
+  { collections, permissions = null, ...fields }: MembershipSeed = {},
+): Promise<string> {
   const now = new Date().toISOString();
   const status = fields.status ?? MembershipStatus.Confirmed;
   const member: MembershipRecord = {
@@ -82,7 +102,9 @@ export async function seedMembership(env: Env, orgId: string, { collections, per
 
 // A new account, seeded with the `user` overrides, holding a membership of `orgId`.
 export async function seedMember(
-  env: Env, orgId: string, { user: account, ...membership }: MembershipSeed & { user?: Partial<User> } = {},
+  env: Env,
+  orgId: string,
+  { user: account, ...membership }: MembershipSeed & { user?: Partial<User> } = {},
 ): Promise<{ user: User; memberId: string }> {
   const user = await seedUser(env, account);
   return { user, memberId: await seedMembership(env, orgId, { userId: user.id, email: user.email, ...membership }) };
@@ -97,7 +119,7 @@ export async function seedSmOrg(
   const owner = await seedUser(env);
   const created = await authedFetch(env, { method: 'POST', path: createPath, body: createBody, userId: owner.id });
   if (!created.ok) throw new Error(`seedSmOrg: ${createPath} answered ${created.status}`);
-  const { id: orgId } = await created.json() as { id: string };
+  const { id: orgId } = (await created.json()) as { id: string };
   return { orgId, owner, admin: (await seedMember(env, orgId, { type: MembershipType.Admin })).user };
 }
 
@@ -107,7 +129,9 @@ export async function createOrg(env: Env, owner: User): Promise<string> {
 }
 
 export async function createCollection(env: Env, owner: User, orgId: string): Promise<string> {
-  return (await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/collections`, { name: ENCRYPTED_FIELD })).id;
+  return (
+    await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/collections`, { name: ENCRYPTED_FIELD })
+  ).id;
 }
 
 export async function createGroup(env: Env, owner: User, orgId: string): Promise<string> {
@@ -126,7 +150,22 @@ export interface SelectionReadOnly {
   manage: boolean;
 }
 
-export const manageAccess = (id: string): SelectionReadOnly => ({ id, readOnly: false, hidePasswords: false, manage: true });
-export const editAccess = (id: string): SelectionReadOnly => ({ id, readOnly: false, hidePasswords: false, manage: false });
-export const viewAccess = (id: string): SelectionReadOnly => ({ id, readOnly: true, hidePasswords: false, manage: false });
+export const manageAccess = (id: string): SelectionReadOnly => ({
+  id,
+  readOnly: false,
+  hidePasswords: false,
+  manage: true,
+});
+export const editAccess = (id: string): SelectionReadOnly => ({
+  id,
+  readOnly: false,
+  hidePasswords: false,
+  manage: false,
+});
+export const viewAccess = (id: string): SelectionReadOnly => ({
+  id,
+  readOnly: true,
+  hidePasswords: false,
+  manage: false,
+});
 export const byId = (left: { id: string }, right: { id: string }): number => left.id.localeCompare(right.id);

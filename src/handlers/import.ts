@@ -3,58 +3,116 @@ import { LIMITS } from '../config/limits';
 import { getOrm, type Orm } from '../db/client';
 import { ciphers as cipherTable, folders as folderTable } from '../db/schema';
 import { notifyUserVaultSync } from '../durable/notifications-hub';
-import type { Env, Cipher, CipherBankAccount, CipherDriversLicense, CipherPassport, Folder, PasswordHistory } from '../types';
+import type {
+  Env,
+  Cipher,
+  CipherBankAccount,
+  CipherDriversLicense,
+  CipherPassport,
+  Folder,
+  PasswordHistory,
+} from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
-import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
+import {
+  normalizeCipherLoginForStorage,
+  normalizeCipherSshKeyForCompatibility,
+  validateCipherEncryptedFieldsForCompatibility,
+} from './ciphers';
 import * as folderRepo from '../services/storage-folder-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 
 const orNull = <T extends z.ZodType>(schema: T) => schema.nullish().transform((value) => value ?? null);
-const list = <T extends z.ZodType>(item: T) => z.array(item).nullish().transform((items) => items ?? []);
+const list = <T extends z.ZodType>(item: T) =>
+  z
+    .array(item)
+    .nullish()
+    .transform((items) => items ?? []);
 const encString = orNull(z.string());
-const optionalId = z.string().nullish().transform((id) => id?.trim() || null);
+const optionalId = z
+  .string()
+  .nullish()
+  .transform((id) => id?.trim() || null);
 // Shapes the cipher endpoints own; validateCipherEncryptedFieldsForCompatibility checks their fields.
 const clientObject = <T>() => orNull(z.custom<T>((value) => typeof value === 'object'));
 
 // Bitwarden's ImportCiphersRequestModel. parseBody folds PascalCase keys to camelCase; cipher entries
 // keep unknown keys so new client fields persist, and absent fields default as the create endpoint's.
 const CiphersImportBody = z.object({
-  ciphers: list(z.looseObject({
-    id: optionalId,
-    type: z.number(),
-    folderId: optionalId,
-    name: z.string().nullish().transform((name) => name ?? 'Untitled'),
-    notes: encString,
-    favorite: z.boolean().nullish().transform((favorite) => favorite ?? false),
-    reprompt: z.number().nullish().transform((reprompt) => reprompt ?? 0),
-    key: encString,
-    login: orNull(z.looseObject({
-      username: encString,
-      password: encString,
-      uris: orNull(z.array(z.looseObject({ uri: encString, uriChecksum: encString, match: orNull(z.number()) }))),
-      totp: encString,
-      autofillOnPageLoad: orNull(z.boolean()),
-      uri: encString,
-      passwordRevisionDate: encString,
-    })),
-    card: orNull(z.looseObject({
-      cardholderName: encString, brand: encString, number: encString, expMonth: encString, expYear: encString, code: encString,
-    })),
-    identity: orNull(z.looseObject({
-      title: encString, firstName: encString, middleName: encString, lastName: encString,
-      address1: encString, address2: encString, address3: encString, city: encString, state: encString, postalCode: encString, country: encString,
-      company: encString, email: encString, phone: encString, ssn: encString, username: encString, passportNumber: encString, licenseNumber: encString,
-    })),
-    secureNote: orNull(z.looseObject({ type: z.number() })),
-    sshKey: z.unknown().optional(),
-    bankAccount: clientObject<CipherBankAccount>(),
-    driversLicense: clientObject<CipherDriversLicense>(),
-    passport: clientObject<CipherPassport>(),
-    fields: orNull(z.array(z.looseObject({ name: encString, value: encString, type: z.number(), linkedId: orNull(z.number()) }))),
-    passwordHistory: clientObject<PasswordHistory[]>(),
-  })),
+  ciphers: list(
+    z.looseObject({
+      id: optionalId,
+      type: z.number(),
+      folderId: optionalId,
+      name: z
+        .string()
+        .nullish()
+        .transform((name) => name ?? 'Untitled'),
+      notes: encString,
+      favorite: z
+        .boolean()
+        .nullish()
+        .transform((favorite) => favorite ?? false),
+      reprompt: z
+        .number()
+        .nullish()
+        .transform((reprompt) => reprompt ?? 0),
+      key: encString,
+      login: orNull(
+        z.looseObject({
+          username: encString,
+          password: encString,
+          uris: orNull(z.array(z.looseObject({ uri: encString, uriChecksum: encString, match: orNull(z.number()) }))),
+          totp: encString,
+          autofillOnPageLoad: orNull(z.boolean()),
+          uri: encString,
+          passwordRevisionDate: encString,
+        }),
+      ),
+      card: orNull(
+        z.looseObject({
+          cardholderName: encString,
+          brand: encString,
+          number: encString,
+          expMonth: encString,
+          expYear: encString,
+          code: encString,
+        }),
+      ),
+      identity: orNull(
+        z.looseObject({
+          title: encString,
+          firstName: encString,
+          middleName: encString,
+          lastName: encString,
+          address1: encString,
+          address2: encString,
+          address3: encString,
+          city: encString,
+          state: encString,
+          postalCode: encString,
+          country: encString,
+          company: encString,
+          email: encString,
+          phone: encString,
+          ssn: encString,
+          username: encString,
+          passportNumber: encString,
+          licenseNumber: encString,
+        }),
+      ),
+      secureNote: orNull(z.looseObject({ type: z.number() })),
+      sshKey: z.unknown().optional(),
+      bankAccount: clientObject<CipherBankAccount>(),
+      driversLicense: clientObject<CipherDriversLicense>(),
+      passport: clientObject<CipherPassport>(),
+      fields: orNull(
+        z.array(z.looseObject({ name: encString, value: encString, type: z.number(), linkedId: orNull(z.number()) })),
+      ),
+      passwordHistory: clientObject<PasswordHistory[]>(),
+    }),
+  ),
   folders: list(z.object({ name: z.string().nullish() })),
   folderRelationships: list(z.object({ key: z.number(), value: z.number() })),
 });
@@ -62,7 +120,7 @@ const CiphersImportBody = z.object({
 async function runOrmBatch(
   orm: Orm,
   statements: Array<{ execute: () => Promise<unknown> }>,
-  chunkSize: number
+  chunkSize: number,
 ): Promise<void> {
   for (let offset = 0; offset < statements.length; offset += chunkSize) {
     const chunk = statements.slice(offset, offset + chunkSize);
@@ -90,7 +148,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   // Create folders and build index -> id mapping
   const folderIdMap = new Map<number, string>();
   const folderRows: Folder[] = [];
-  
+
   for (let i = 0; i < folders.length; i++) {
     const folderId = generateUUID();
     folderIdMap.set(i, folderId);
@@ -111,12 +169,15 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
     await runOrmBatch(
       orm,
       folderRows.map((folder) =>
-        orm.insert(folderTable).values(folder).onConflictDoUpdate({
-          target: folderTable.id,
-          set: { userId: folder.userId, name: folder.name, updatedAt: folder.updatedAt },
-        })
+        orm
+          .insert(folderTable)
+          .values(folder)
+          .onConflictDoUpdate({
+            target: folderTable.id,
+            set: { userId: folder.userId, name: folder.name, updatedAt: folder.updatedAt },
+          }),
       ),
-      batchChunkSize
+      batchChunkSize,
     );
   }
 
@@ -177,23 +238,26 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
         archivedAt: cipher.archivedAt,
         deletedAt: cipher.deletedAt,
       };
-      return orm.insert(cipherTable).values(values).onConflictDoUpdate({
-        target: cipherTable.id,
-        set: {
-          userId: values.userId,
-          type: values.type,
-          folderId: values.folderId,
-          name: values.name,
-          notes: values.notes,
-          favorite: values.favorite,
-          data: values.data,
-          reprompt: values.reprompt,
-          key: values.key,
-          updatedAt: values.updatedAt,
-          archivedAt: values.archivedAt,
-          deletedAt: values.deletedAt,
-        },
-      });
+      return orm
+        .insert(cipherTable)
+        .values(values)
+        .onConflictDoUpdate({
+          target: cipherTable.id,
+          set: {
+            userId: values.userId,
+            type: values.type,
+            folderId: values.folderId,
+            name: values.name,
+            notes: values.notes,
+            favorite: values.favorite,
+            data: values.data,
+            reprompt: values.reprompt,
+            key: values.key,
+            updatedAt: values.updatedAt,
+            archivedAt: values.archivedAt,
+            deletedAt: values.deletedAt,
+          },
+        });
     });
     await runOrmBatch(orm, cipherStatements, batchChunkSize);
   }

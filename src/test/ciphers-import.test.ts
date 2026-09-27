@@ -17,15 +17,23 @@ test('cipher import accepts PascalCase bodies, files ciphers into imported folde
     userId: user.id,
     body: {
       Folders: [{ Name: ENC }],
-      Ciphers: [{ Id: ' source-1 ', Type: 1, Name: ENC, Login: { Username: ENC, Uris: [{ Uri: ENC }] }, ClientOnly: 'kept' }],
+      Ciphers: [
+        { Id: ' source-1 ', Type: 1, Name: ENC, Login: { Username: ENC, Uris: [{ Uri: ENC }] }, ClientOnly: 'kept' },
+      ],
       FolderRelationships: [{ Key: 0, Value: 0 }],
     },
   });
   assert.equal(response.status, 200);
-  const { cipherMap } = await response.json() as { cipherMap: Array<{ index: number; sourceId: string | null; id: string }> };
+  const { cipherMap } = (await response.json()) as {
+    cipherMap: Array<{ index: number; sourceId: string | null; id: string }>;
+  };
   assert.equal(cipherMap[0].sourceId, 'source-1');
 
-  const row = await getOrm(env.DB).select({ folderId: ciphers.folderId, data: ciphers.data }).from(ciphers).where(eq(ciphers.id, cipherMap[0].id)).get();
+  const row = await getOrm(env.DB)
+    .select({ folderId: ciphers.folderId, data: ciphers.data })
+    .from(ciphers)
+    .where(eq(ciphers.id, cipherMap[0].id))
+    .get();
   const folder = await getOrm(env.DB).select({ id: folders.id }).from(folders).where(eq(folders.userId, user.id)).get();
   assert.equal(row?.folderId, folder?.id);
   const data = JSON.parse(row?.data ?? '{}');
@@ -45,7 +53,7 @@ test('cipher import rejects malformed entries before writing anything', async ()
     body: { folders: [{ name: ENC }], ciphers: [{ name: ENC }], folderRelationships: [] },
   });
   assert.equal(response.status, 400);
-  const { validationErrors } = await response.json() as { validationErrors: Record<string, string[]> };
+  const { validationErrors } = (await response.json()) as { validationErrors: Record<string, string[]> };
   assert.deepEqual(Object.keys(validationErrors), ['ciphers.0.type']);
   assert.equal(await getOrm(env.DB).$count(folders, eq(folders.userId, user.id)), 0);
 });

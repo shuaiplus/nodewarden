@@ -9,7 +9,18 @@ import { MembershipType } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
-import { byId, createCollection, createGroup, createOrg, editAccess, ENCRYPTED_FIELD, manageAccess, seedMember, type SelectionReadOnly, viewAccess } from './support/sm';
+import {
+  byId,
+  createCollection,
+  createGroup,
+  createOrg,
+  editAccess,
+  ENCRYPTED_FIELD,
+  manageAccess,
+  seedMember,
+  type SelectionReadOnly,
+  viewAccess,
+} from './support/sm';
 
 // Official web's collection dialog builds its Access tab from GET /organizations/{orgId}/collections/details
 // and saves the whole list back, so a details row without users and groups made every save wipe the
@@ -19,8 +30,20 @@ import { byId, createCollection, createGroup, createOrg, editAccess, ENCRYPTED_F
 const COLLECTION_NAME = ENCRYPTED_FIELD;
 const INVITED_EMAIL = 'invitee@example.test';
 const ACCESS_DETAILS_KEYS = [
-  'assigned', 'defaultUserCollectionEmail', 'externalId', 'groups', 'hidePasswords', 'id', 'manage',
-  'name', 'object', 'organizationId', 'readOnly', 'type', 'unmanaged', 'users',
+  'assigned',
+  'defaultUserCollectionEmail',
+  'externalId',
+  'groups',
+  'hidePasswords',
+  'id',
+  'manage',
+  'name',
+  'object',
+  'organizationId',
+  'readOnly',
+  'type',
+  'unmanaged',
+  'users',
 ];
 const SELECTION_KEYS = ['hidePasswords', 'id', 'manage', 'readOnly'];
 
@@ -44,12 +67,33 @@ function collectionsPath(orgId: string, suffix = ''): string {
   return `/api/organizations/${orgId}/collections${suffix}`;
 }
 
-async function postCollection(env: Env, actor: User, orgId: string, access: Record<string, unknown> = {}): Promise<Response> {
-  return authedFetch(env, { method: 'POST', path: collectionsPath(orgId), body: { name: COLLECTION_NAME, ...access }, userId: actor.id });
+async function postCollection(
+  env: Env,
+  actor: User,
+  orgId: string,
+  access: Record<string, unknown> = {},
+): Promise<Response> {
+  return authedFetch(env, {
+    method: 'POST',
+    path: collectionsPath(orgId),
+    body: { name: COLLECTION_NAME, ...access },
+    userId: actor.id,
+  });
 }
 
-function putCollection(env: Env, actor: User, orgId: string, collectionId: string, body: Record<string, unknown>): Promise<Response> {
-  return authedFetch(env, { method: 'PUT', path: collectionsPath(orgId, `/${collectionId}`), body: { name: COLLECTION_NAME, ...body }, userId: actor.id });
+function putCollection(
+  env: Env,
+  actor: User,
+  orgId: string,
+  collectionId: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return authedFetch(env, {
+    method: 'PUT',
+    path: collectionsPath(orgId, `/${collectionId}`),
+    body: { name: COLLECTION_NAME, ...body },
+    userId: actor.id,
+  });
 }
 
 function get(env: Env, actor: User, path: string): Promise<Response> {
@@ -65,7 +109,7 @@ async function listDetails(env: Env, actor: User, orgId: string): Promise<Access
 async function singleDetails(env: Env, actor: User, orgId: string, collectionId: string): Promise<AccessDetails> {
   const response = await get(env, actor, collectionsPath(orgId, `/${collectionId}/details`));
   assert.equal(response.status, 200);
-  return await response.json() as AccessDetails;
+  return (await response.json()) as AccessDetails;
 }
 
 test('the collection dialog opens with every grant and saving it back keeps them', async () => {
@@ -75,7 +119,15 @@ test('the collection dialog opens with every grant and saving it back keeps them
   const collectionId = await createCollection(env, owner, orgId);
   const [alice, bob] = [await seedMember(env, orgId), await seedMember(env, orgId)];
   const groupId = await createGroup(env, owner, orgId);
-  assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
+  assert.equal(
+    (
+      await putCollection(env, owner, orgId, collectionId, {
+        users: [editAccess(alice.memberId)],
+        groups: [manageAccess(groupId)],
+      })
+    ).status,
+    200,
+  );
   // An invited member's grant waits in pending_collection_users until accept.
   const invited = await authedFetch(env, {
     method: 'POST',
@@ -99,7 +151,10 @@ test('the collection dialog opens with every grant and saving it back keeps them
   });
   assert.equal(saved.status, 200);
   const reopened = await singleDetails(env, owner, orgId, collectionId);
-  assert.deepEqual(sorted(reopened.users), sorted([editAccess(alice.memberId), viewAccess(invitedId), editAccess(bob.memberId)]));
+  assert.deepEqual(
+    sorted(reopened.users),
+    sorted([editAccess(alice.memberId), viewAccess(invitedId), editAccess(bob.memberId)]),
+  );
   assert.deepEqual(reopened.groups, [manageAccess(groupId)]);
   assert.deepEqual(await orgRepo.listUserCollectionAccess(env.DB, alice.user.id, orgId), [
     { collectionId, readOnly: false, hidePasswords: false, manage: false },
@@ -120,7 +175,10 @@ test('saving the dialog keeps more group grants than one statement can bind', as
 
   const opened = await singleDetails(env, owner, orgId, collectionId);
   assert.deepEqual(sorted(opened.groups), grants);
-  assert.equal((await putCollection(env, owner, orgId, collectionId, { users: opened.users, groups: opened.groups })).status, 200);
+  assert.equal(
+    (await putCollection(env, owner, orgId, collectionId, { users: opened.users, groups: opened.groups })).status,
+    200,
+  );
   assert.deepEqual(sorted((await singleDetails(env, owner, orgId, collectionId)).groups), grants);
 });
 
@@ -132,7 +190,15 @@ test('saving the dialog with an empty list removes those grants and an omitted l
   const collectionId = await createCollection(env, owner, orgId);
   const alice = await seedMember(env, orgId);
   const groupId = await createGroup(env, owner, orgId);
-  assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
+  assert.equal(
+    (
+      await putCollection(env, owner, orgId, collectionId, {
+        users: [editAccess(alice.memberId)],
+        groups: [manageAccess(groupId)],
+      })
+    ).status,
+    200,
+  );
 
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [] })).status, 200);
   const details = await singleDetails(env, owner, orgId, collectionId);
@@ -154,9 +220,15 @@ test('single collection details is one object in the shape `bw get org-collectio
   assert.equal(unmanaged.id, collectionId);
   assert.equal(unmanaged.name, COLLECTION_NAME);
   assert.equal(unmanaged.object, 'collectionAccessDetails');
-  assert.deepEqual({ users: unmanaged.users, groups: unmanaged.groups, unmanaged: unmanaged.unmanaged }, { users: [], groups: [], unmanaged: true });
+  assert.deepEqual(
+    { users: unmanaged.users, groups: unmanaged.groups, unmanaged: unmanaged.unmanaged },
+    { users: [], groups: [], unmanaged: true },
+  );
 
-  assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [manageAccess(alice.memberId)] })).status, 200);
+  assert.equal(
+    (await putCollection(env, owner, orgId, collectionId, { users: [manageAccess(alice.memberId)] })).status,
+    200,
+  );
   const managed = await singleDetails(env, owner, orgId, collectionId);
   assert.equal(managed.unmanaged, false);
   assert.deepEqual(managed.users, [manageAccess(alice.memberId)]);
@@ -179,29 +251,48 @@ test('create and update answer with the saved collection access details', async 
 
   const created = await postCollection(env, owner, orgId, { users: [manageAccess(ownerId)], groups: [] });
   assert.equal(created.status, 200);
-  const createdBody = await created.json() as AccessDetails;
+  const createdBody = (await created.json()) as AccessDetails;
   assert.deepEqual(Object.keys(createdBody).sort(), ACCESS_DETAILS_KEYS);
   assert.deepEqual(
-    { object: createdBody.object, assigned: createdBody.assigned, users: createdBody.users, groups: createdBody.groups },
+    {
+      object: createdBody.object,
+      assigned: createdBody.assigned,
+      users: createdBody.users,
+      groups: createdBody.groups,
+    },
     { object: 'collectionAccessDetails', assigned: true, users: [manageAccess(ownerId)], groups: [] },
   );
 
   const updated = await putCollection(env, owner, orgId, createdBody.id, { users: [editAccess(ownerId)] });
   assert.equal(updated.status, 200);
-  const updatedBody = await updated.json() as AccessDetails;
+  const updatedBody = (await updated.json()) as AccessDetails;
   assert.deepEqual(
-    { object: updatedBody.object, assigned: updatedBody.assigned, users: updatedBody.users, unmanaged: updatedBody.unmanaged },
+    {
+      object: updatedBody.object,
+      assigned: updatedBody.assigned,
+      users: updatedBody.users,
+      unmanaged: updatedBody.unmanaged,
+    },
     { object: 'collectionAccessDetails', assigned: true, users: [editAccess(ownerId)], unmanaged: true },
   );
 
   // A creator that may not read access gets upstream's bare response: no grants and every flag false.
-  const creator = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { createNewCollections: true } });
+  const creator = await seedMember(env, orgId, {
+    type: MembershipType.Custom,
+    permissions: { createNewCollections: true },
+  });
   const bare = await postCollection(env, creator.user, orgId, { users: [editAccess(creator.memberId)] });
   assert.equal(bare.status, 200);
-  const bareBody = await bare.json() as AccessDetails;
+  const bareBody = (await bare.json()) as AccessDetails;
   assert.deepEqual(Object.keys(bareBody).sort(), ACCESS_DETAILS_KEYS);
   assert.deepEqual(
-    { object: bareBody.object, assigned: bareBody.assigned, manage: bareBody.manage, users: bareBody.users, groups: bareBody.groups },
+    {
+      object: bareBody.object,
+      assigned: bareBody.assigned,
+      manage: bareBody.manage,
+      users: bareBody.users,
+      groups: bareBody.groups,
+    },
     { object: 'collectionAccessDetails', assigned: false, manage: false, users: null, groups: null },
   );
 });
@@ -219,7 +310,10 @@ test('access details are served only to members who may read that access', async
   const manager = await seedMember(env, orgId);
   const editor = await seedMember(env, orgId);
   const userManager = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
-  const groupManager = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageGroups: true } });
+  const groupManager = await seedMember(env, orgId, {
+    type: MembershipType.Custom,
+    permissions: { manageGroups: true },
+  });
   const grants = { users: [manageAccess(manager.memberId), editAccess(editor.memberId)] };
   assert.equal((await putCollection(env, owner, orgId, managed, grants)).status, 200);
   const status = async (actor: User, suffix: string) => (await get(env, actor, collectionsPath(orgId, suffix))).status;
@@ -247,7 +341,12 @@ test('access details are served only to members who may read that access', async
   // Upstream takes the reader's own flags from its grants, so one holding none gets every flag false.
   const unassigned = await singleDetails(env, userManager.user, orgId, other);
   assert.deepEqual(
-    { assigned: unassigned.assigned, readOnly: unassigned.readOnly, hidePasswords: unassigned.hidePasswords, manage: unassigned.manage },
+    {
+      assigned: unassigned.assigned,
+      readOnly: unassigned.readOnly,
+      hidePasswords: unassigned.hidePasswords,
+      manage: unassigned.manage,
+    },
     { assigned: false, readOnly: false, hidePasswords: false, manage: false },
   );
 
@@ -267,7 +366,10 @@ test('only members who manage a collection may update it', async () => {
   const collectionId = await createCollection(env, owner, orgId);
   const manager = await seedMember(env, orgId);
   const editor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
-  const collectionEditor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
+  const collectionEditor = await seedMember(env, orgId, {
+    type: MembershipType.Custom,
+    permissions: { editAnyCollection: true },
+  });
   const grants = [manageAccess(manager.memberId), editAccess(editor.memberId)].sort(byId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: grants })).status, 200);
 
@@ -275,7 +377,10 @@ test('only members who manage a collection may update it', async () => {
   const synced = await get(env, editor.user, '/api/sync');
   const syncedCollections = ((await synced.json()) as { collections: AccessDetails[] }).collections;
   assert.equal(syncedCollections.find(({ id }) => id === collectionId)!.manage, false);
-  assert.equal((await putCollection(env, editor.user, orgId, collectionId, { users: [manageAccess(editor.memberId)] })).status, 404);
+  assert.equal(
+    (await putCollection(env, editor.user, orgId, collectionId, { users: [manageAccess(editor.memberId)] })).status,
+    404,
+  );
   assert.deepEqual(sorted((await singleDetails(env, owner, orgId, collectionId)).users), grants);
   assert.equal((await putCollection(env, manager.user, orgId, collectionId, { users: grants })).status, 200);
   assert.equal((await putCollection(env, collectionEditor.user, orgId, collectionId, { users: grants })).status, 200);
@@ -289,6 +394,9 @@ test('a collection save with a malformed access list is rejected before anything
 
   const rejected = await postCollection(env, owner, orgId, { users: [{ readOnly: true }] });
   assert.equal(rejected.status, 400);
-  assert.deepEqual(Object.keys((await rejected.json() as { validationErrors: Record<string, string[]> }).validationErrors), ['users.0.id']);
+  assert.deepEqual(
+    Object.keys(((await rejected.json()) as { validationErrors: Record<string, string[]> }).validationErrors),
+    ['users.0.id'],
+  );
   assert.deepEqual(await orgRepo.listCollectionsByOrg(env.DB, orgId), before);
 });

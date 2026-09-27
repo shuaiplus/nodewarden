@@ -54,7 +54,11 @@ function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
 }
 
-async function requireBackupUserVerification(actorUser: User, masterPasswordHash: string | null | undefined, env: Env): Promise<Response | null> {
+async function requireBackupUserVerification(
+  actorUser: User,
+  masterPasswordHash: string | null | undefined,
+  env: Env,
+): Promise<Response | null> {
   const normalized = (masterPasswordHash ?? '').trim();
   if (!normalized) {
     return errorResponse('masterPasswordHash is required', 400);
@@ -74,7 +78,7 @@ async function writeAuditLog(
   targetType: string | null,
   targetId: string | null,
   metadata: Record<string, unknown> | null,
-  request?: Request
+  request?: Request,
 ): Promise<void> {
   await writeAuditEvent(db, {
     actorUserId,
@@ -107,9 +111,10 @@ function getBackupDestinationSummary(destination: BackupDestinationRecord | null
 
 function contentDispositionBackup(fileName: string | null | undefined): string {
   const fallback = 'nodewarden_backup.zip';
-  const value = String(fileName || fallback)
-    .replace(/[\\/\r\n"]/g, '_')
-    .trim() || fallback;
+  const value =
+    String(fileName || fallback)
+      .replace(/[\\/\r\n"]/g, '_')
+      .trim() || fallback;
   return `attachment; filename="${value}"`;
 }
 
@@ -138,17 +143,19 @@ export async function executeConfiguredBackup(
   trigger: 'manual' | 'scheduled',
   destinationId?: string | null,
   keepAlive?: (() => Promise<void>) | null,
-  progress?: ((event: {
-    operation: 'backup-remote-run';
-    step: string;
-    fileName: string;
-    stageTitle: string;
-    stageDetail: string;
-    done?: boolean;
-    ok?: boolean;
-    error?: string | null;
-  }) => Promise<void>) | null,
-  auditMetadata?: Record<string, unknown> | null
+  progress?:
+    | ((event: {
+        operation: 'backup-remote-run';
+        step: string;
+        fileName: string;
+        stageTitle: string;
+        stageDetail: string;
+        done?: boolean;
+        ok?: boolean;
+        error?: string | null;
+      }) => Promise<void>)
+    | null,
+  auditMetadata?: Record<string, unknown> | null,
 ): Promise<{ fileName: string; fileSize: number; remotePath: string; provider: string }> {
   const maxArchiveUploadAttempts = 3;
   const touchLease = async () => {
@@ -182,17 +189,17 @@ export async function executeConfiguredBackup(
       timeZone: destination.schedule.timezone,
       progress: progress
         ? async (event) => {
-          if (event.step === 'archive_ready') {
-            return;
+            if (event.step === 'archive_ready') {
+              return;
+            }
+            await progress({
+              operation: 'backup-remote-run',
+              step: `remote_run_${event.step}`,
+              fileName: event.fileName || '',
+              stageTitle: event.stageTitle,
+              stageDetail: event.stageDetail,
+            });
           }
-          await progress({
-            operation: 'backup-remote-run',
-            step: `remote_run_${event.step}`,
-            fileName: event.fileName || '',
-            stageTitle: event.stageTitle,
-            stageDetail: event.stageDetail,
-          });
-        }
         : undefined,
     });
     await progress?.({
@@ -212,9 +219,13 @@ export async function executeConfiguredBackup(
         const file = await remoteSession.download(REMOTE_ATTACHMENT_INDEX_PATH);
         // An unreadable index re-uploads every attachment rather than trusting partial sizes.
         const index = RemoteAttachmentIndexSchema.safeParse(JSON.parse(new TextDecoder().decode(file.bytes)));
-        remoteAttachmentIndex = new Map(index.success
-          ? Object.entries(index.data.blobs).filter(([blobName]) => blobName.trim()).map(([blobName, { sizeBytes }]) => [blobName, sizeBytes])
-          : []);
+        remoteAttachmentIndex = new Map(
+          index.success
+            ? Object.entries(index.data.blobs)
+                .filter(([blobName]) => blobName.trim())
+                .map(([blobName, { sizeBytes }]) => [blobName, sizeBytes])
+            : [],
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const normalized = message.toLowerCase();
@@ -222,39 +233,41 @@ export async function executeConfiguredBackup(
         // attachment index does not exist yet. Treat these "missing file" style
         // responses as an empty index so first-time incremental backups can proceed.
         if (
-          normalized.includes('404')
-          || normalized.includes('403')
-          || normalized.includes('530')
-          || normalized.includes('not found')
-          || normalized.includes('file not found')
-          || normalized.includes('does not exist')
-          || normalized.includes('please select a backup file')
+          normalized.includes('404') ||
+          normalized.includes('403') ||
+          normalized.includes('530') ||
+          normalized.includes('not found') ||
+          normalized.includes('file not found') ||
+          normalized.includes('does not exist') ||
+          normalized.includes('please select a backup file')
         ) {
           remoteAttachmentIndex = new Map<string, number>();
         } else {
           throw error;
         }
       }
-      const pendingAttachments = (archive.manifest.attachmentBlobs || [])
-        .filter((attachment) => remoteAttachmentIndex.get(attachment.blobName) !== attachment.sizeBytes);
+      const pendingAttachments = (archive.manifest.attachmentBlobs || []).filter(
+        (attachment) => remoteAttachmentIndex.get(attachment.blobName) !== attachment.sizeBytes,
+      );
       // A WebDAV batch spends two subrequests per attachment after creating the remote path's
       // collections, all inside the Worker's external subrequest limit; S3 creates no collections.
       let attachmentSyncBatchSize: number = REMOTE_ATTACHMENT_SYNC_MAX_S3_BATCH_SIZE;
       if (destination.type !== 's3') {
         const remotePath = String((destination.destination as WebDavBackupDestination).remotePath || '');
         const fixedWebDavDirectoryCalls = remotePath.replace(/\\/g, '/').split('/').filter(Boolean).length + 1; // remotePath plus the shared "attachments" dir.
-        const available = REMOTE_ATTACHMENT_SYNC_EXTERNAL_SUBREQUEST_LIMIT
-          - REMOTE_ATTACHMENT_SYNC_SUBREQUEST_RESERVE
-          - fixedWebDavDirectoryCalls;
+        const available =
+          REMOTE_ATTACHMENT_SYNC_EXTERNAL_SUBREQUEST_LIMIT -
+          REMOTE_ATTACHMENT_SYNC_SUBREQUEST_RESERVE -
+          fixedWebDavDirectoryCalls;
 
         if (available < 2) {
           throw new Error('WebDAV remote backup path is too deep for safe attachment batching');
         }
 
-        attachmentSyncBatchSize = Math.max(1, Math.min(
-          REMOTE_ATTACHMENT_SYNC_MAX_WEB_DAV_BATCH_SIZE,
-          Math.floor(available / 2)
-        ));
+        attachmentSyncBatchSize = Math.max(
+          1,
+          Math.min(REMOTE_ATTACHMENT_SYNC_MAX_WEB_DAV_BATCH_SIZE, Math.floor(available / 2)),
+        );
       }
       for (let i = 0; i < pendingAttachments.length; i += attachmentSyncBatchSize) {
         await touchLease();
@@ -277,12 +290,16 @@ export async function executeConfiguredBackup(
                 sizeBytes,
                 updatedAt: new Date().toISOString(),
               },
-            ])
+            ]),
           ),
         };
-        await remoteSession.putFile(REMOTE_ATTACHMENT_INDEX_PATH, new TextEncoder().encode(JSON.stringify(indexPayload)), {
-          contentType: 'application/json; charset=utf-8',
-        });
+        await remoteSession.putFile(
+          REMOTE_ATTACHMENT_INDEX_PATH,
+          new TextEncoder().encode(JSON.stringify(indexPayload)),
+          {
+            contentType: 'application/json; charset=utf-8',
+          },
+        );
       }
     }
     let upload: Awaited<ReturnType<typeof uploadBackupArchive>> | null = null;
@@ -327,7 +344,9 @@ export async function executeConfiguredBackup(
         await remoteSession.deleteFile(archive.fileName).catch(() => undefined);
         if (attempt === maxArchiveUploadAttempts) {
           const message = error instanceof Error ? error.message : 'Remote backup ZIP verification failed';
-          throw new Error(`Backup archive upload verification failed after ${maxArchiveUploadAttempts} attempts: ${message}`);
+          throw new Error(
+            `Backup archive upload verification failed after ${maxArchiveUploadAttempts} attempts: ${message}`,
+          );
         }
       }
     }
@@ -345,7 +364,11 @@ export async function executeConfiguredBackup(
         stageTitle: 'txt_backup_remote_run_progress_cleanup_title',
         stageDetail: 'txt_backup_remote_run_progress_cleanup_detail',
       });
-      prunedFileCount = await pruneRemoteBackupArchives(destination, destination.schedule.retentionCount, archive.fileName);
+      prunedFileCount = await pruneRemoteBackupArchives(
+        destination,
+        destination.schedule.retentionCount,
+        archive.fileName,
+      );
     } catch (error) {
       pruneErrorMessage = error instanceof Error ? error.message : 'Old backup cleanup failed';
     }
@@ -445,7 +468,7 @@ export async function importAndAuditRemoteBackupFile(
   checksumMismatchAccepted: boolean,
   auditMetadata: Record<string, unknown> | null = null,
   targetDeviceIdentifier: string | null = null,
-  keepAlive?: (() => Promise<void>) | null
+  keepAlive?: (() => Promise<void>) | null,
 ): Promise<BackupImportExecutionResult> {
   const touchLease = async () => {
     await keepAlive?.();
@@ -454,13 +477,21 @@ export async function importAndAuditRemoteBackupFile(
   await touchLease();
   // Blob names the archive references without carrying them inline, fetched from the destination in batches.
   const parsed = parseBackupArchive(remoteFile.bytes, { allowExternalAttachmentBlobs: true });
-  const refs = new Map(parsed.payload.manifest.attachmentBlobs.map((item) => [`${item.cipherId}/${item.attachmentId}`, item.blobName]));
-  const externalAttachmentBlobNames = Array.from(new Set(parsed.payload.db.attachments.flatMap((row) => {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    const blobName = refs.get(`${cipherId}/${attachmentId}`) ?? '';
-    return parsed.files[`attachments/${cipherId}/${attachmentId}.bin`] || !isSafeBackupAttachmentBlobName(blobName) ? [] : [blobName];
-  })));
+  const refs = new Map(
+    parsed.payload.manifest.attachmentBlobs.map((item) => [`${item.cipherId}/${item.attachmentId}`, item.blobName]),
+  );
+  const externalAttachmentBlobNames = Array.from(
+    new Set(
+      parsed.payload.db.attachments.flatMap((row) => {
+        const cipherId = String(row.cipher_id || '').trim();
+        const attachmentId = String(row.id || '').trim();
+        const blobName = refs.get(`${cipherId}/${attachmentId}`) ?? '';
+        return parsed.files[`attachments/${cipherId}/${attachmentId}.bin`] || !isSafeBackupAttachmentBlobName(blobName)
+          ? []
+          : [blobName];
+      }),
+    ),
+  );
   const externalAttachmentCache = new Map<string, Uint8Array | null>();
   const progress: BackupRestoreProgressReporter = async (event) => {
     await touchLease();
@@ -471,7 +502,7 @@ export async function importAndAuditRemoteBackupFile(
         operation: 'backup-restore',
         ...event,
       },
-      targetDeviceIdentifier
+      targetDeviceIdentifier,
     );
   };
   const result = await importBackupArchiveBytes(
@@ -498,13 +529,20 @@ export async function importAndAuditRemoteBackupFile(
 
         try {
           // The runner streams the batch as a zip whose manifest.json maps blob names to entries.
-          const names = Array.from(new Set(batchNames.map((blobName) => String(blobName || '').trim()).filter(Boolean)));
+          const names = Array.from(
+            new Set(batchNames.map((blobName) => String(blobName || '').trim()).filter(Boolean)),
+          );
           const batch = new Map<string, Uint8Array>();
-          const stream = await backupTransferRunner(env, 'remote-attachment-restore').downloadRemoteAttachmentBatch(destination, names);
+          const stream = await backupTransferRunner(env, 'remote-attachment-restore').downloadRemoteAttachmentBatch(
+            destination,
+            names,
+          );
           const files = unzipSync(new Uint8Array(await new Response(stream).arrayBuffer()));
           const manifestBytes = files['manifest.json'];
           if (manifestBytes) {
-            const { entries } = RemoteAttachmentBatchManifestSchema.parse(JSON.parse(new TextDecoder().decode(manifestBytes)));
+            const { entries } = RemoteAttachmentBatchManifestSchema.parse(
+              JSON.parse(new TextDecoder().decode(manifestBytes)),
+            );
             for (const { blobName, path } of entries) {
               if (blobName && files[path]) {
                 batch.set(blobName, files[path]);
@@ -518,7 +556,10 @@ export async function importAndAuditRemoteBackupFile(
           // A failed batch falls back to this attachment alone; if that fails too it restores as skipped.
           let single: Uint8Array | null = null;
           try {
-            const stream = await backupTransferRunner(env, 'remote-attachment-restore').downloadRemoteAttachment(destination, normalized);
+            const stream = await backupTransferRunner(env, 'remote-attachment-restore').downloadRemoteAttachment(
+              destination,
+              normalized,
+            );
             single = stream ? new Uint8Array(await new Response(stream).arrayBuffer()) : null;
           } catch {
             // Stays null, so the attachment restores as skipped.
@@ -530,7 +571,7 @@ export async function importAndAuditRemoteBackupFile(
       },
     },
     progress,
-    restoreFileName
+    restoreFileName,
   );
   await writeAuditLog(db, result.auditActorUserId, 'admin.backup.import', 'backup', null, {
     users: result.result.imported.users,
@@ -583,7 +624,11 @@ async function normalizeBackupSettingsBody(env: Env, destinations: unknown): Pro
 export async function handleUpdateAdminBackupSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(request, { destinations: z.unknown().optional(), masterPasswordHash: optionalString }, 'Backup settings payload is invalid');
+  const body = await parseBackupBody(
+    request,
+    { destinations: z.unknown().optional(), masterPasswordHash: optionalString },
+    'Backup settings payload is invalid',
+  );
   if (body instanceof Response) return body;
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
@@ -593,14 +638,26 @@ export async function handleUpdateAdminBackupSettings(request: Request, env: Env
   if (next instanceof Response) return next;
 
   await saveBackupSettings(env.DB, env, next);
-  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.update', 'backup', null, {
-    destinationCount: next.destinations.length,
-    scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.backup.settings.update',
+    'backup',
+    null,
+    {
+      destinationCount: next.destinations.length,
+      scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
+    },
+    request,
+  );
   return jsonResponse(redactBackupSettingsSecrets(next));
 }
 
-export async function handleGetAdminBackupSettingsRepairState(request: Request, env: Env, actorUser: User): Promise<Response> {
+export async function handleGetAdminBackupSettingsRepairState(
+  request: Request,
+  env: Env,
+  actorUser: User,
+): Promise<Response> {
   void request;
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
@@ -612,18 +669,25 @@ export async function handleGetAdminBackupSettingsRepairState(request: Request, 
       portable: state.portable,
     });
   } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Backup settings repair state could not be loaded', 409);
+    return errorResponse(
+      error instanceof Error ? error.message : 'Backup settings repair state could not be loaded',
+      409,
+    );
   }
 }
 
 export async function handleRepairAdminBackupSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(request, {
-    destinations: z.unknown().optional(),
-    masterPasswordHash: optionalString,
-    userVerificationToken: optionalString,
-  }, 'Backup settings repair payload is invalid');
+  const body = await parseBackupBody(
+    request,
+    {
+      destinations: z.unknown().optional(),
+      masterPasswordHash: optionalString,
+      userVerificationToken: optionalString,
+    },
+    'Backup settings repair payload is invalid',
+  );
   if (body instanceof Response) return body;
 
   // Repair accepts the master password hash or a user verification token issued for this repair.
@@ -636,7 +700,12 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
     if (!userVerificationToken) {
       return errorResponse('masterPasswordHash or userVerificationToken is required', 400);
     }
-    const valid = await verifyPasskeyUserVerificationToken(env, userVerificationToken, actorUser.id, 'backup.settings.repair');
+    const valid = await verifyPasskeyUserVerificationToken(
+      env,
+      userVerificationToken,
+      actorUser.id,
+      'backup.settings.repair',
+    );
     if (!valid) {
       return errorResponse('Invalid user verification token', 400);
     }
@@ -646,10 +715,18 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
   if (next instanceof Response) return next;
 
   await repairBackupSettings(env.DB, env, next);
-  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.repair', 'backup', null, {
-    destinationCount: next.destinations.length,
-    scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.backup.settings.repair',
+    'backup',
+    null,
+    {
+      destinationCount: next.destinations.length,
+      scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
+    },
+    request,
+  );
   return jsonResponse(redactBackupSettingsSecrets(next));
 }
 
@@ -657,7 +734,11 @@ export async function handleRunAdminConfiguredBackup(request: Request, env: Env,
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
   try {
-    const body = await parseBackupBody(request, { destinationId: optionalString, masterPasswordHash: optionalString }, 'Backup run payload is invalid');
+    const body = await parseBackupBody(
+      request,
+      { destinationId: optionalString, masterPasswordHash: optionalString },
+      'Backup run payload is invalid',
+    );
     if (body instanceof Response) return body;
 
     const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
@@ -775,10 +856,18 @@ export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, 
     const path = ensureRemoteRestoreCandidate(body.path ?? '');
     const destination = requireBackupDestination(settings, body.destinationId || null);
     await deleteRemoteBackupFile(destination, path);
-    await writeAuditLog(env.DB, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
-      ...getBackupDestinationSummary(destination),
-      remotePath: path,
-    }, request);
+    await writeAuditLog(
+      env.DB,
+      actorUser.id,
+      'admin.backup.remote.delete',
+      'backup',
+      null,
+      {
+        ...getBackupDestinationSummary(destination),
+        remotePath: path,
+      },
+      request,
+    );
     return jsonResponse({ object: 'backup-remote-delete', deleted: true, path });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Remote backup delete failed', 409);
@@ -788,11 +877,15 @@ export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, 
 export async function handleRestoreAdminRemoteBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  const body = await parseBackupBody(request, {
-    ...remoteFileShape,
-    replaceExisting: z.boolean().nullish(),
-    allowChecksumMismatch: z.boolean().nullish(),
-  }, 'Remote restore payload is invalid');
+  const body = await parseBackupBody(
+    request,
+    {
+      ...remoteFileShape,
+      replaceExisting: z.boolean().nullish(),
+      allowChecksumMismatch: z.boolean().nullish(),
+    },
+    'Remote restore payload is invalid',
+  );
   if (body instanceof Response) return body;
 
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
@@ -824,7 +917,11 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
   const targetDeviceIdentifier = String(request.headers.get('X-NodeWarden-Acting-Device-Id') || '').trim() || null;
-  const body = await parseBackupBody(request, { includeAttachments: z.boolean().nullish(), masterPasswordHash: optionalString }, 'Backup export payload is invalid');
+  const body = await parseBackupBody(
+    request,
+    { includeAttachments: z.boolean().nullish(), masterPasswordHash: optionalString },
+    'Backup export payload is invalid',
+  );
   if (body instanceof Response) return body;
   const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
   if (verificationError) return verificationError;
@@ -848,7 +945,7 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
           stageTitle: event.stageTitle,
           stageDetail: event.stageDetail,
         },
-        targetDeviceIdentifier
+        targetDeviceIdentifier,
       );
     };
     archive = await buildBackupArchive(env, new Date(), {
@@ -871,18 +968,26 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
         ok: false,
         error: message,
       },
-      targetDeviceIdentifier
+      targetDeviceIdentifier,
     );
     return errorResponse(message, message.includes('blob missing') ? 409 : 500);
   }
 
-  await writeAuditLog(env.DB, actorUser.id, 'admin.backup.export', 'backup', null, {
-    users: archive.manifest.tableCounts.users,
-    ciphers: archive.manifest.tableCounts.ciphers,
-    attachments: archive.manifest.tableCounts.attachments,
-    compressedBytes: archive.bytes.byteLength,
-    includesAttachments: archive.manifest.includes.attachments,
-  }, request);
+  await writeAuditLog(
+    env.DB,
+    actorUser.id,
+    'admin.backup.export',
+    'backup',
+    null,
+    {
+      users: archive.manifest.tableCounts.users,
+      ciphers: archive.manifest.tableCounts.ciphers,
+      attachments: archive.manifest.tableCounts.attachments,
+      compressedBytes: archive.bytes.byteLength,
+      includesAttachments: archive.manifest.includes.attachments,
+    },
+    request,
+  );
 
   return new Response(archive.bytes, {
     status: 200,
@@ -895,20 +1000,31 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
   });
 }
 
-export async function handleDownloadAdminBackupAttachment(request: Request, env: Env, actorUser: User): Promise<Response> {
+export async function handleDownloadAdminBackupAttachment(
+  request: Request,
+  env: Env,
+  actorUser: User,
+): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
   try {
     // Read the request body only. Accepting these fields from the query string
     // would put the master-password authentication hash in the URL, where it is
     // captured by request logs, browser history and Referer headers.
-    const body = await parseBackupBody(request, { blobName: optionalString, masterPasswordHash: optionalString }, 'Backup attachment download payload is invalid');
+    const body = await parseBackupBody(
+      request,
+      { blobName: optionalString, masterPasswordHash: optionalString },
+      'Backup attachment download payload is invalid',
+    );
     if (body instanceof Response) return body;
 
     const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
     if (verificationError) return verificationError;
 
-    const blobName = String(body.blobName || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const blobName = String(body.blobName || '')
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '');
     if (!blobName) {
       return errorResponse('Backup attachment blob is required', 400);
     }
@@ -943,8 +1059,15 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
   // Refuse an oversized upload before reading it; a missing or malformed Content-Length falls through to the
   // file size check below.
   const declaredSize = Number(request.headers.get('content-length') || Number.NaN);
-  if (Number.isFinite(declaredSize) && declaredSize >= 0 && Math.floor(declaredSize) > getMultipartRequestMaxBytes(MAX_BACKUP_ARCHIVE_BYTES)) {
-    return errorResponse(`Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`, 413);
+  if (
+    Number.isFinite(declaredSize) &&
+    declaredSize >= 0 &&
+    Math.floor(declaredSize) > getMultipartRequestMaxBytes(MAX_BACKUP_ARCHIVE_BYTES)
+  ) {
+    return errorResponse(
+      `Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`,
+      413,
+    );
   }
 
   let formData: FormData;
@@ -959,10 +1082,17 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
     return errorResponse('Backup file is required', 400);
   }
   if ('size' in file && typeof (file as File).size === 'number' && (file as File).size > MAX_BACKUP_ARCHIVE_BYTES) {
-    return errorResponse(`Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`, 413);
+    return errorResponse(
+      `Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`,
+      413,
+    );
   }
 
-  const verificationError = await requireBackupUserVerification(actorUser, String(formData.get('masterPasswordHash') || ''), env);
+  const verificationError = await requireBackupUserVerification(
+    actorUser,
+    String(formData.get('masterPasswordHash') || ''),
+    env,
+  );
   if (verificationError) return verificationError;
 
   const replaceExisting = String(formData.get('replaceExisting') || '').trim() === '1';
@@ -990,7 +1120,7 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
           operation: 'backup-restore',
           ...event,
         },
-        targetDeviceIdentifier
+        targetDeviceIdentifier,
       );
     };
     await progress({
@@ -1001,18 +1131,34 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
       stageDetail: 'txt_backup_restore_progress_local_upload_detail',
       replaceExisting,
     });
-    const imported = await importBackupArchiveBytes(archiveBytes, env, actorUser.id, replaceExisting, null, progress, restoreFileName);
-    await writeAuditLog(env.DB, imported.auditActorUserId, 'admin.backup.import', 'backup', null, {
-      users: imported.result.imported.users,
-      ciphers: imported.result.imported.ciphers,
-      attachments: imported.result.imported.attachmentFiles,
-      skippedAttachments: imported.result.skipped.attachments,
-      skippedReason: imported.result.skipped.reason,
+    const imported = await importBackupArchiveBytes(
+      archiveBytes,
+      env,
+      actorUser.id,
       replaceExisting,
-      trigger: 'local',
-      bytes: archiveBytes.byteLength,
-      checksumMismatchAccepted: !checksumOk,
-    }, request);
+      null,
+      progress,
+      restoreFileName,
+    );
+    await writeAuditLog(
+      env.DB,
+      imported.auditActorUserId,
+      'admin.backup.import',
+      'backup',
+      null,
+      {
+        users: imported.result.imported.users,
+        ciphers: imported.result.imported.ciphers,
+        attachments: imported.result.imported.attachmentFiles,
+        skippedAttachments: imported.result.skipped.attachments,
+        skippedReason: imported.result.skipped.reason,
+        replaceExisting,
+        trigger: 'local',
+        bytes: archiveBytes.byteLength,
+        checksumMismatchAccepted: !checksumOk,
+      },
+      request,
+    );
     return jsonResponse(imported.result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Backup import failed';

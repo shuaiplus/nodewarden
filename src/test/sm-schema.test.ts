@@ -71,9 +71,27 @@ async function seedPolicies(): Promise<{ env: Env; ids: SeededIds }> {
   await orm.batch([
     orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Group', createdAt: now, updatedAt: now }),
     orm.insert(smProjects).values({ id: projectId, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
-    orm.insert(smSecrets).values({ id: secretId, orgId, key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
-    orm.insert(smServiceAccounts).values({ id: serviceAccountId, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
-    orm.insert(smAccessTokens).values({ id: crypto.randomUUID(), serviceAccountId, name: ENCRYPTED_FIELD, encryptedPayload: ENCRYPTED_FIELD, key: ENCRYPTED_FIELD, clientSecretHash: 'hash', createdAt: now }),
+    orm.insert(smSecrets).values({
+      id: secretId,
+      orgId,
+      key: ENCRYPTED_FIELD,
+      value: ENCRYPTED_FIELD,
+      note: ENCRYPTED_FIELD,
+      createdAt: now,
+      updatedAt: now,
+    }),
+    orm
+      .insert(smServiceAccounts)
+      .values({ id: serviceAccountId, orgId, name: ENCRYPTED_FIELD, createdAt: now, updatedAt: now }),
+    orm.insert(smAccessTokens).values({
+      id: crypto.randomUUID(),
+      serviceAccountId,
+      name: ENCRYPTED_FIELD,
+      encryptedPayload: ENCRYPTED_FIELD,
+      key: ENCRYPTED_FIELD,
+      clientSecretHash: 'hash',
+      createdAt: now,
+    }),
     orm.insert(smSecretProjects).values({ secretId, projectId }),
     orm.insert(smServiceAccountProjects).values({ serviceAccountId, projectId }),
     orm.insert(smProjectMembers).values({ projectId, membershipId: membership.id }),
@@ -89,7 +107,9 @@ async function seedPolicies(): Promise<{ env: Env; ids: SeededIds }> {
 
 async function rowCounts(env: Env): Promise<Record<string, number>> {
   const orm = getOrm(env.DB);
-  return Object.fromEntries(await Promise.all(SEEDED_TABLES.map(async (table) => [getTableName(table), await orm.$count(table)])));
+  return Object.fromEntries(
+    await Promise.all(SEEDED_TABLES.map(async (table) => [getTableName(table), await orm.$count(table)])),
+  );
 }
 
 function expectedCounts(emptied: Table[]): Record<string, number> {
@@ -99,14 +119,32 @@ function expectedCounts(emptied: Table[]): Record<string, number> {
 // Every FK cascades, so no handler has to clean up policies. Every other seeded row stays, so a
 // deleted project's secret survives with no project, as upstream.
 const CASCADES = [
-  { parent: organizationMemberships, id: 'membershipId', cascaded: [smProjectMembers, smSecretMembers, smServiceAccountMembers] },
+  {
+    parent: organizationMemberships,
+    id: 'membershipId',
+    cascaded: [smProjectMembers, smSecretMembers, smServiceAccountMembers],
+  },
   { parent: orgGroups, id: 'groupId', cascaded: [smProjectGroups, smSecretGroups, smServiceAccountGroups] },
-  { parent: smProjects, id: 'projectId', cascaded: [smSecretProjects, smServiceAccountProjects, smProjectMembers, smProjectGroups] },
-  { parent: smSecrets, id: 'secretId', cascaded: [smSecretProjects, smSecretMembers, smSecretGroups, smSecretServiceAccounts] },
+  {
+    parent: smProjects,
+    id: 'projectId',
+    cascaded: [smSecretProjects, smServiceAccountProjects, smProjectMembers, smProjectGroups],
+  },
+  {
+    parent: smSecrets,
+    id: 'secretId',
+    cascaded: [smSecretProjects, smSecretMembers, smSecretGroups, smSecretServiceAccounts],
+  },
   {
     parent: smServiceAccounts,
     id: 'serviceAccountId',
-    cascaded: [smAccessTokens, smServiceAccountProjects, smSecretServiceAccounts, smServiceAccountMembers, smServiceAccountGroups],
+    cascaded: [
+      smAccessTokens,
+      smServiceAccountProjects,
+      smSecretServiceAccounts,
+      smServiceAccountMembers,
+      smServiceAccountGroups,
+    ],
   },
 ] satisfies Array<{ parent: Table; id: keyof SeededIds; cascaded: Table[] }>;
 
@@ -126,5 +164,11 @@ test('the schema step replays over existing policies without losing a row and yi
   await ensureStorageSchema(env.DB);
   await ensureStorageSchema(env.DB);
   assert.deepEqual(await rowCounts(env), expectedCounts([]));
-  assert.equal(await getOrm(env.DB).$count(sqliteMaster, and(eq(sqliteMaster.type, 'table'), notLike(sqliteMaster.name, 'sqlite_%'))), TABLE_COUNT);
+  assert.equal(
+    await getOrm(env.DB).$count(
+      sqliteMaster,
+      and(eq(sqliteMaster.type, 'table'), notLike(sqliteMaster.name, 'sqlite_%')),
+    ),
+    TABLE_COUNT,
+  );
 });

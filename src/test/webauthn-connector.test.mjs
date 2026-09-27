@@ -52,17 +52,19 @@ test('normalizes WebAuthn challenge and allowed credential IDs', () => {
 });
 
 test('emits the exact assertion shape consumed by official Bitwarden clients', () => {
-  const output = JSON.parse(buildCredentialData({
-    id: 'credential-id',
-    rawId: Uint8Array.from([1, 2, 3]).buffer,
-    type: 'public-key',
-    getClientExtensionResults: () => ({ appid: false }),
-    response: {
-      authenticatorData: Uint8Array.from([4, 5]).buffer,
-      clientDataJSON: Uint8Array.from([6, 7]).buffer,
-      signature: Uint8Array.from([8, 9]).buffer,
-    },
-  }));
+  const output = JSON.parse(
+    buildCredentialData({
+      id: 'credential-id',
+      rawId: Uint8Array.from([1, 2, 3]).buffer,
+      type: 'public-key',
+      getClientExtensionResults: () => ({ appid: false }),
+      response: {
+        authenticatorData: Uint8Array.from([4, 5]).buffer,
+        clientDataJSON: Uint8Array.from([6, 7]).buffer,
+        signature: Uint8Array.from([8, 9]).buffer,
+      },
+    }),
+  );
   assert.deepEqual(output, {
     id: 'credential-id',
     rawId: 'AQID',
@@ -77,35 +79,62 @@ test('emits the exact assertion shape consumed by official Bitwarden clients', (
 });
 
 test('accepts legacy file and current official desktop parent origins', () => {
-  assert.deepEqual(resolveParentChannel({
-    parentProtocol: 'file:',
-    parentUrl: 'file:///C:/Bitwarden/index.html',
-  }, 'https://vault.example.test'), {
-    eventOrigin: 'null',
-    targetOrigin: 'file:///C:/Bitwarden/index.html',
-  });
-  assert.deepEqual(resolveParentChannel({
-    parentProtocol: 'bw-desktop-file:',
-    parentUrl: 'bw-desktop-file://bundle/index.html',
-  }, 'https://vault.example.test'), {
-    eventOrigin: 'bw-desktop-file://bundle',
-    targetOrigin: 'bw-desktop-file://bundle/index.html',
-  });
+  assert.deepEqual(
+    resolveParentChannel(
+      {
+        parentProtocol: 'file:',
+        parentUrl: 'file:///C:/Bitwarden/index.html',
+      },
+      'https://vault.example.test',
+    ),
+    {
+      eventOrigin: 'null',
+      targetOrigin: 'file:///C:/Bitwarden/index.html',
+    },
+  );
+  assert.deepEqual(
+    resolveParentChannel(
+      {
+        parentProtocol: 'bw-desktop-file:',
+        parentUrl: 'bw-desktop-file://bundle/index.html',
+      },
+      'https://vault.example.test',
+    ),
+    {
+      eventOrigin: 'bw-desktop-file://bundle',
+      targetOrigin: 'bw-desktop-file://bundle/index.html',
+    },
+  );
 });
 
 test('accepts configured official extension origins and rejects arbitrary parents', () => {
   const extension = 'chrome-extension://nngceckbapebfimnlniiiahkandclblb';
-  assert.deepEqual(resolveParentChannel({
-    parentProtocol: 'chrome-extension:',
-    parentUrl: `${extension}/popup/index.html`,
-  }, 'https://vault.example.test', [extension]), {
-    eventOrigin: extension,
-    targetOrigin: extension,
-  });
-  assert.throws(() => resolveParentChannel({
-    parentProtocol: 'https:',
-    parentUrl: 'https://attacker.example/frame',
-  }, 'https://vault.example.test', []), /Untrusted parent/);
+  assert.deepEqual(
+    resolveParentChannel(
+      {
+        parentProtocol: 'chrome-extension:',
+        parentUrl: `${extension}/popup/index.html`,
+      },
+      'https://vault.example.test',
+      [extension],
+    ),
+    {
+      eventOrigin: extension,
+      targetOrigin: extension,
+    },
+  );
+  assert.throws(
+    () =>
+      resolveParentChannel(
+        {
+          parentProtocol: 'https:',
+          parentUrl: 'https://attacker.example/frame',
+        },
+        'https://vault.example.test',
+        [],
+      ),
+    /Untrusted parent/,
+  );
 });
 
 test('uses the official postMessage message contract and iframe-sized fallback styling', async () => {
