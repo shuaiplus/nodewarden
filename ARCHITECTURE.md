@@ -22,6 +22,10 @@ Bitwarden-compatible password manager on Cloudflare Workers.
   - Local: `webapp/` (Preact + Vite) → Worker assets (`dist/`)
   - Official: `official-web/` (Bitwarden OSS self-host Angular) → Cloudflare Pages, API proxied to the Worker
 - Shared: `shared/backend-paths.ts` lists the backend path prefixes used by the Pages proxy, `scripts/serve-official-web.mjs` and the Worker web-vault visibility check
+- Validation: request bodies go through zod schemas via `parseBody` (`src/utils/response.ts`; PascalCase keys are normalised first and failures answer 400 with `validationErrors`), Worker variables through `readEnvConfig` (`src/config/env.ts`), stored JSON columns through tolerant schemas that fall back instead of throwing
+- Platform helpers instead of hand-rolled code: HS256 tokens via `hono/jwt` (still keyed by `JWT_SECRET`), base64/sha256 via `hono/utils/encode` and `hono/utils/crypto`, constant-time compares via `crypto.subtle.timingSafeEqual`, cookies via `hono/utils/cookie`, CORS via `hono/cors`, admin HTML via `hono/html`, OIDC id_tokens via `verifyWithJwks`, S3/R2 SigV4 via `aws4fetch`, TOTP via `otpauth`
+- Rate limits: per-minute budgets spend Workers Rate Limiting bindings (`RATE_LIMIT_<n>_PER_MINUTE` in `wrangler.toml` and `wrangler.kv.toml`); login lockouts and strict budgets stay in D1
+- Webapp crypto: the official Bitwarden SDK (`@bitwarden/sdk-internal`, GPL-3.0) as WASM, loaded once per realm (page and vault decrypt worker) by `webapp/src/lib/sdk.ts`; the page CSP allows `wasm-unsafe-eval`, and the service worker precaches the WASM for offline unlock
 
 ## Data
 

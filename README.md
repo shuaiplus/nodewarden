@@ -169,6 +169,8 @@ The Pages web vault built by this repository creates organizations from a name, 
 
 LGPL-3.0 License
 
+The `webapp/` build bundles the official Bitwarden SDK (`@bitwarden/sdk-internal`), which is GPL-3.0, so a distributed webapp bundle is subject to GPL-3.0 as a whole. The official web vault in `official-web/` is GPL-3.0 as well.
+
 ---
 
 ## Credits

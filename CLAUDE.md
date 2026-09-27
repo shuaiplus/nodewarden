@@ -18,6 +18,10 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - Tests: `npm test` runs `src/**/*.test.ts` and `scripts/*.test.{ts,mjs}`. Route tests among them drive the real Worker `fetch` via `scripts/support/env.ts` (`createTestEnv`, `seedUser`, `authedFetch`) on a SQLite-backed D1 that enforces the 100-parameter cap and batch atomicity. `npx tsc --noEmit` skips `scripts/` and tests.
 - Routing is a Hono 4 app (`src/router.ts` + `src/router-*.ts`). Handlers keep their `(request, env, …)` signatures and routes call them with `c.req.raw`. Paths match exact case except the Secrets Manager sub-router, which lower-cases its path. Read JSON bodies with `parseJsonBody` (`src/utils/response.ts`), which normalizes PascalCase keys; `prop` / `readString` accept either casing.
 - Repositories (`src/services/storage-*-repo.ts`) are called directly with `env.DB`; there is no storage facade. `shared/backend-paths.ts` is the single list of backend path prefixes for the Pages proxy, the local official-web server and web-vault visibility.
+- Validate input with zod, never hand-rolled typeof chains: request bodies through `parseBody(request, Schema)`, Worker variables through `readEnvConfig(env)` (`src/config/env.ts`), stored JSON through schemas with `.catch` fallbacks. Keep user-facing error messages stable; tests pin them.
+- Prefer installed packages over hand-rolled helpers: `hono/jwt`, `hono/utils/encode`, `hono/utils/crypto`, `hono/utils/cookie`, `hono/cors`, `hono/html`, `hono/utils/ipaddr`, `aws4fetch`, `otpauth`, `idb-keyval`. Constant-time comparisons use `constantTimeEquals` (`src/utils/api-key.ts`). Construct `new RateLimitService(env)`; per-minute budgets need a matching `[[ratelimits]]` binding in both wrangler configs.
+- Webapp vault crypto goes through the Bitwarden SDK `PureCrypto` behind the adapters in `webapp/src/lib/crypto.ts`; browser realms must `await loadSdk()` first, Node resolves the self-initialising build.
+- Parallel agent worktrees share `refs/stash`; never use `git stash` there (the user keeps a stash of their own).
 
 - SM authorization goes through `src/services/sm-authz.ts` + `smContext`; no ad-hoc checks.
 
