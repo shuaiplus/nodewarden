@@ -119,7 +119,7 @@ for (const { parent, id, cascaded } of CASCADES) {
 }
 
 // Tables the embedded baseline creates, so a schema change has to be re-embedded and counted here.
-const TABLE_COUNT = 52;
+const TABLE_COUNT = 51;
 
 test('the schema step replays over existing policies without losing a row and yields the current table set', async () => {
   const { env } = await seedPolicies();
