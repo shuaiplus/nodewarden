@@ -1,3 +1,4 @@
+import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
 import type { Cipher } from '../types';
 
@@ -7,15 +8,7 @@ const DEVICE_TEXT_MAX_LENGTH = 128;
 
 function decodeBase64UrlUtf8(value: string): string | null {
   try {
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-    const padding = normalized.length % 4;
-    const padded = padding === 0 ? normalized : normalized + '='.repeat(4 - padding);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return new TextDecoder().decode(bytes);
+    return new TextDecoder().decode(decodeBase64Url(value));
   } catch {
     return null;
   }

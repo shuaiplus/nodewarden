@@ -6,10 +6,6 @@ export function bytesToBase64Url(bytes: Uint8Array | ArrayBuffer): string {
   return encodeBase64Url(new Uint8Array(bytes).buffer).replace(/=+$/, '');
 }
 
-export function randomChallenge(size: number = 32): string {
-  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(size)));
-}
-
 export function parseClientDataJSON(base64Url: string): { type?: string; challenge?: string; origin?: string } | null {
   try {
     const raw = decodeBase64Url(base64Url);

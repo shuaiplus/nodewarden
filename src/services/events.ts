@@ -1,8 +1,10 @@
 import { and, desc, eq, gte, isNull, lt, lte, or } from 'drizzle-orm';
+import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
 import { chunkRows, columnCount, getOrm } from '../db/client';
 import { events, organizationMemberships } from '../db/schema';
 import { SendAuthType, SendType, type Env, type Send } from '../types';
+import { bytesToBase64Url } from '../utils/passkey';
 import { bodyIssues, errorResponse, jsonResponse } from '../utils/response';
 import { DEFAULT_AUDIT_LOG_SETTINGS, getAuditLogSettings } from './audit-events';
 import { MembershipStatus } from './org-types';
@@ -150,7 +152,7 @@ function eventResponse(row: typeof events.$inferSelect) {
 
 // The official client concatenates continuationToken without URL encoding; use base64url.
 function cursor(date: string, id: string): string {
-  return btoa(JSON.stringify([date, id])).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return bytesToBase64Url(new TextEncoder().encode(JSON.stringify([date, id])));
 }
 
 const queryDate = z.string().transform(date => Date.parse(date)).pipe(z.number({ error: 'Invalid date range.' })).optional();
@@ -179,7 +181,7 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
   if (token) {
     try {
       if (token.length > 256 || !/^[A-Za-z0-9_-]+$/.test(token)) throw new Error();
-      const [date, id] = Cursor.parse(JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/'))));
+      const [date, id] = Cursor.parse(JSON.parse(new TextDecoder().decode(decodeBase64Url(token))));
       conditions.push(or(lt(events.date, date), and(eq(events.date, date), lt(events.id, id)))!);
     } catch { return errorResponse('Invalid continuation token.', 400); }
   }
