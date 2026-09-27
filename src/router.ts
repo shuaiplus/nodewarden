@@ -9,7 +9,7 @@ import { LIMITS } from './config/limits';
 import { handleAuthenticatedRoute } from './router-authenticated';
 import { handlePublicRoute } from './router-public';
 
-function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
+export function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
   const secret = (env.JWT_SECRET || '').trim();
   if (!secret) return 'missing';
   if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
@@ -20,7 +20,6 @@ function canServeWithUnsafeJwtSecret(path: string, method: string): boolean {
   if (method === 'OPTIONS') return true;
   if (method === 'GET' && (path === '/api/web-bootstrap' || path === '/web-bootstrap')) return true;
   if (method === 'GET' && (path === '/config' || path === '/api/config' || path === '/api/version')) return true;
-  if (method === 'GET' && path === '/.well-known/appspecific/com.chrome.devtools.json') return true;
   if (method === 'GET' && path === '/fill-assist/manifest.json') return true;
   if (method === 'GET' && /^\/fill-assist\/[^/]+$/i.test(path)) return true;
   if (method === 'GET' && (path === '/v1/assetlinks:check' || path === '/api/v1/assetlinks:check')) return true;

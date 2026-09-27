@@ -46,6 +46,7 @@ import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
 import * as userRepo from './services/storage-user-repo';
+import { jwtSecretUnsafeReason } from './router';
 
 type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
@@ -86,12 +87,10 @@ function isSameOriginWriteRequest(request: Request, env?: Env): boolean {
   return true;
 }
 
-function getDefaultWebsiteIconSvg(): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Globe icon"><circle cx="48" cy="48" r="34" fill="none" stroke="#8ea9c7" stroke-width="6"/><path d="M14 48h68M48 14c10 10 16 21.5 16 34s-6 24-16 34c-10-10-16-21.5-16-34s6-24 16-34zm-24 10c8 5 17 8 24 8s16-3 24-8m-48 48c8-5 17-8 24-8s16 3 24 8" fill="none" stroke="#8ea9c7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-}
+const DEFAULT_WEBSITE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Globe icon"><circle cx="48" cy="48" r="34" fill="none" stroke="#8ea9c7" stroke-width="6"/><path d="M14 48h68M48 14c10 10 16 21.5 16 34s-6 24-16 34c-10-10-16-21.5-16-34s6-24 16-34zm-24 10c8 5 17 8 24 8s16-3 24-8m-48 48c8-5 17-8 24-8s16 3 24 8" fill="none" stroke="#8ea9c7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 function handleNwFavicon(): Response {
-  return new Response(getDefaultWebsiteIconSvg(), {
+  return new Response(DEFAULT_WEBSITE_ICON_SVG, {
     status: 200,
     headers: {
       'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -278,13 +277,7 @@ async function handleWebsiteIcon(env: Env, host: string, fallbackMode: 'default'
 }
 
 export async function buildWebBootstrapResponse(env: Env): Promise<WebBootstrapResponse> {
-  const secret = (env.JWT_SECRET || '').trim();
-  const jwtUnsafeReason =
-    !secret
-      ? 'missing'
-      : secret.length < LIMITS.auth.jwtSecretMinLength
-          ? 'too_short'
-          : null;
+  const jwtUnsafeReason = jwtSecretUnsafeReason(env);
   const userCount = await userRepo.getUserCount(env.DB);
 
   return {
@@ -306,16 +299,6 @@ export async function handlePublicRoute(
 ): Promise<Response | null> {
   if (path === '/api/auth' || path.startsWith('/api/auth/')) {
     return createAuth(env, request).handler(request);
-  }
-
-  if (path === '/.well-known/appspecific/com.chrome.devtools.json' && method === 'GET') {
-    return new Response('{}', {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-      },
-    });
   }
 
   if ((path === '/api/web-bootstrap' || path === '/web-bootstrap') && method === 'GET') {
