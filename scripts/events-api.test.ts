@@ -52,6 +52,28 @@ test('event queries page equal timestamps without loss and validate dates and UR
   assert.equal(((await (await authedFetch(env, { path: `${path}?start=${tomorrow}&end=${yesterday}`, userId: owner.id })).json()) as EventPage).data.length, 50);
 });
 
+test('continuation walks every page in date then id order when page boundaries fall between and within timestamps', async () => {
+  const { env, owner, org } = await setup();
+  const SHARED_PER_TIMESTAMP = 7;
+  const base = Date.now() - 3_600_000;
+  const resources = Array.from({ length: 130 }, () => crypto.randomUUID());
+  await recordEvents(env, null, { userId: owner.id }, resources.map((resourceId, index) => ({
+    type: EventType.CipherCreated, organizationId: org.id, resourceType: 'cipher', resourceId,
+    date: new Date(base - Math.floor(index / SHARED_PER_TIMESTAMP) * 60_000).toISOString(),
+  })));
+  const path = `/api/organizations/${org.id}/events`;
+  const pages: EventPage[] = [];
+  for (let token: string | null = ''; token !== null;) {
+    const page = await (await authedFetch(env, { path: token ? `${path}?continuationToken=${token}` : path, userId: owner.id })).json() as EventPage;
+    pages.push(page);
+    token = page.continuationToken;
+  }
+  assert.deepEqual(pages.map(page => page.data.length), [50, 50, 30]);
+  const walked = pages.flatMap(page => page.data);
+  assert.deepEqual(walked.map(event => event.cipherId).sort(), [...resources].sort(), 'no event is skipped or repeated');
+  assert.ok(walked.every((event, index) => index === 0 || walked[index - 1].date >= event.date), 'pages continue in descending date order');
+});
+
 test('event scope is immutable across moves/deletion; membership filters use the actor and permissions remain tenant-bound', async () => {
   const { env, owner, org } = await setup();
   const otherOwner = await seedUser(env);
@@ -110,6 +132,31 @@ test('collector records authorized client actions, derives actor/scope and hides
   const overCap = Array.from({ length: 100 * LIMITS.rateLimit.apiRequestsPerMinute + 1 }, () => ({ type: 1107, cipherId: id, date }));
   for (const body of [[], overCap, [{ type: 1107, cipherId: id, date: 'bad' }]]) assert.equal((await post(body)).status, 400);
   assert.equal(await count(env), 351);
+});
+
+test('collector accepts PascalCase uploads and records organization client events only for members', async () => {
+  const { env, owner, org } = await setup();
+  const id = await cipher(env, owner, org.id);
+  const ownerMembership = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, org.id))!;
+  const outsider = await seedUser(env);
+  await env.DB.prepare('DELETE FROM events').run();
+  const date = new Date().toISOString();
+  const post = (body: unknown, userId = owner.id) => authedFetch(env, { method: 'POST', path: '/events/collect', userId, body });
+  assert.equal((await post([{ Type: EventType.CipherClientViewed, CipherId: id, Date: date }])).status, 200);
+  const ORGANIZATION_CLIENT_EXPORTED_VAULT = 1602;
+  const MEMBER_CLIENT_EVENTS = [1522, 1618, 1619];
+  assert.equal((await post([ORGANIZATION_CLIENT_EXPORTED_VAULT, ...MEMBER_CLIENT_EVENTS].map(type => ({ type, organizationId: org.id, date })))).status, 200);
+  assert.equal((await post([ORGANIZATION_CLIENT_EXPORTED_VAULT, ...MEMBER_CLIENT_EVENTS].map(type => ({ type, organizationId: org.id, date })), outsider.id)).status, 200);
+  const rows = await env.DB.prepare('SELECT type, organization_id, acting_user_id, user_id, resource_type, resource_id FROM events ORDER BY type').all<Record<string, string | number | null>>();
+  const row = (type: number, userId: string | null, resourceType: string | null, resourceId: string | null) =>
+    ({ type, organization_id: org.id, acting_user_id: owner.id, user_id: userId, resource_type: resourceType, resource_id: resourceId });
+  assert.deepEqual(rows.results, [
+    row(EventType.CipherClientViewed, null, 'cipher', id),
+    row(MEMBER_CLIENT_EVENTS[0], owner.id, 'organizationUser', ownerMembership.id),
+    row(ORGANIZATION_CLIENT_EXPORTED_VAULT, null, null, null),
+    row(MEMBER_CLIENT_EVENTS[1], owner.id, 'organizationUser', ownerMembership.id),
+    row(MEMBER_CLIENT_EVENTS[2], owner.id, 'organizationUser', ownerMembership.id),
+  ], 'a non-member upload for the organization stores nothing');
 });
 
 test('event cleanup reuses audit retention and deletes at most 1000 rows using receipt time', async () => {
