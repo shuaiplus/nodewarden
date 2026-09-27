@@ -70,31 +70,6 @@ function buildDeviceResponse(device: Device): DeviceResponse {
   return response as DeviceResponse;
 }
 
-function buildProtectedDeviceResponse(device: Device): ProtectedDeviceWireResponse {
-  const response = {
-    Id: device.deviceIdentifier,
-    id: device.deviceIdentifier,
-    Name: String(device.deviceNote || '').trim() || device.name,
-    name: String(device.deviceNote || '').trim() || device.name,
-    SystemName: device.name,
-    systemName: device.name,
-    DeviceNote: device.deviceNote,
-    deviceNote: device.deviceNote,
-    Identifier: device.deviceIdentifier,
-    identifier: device.deviceIdentifier,
-    Type: device.type,
-    type: device.type,
-    CreationDate: device.createdAt,
-    creationDate: device.createdAt,
-    EncryptedUserKey: device.encryptedUserKey,
-    encryptedUserKey: device.encryptedUserKey,
-    EncryptedPublicKey: device.encryptedPublicKey,
-    encryptedPublicKey: device.encryptedPublicKey,
-    object: 'protectedDevice',
-  };
-  return response as ProtectedDeviceWireResponse;
-}
-
 const storedKey = z.string().nullable().optional();
 const DeviceKeysSchema = z.object({ encryptedUserKey: storedKey, encryptedPublicKey: storedKey, encryptedPrivateKey: storedKey });
 
@@ -576,7 +551,27 @@ export async function handleRetrieveDeviceKeys(
     return errorResponse('Device not found', 404);
   }
 
-  return jsonResponse(buildProtectedDeviceResponse(device));
+  return jsonResponse({
+    Id: device.deviceIdentifier,
+    id: device.deviceIdentifier,
+    Name: String(device.deviceNote || '').trim() || device.name,
+    name: String(device.deviceNote || '').trim() || device.name,
+    SystemName: device.name,
+    systemName: device.name,
+    DeviceNote: device.deviceNote,
+    deviceNote: device.deviceNote,
+    Identifier: device.deviceIdentifier,
+    identifier: device.deviceIdentifier,
+    Type: device.type,
+    type: device.type,
+    CreationDate: device.createdAt,
+    creationDate: device.createdAt,
+    EncryptedUserKey: device.encryptedUserKey,
+    encryptedUserKey: device.encryptedUserKey,
+    EncryptedPublicKey: device.encryptedPublicKey,
+    encryptedPublicKey: device.encryptedPublicKey,
+    object: 'protectedDevice',
+  } as ProtectedDeviceWireResponse);
 }
 
 // POST /api/devices/:id/deactivate
