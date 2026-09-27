@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Env, User } from '../types';
 import {
   type BackupSettingsPortableEnvelope,
@@ -6,20 +7,17 @@ import {
   parseBackupSettingsEnvelope,
 } from './backup-settings-crypto';
 import {
-  BACKUP_DEFAULT_INTERVAL_HOURS,
-  BACKUP_DEFAULT_START_TIME,
+  BACKUP_DEFAULT_S3_REGION,
   BACKUP_DEFAULT_TIMEZONE,
-  type BackupDestinationConfig,
   type BackupDestinationRecord,
-  type BackupDestinationType,
   type BackupRuntimeState,
-  type BackupScheduleConfig,
   type BackupSettings,
   type S3BackupAddressingStyle,
   type S3BackupDestination,
   type WebDavBackupDestination,
   createBackupRandomId,
   createDefaultBackupDestinationName,
+  createDefaultBackupRuntimeState,
   createDefaultBackupScheduleConfig,
   createDefaultBackupSettings as createSharedDefaultBackupSettings,
 } from '../../shared/backup-schema';
@@ -44,17 +42,9 @@ export type {
   WebDavBackupDestination,
 } from '../../shared/backup-schema';
 
-export interface BackupSettingsInput {
-  destinations?: unknown;
-}
-
 export interface BackupSettingsRepairState {
   needsRepair: boolean;
   portable: BackupSettingsPortableEnvelope | null;
-}
-
-function defaultScheduleConfig(timezone: string = 'UTC'): BackupScheduleConfig {
-  return { ...createDefaultBackupScheduleConfig(assertValidTimeZone(timezone)) };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -63,10 +53,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function asTrimmedString(value: unknown): string {
   return String(value ?? '').trim();
-}
-
-function normalizePath(value: unknown): string {
-  return asTrimmedString(value).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 }
 
 function normalizeHostnameForPolicy(hostname: string): string {
@@ -226,266 +212,184 @@ export function normalizeBackupEndpointUrl(value: string, label: string): string
   return parsed.toString().replace(/\/+$/, '');
 }
 
-function assertValidTimeZone(timezone: string): string {
+function isValidTimeZone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
-    return timezone;
+    return true;
   } catch {
-    throw new Error('Invalid backup timezone');
+    return false;
   }
 }
 
-function normalizeRetentionCount(value: unknown, fallback: number | null = 30): number | null {
-  if (value === undefined) return fallback;
-  if (value === null || String(value).trim() === '') return null;
-  const count = Number(value);
-  if (!Number.isInteger(count) || count < 1 || count > 1000) {
-    throw new Error('Backup retention count must be between 1 and 1000');
-  }
-  return count;
+// Settings fields read leniently, as stored rows and older clients expect: absent, null and
+// non-string values become their trimmed string form instead of failing the save.
+const text = z.preprocess(asTrimmedString, z.string());
+const remotePath = text.transform((path) => path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''));
+const nullableText = text.transform((value) => value || null);
+const isoTimestamp = text.transform((value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+});
+
+function integerBetween(min: number, max: number, error: string) {
+  return z.preprocess(Number, z.int({ error }).min(min, { error }).max(max, { error }));
 }
 
-function normalizeIntervalHours(value: unknown, fallback: number = BACKUP_DEFAULT_INTERVAL_HOURS): number {
-  const raw = value === undefined || value === null || value === '' ? fallback : Number(value);
-  if (!Number.isInteger(raw) || raw < 1 || raw > 99) {
-    throw new Error('Backup interval hours must be between 1 and 99');
-  }
-  return raw;
-}
-
-function normalizeStartTime(value: unknown, fallback: string = BACKUP_DEFAULT_START_TIME): string {
-  const raw = asTrimmedString(value) || fallback;
-  const match = raw.match(/^(\d{1,2})(?::(\d{1,2}))?$/);
-  if (!match) {
-    throw new Error('Backup start time must be in HH:mm format');
-  }
-  const hour = Number(match[1]);
-  const minute = Number(match[2] ?? '0');
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    throw new Error('Backup start time must be in HH:mm format');
-  }
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
-
-function normalizeS3Destination(value: unknown, allowIncomplete = false): S3BackupDestination {
-  const source = isPlainObject(value) ? value : {};
-  const endpoint = asTrimmedString(source.endpoint);
-  const bucket = asTrimmedString(source.bucket);
-  const addressingStyleRaw = asTrimmedString(source.addressingStyle);
-  const addressingStyle: S3BackupAddressingStyle =
-    addressingStyleRaw === 'virtual-hosted-style' ? 'virtual-hosted-style' : 'path-style';
-  const accessKeyId = asTrimmedString(source.accessKeyId);
-  const secretAccessKey = asTrimmedString(source.secretAccessKey);
-  const region = asTrimmedString(source.region) || 'auto';
-  const rootPath = normalizePath(source.rootPath);
-
-  if (!allowIncomplete || endpoint) {
-    if (!endpoint) throw new Error('S3 endpoint is required');
-    normalizeBackupEndpointUrl(endpoint, 'S3 endpoint');
-  }
-  if (!allowIncomplete || bucket) {
-    if (!bucket) throw new Error('S3 bucket is required');
-  }
-  if (!allowIncomplete || accessKeyId) {
-    if (!accessKeyId) throw new Error('S3 access key is required');
-  }
-  if (!allowIncomplete || secretAccessKey) {
-    if (!secretAccessKey) throw new Error('S3 secret key is required');
-  }
-
-  return {
-    endpoint: endpoint ? normalizeBackupEndpointUrl(endpoint, 'S3 endpoint') : '',
-    bucket,
-    addressingStyle,
-    region,
-    accessKeyId,
-    secretAccessKey,
-    rootPath,
-  };
-}
-
-function normalizeWebDavDestination(value: unknown, allowIncomplete = false): WebDavBackupDestination {
-  const source = isPlainObject(value) ? value : {};
-  const baseUrl = asTrimmedString(source.baseUrl);
-  const username = asTrimmedString(source.username);
-  const password = String(source.password ?? '');
-  const remotePath = normalizePath(source.remotePath);
-
-  if (!allowIncomplete || baseUrl) {
-    if (!baseUrl) throw new Error('WebDAV server URL is required');
-    normalizeBackupEndpointUrl(baseUrl, 'WebDAV server URL');
-  }
-  if (!allowIncomplete || username) {
-    if (!username) throw new Error('WebDAV username is required');
-  }
-  if (!allowIncomplete || password) {
-    if (!password) throw new Error('WebDAV password is required');
-  }
-
-  return {
-    baseUrl: baseUrl ? normalizeBackupEndpointUrl(baseUrl, 'WebDAV server URL') : '',
-    username,
-    password,
-    remotePath,
-  };
-}
-
-function normalizeDestination(
-  destinationType: BackupDestinationType,
-  destination: unknown,
-  allowIncomplete = false
-): BackupDestinationConfig {
-  if (destinationType === 's3') return normalizeS3Destination(destination, allowIncomplete);
-  return normalizeWebDavDestination(destination, allowIncomplete);
-}
-
-function shouldPreserveBackupSecret(value: unknown): boolean {
-  if (value === undefined || value === null) return true;
-  const raw = String(value);
-  return raw === '' || raw === REDACTED_BACKUP_SECRET;
-}
-
-function withPreservedDestinationSecret(
-  destinationType: BackupDestinationType,
-  inputDestination: unknown,
-  previous: BackupDestinationRecord | undefined
-): unknown {
-  const source = isPlainObject(inputDestination) ? { ...inputDestination } : {};
-  if (destinationType === 's3') {
-    const previousDestination = previous?.type === 's3' ? previous.destination as S3BackupDestination : null;
-    if (shouldPreserveBackupSecret(source.secretAccessKey)) {
-      source.secretAccessKey = previousDestination?.secretAccessKey || '';
+// The SSRF policy stays in normalizeBackupEndpointUrl, which backup-uploader re-applies before every
+// transfer; here its message becomes the field's issue.
+function endpointUrl(label: string) {
+  return text.transform((url, context) => {
+    try {
+      return url && normalizeBackupEndpointUrl(url, label);
+    } catch (error) {
+      context.issues.push({ code: 'custom', message: (error as Error).message, input: url });
+      return z.NEVER;
     }
-  } else {
-    const previousDestination = previous?.type === 'webdav' ? previous.destination as WebDavBackupDestination : null;
-    if (shouldPreserveBackupSecret(source.password)) {
-      source.password = previousDestination?.password || '';
-    }
-  }
-  return source;
+  });
 }
 
-function normalizeRuntime(value: unknown): BackupRuntimeState {
-  const source = isPlainObject(value) ? value : {};
-  const asIso = (input: unknown): string | null => {
-    const raw = asTrimmedString(input);
-    if (!raw) return null;
-    const date = new Date(raw);
-    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
-  };
-  const asMaybeNumber = (input: unknown): number | null => {
-    if (input === null || input === undefined || input === '') return null;
-    const n = Number(input);
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
-  };
-  return {
-    lastAttemptAt: asIso(source.lastAttemptAt),
-    lastAttemptLocalDate: asTrimmedString(source.lastAttemptLocalDate) || null,
-    lastSuccessAt: asIso(source.lastSuccessAt),
-    lastErrorAt: asIso(source.lastErrorAt),
-    lastErrorMessage: asTrimmedString(source.lastErrorMessage) || null,
-    lastUploadedFileName: asTrimmedString(source.lastUploadedFileName) || null,
-    lastUploadedSizeBytes: asMaybeNumber(source.lastUploadedSizeBytes),
-    lastUploadedDestination: asTrimmedString(source.lastUploadedDestination) || null,
-  };
+// A scheduled destination needs every credential; an unscheduled one may be saved half-filled.
+function requireWhenScheduled(enabled: boolean, context: z.RefinementCtx, fields: Array<[field: string, value: string, message: string]>): void {
+  if (!enabled) return;
+  fields
+    .filter(([, value]) => !value)
+    .forEach(([field, , message]) => context.addIssue({ code: 'custom', message, path: ['destination', field] }));
 }
 
-function defaultDestinationName(type: BackupDestinationType, index: number): string {
-  return createDefaultBackupDestinationName(type, index);
-}
+const BackupRuntimeSchema = z.preprocess((runtime) => (isPlainObject(runtime) ? runtime : {}), z.object({
+  lastAttemptAt: isoTimestamp,
+  lastAttemptLocalDate: nullableText,
+  lastSuccessAt: isoTimestamp,
+  lastErrorAt: isoTimestamp,
+  lastErrorMessage: nullableText,
+  lastUploadedFileName: nullableText,
+  lastUploadedSizeBytes: z.preprocess((size) => {
+    const bytes = size === null || size === '' ? Number.NaN : Number(size);
+    return Number.isFinite(bytes) && bytes >= 0 ? Math.floor(bytes) : null;
+  }, z.number().nullable()),
+  lastUploadedDestination: nullableText,
+}));
 
-function getDestinationType(raw: unknown): BackupDestinationType {
-  const value = asTrimmedString(raw);
-  if (value === 'e3') return 's3';
-  if (value === 's3' || value === 'webdav') return value;
-  throw new Error('Backup destination type is invalid');
-}
+const destinationRecordFields = {
+  id: z.string(),
+  name: z.string(),
+  includeAttachments: z.boolean(),
+  schedule: z.object({
+    enabled: z.preprocess(Boolean, z.boolean()),
+    intervalHours: integerBetween(1, 99, 'Backup interval hours must be between 1 and 99'),
+    startTime: z.string()
+      .regex(/^([01]?\d|2[0-3])(?::[0-5]?\d)?$/, { error: 'Backup start time must be in HH:mm format' })
+      .transform((time) => {
+        const [hour, minute = '0'] = time.split(':');
+        return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
+      }),
+    timezone: z.string().refine(isValidTimeZone, { error: 'Invalid backup timezone' }),
+    retentionCount: z.preprocess(
+      (count) => (count === null || String(count).trim() === '' ? null : count),
+      integerBetween(1, 1000, 'Backup retention count must be between 1 and 1000').nullable()
+    ),
+  }),
+  runtime: BackupRuntimeSchema,
+};
 
-function normalizeDestinationRecord(
+const BackupDestinationRecordSchema = z.discriminatedUnion('type', [
+  z.object({
+    ...destinationRecordFields,
+    type: z.literal('s3'),
+    destination: z.object({
+      endpoint: endpointUrl('S3 endpoint'),
+      bucket: text,
+      addressingStyle: text.transform((style): S3BackupAddressingStyle => (style === 'virtual-hosted-style' ? style : 'path-style')),
+      region: text.transform((region) => region || BACKUP_DEFAULT_S3_REGION),
+      accessKeyId: text,
+      secretAccessKey: text,
+      rootPath: remotePath,
+    }),
+  }).superRefine(({ schedule, destination }, context) => requireWhenScheduled(schedule.enabled, context, [
+    ['endpoint', destination.endpoint, 'S3 endpoint is required'],
+    ['bucket', destination.bucket, 'S3 bucket is required'],
+    ['accessKeyId', destination.accessKeyId, 'S3 access key is required'],
+    ['secretAccessKey', destination.secretAccessKey, 'S3 secret key is required'],
+  ])),
+  z.object({
+    ...destinationRecordFields,
+    type: z.literal('webdav'),
+    destination: z.object({
+      baseUrl: endpointUrl('WebDAV server URL'),
+      username: text,
+      password: z.preprocess((password) => String(password ?? ''), z.string()),
+      remotePath,
+    }),
+  }).superRefine(({ schedule, destination }, context) => requireWhenScheduled(schedule.enabled, context, [
+    ['baseUrl', destination.baseUrl, 'WebDAV server URL is required'],
+    ['username', destination.username, 'WebDAV username is required'],
+    ['password', destination.password, 'WebDAV password is required'],
+  ])),
+], { error: (issue) => (issue.code === 'invalid_union' ? 'Backup destination type is invalid' : 'Backup destination is invalid') });
+
+// A save may omit fields: they keep the values of the stored destination with the same id (or the
+// defaults), and a blank or redacted secret keeps the stored secret. The schema then validates the
+// merged record. Entries that are not objects or name an unknown type pass through for the schema
+// to reject.
+function withStoredDestination(
   input: unknown,
-  previousById: Map<string, BackupDestinationRecord>,
   index: number,
+  previousById: ReadonlyMap<string, BackupDestinationRecord>,
   fallbackTimezone: string
-): BackupDestinationRecord {
-  if (!isPlainObject(input)) {
-    throw new Error('Backup destination is invalid');
-  }
+): unknown {
+  if (!isPlainObject(input)) return input;
+  const requestedType = asTrimmedString(input.type);
+  const type = requestedType === 'e3' ? 's3' : requestedType;
+  if (type !== 's3' && type !== 'webdav') return input;
 
   const id = asTrimmedString(input.id) || createBackupRandomId();
-  const type = getDestinationType(input.type);
   const previous = previousById.get(id);
-  const runtime = previous?.runtime ? normalizeRuntime(previous.runtime) : normalizeRuntime(input.runtime);
-  const name = asTrimmedString(input.name) || previous?.name || defaultDestinationName(type, index + 1);
-  const scheduleSource = isPlainObject(input.schedule) ? input.schedule : {};
-  const previousSchedule = previous?.schedule || defaultScheduleConfig(fallbackTimezone);
-  const retentionSource = Object.prototype.hasOwnProperty.call(scheduleSource, 'retentionCount')
-    ? scheduleSource.retentionCount
-    : previousSchedule.retentionCount;
-  const schedule: BackupScheduleConfig = {
-    enabled: !!(scheduleSource.enabled ?? previousSchedule.enabled),
-    intervalHours: normalizeIntervalHours(
-      scheduleSource.intervalHours ?? previousSchedule.intervalHours,
-      previousSchedule.intervalHours || BACKUP_DEFAULT_INTERVAL_HOURS
-    ),
-    startTime: normalizeStartTime(
-      scheduleSource.startTime ?? previousSchedule.startTime,
-      previousSchedule.startTime || BACKUP_DEFAULT_START_TIME
-    ),
-    timezone: assertValidTimeZone(asTrimmedString(scheduleSource.timezone ?? previousSchedule.timezone) || fallbackTimezone || BACKUP_DEFAULT_TIMEZONE),
-    retentionCount: normalizeRetentionCount(retentionSource, previousSchedule.retentionCount),
-  };
-
-  const destination = normalizeDestination(
-    type,
-    withPreservedDestinationSecret(type, input.destination, previous),
-    !schedule.enabled
-  );
-
+  const previousSchedule = previous?.schedule ?? createDefaultBackupScheduleConfig(fallbackTimezone);
+  const schedule = isPlainObject(input.schedule) ? input.schedule : {};
+  const destination = isPlainObject(input.destination) ? input.destination : {};
+  const secretField = type === 's3' ? 'secretAccessKey' : 'password';
+  const previousDestination: Record<string, unknown> = previous?.type === type ? { ...previous.destination } : {};
+  const keepSecret = ['', REDACTED_BACKUP_SECRET].includes(String(destination[secretField] ?? ''));
   return {
     id,
-    name,
+    name: asTrimmedString(input.name) || previous?.name || createDefaultBackupDestinationName(type, index + 1),
     type,
-    includeAttachments: typeof input.includeAttachments === 'boolean'
-      ? input.includeAttachments
-      : previous?.includeAttachments ?? false,
-    destination,
-    schedule,
-    runtime,
+    includeAttachments: typeof input.includeAttachments === 'boolean' ? input.includeAttachments : previous?.includeAttachments ?? false,
+    destination: keepSecret ? { ...destination, [secretField]: previousDestination[secretField] || '' } : destination,
+    schedule: {
+      enabled: schedule.enabled ?? previousSchedule.enabled,
+      intervalHours: schedule.intervalHours == null || schedule.intervalHours === '' ? previousSchedule.intervalHours : schedule.intervalHours,
+      startTime: asTrimmedString(schedule.startTime) || previousSchedule.startTime,
+      timezone: asTrimmedString(schedule.timezone ?? previousSchedule.timezone) || fallbackTimezone,
+      retentionCount: Object.hasOwn(schedule, 'retentionCount') ? schedule.retentionCount : previousSchedule.retentionCount,
+    },
+    runtime: previous?.runtime ?? input.runtime,
   };
 }
 
-function parseDestinations(
-  rawDestinations: unknown,
-  previousById: Map<string, BackupDestinationRecord>,
-  fallbackTimezone: string
-): BackupDestinationRecord[] {
-  if (!Array.isArray(rawDestinations)) {
-    throw new Error('Backup destinations are invalid');
-  }
-  if (rawDestinations.length > MAX_BACKUP_DESTINATIONS) {
-    throw new Error(`You can save up to ${MAX_BACKUP_DESTINATIONS} backup destinations`);
-  }
-
-  const destinations = rawDestinations.map((entry, index) => normalizeDestinationRecord(entry, previousById, index, fallbackTimezone));
-  const ids = new Set<string>();
-  for (const destination of destinations) {
-    if (ids.has(destination.id)) {
-      throw new Error('Backup destination ids must be unique');
-    }
-    ids.add(destination.id);
-  }
-  return destinations;
+function backupSettingsSchema(previousById: ReadonlyMap<string, BackupDestinationRecord>, fallbackTimezone: string) {
+  return z.object({
+    destinations: z.array(z.unknown(), { error: 'Backup destinations are invalid' })
+      .max(MAX_BACKUP_DESTINATIONS, { error: `You can save up to ${MAX_BACKUP_DESTINATIONS} backup destinations` })
+      .transform((entries) => entries.map((entry, index) => withStoredDestination(entry, index, previousById, fallbackTimezone)))
+      .pipe(z.array(BackupDestinationRecordSchema))
+      .refine((destinations) => new Set(destinations.map(({ id }) => id)).size === destinations.length, {
+        error: 'Backup destination ids must be unique',
+      }),
+  });
 }
 
-function mapDestinationsById(destinations: BackupDestinationRecord[]): Map<string, BackupDestinationRecord> {
-  return new Map(destinations.map((destination) => [destination.id, destination]));
-}
+// Rows written before per-destination schedules are not migrated: the defaults come back and the
+// administrator re-saves the schedule once.
+const ScheduledSettingsRowSchema = z.object({ destinations: z.array(z.looseObject({ schedule: z.looseObject({}) })) });
+
+const BackupRuntimeRowSchema = z.object({ destinations: z.record(z.string(), BackupRuntimeSchema) });
 
 function stripRuntimeFromSettings(settings: BackupSettings): BackupSettings {
   return {
     destinations: settings.destinations.map((destination) => ({
       ...destination,
-      runtime: normalizeRuntime(null),
+      runtime: createDefaultBackupRuntimeState(),
     })),
   };
 }
@@ -494,7 +398,7 @@ function serializeRuntimeState(settings: BackupSettings): string {
   return JSON.stringify({
     version: 1,
     destinations: Object.fromEntries(
-      settings.destinations.map((destination) => [destination.id, normalizeRuntime(destination.runtime)])
+      settings.destinations.map((destination) => [destination.id, BackupRuntimeSchema.parse(destination.runtime)])
     ),
   });
 }
@@ -503,11 +407,8 @@ async function loadBackupRuntimeStates(db: D1Database): Promise<Map<string, Back
   const raw = await configRepo.getConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY);
   if (!raw) return new Map();
   try {
-    const parsed = JSON.parse(raw) as { destinations?: Record<string, unknown> };
-    const entries = Object.entries(parsed.destinations || {})
-      .filter(([id]) => !!asTrimmedString(id))
-      .map(([id, runtime]) => [id, normalizeRuntime(runtime)] as const);
-    return new Map(entries);
+    const { destinations } = BackupRuntimeRowSchema.catch({ destinations: {} }).parse(JSON.parse(raw));
+    return new Map(Object.entries(destinations).filter(([id]) => id.trim()));
   } catch {
     return new Map();
   }
@@ -517,46 +418,32 @@ function mergeRuntimeStates(settings: BackupSettings, runtimes: Map<string, Back
   return {
     destinations: settings.destinations.map((destination) => ({
       ...destination,
-      runtime: runtimes.get(destination.id) || normalizeRuntime(destination.runtime),
+      runtime: runtimes.get(destination.id) || BackupRuntimeSchema.parse(destination.runtime),
     })),
   };
 }
 
 export function getDefaultBackupSettings(timezone: string = 'UTC'): BackupSettings {
-  return createSharedDefaultBackupSettings(assertValidTimeZone(timezone));
+  if (!isValidTimeZone(timezone)) throw new Error('Invalid backup timezone');
+  return createSharedDefaultBackupSettings(timezone);
 }
 
 export function parseBackupSettings(raw: string | null, fallbackTimezone: string = 'UTC'): BackupSettings {
-  if (!raw) return getDefaultBackupSettings(fallbackTimezone);
+  const defaults = () => getDefaultBackupSettings(fallbackTimezone);
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    // Rows written before per-destination schedules are not migrated: the defaults come back and
-    // the administrator re-saves the schedule once.
-    const destinations = Array.isArray(parsed.destinations) ? parsed.destinations : null;
-    if (!destinations?.every((entry) => isPlainObject(entry) && isPlainObject(entry.schedule))) {
-      return getDefaultBackupSettings(fallbackTimezone);
-    }
-    return { destinations: parseDestinations(destinations, new Map(), fallbackTimezone) };
+    parsed = JSON.parse(raw ?? '');
   } catch {
-    return getDefaultBackupSettings(fallbackTimezone);
+    return defaults();
   }
+  if (!ScheduledSettingsRowSchema.safeParse(parsed).success) return defaults();
+  const settings = backupSettingsSchema(new Map(), fallbackTimezone).safeParse(parsed);
+  return settings.success ? settings.data : defaults();
 }
 
-export function normalizeBackupSettingsInput(
-  input: BackupSettingsInput,
-  previous: BackupSettings
-): BackupSettings {
-  if (!isPlainObject(input)) {
-    throw new Error('Backup settings payload is invalid');
-  }
-
-  const previousById = mapDestinationsById(previous.destinations);
-  const rawDestinations = input.destinations ?? previous.destinations;
-  const destinations = parseDestinations(rawDestinations, previousById, BACKUP_DEFAULT_TIMEZONE);
-
-  return {
-    destinations,
-  };
+export function normalizeBackupSettingsInput(destinations: unknown, previous: BackupSettings) {
+  const previousById = new Map(previous.destinations.map((destination) => [destination.id, destination]));
+  return backupSettingsSchema(previousById, BACKUP_DEFAULT_TIMEZONE).safeParse({ destinations: destinations ?? previous.destinations });
 }
 
 export function serializeBackupSettings(settings: BackupSettings): string {
@@ -631,8 +518,8 @@ export async function updateBackupDestinationRuntime(
   mutator: (runtime: BackupRuntimeState) => BackupRuntimeState
 ): Promise<BackupRuntimeState> {
   const runtimes = await loadBackupRuntimeStates(db);
-  const current = runtimes.get(destinationId) || normalizeRuntime(null);
-  const next = normalizeRuntime(mutator(current));
+  const current = runtimes.get(destinationId) || createDefaultBackupRuntimeState();
+  const next = BackupRuntimeSchema.parse(mutator(current));
   runtimes.set(destinationId, next);
   await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
     version: 1,
@@ -784,7 +671,7 @@ function getBackupSlotStartsForLocalDay(
   intervalHours: number
 ): Date[] {
   const parsedDate = parseLocalDateKey(dateKey);
-  const parsedTime = normalizeStartTime(startTime).split(':').map((value) => Number(value));
+  const parsedTime = startTime.split(':').map((value) => Number(value));
   if (!parsedDate || parsedTime.length !== 2) return [];
 
   const [hour, minute] = parsedTime;

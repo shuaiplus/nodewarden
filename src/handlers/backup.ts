@@ -1,5 +1,6 @@
 import type { Env, User } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { z } from 'zod';
+import { bodyIssues, errorResponse, jsonResponse, parseBody } from '../utils/response';
 import {
   type BackupArchiveBundle,
   MAX_BACKUP_ARCHIVE_BYTES,
@@ -11,7 +12,7 @@ import {
 } from '../services/backup-archive';
 import {
   type BackupDestinationRecord,
-  type BackupSettingsInput,
+  type BackupSettings,
   type WebDavBackupDestination,
   getBackupLocalDateKey,
   getDefaultBackupSettings,
@@ -62,8 +63,8 @@ function parseRequestContentLength(request: Request): number | null {
   return Math.floor(value);
 }
 
-async function requireBackupUserVerification(actorUser: User, masterPasswordHash: string, env: Env): Promise<Response | null> {
-  const normalized = String(masterPasswordHash || '').trim();
+async function requireBackupUserVerification(actorUser: User, masterPasswordHash: string | null | undefined, env: Env): Promise<Response | null> {
+  const normalized = (masterPasswordHash ?? '').trim();
   if (!normalized) {
     return errorResponse('masterPasswordHash is required', 400);
   }
@@ -77,7 +78,7 @@ async function requireBackupUserVerification(actorUser: User, masterPasswordHash
 
 async function requireBackupRepairVerification(
   actorUser: User,
-  body: { masterPasswordHash?: string; userVerificationToken?: string },
+  body: { masterPasswordHash?: string | null; userVerificationToken?: string | null },
   env: Env
 ): Promise<Response | null> {
   const masterPasswordHash = String(body.masterPasswordHash || '').trim();
@@ -687,32 +688,32 @@ export async function handleGetAdminBackupSettings(request: Request, env: Env, a
   }
 }
 
+const optionalString = z.string().nullish();
+
+const backupSettingsBody = (error: string) => z.object({
+  destinations: z.unknown(),
+  masterPasswordHash: optionalString,
+  userVerificationToken: optionalString,
+}, { error });
+
+// Settings saves merge into the stored settings; an unreadable store merges into the defaults.
+async function normalizeBackupSettingsBody(env: Env, destinations: unknown): Promise<BackupSettings | Response> {
+  const previous = await loadBackupSettings(env.DB, env, 'UTC').catch(() => getDefaultBackupSettings('UTC'));
+  const next = normalizeBackupSettingsInput(destinations, previous);
+  return next.success ? next.data : errorResponse(next.error.issues[0].message, 400, {}, bodyIssues(next.error));
+}
+
 export async function handleUpdateAdminBackupSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  let body: BackupSettingsInput & { masterPasswordHash?: string };
-  try {
-    body = await request.json<BackupSettingsInput & { masterPasswordHash?: string }>();
-  } catch {
-    return errorResponse('Backup settings payload is invalid', 400);
-  }
+  const body = await parseBody(request, backupSettingsBody('Backup settings payload is invalid'), 'Backup settings payload is invalid');
+  if (body instanceof Response) return body;
 
-  const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
+  const verificationError = await requireBackupUserVerification(actorUser, body.masterPasswordHash, env);
   if (verificationError) return verificationError;
 
-  let previous;
-  try {
-    previous = await loadBackupSettings(env.DB, env, 'UTC');
-  } catch {
-    previous = getDefaultBackupSettings('UTC');
-  }
-
-  let next;
-  try {
-    next = normalizeBackupSettingsInput(body, previous);
-  } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Backup settings are invalid', 400);
-  }
+  const next = await normalizeBackupSettingsBody(env, body.destinations);
+  if (next instanceof Response) return next;
 
   await saveBackupSettings(env.DB, env, next);
   await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.update', 'backup', null, {
@@ -741,29 +742,14 @@ export async function handleGetAdminBackupSettingsRepairState(request: Request, 
 export async function handleRepairAdminBackupSettings(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
-  let body: BackupSettingsInput & { masterPasswordHash?: string; userVerificationToken?: string };
-  try {
-    body = await request.json<BackupSettingsInput & { masterPasswordHash?: string; userVerificationToken?: string }>();
-  } catch {
-    return errorResponse('Backup settings repair payload is invalid', 400);
-  }
+  const body = await parseBody(request, backupSettingsBody('Backup settings repair payload is invalid'), 'Backup settings repair payload is invalid');
+  if (body instanceof Response) return body;
 
   const verificationError = await requireBackupRepairVerification(actorUser, body, env);
   if (verificationError) return verificationError;
 
-  let previous;
-  try {
-    previous = await loadBackupSettings(env.DB, env, 'UTC');
-  } catch {
-    previous = getDefaultBackupSettings('UTC');
-  }
-
-  let next;
-  try {
-    next = normalizeBackupSettingsInput(body, previous);
-  } catch (error) {
-    return errorResponse(error instanceof Error ? error.message : 'Backup settings repair payload is invalid', 400);
-  }
+  const next = await normalizeBackupSettingsBody(env, body.destinations);
+  if (next instanceof Response) return next;
 
   await repairBackupSettings(env.DB, env, next);
   await writeAuditLog(env.DB, actorUser.id, 'admin.backup.settings.repair', 'backup', null, {

@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { type WebDavBackupDestination, getDefaultBackupSettings, parseBackupSettings, serializeBackupSettings } from './backup-config';
+import {
+  REDACTED_BACKUP_SECRET,
+  type WebDavBackupDestination,
+  getDefaultBackupSettings,
+  normalizeBackupSettingsInput,
+  parseBackupSettings,
+  serializeBackupSettings,
+} from './backup-config';
 
 const webdav: WebDavBackupDestination = {
   baseUrl: 'https://dav.example.com/nodewarden',
@@ -25,5 +32,24 @@ test('rows without per-destination schedules come back as the defaults for the a
     assert.equal(destinations.length, 1);
     assert.deepEqual(destinations[0].schedule, getDefaultBackupSettings('UTC').destinations[0].schedule);
     assert.equal((destinations[0].destination as WebDavBackupDestination).baseUrl, '');
+  }
+});
+
+test('a save keeps the stored secret behind a redacted value and rejects unsafe or incomplete scheduled destinations', () => {
+  const previous = getDefaultBackupSettings('UTC');
+  previous.destinations[0].destination = webdav;
+  const [stored] = previous.destinations;
+  const saved = normalizeBackupSettingsInput([{ ...stored, destination: { ...webdav, password: REDACTED_BACKUP_SECRET } }], previous);
+  assert.equal(saved.success && (saved.data.destinations[0].destination as WebDavBackupDestination).password, 'secret');
+
+  const scheduled = { ...stored, schedule: { ...stored.schedule, enabled: true } };
+  const cases: Array<[unknown, string, string]> = [
+    [{ ...scheduled, destination: { ...webdav, baseUrl: 'http://127.0.0.1' } }, 'destinations.0.destination.baseUrl', 'WebDAV server URL host is not allowed'],
+    [{ ...scheduled, id: 'new', destination: { baseUrl: webdav.baseUrl } }, 'destinations.0.destination.username', 'WebDAV username is required'],
+    [{ ...scheduled, schedule: { retentionCount: 1001 } }, 'destinations.0.schedule.retentionCount', 'Backup retention count must be between 1 and 1000'],
+  ];
+  for (const [destination, path, message] of cases) {
+    const [issue] = normalizeBackupSettingsInput([destination], previous).error?.issues ?? [];
+    assert.deepEqual([issue?.path.join('.'), issue?.message], [path, message]);
   }
 });
