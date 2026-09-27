@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { AuthService } from '../services/auth';
 import { notifyUserLogout } from '../durable/notifications-hub';
@@ -37,6 +38,16 @@ const forbidden = () => portalPage('Forbidden', html`<p>This request is not allo
 const methodNotAllowed = () => portalPage('Method not allowed', html`<p>This method is not supported.</p>`, 405);
 const invalidLink = () => loginPage('/admin', true, LOGIN_MESSAGES.invalid, 400);
 
+// Portal forms never fail to parse: a missing or non-text field reads as empty, so it fails the csrf,
+// token, email or confirmation check that renders the matching HTML page instead of an API error.
+const formText = z.string().catch('');
+const PortalForm = z.object({
+  csrf: formText, token: formText, confirmation: formText,
+  email: formText.transform(email => email.trim().toLowerCase()),
+  returnUrl: z.string().catch('/admin'),
+});
+const readPortalForm = async (request: Request) => PortalForm.parse(Object.fromEntries(await request.formData()));
+
 export async function handleAdminPortal(request: Request, env: Env): Promise<Response> {
   try {
     const directory = parseAdminDirectory(env);
@@ -56,9 +67,8 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const mailEnabled = readMailConfig(env).kind === 'enabled';
       if (request.method === 'GET') return loginPage(adminReturnPath(url.searchParams.get('returnUrl') ?? '/admin', url.origin), mailEnabled, LOGIN_MESSAGES[url.searchParams.get('m') ?? '']);
       if (request.method !== 'POST') return methodNotAllowed();
-      const form = await request.formData();
-      const email = String(form.get('email') ?? '').trim().toLowerCase();
-      const returnPath = adminReturnPath(String(form.get('returnUrl') ?? '/admin'), url.origin);
+      const { email, returnUrl } = await readPortalForm(request);
+      const returnPath = adminReturnPath(returnUrl, url.origin);
       if (!EMAIL_PATTERN.test(email) || email.length > 256) return loginPage(returnPath, mailEnabled, 'Enter a valid email address.', 400);
       const clientId = getClientIdentifier(request);
       if (!clientId) return forbidden();
@@ -79,8 +89,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         return portalPage('Confirm administrator sign-in', html`<form method="post" action="/admin/login/confirm"><input type="hidden" name="token" value="${token}"><button type="submit">Sign in</button></form>`);
       }
       if (request.method !== 'POST') return methodNotAllowed();
-      const form = await request.formData();
-      const value = await redeemAdminLogin(env, String(form.get('token') ?? ''), readAdminCookie(request, ADMIN_LOGIN_COOKIE));
+      const value = await redeemAdminLogin(env, (await readPortalForm(request)).token, readAdminCookie(request, ADMIN_LOGIN_COOKIE));
       if (!value) { console.warn('Invalid administrator sign-in link'); return invalidLink(); }
       if (directory.admins.get(value.email) !== value.stampHash) { await audit('admin.portal.login.denied'); return invalidLink(); }
       const session = await createAdminSession(env, value.email, value.stampHash);
@@ -93,11 +102,8 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (denied) await audit('admin.portal.login.denied');
       return portalRedirect(`/admin/login?returnUrl=${encodeURIComponent(adminReturnPath(path + url.search, url.origin))}`, [adminCookie(ADMIN_COOKIE)]);
     }
-    let form: FormData | null = null;
-    if (request.method === 'POST') {
-      form = await request.formData();
-      if (!constantTimeEquals(String(form.get('csrf') ?? ''), session.csrf)) return forbidden();
-    }
+    const form = request.method === 'POST' ? await readPortalForm(request) : null;
+    if (form && !constantTimeEquals(form.csrf, session.csrf)) return forbidden();
     if (path === '/admin/login/logout') {
       if (request.method !== 'POST') return methodNotAllowed();
       await env.DB.prepare('DELETE FROM verification WHERE id=?').bind(session.id).run();
@@ -128,9 +134,10 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const user = await userRepo.getUserById(env.DB, decodeURIComponent(userPath[2]));
       if (!user) return portalPage('Not found', html`<p>User not found.</p>`, 404);
       const viewPath = '/admin/users/view/' + encodeURIComponent(user.id);
+      const typedEmail = form?.confirmation.trim().toLowerCase() ?? '';
       let refusal = '';
       if (deleting) {
-        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        const check = await sensitiveActionCheck(typedEmail, user.email.toLowerCase(), viewPath);
         if (check) return check;
         const outcome = await deleteUserAccount(env, user.id, { action: 'admin.portal.user.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'user', targetId: user.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
         if (outcome.kind === 'deleted') return portalRedirect('/admin/users?m=deleted');
@@ -148,7 +155,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
         refusal = 'Cannot disable the last active instance administrator.';
       }
       if (userPath[1] === 'verify-email') {
-        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        const check = await sensitiveActionCheck(typedEmail, user.email.toLowerCase(), viewPath);
         if (check) return check;
         await markEmailVerified(env, user.id);
         await writeAuditEvent(env.DB, {
@@ -160,7 +167,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (userPath[1] === 'remove-2fa') {
         const passkeys = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor');
         if (!twoFactorProviders(user, passkeys > 0).length) return portalRedirect(viewPath + '?m=nothing-to-reset');
-        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? '').trim().toLowerCase(), user.email.toLowerCase(), viewPath);
+        const check = await sensitiveActionCheck(typedEmail, user.email.toLowerCase(), viewPath);
         if (check) return check;
         const event = auditEventStatement(env.DB, {
           action: 'admin.portal.user.two_factor.reset', category: 'security', level: 'security', actorUserId: null,
@@ -199,7 +206,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       const org = await orgRepo.getOrganization(env.DB, decodeURIComponent(orgPath[2]));
       if (!org) return portalPage('Not found', html`<p>Organization not found.</p>`, 404);
       if (deleting) {
-        const check = await sensitiveActionCheck(String(form?.get('confirmation') ?? ''), org.name, '/admin/organizations/view/' + encodeURIComponent(org.id));
+        const check = await sensitiveActionCheck(form?.confirmation ?? '', org.name, '/admin/organizations/view/' + encodeURIComponent(org.id));
         if (check) return check;
         await deleteOrganizationAccount(env, org.id, { action: 'admin.portal.org.delete', category: 'security', level: 'security', actorUserId: null, targetType: 'organization', targetId: org.id, metadata: { adminEmail: session.email, ...auditRequestMetadata(request) } });
         return portalRedirect('/admin/organizations?m=deleted');
