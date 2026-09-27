@@ -764,7 +764,5 @@ export const events = sqliteTable('events', {
   index('idx_events_recorded').on(table.recordedAt, table.id),
   index('idx_events_org_date').on(table.organizationId, table.date, table.id),
   index('idx_events_actor_date').on(table.actingUserId, table.date, table.id),
-  index('idx_events_resource_date').on(table.resourceType, table.resourceId, table.date, table.id),
-  index('idx_events_service_account_date').on(table.serviceAccountId, table.date, table.id),
-  index('idx_events_granted_service_account_date').on(table.grantedServiceAccountId, table.date, table.id),
+  index('idx_events_resource_date').on(table.organizationId, table.resourceType, table.resourceId, table.date, table.id),
 ]);

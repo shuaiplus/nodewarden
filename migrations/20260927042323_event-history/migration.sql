@@ -19,6 +19,4 @@ CREATE TABLE `events` (
 CREATE INDEX `idx_events_recorded` ON `events` (`recorded_at`,`id`);--> statement-breakpoint
 CREATE INDEX `idx_events_org_date` ON `events` (`organization_id`,`date`,`id`);--> statement-breakpoint
 CREATE INDEX `idx_events_actor_date` ON `events` (`acting_user_id`,`date`,`id`);--> statement-breakpoint
-CREATE INDEX `idx_events_resource_date` ON `events` (`resource_type`,`resource_id`,`date`,`id`);--> statement-breakpoint
-CREATE INDEX `idx_events_service_account_date` ON `events` (`service_account_id`,`date`,`id`);--> statement-breakpoint
-CREATE INDEX `idx_events_granted_service_account_date` ON `events` (`granted_service_account_id`,`date`,`id`);
+CREATE INDEX `idx_events_resource_date` ON `events` (`organization_id`,`resource_type`,`resource_id`,`date`,`id`);

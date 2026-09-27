@@ -1,7 +1,7 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "4d45bed4-7c77-4c25-bad2-18fc9cb89b57",
+  "id": "1f60e1d4-3ea0-43d6-83dd-ed632feebc68",
   "prevIds": [
     "b18b5f75-1218-4a7e-b97f-916ef4e5358a"
   ],
@@ -5819,6 +5819,10 @@
     {
       "columns": [
         {
+          "value": "organization_id",
+          "isExpression": false
+        },
+        {
           "value": "resource_type",
           "isExpression": false
         },
@@ -5839,50 +5843,6 @@
       "where": null,
       "origin": "manual",
       "name": "idx_events_resource_date",
-      "entityType": "indexes",
-      "table": "events"
-    },
-    {
-      "columns": [
-        {
-          "value": "service_account_id",
-          "isExpression": false
-        },
-        {
-          "value": "date",
-          "isExpression": false
-        },
-        {
-          "value": "id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "idx_events_service_account_date",
-      "entityType": "indexes",
-      "table": "events"
-    },
-    {
-      "columns": [
-        {
-          "value": "granted_service_account_id",
-          "isExpression": false
-        },
-        {
-          "value": "date",
-          "isExpression": false
-        },
-        {
-          "value": "id",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "idx_events_granted_service_account_date",
       "entityType": "indexes",
       "table": "events"
     },
