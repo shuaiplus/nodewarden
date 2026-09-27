@@ -1,0 +1,126 @@
+diff --git a/apps/web/src/app/billing/organizations/organization-plans.component.ts b/apps/web/src/app/billing/organizations/organization-plans.component.ts
+index 8c56ada948..3fa0c31a54 100644
+--- a/apps/web/src/app/billing/organizations/organization-plans.component.ts
++++ b/apps/web/src/app/billing/organizations/organization-plans.component.ts
+@@ -1335,7 +1335,9 @@ export class OrganizationPlansComponent implements OnInit, OnDestroy {
+     if (!this.acceptingSponsorship() && !this.isInTrialFlow) {
+       // FIXME: Verify that this floating promise is intentional. If it is, add an explanatory comment and ensure there is proper error handling.
+       // eslint-disable-next-line @typescript-eslint/no-floating-promises
+-      this.router.navigate(["/organizations/" + organizationId]);
++      this.router.navigate([
++        this.enableSecretsManagerByDefault() ? "/sm/" + organizationId : "/organizations/" + organizationId,
++      ]);
+     }
+
+     if (this.isInTrialFlow) {
+diff --git a/apps/web/src/app/billing/shared/self-hosting-license-uploader/organization-self-hosting-license-uploader.component.ts b/apps/web/src/app/billing/shared/self-hosting-license-uploader/organization-self-hosting-license-uploader.component.ts
+index baf022514d..6c4b4682ee 100644
+--- a/apps/web/src/app/billing/shared/self-hosting-license-uploader/organization-self-hosting-license-uploader.component.ts
++++ b/apps/web/src/app/billing/shared/self-hosting-license-uploader/organization-self-hosting-license-uploader.component.ts
+@@ -1,11 +1,13 @@
+ // FIXME: Update this file to be type safe and remove this and next line
+ // @ts-strict-ignore
+ import { Component, EventEmitter, Output } from "@angular/core";
+-import { FormBuilder } from "@angular/forms";
++import { FormBuilder, Validators } from "@angular/forms";
+ import { firstValueFrom } from "rxjs";
+
+ import { ApiService } from "@bitwarden/common/abstractions/api.service";
+ import { OrganizationApiServiceAbstraction } from "@bitwarden/common/admin-console/abstractions/organization/organization-api.service.abstraction";
++import { OrganizationCreateRequest } from "@bitwarden/common/admin-console/models/request/organization-create.request";
++import { PlanType } from "@bitwarden/common/billing/enums";
+ import { OrganizationKeysRequest } from "@bitwarden/common/admin-console/models/request/organization-keys.request";
+ import { AccountService } from "@bitwarden/common/auth/abstractions/account.service";
+ import { TokenService } from "@bitwarden/common/auth/abstractions/token.service";
+@@ -30,7 +32,17 @@ import { AbstractSelfHostingLicenseUploaderComponent } from "../../shared/self-h
+ // eslint-disable-next-line @angular-eslint/prefer-on-push-component-change-detection
+ @Component({
+   selector: "organization-self-hosting-license-uploader",
+-  templateUrl: "./self-hosting-license-uploader.component.html",
++  template: `
++    <form [formGroup]="form" [bitSubmit]="submit">
++      <bit-form-field>
++        <bit-label>{{ "organizationName" | i18n }}</bit-label>
++        <input bitInput formControlName="name" type="text" required />
++      </bit-form-field>
++      <button type="submit" bitButton bitFormButton buttonType="primary">
++        {{ "create" | i18n }}
++      </button>
++    </form>
++  `,
+   standalone: false,
+ })
+ export class OrganizationSelfHostingLicenseUploaderComponent extends AbstractSelfHostingLicenseUploaderComponent {
+@@ -56,10 +68,22 @@ export class OrganizationSelfHostingLicenseUploaderComponent extends AbstractSel
+     private readonly configService: ConfigService,
+   ) {
+     super(formBuilder, i18nService, platformUtilsService, toastService, tokenService);
++    this.form = formBuilder.group({ name: ["", [Validators.required, Validators.pattern(/\S/)]] });
+   }
+
+   protected async submit(): Promise<void> {
+-    await super.submit();
++    this.form.markAllAsTouched();
++    if (this.form.invalid) {
++      return;
++    }
++    if (!(await this.tokenService.getEmailVerified())) {
++      this.toastService.showToast({
++        variant: "error",
++        title: this.i18nService.t("errorOccurred"),
++        message: this.i18nService.t("verifyEmailFirst"),
++      });
++      return;
++    }
+     const activeUserId = await firstValueFrom(getUserId(this.accountService.activeAccount$));
+     const orgKey = await this.legacyCompatKeyService.makeOrgKey<OrgKey>(activeUserId);
+     const key = orgKey[0].encryptedString;
+@@ -71,19 +95,18 @@ export class OrganizationSelfHostingLicenseUploaderComponent extends AbstractSel
+     const collectionCt = collection.encryptedString;
+     const orgKeys = await this.legacyCompatKeyService.makeKeyPair(orgKey[1]);
+
+-    const fd = new FormData();
+-    fd.append("license", this.formValue.file);
+-    fd.append("key", key);
+-    fd.append("collectionName", collectionCt);
+-    const response = await this.organizationApiService.createLicense(fd);
++    const request = new OrganizationCreateRequest(
++      key,
++      new OrganizationKeysRequest(orgKeys[0], orgKeys[1].encryptedString),
++      collectionCt,
++    );
++    request.name = this.form.value.name.trim();
++    request.billingEmail = await this.tokenService.getEmail();
++    request.planType = PlanType.Free;
++    request.useSecretsManager = true;
++    const response = await this.organizationApiService.create(request);
+     const orgId = response.id;
+
+-    await this.apiService.refreshIdentityToken();
+-
+-    // Org Keys live outside of the OrganizationLicense - add the keys to the org here
+-    const request = new OrganizationKeysRequest(orgKeys[0], orgKeys[1].encryptedString);
+-    await this.organizationApiService.updateKeys(orgId, request);
+-
+     await this.apiService.refreshIdentityToken();
+     await this.syncService.fullSync(true);
+
+diff --git a/apps/web/src/app/secrets-manager/secrets-manager-landing/sm-landing.component.html b/apps/web/src/app/secrets-manager/secrets-manager-landing/sm-landing.component.html
+index 659baa7fde..8b9e78e7b2 100644
+--- a/apps/web/src/app/secrets-manager/secrets-manager-landing/sm-landing.component.html
++++ b/apps/web/src/app/secrets-manager/secrets-manager-landing/sm-landing.component.html
+@@ -43,7 +43,13 @@
+         </li>
+       </ul>
+     </bit-container>
+-    <button type="button" bitButton buttonType="primary" [routerLink]="tryItNowUrl">
++    <button
++      type="button"
++      bitButton
++      buttonType="primary"
++      [routerLink]="tryItNowUrl"
++      [queryParams]="tryItNowUrl === '/create-organization' ? { product: 1 } : null"
++    >
+       {{ "tryItNow" | i18n }}
+     </button>
+     <a bitLink linkType="primary" [href]="learnMoreUrl" target="_blank" class="tw-m-5">

@@ -12,7 +12,7 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 - Official Bitwarden clients are the API contract; Vaultwarden is the AGPL reference.
 - Keep `webapp/` on the Worker. Official Bitwarden web lives in `official-web/` (Pages) and proxies `/api` `/identity` to the Worker via `WEB_VAULT_ORIGINS`.
 - Official web signup uses `/identity/accounts/register/send-verification-email` + `/finish`. Send a Cloudflare Email (`EMAIL` binding + `EMAIL_FROM`) and return an empty JSON string (never an inline JWT). Official self-host web still continues to the password form; the emailed `/redirect-connector.html#finish-signup` link carries the token when the user opens it.
-- Official self-host web creates orgs via `POST /organizations/licenses/self-hosted` (any JSON). Serve `GET /api/licenses/nodewarden-enterprise.json`. Emergency access lives in `emergency_access`.
+- The patched Pages web vault creates orgs by name via `POST /api/organizations`, preserving client-generated encrypted keys. Unmodified self-host web uses `POST /organizations/licenses/self-hosted` (any JSON); keep `GET /api/licenses/nodewarden-enterprise.json` for it. Emergency access lives in `emergency_access`.
 - Prefer Cloudflare D1 / KV / DO / Queues / Workflows / R2 over new in-process state.
 - Files > 100 MB upload via R2 S3 presigned URLs (`src/services/r2-presign.ts`).
 - Tests: `npm test` runs `src/**/*.test.ts` and `scripts/*.test.{ts,mjs}`. Route tests among them drive the real Worker `fetch` via `scripts/support/env.ts` (`createTestEnv`, `seedUser`, `authedFetch`) on a SQLite-backed D1 that enforces the 100-parameter cap and batch atomicity. `npx tsc --noEmit` skips `scripts/` and tests.

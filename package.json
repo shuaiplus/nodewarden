@@ -33,13 +33,13 @@
     "test:enterprise-license": "tsx --test src/services/enterprise-license.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:live-mail": "tsx scripts/live-mail-browser.ts",
-    "test:e2e:official": "playwright test e2e/official-web.spec.ts",
+    "test:e2e:official": "playwright test e2e/official-web.spec.ts e2e/official-org-create.spec.ts",
     "build:official-web": "node scripts/build-official-web.mjs",
     "dev:official-web": "node scripts/serve-official-web.mjs",
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
     "deploy:demo": "npm run build:demo && wrangler pages deploy dist --project-name nw-demo",
-    "deploy:official-web": "npm run build:official-web && wrangler pages deploy dist --project-name nodewarden-official-web --config official-web/wrangler.toml",
+    "deploy:official-web": "npm run build:official-web && wrangler pages deploy --cwd official-web --project-name nodewarden-official-web",
     "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs"
   },
   "keywords": [

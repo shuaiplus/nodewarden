@@ -158,7 +158,7 @@ E2E_ORIGIN=http://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8090 npm 
 
 Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
 
-Official self-host web asks for a **license file** to create an organization. Download `GET /api/licenses/nodewarden-enterprise.json` while logged in and upload it. That unlocks Enterprise features (including emergency access). NodeWarden does not check Bitwarden commercial signatures.
+The Pages web vault built by this repository creates organizations from a name, without a license upload. Its small Bitwarden frontend patch preserves browser-side key generation and opens Secrets Manager when creation starts there. Unmodified self-hosted Bitwarden web builds still use the license-upload dialog; `GET /api/licenses/nodewarden-enterprise.json` remains available for their compatibility flow.
 
 `npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on port 8080.
 

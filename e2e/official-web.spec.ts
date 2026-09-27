@@ -4,6 +4,12 @@ const workerOrigin = process.env.E2E_ORIGIN || 'http://127.0.0.1:8787';
 const officialWebOrigin = process.env.OFFICIAL_WEB_ORIGIN || 'http://127.0.0.1:8080';
 
 test.describe('official Bitwarden web against NodeWarden', () => {
+  test.beforeAll(async ({ request }) => {
+    const version = await request.get(`${officialWebOrigin}/version.json`);
+    expect(version.ok(), await version.text()).toBeTruthy();
+    expect((await version.json()).version).toBe('2026.9.0');
+  });
+
   test('identity send-verification-email does not return an inline JWT', async ({ request }) => {
     const email = `official-${Date.now()}@example.com`;
     const start = await request.post(`${workerOrigin}/identity/accounts/register/send-verification-email`, {
