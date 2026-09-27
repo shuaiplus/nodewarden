@@ -1,6 +1,7 @@
+import { z } from 'zod';
 import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { sanitizeDownloadContentType } from '../utils/content-type';
@@ -27,6 +28,22 @@ import { EventType } from '../services/events';
 import * as attachmentRepo from '../services/storage-attachment-repo';
 import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
+
+const ATTACHMENT_FIELD_REQUIRED = 'fileName and key are required';
+const requiredAttachmentField = z.string({ error: ATTACHMENT_FIELD_REQUIRED }).min(1, { error: ATTACHMENT_FIELD_REQUIRED });
+
+const CreateAttachmentBody = z.object({
+  fileName: requiredAttachmentField,
+  key: requiredAttachmentField,
+  // Android sends fileSize as a numeric string.
+  fileSize: z.coerce.number().optional(),
+});
+
+// Only the sent fields change; a present fileName must not be blank, and a blank key clears it.
+const AttachmentMetadataBody = z.object({
+  fileName: z.unknown().transform((value) => String(value || '').trim()).pipe(z.string().min(1, { error: 'fileName is required' })).optional(),
+  key: z.unknown().transform((value) => String(value || '').trim() || null).optional(),
+}).refine((body) => 'fileName' in body || 'key' in body, { error: 'No metadata fields supplied' });
 
 // An attachment change is a change to its cipher: the cipher's owner gets a new revision and their
 // devices the cipher update signal. Returns null when the cipher row is gone.
@@ -133,14 +150,8 @@ export async function handleCreateAttachment(
 
   const cipher = await loadAccessibleCipher(env, env.DB, userId, cipherId, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
-
-  const body = await parseJsonBody<{ fileName?: string; key?: string; fileSize?: number; }>(request);
-
+  const body = await parseBody(request, CreateAttachmentBody);
   if (body instanceof Response) return body;
-
-  if (!body.fileName || !body.key) {
-    return errorResponse('fileName and key are required', 400);
-  }
 
   const fileSize = body.fileSize || 0;
   const attachmentId = generateUUID();
@@ -303,24 +314,11 @@ export async function handleUpdateAttachmentMetadata(
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
-
-  const body = await parseJsonBody<{ fileName?: string | null; key?: string | null }>(request);
-
+  const body = await parseBody(request, AttachmentMetadataBody);
   if (body instanceof Response) return body;
 
-  if (!Object.prototype.hasOwnProperty.call(body, 'fileName') && !Object.prototype.hasOwnProperty.call(body, 'key')) {
-    return errorResponse('No metadata fields supplied', 400);
-  }
-
-  if (Object.prototype.hasOwnProperty.call(body, 'fileName')) {
-    const fileName = String(body.fileName || '').trim();
-    if (!fileName) return errorResponse('fileName is required', 400);
-    attachment.fileName = fileName;
-  }
-  if (Object.prototype.hasOwnProperty.call(body, 'key')) {
-    const key = body.key == null ? null : String(body.key || '').trim();
-    attachment.key = key || null;
-  }
+  if (body.fileName !== undefined) attachment.fileName = body.fileName;
+  if (body.key !== undefined) attachment.key = body.key;
 
   await attachmentRepo.saveAttachment(env.DB, attachment);
   await afterAttachmentChange(request, env, cipher, cipherId);

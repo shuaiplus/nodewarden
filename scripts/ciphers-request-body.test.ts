@@ -4,7 +4,7 @@ import test from 'node:test';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
-// Personal cipher bodies as official clients send them to POST/PUT /api/ciphers and the bulk routes.
+// Personal cipher bodies as official clients send them to /api/ciphers, its bulk and attachment routes.
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const LOGIN_TYPE = 1;
 const ARCHIVED_AT = '2026-01-02T03:04:05.000Z';
@@ -67,4 +67,20 @@ test('a full update clears the archive only when archivedAt or archivedDate is s
     type: LOGIN_TYPE, name: ENCRYPTED, archivedAt: null, archivedDate: ARCHIVED_AT,
   })).json()) as CipherBody;
   assert.equal(cleared.archivedDate, null);
+});
+
+test('attachment v2 reads the numeric-string fileSize Android sends and requires fileName and key', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const created = (await (await send(env, user, 'POST', '/api/ciphers', { type: LOGIN_TYPE, name: ENCRYPTED })).json()) as CipherBody;
+  const path = `/api/ciphers/${created.id}/attachment/v2`;
+
+  const response = await send(env, user, 'POST', path, { fileName: ENCRYPTED, key: ENCRYPTED, fileSize: '2048' });
+  assert.equal(response.status, 200);
+  const { cipherResponse } = (await response.json()) as { cipherResponse: { attachments: Array<{ size: string }> } };
+  assert.deepEqual(cipherResponse.attachments.map((attachment) => attachment.size), ['2048']);
+
+  const missing = await send(env, user, 'POST', path, { fileName: ENCRYPTED, fileSize: 1 });
+  assert.equal(missing.status, 400);
+  assert.deepEqual(((await missing.json()) as ErrorBody).validationErrors, { key: ['fileName and key are required'] });
 });
