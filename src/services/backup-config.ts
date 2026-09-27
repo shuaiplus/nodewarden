@@ -56,10 +56,6 @@ function asTrimmedString(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function normalizeHostnameForPolicy(hostname: string): string {
-  return hostname.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-}
-
 // Backup destinations must not reach private, loopback, link-local, carrier-grade NAT, benchmarking,
 // documentation, multicast or reserved space (SSRF). An IPv4-mapped IPv6 address is judged by its IPv4.
 const BLOCKED_IPV4 = ([['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
@@ -73,21 +69,23 @@ const IPV4_LITERAL = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 const inBlockedRange = (address: bigint, width: number, ranges: ReadonlyArray<readonly [bigint, number]>) =>
   ranges.some(([network, prefix]) => address >> BigInt(width - prefix) === network >> BigInt(width - prefix));
 
-function isBlockedIpAddress(hostname: string): boolean {
-  if (IPV4_LITERAL.test(hostname)) return inBlockedRange(convertIPv4ToBinary(hostname), 32, BLOCKED_IPV4);
-  if (!hostname.includes(':')) return false;
+export function normalizeBackupEndpointUrl(value: string, label: string): string {
+  let parsed: URL;
   try {
-    const address = convertIPv6ToBinary(hostname);
-    return isIPv4MappedIPv6(address)
-      ? inBlockedRange(convertIPv4MappedIPv6ToIPv4(address), 32, BLOCKED_IPV4)
-      : inBlockedRange(address, 128, BLOCKED_IPV6);
+    parsed = new URL(value);
   } catch {
-    return true;
+    throw new Error(`${label} must be a valid URL`);
   }
-}
-
-function assertBackupEndpointHostAllowed(hostname: string, label: string): void {
-  const normalized = normalizeHostnameForPolicy(hostname);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${label} must start with http:// or https://`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${label} must not include credentials`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${label} must not include query or fragment`);
+  }
+  const normalized = parsed.hostname.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!normalized) throw new Error(`${label} host is required`);
   if (
     normalized === 'localhost' ||
@@ -114,28 +112,23 @@ function assertBackupEndpointHostAllowed(hostname: string, label: string): void 
   ) {
     throw new Error(`${label} host is not allowed`);
   }
-  if (isBlockedIpAddress(normalized)) {
+  // An IP literal in a blocked range is refused, and so is an IPv6 literal that does not parse.
+  let blockedAddress = false;
+  if (IPV4_LITERAL.test(normalized)) {
+    blockedAddress = inBlockedRange(convertIPv4ToBinary(normalized), 32, BLOCKED_IPV4);
+  } else if (normalized.includes(':')) {
+    try {
+      const address = convertIPv6ToBinary(normalized);
+      blockedAddress = isIPv4MappedIPv6(address)
+        ? inBlockedRange(convertIPv4MappedIPv6ToIPv4(address), 32, BLOCKED_IPV4)
+        : inBlockedRange(address, 128, BLOCKED_IPV6);
+    } catch {
+      blockedAddress = true;
+    }
+  }
+  if (blockedAddress) {
     throw new Error(`${label} host is not allowed`);
   }
-}
-
-export function normalizeBackupEndpointUrl(value: string, label: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(`${label} must be a valid URL`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`${label} must start with http:// or https://`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`${label} must not include credentials`);
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error(`${label} must not include query or fragment`);
-  }
-  assertBackupEndpointHostAllowed(parsed.hostname, label);
   return parsed.toString().replace(/\/+$/, '');
 }
 
@@ -254,51 +247,44 @@ const BackupDestinationRecordSchema = z.discriminatedUnion('type', [
   ])),
 ], { error: (issue) => (issue.code === 'invalid_union' ? 'Backup destination type is invalid' : 'Backup destination is invalid') });
 
-// A save may omit fields: they keep the values of the stored destination with the same id (or the
-// defaults), and a blank or redacted secret keeps the stored secret. The schema then validates the
-// merged record. Entries that are not objects or name an unknown type pass through for the schema
-// to reject.
-function withStoredDestination(
-  input: unknown,
-  index: number,
-  previousById: ReadonlyMap<string, BackupDestinationRecord>,
-  fallbackTimezone: string
-): unknown {
-  if (!isPlainObject(input)) return input;
-  const requestedType = asTrimmedString(input.type);
-  const type = requestedType === 'e3' ? 's3' : requestedType;
-  if (type !== 's3' && type !== 'webdav') return input;
-
-  const id = asTrimmedString(input.id) || createBackupRandomId();
-  const previous = previousById.get(id);
-  const previousSchedule = previous?.schedule ?? createDefaultBackupScheduleConfig(fallbackTimezone);
-  const schedule = isPlainObject(input.schedule) ? input.schedule : {};
-  const destination = isPlainObject(input.destination) ? input.destination : {};
-  const secretField = type === 's3' ? 'secretAccessKey' : 'password';
-  const previousDestination: Record<string, unknown> = previous?.type === type ? { ...previous.destination } : {};
-  const keepSecret = ['', REDACTED_BACKUP_SECRET].includes(String(destination[secretField] ?? ''));
-  return {
-    id,
-    name: asTrimmedString(input.name) || previous?.name || createDefaultBackupDestinationName(type, index + 1),
-    type,
-    includeAttachments: typeof input.includeAttachments === 'boolean' ? input.includeAttachments : previous?.includeAttachments ?? false,
-    destination: keepSecret ? { ...destination, [secretField]: previousDestination[secretField] || '' } : destination,
-    schedule: {
-      enabled: schedule.enabled ?? previousSchedule.enabled,
-      intervalHours: schedule.intervalHours == null || schedule.intervalHours === '' ? previousSchedule.intervalHours : schedule.intervalHours,
-      startTime: asTrimmedString(schedule.startTime) || previousSchedule.startTime,
-      timezone: asTrimmedString(schedule.timezone ?? previousSchedule.timezone) || fallbackTimezone,
-      retentionCount: Object.hasOwn(schedule, 'retentionCount') ? schedule.retentionCount : previousSchedule.retentionCount,
-    },
-    runtime: previous?.runtime ?? input.runtime,
-  };
-}
-
 function backupSettingsSchema(previousById: ReadonlyMap<string, BackupDestinationRecord>, fallbackTimezone: string) {
   return z.object({
     destinations: z.array(z.unknown(), { error: 'Backup destinations are invalid' })
       .max(MAX_BACKUP_DESTINATIONS, { error: `You can save up to ${MAX_BACKUP_DESTINATIONS} backup destinations` })
-      .transform((entries) => entries.map((entry, index) => withStoredDestination(entry, index, previousById, fallbackTimezone)))
+      // A save may omit fields: they keep the values of the stored destination with the same id (or the
+      // defaults), and a blank or redacted secret keeps the stored secret. The schema then validates the
+      // merged record. Entries that are not objects or name an unknown type pass through for the schema
+      // to reject.
+      .transform((entries) => entries.map((input, index): unknown => {
+        if (!isPlainObject(input)) return input;
+        const requestedType = asTrimmedString(input.type);
+        const type = requestedType === 'e3' ? 's3' : requestedType;
+        if (type !== 's3' && type !== 'webdav') return input;
+
+        const id = asTrimmedString(input.id) || createBackupRandomId();
+        const previous = previousById.get(id);
+        const previousSchedule = previous?.schedule ?? createDefaultBackupScheduleConfig(fallbackTimezone);
+        const schedule = isPlainObject(input.schedule) ? input.schedule : {};
+        const destination = isPlainObject(input.destination) ? input.destination : {};
+        const secretField = type === 's3' ? 'secretAccessKey' : 'password';
+        const previousDestination: Record<string, unknown> = previous?.type === type ? { ...previous.destination } : {};
+        const keepSecret = ['', REDACTED_BACKUP_SECRET].includes(String(destination[secretField] ?? ''));
+        return {
+          id,
+          name: asTrimmedString(input.name) || previous?.name || createDefaultBackupDestinationName(type, index + 1),
+          type,
+          includeAttachments: typeof input.includeAttachments === 'boolean' ? input.includeAttachments : previous?.includeAttachments ?? false,
+          destination: keepSecret ? { ...destination, [secretField]: previousDestination[secretField] || '' } : destination,
+          schedule: {
+            enabled: schedule.enabled ?? previousSchedule.enabled,
+            intervalHours: schedule.intervalHours == null || schedule.intervalHours === '' ? previousSchedule.intervalHours : schedule.intervalHours,
+            startTime: asTrimmedString(schedule.startTime) || previousSchedule.startTime,
+            timezone: asTrimmedString(schedule.timezone ?? previousSchedule.timezone) || fallbackTimezone,
+            retentionCount: Object.hasOwn(schedule, 'retentionCount') ? schedule.retentionCount : previousSchedule.retentionCount,
+          },
+          runtime: previous?.runtime ?? input.runtime,
+        };
+      }))
       .pipe(z.array(BackupDestinationRecordSchema))
       .refine((destinations) => new Set(destinations.map(({ id }) => id)).size === destinations.length, {
         error: 'Backup destination ids must be unique',
@@ -312,24 +298,6 @@ const ScheduledSettingsRowSchema = z.object({ destinations: z.array(z.looseObjec
 
 const BackupRuntimeRowSchema = z.object({ destinations: z.record(z.string(), BackupRuntimeSchema) });
 
-function stripRuntimeFromSettings(settings: BackupSettings): BackupSettings {
-  return {
-    destinations: settings.destinations.map((destination) => ({
-      ...destination,
-      runtime: createDefaultBackupRuntimeState(),
-    })),
-  };
-}
-
-function serializeRuntimeState(settings: BackupSettings): string {
-  return JSON.stringify({
-    version: 1,
-    destinations: Object.fromEntries(
-      settings.destinations.map((destination) => [destination.id, BackupRuntimeSchema.parse(destination.runtime)])
-    ),
-  });
-}
-
 async function loadBackupRuntimeStates(db: D1Database): Promise<Map<string, BackupRuntimeState>> {
   const raw = await configRepo.getConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY);
   if (!raw) return new Map();
@@ -339,15 +307,6 @@ async function loadBackupRuntimeStates(db: D1Database): Promise<Map<string, Back
   } catch {
     return new Map();
   }
-}
-
-function mergeRuntimeStates(settings: BackupSettings, runtimes: Map<string, BackupRuntimeState>): BackupSettings {
-  return {
-    destinations: settings.destinations.map((destination) => ({
-      ...destination,
-      runtime: runtimes.get(destination.id) || BackupRuntimeSchema.parse(destination.runtime),
-    })),
-  };
 }
 
 export function getDefaultBackupSettings(timezone: string = 'UTC'): BackupSettings {
@@ -373,8 +332,14 @@ export function normalizeBackupSettingsInput(destinations: unknown, previous: Ba
   return backupSettingsSchema(previousById, BACKUP_DEFAULT_TIMEZONE).safeParse({ destinations: destinations ?? previous.destinations });
 }
 
+// Runtime state is stored in its own config row, so the settings row keeps only the defaults.
 export function serializeBackupSettings(settings: BackupSettings): string {
-  return JSON.stringify(stripRuntimeFromSettings(settings));
+  return JSON.stringify({
+    destinations: settings.destinations.map((destination) => ({
+      ...destination,
+      runtime: createDefaultBackupRuntimeState(),
+    })),
+  });
 }
 
 export function redactBackupSettingsSecrets(settings: BackupSettings): BackupSettings {
@@ -404,9 +369,15 @@ export function redactBackupSettingsSecrets(settings: BackupSettings): BackupSet
 
 export async function loadBackupSettings(db: D1Database, env: Env, fallbackTimezone: string = 'UTC'): Promise<BackupSettings> {
   const raw = await configRepo.getConfigValue(db, BACKUP_SETTINGS_CONFIG_KEY);
-  const mergeRuntime = async (settings: BackupSettings): Promise<BackupSettings> => (
-    mergeRuntimeStates(settings, await loadBackupRuntimeStates(db))
-  );
+  const mergeRuntime = async (settings: BackupSettings): Promise<BackupSettings> => {
+    const runtimes = await loadBackupRuntimeStates(db);
+    return {
+      destinations: settings.destinations.map((destination) => ({
+        ...destination,
+        runtime: runtimes.get(destination.id) || BackupRuntimeSchema.parse(destination.runtime),
+      })),
+    };
+  };
   if (!raw) {
     const settings = getDefaultBackupSettings(fallbackTimezone);
     await saveBackupSettings(db, env, settings);
@@ -436,7 +407,12 @@ export async function saveBackupSettings(db: D1Database, env: Env, settings: Bac
 }
 
 export async function saveBackupRuntimeStates(db: D1Database, settings: BackupSettings): Promise<void> {
-  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, serializeRuntimeState(settings));
+  await configRepo.setConfigValue(db, BACKUP_RUNTIME_CONFIG_KEY, JSON.stringify({
+    version: 1,
+    destinations: Object.fromEntries(
+      settings.destinations.map((destination) => [destination.id, BackupRuntimeSchema.parse(destination.runtime)])
+    ),
+  }));
 }
 
 export async function updateBackupDestinationRuntime(
@@ -565,16 +541,6 @@ export function getBackupLocalTime(date: Date, timezone: string): string {
   return `${parts.hour}:${parts.minute}`;
 }
 
-function parseLocalDateKey(dateKey: string): { year: number; month: number; day: number } | null {
-  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
-  return { year, month, day };
-}
-
 function getUtcDateForLocalTime(timezone: string, year: number, month: number, day: number, hour: number, minute: number): Date {
   const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
   const actual = getDateTimeParts(new Date(utcGuess), timezone);
@@ -597,13 +563,14 @@ function getBackupSlotStartsForLocalDay(
   startTime: string,
   intervalHours: number
 ): Date[] {
-  const parsedDate = parseLocalDateKey(dateKey);
+  const dateMatch = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const parsedTime = startTime.split(':').map((value) => Number(value));
-  if (!parsedDate || parsedTime.length !== 2) return [];
+  if (!dateMatch || parsedTime.length !== 2) return [];
 
+  const [year, month, day] = dateMatch.slice(1).map(Number);
   const [hour, minute] = parsedTime;
-  const firstSlot = getUtcDateForLocalTime(timezone, parsedDate.year, parsedDate.month, parsedDate.day, hour, minute);
-  const nextLocalDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day, 0, 0, 0, 0));
+  const firstSlot = getUtcDateForLocalTime(timezone, year, month, day, hour, minute);
+  const nextLocalDay = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   nextLocalDay.setUTCDate(nextLocalDay.getUTCDate() + 1);
   const nextDay = getUtcDateForLocalTime(
     timezone,
