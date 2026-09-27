@@ -20,7 +20,7 @@ import {
   getBlobStorageMaxBytes,
   putBlobObject,
 } from '../services/blob-store';
-import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { writeDataAudit } from '../services/audit-events';
 import { createR2PresignedPutUrl, shouldPresignUpload } from '../services/r2-presign';
 import { loadAccessibleCipher } from './cipher-access';
 import { EventType } from '../services/events';
@@ -67,27 +67,6 @@ function contentDispositionAttachment(fileName: string | null | undefined): stri
     .replace(/[\r\n"]/g, '_')
     .trim() || fallback;
   return `attachment; filename="${value}"`;
-}
-
-async function writeAttachmentAudit(
-  db: D1Database,
-  request: Request,
-  userId: string,
-  action: string,
-  metadata: Record<string, unknown>
-): Promise<void> {
-  await writeAuditEvent(db, {
-    actorUserId: userId,
-    action,
-    category: 'data',
-    level: action.includes('delete') ? 'security' : 'info',
-    targetType: 'attachment',
-    targetId: typeof metadata.id === 'string' ? metadata.id : null,
-    metadata: {
-      ...metadata,
-      ...auditRequestMetadata(request),
-    },
-  });
 }
 
 // Format file size to human readable
@@ -476,7 +455,7 @@ export async function handleDeleteAttachment(
   if (revisionInfo) {
     notifyVaultSyncForRequest(request, env, revisionInfo.userId, revisionInfo.revisionDate);
     notifyCipherUpdateForRequest(request, env, cipher, revisionInfo.revisionDate);
-    await writeAttachmentAudit(env.DB, request, revisionInfo.userId, 'attachment.delete', {
+    await writeDataAudit(env.DB, request, revisionInfo.userId, 'attachment', 'attachment.delete', {
       id: attachmentId,
       cipherId,
       size: attachment.size,

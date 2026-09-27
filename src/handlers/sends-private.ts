@@ -33,32 +33,11 @@ import {
   setSendPassword,
   validateDeletionDate,
 } from './sends-shared';
-import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { writeDataAudit } from '../services/audit-events';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sendRepo from '../services/storage-send-repo';
 
 const SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE = 'Send email verification is not supported by this server.';
-
-async function writeSendAudit(
-  db: D1Database,
-  request: Request,
-  userId: string,
-  action: string,
-  metadata: Record<string, unknown>
-): Promise<void> {
-  await writeAuditEvent(db, {
-    actorUserId: userId,
-    action,
-    category: 'data',
-    level: action.includes('delete') ? 'security' : 'info',
-    targetType: 'send',
-    targetId: typeof metadata.id === 'string' ? metadata.id : null,
-    metadata: {
-      ...metadata,
-      ...auditRequestMetadata(request),
-    },
-  });
-}
 
 async function processSendFileUpload(
   request: Request,
@@ -660,7 +639,7 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendDeleteForRequest(request, env, sendId, userId, revisionDate);
   await recordSendEvent(env, request, send, 'deleted');
-  await writeSendAudit(env.DB, request, userId, 'send.delete', {
+  await writeDataAudit(env.DB, request, userId, 'send', 'send.delete', {
     id: sendId,
     type: send.type,
   });
@@ -695,7 +674,7 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
       notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
     }
     await recordSendEvents(env, request, userId, sends, 'deleted');
-    await writeSendAudit(env.DB, request, userId, 'send.delete.bulk', {
+    await writeDataAudit(env.DB, request, userId, 'send', 'send.delete.bulk', {
       count: sends.length,
       requestedCount: body.ids.length,
     });
@@ -717,7 +696,7 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
   await recordSendEvent(env, request, send, 'edited');
-  await writeSendAudit(env.DB, request, userId, 'send.password.remove', {
+  await writeDataAudit(env.DB, request, userId, 'send', 'send.password.remove', {
     id: send.id,
     type: send.type,
   });
@@ -739,7 +718,7 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
   await recordSendEvent(env, request, send, 'edited');
-  await writeSendAudit(env.DB, request, userId, 'send.auth.remove', {
+  await writeDataAudit(env.DB, request, userId, 'send', 'send.auth.remove', {
     id: send.id,
     type: send.type,
   });

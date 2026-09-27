@@ -9,7 +9,7 @@ import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
-import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { writeDataAudit } from '../services/audit-events';
 import * as folderRepo from '../services/storage-folder-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 
@@ -20,27 +20,6 @@ function notifyVaultSyncForRequest(
   revisionDate: string
 ): void {
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-}
-
-async function writeFolderAudit(
-  db: D1Database,
-  request: Request,
-  userId: string,
-  action: string,
-  metadata: Record<string, unknown>
-): Promise<void> {
-  await writeAuditEvent(db, {
-    actorUserId: userId,
-    action,
-    category: 'data',
-    level: action.includes('delete') ? 'security' : 'info',
-    targetType: 'folder',
-    targetId: typeof metadata.id === 'string' ? metadata.id : null,
-    metadata: {
-      ...metadata,
-      ...auditRequestMetadata(request),
-    },
-  });
 }
 
 // Convert internal folder to API response format
@@ -169,7 +148,7 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
     revisionDate,
     contextId: readActingDeviceIdentifier(request),
   });
-  await writeFolderAudit(env.DB, request, userId, 'folder.delete', {
+  await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete', {
     id,
   });
 
@@ -205,7 +184,7 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
         contextId: readActingDeviceIdentifier(request),
       });
     }
-    await writeFolderAudit(env.DB, request, userId, 'folder.delete.bulk', {
+    await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete.bulk', {
       count: ids.length,
     });
   }

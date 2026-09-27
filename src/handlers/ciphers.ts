@@ -27,7 +27,7 @@ import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
-import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { writeDataAudit } from '../services/audit-events';
 import { EventType, recordEvents } from '../services/events';
 import * as orgRepo from '../services/storage-org-repo';
 import {
@@ -196,27 +196,6 @@ function syncCipherComputedAliases(cipher: Cipher): Cipher {
   cipher.archivedDate = cipher.archivedAt ?? null;
   cipher.deletedDate = cipher.deletedAt ?? null;
   return cipher;
-}
-
-async function writeCipherAudit(
-  db: D1Database,
-  request: Request,
-  userId: string,
-  action: string,
-  metadata: Record<string, unknown>
-): Promise<void> {
-  await writeAuditEvent(db, {
-    actorUserId: userId,
-    action,
-    category: 'data',
-    level: action.includes('delete') ? 'security' : 'info',
-    targetType: 'cipher',
-    targetId: typeof metadata.id === 'string' ? metadata.id : null,
-    metadata: {
-      ...metadata,
-      ...auditRequestMetadata(request),
-    },
-  });
 }
 
 export async function recordCipherEvents(env: Env, request: Request, userId: string, type: number, ciphers: Cipher[]): Promise<void> {
@@ -1389,7 +1368,7 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
-  await writeCipherAudit(env.DB, request, userId, 'cipher.delete.soft', {
+  await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.soft', {
     id: cipher.id,
     type: cipher.type,
     folderId: cipher.folderId ?? null,
@@ -1416,7 +1395,7 @@ export async function handleDeleteCipherCompat(request: Request, env: Env, userI
     const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
-    await writeCipherAudit(env.DB, request, userId, 'cipher.delete.permanent', {
+    await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent', {
       id,
       type: cipher.type,
       folderId: cipher.folderId ?? null,
@@ -1441,7 +1420,7 @@ export async function handlePermanentDeleteCipher(request: Request, env: Env, us
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
-  await writeCipherAudit(env.DB, request, userId, 'cipher.delete.permanent', {
+  await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent', {
     id,
     type: cipher.type,
     folderId: cipher.folderId ?? null,
@@ -1648,7 +1627,7 @@ export async function handleBulkDeleteCiphers(request: Request, env: Env, userId
   if (revisionDate) {
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-    await writeCipherAudit(env.DB, request, userId, 'cipher.delete.soft.bulk', {
+    await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.soft.bulk', {
       count: body.ids.length,
     });
   }
@@ -1704,7 +1683,7 @@ export async function handleBulkPermanentDeleteCiphers(request: Request, env: En
   if (revisionDate) {
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-    await writeCipherAudit(env.DB, request, userId, 'cipher.delete.permanent.bulk', {
+    await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent.bulk', {
       count: ownedIds.length,
       requestedCount: ids.length,
     });

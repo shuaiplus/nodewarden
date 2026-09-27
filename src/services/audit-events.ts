@@ -209,3 +209,24 @@ export async function writeAuditEvent(db: D1Database, event: AuditEventInput): P
 export async function safeWriteAuditEvent(env: Env, event: AuditEventInput): Promise<void> {
   await writeAuditEvent(env.DB, event);
 }
+
+// Folder, cipher, attachment and Send mutations leave the same row apart from the target type;
+// deletions are security-level so they stand out in the admin log.
+export async function writeDataAudit(
+  db: D1Database,
+  request: Request,
+  userId: string,
+  targetType: 'folder' | 'cipher' | 'attachment' | 'send',
+  action: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await writeAuditEvent(db, {
+    actorUserId: userId,
+    action,
+    category: 'data',
+    level: action.includes('delete') ? 'security' : 'info',
+    targetType,
+    targetId: typeof metadata.id === 'string' ? metadata.id : null,
+    metadata: { ...metadata, ...auditRequestMetadata(request) },
+  });
+}
