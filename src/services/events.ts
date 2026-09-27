@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNull, lt, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
 import { decodeBase64Url } from 'hono/utils/encode';
 import { z } from 'zod';
 import { chunkRows, columnCount, getOrm } from '../db/client';
@@ -191,6 +191,8 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
   return jsonResponse({ object: 'list', data: data.map(eventResponse), continuationToken: rows.length > 50 && last ? cursor(last.date, last.id) : null });
 }
 
+const EVENT_PRUNE_BATCH_ROWS = 1000;
+
 // Prune bounded batches by server receipt age only, as upstream does. A shared row cap would let any
 // account's self-reported /events/collect volume evict other organizations' history, so the audit
 // row-cap mode bounds only audit_logs and events then keep the default retention age. Retention
@@ -199,6 +201,9 @@ export async function pruneEvents(env: Env): Promise<void> {
   const { retentionDays, maxEntries } = await getAuditLogSettings(env.DB);
   const days = retentionDays ?? (maxEntries ? DEFAULT_AUDIT_LOG_SETTINGS.retentionDays : null);
   if (!days) return;
-  await env.DB.prepare('DELETE FROM events WHERE id IN (SELECT id FROM events WHERE recorded_at < ? ORDER BY recorded_at,id LIMIT 1000)')
-    .bind(new Date(Date.now() - days * 86_400_000).toISOString()).run();
+  const orm = getOrm(env.DB);
+  const oldest = orm.select({ id: events.id }).from(events)
+    .where(lt(events.recordedAt, new Date(Date.now() - days * 86_400_000).toISOString()))
+    .orderBy(events.recordedAt, events.id).limit(EVENT_PRUNE_BATCH_ROWS);
+  await orm.delete(events).where(inArray(events.id, oldest));
 }
