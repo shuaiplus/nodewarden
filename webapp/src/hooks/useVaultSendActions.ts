@@ -11,7 +11,6 @@ import {
   buildNodeWardenPlainJsonDocument,
   buildPasswordProtectedBitwardenJsonString,
   buildPlainBitwardenJsonString,
-  encryptZipBytesWithPassword,
 } from '@/lib/export-formats';
 import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr } from '@/lib/crypto';
 import { decryptSingleCipher } from '@/lib/decrypt-cipher';
@@ -1362,11 +1361,10 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           }
           const attachments = await zipAttachments();
           const zipBytes = buildBitwardenZipBytes(dataJson, attachments);
-          const encryptedZip = await encryptZipBytesWithPassword(zipBytes, String(request.zipPassword || ''));
           result = {
-            fileName: buildExportFileName(format, encryptedZip.encrypted),
+            fileName: buildExportFileName(format),
             mimeType: 'application/zip',
-            bytes: encryptedZip.bytes,
+            bytes: zipBytes,
           };
         }
 

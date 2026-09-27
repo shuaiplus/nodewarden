@@ -1,11 +1,8 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { strToU8, zipSync } from 'fflate';
-import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter, configure as configureZipJs } from '@zip.js/zip.js';
 import type { PreloginKdfConfig } from './api/auth';
 import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, hkdfExpand, pbkdf2 } from './crypto';
 import type { Cipher, Folder } from './types';
-
-configureZipJs({ useWebWorkers: false });
 
 export const EXPORT_FORMATS = [
   { id: 'bitwarden_json', label: 'Bitwarden (vault as json)' },
@@ -24,7 +21,6 @@ export interface ExportRequest {
   format: ExportFormatId;
   encryptedJsonMode?: EncryptedJsonMode;
   filePassword?: string;
-  zipPassword?: string;
   masterPassword?: string;
 }
 
@@ -707,46 +703,6 @@ export function buildBitwardenZipBytes(dataJson: string, attachments: ZipAttachm
   return zipSync(files, { level: 6 });
 }
 
-export async function encryptZipBytesWithPassword(
-  zipBytes: Uint8Array,
-  passwordRaw: string
-): Promise<{ bytes: Uint8Array; encrypted: boolean }> {
-  const password = String(passwordRaw || '').trim();
-  if (!password) return { bytes: zipBytes, encrypted: false };
-  const zipReader = new ZipReader(new Uint8ArrayReader(zipBytes), { useWebWorkers: false });
-  const zipWriter = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false });
-  try {
-    const entries = await zipReader.getEntries();
-    for (const entry of entries) {
-      const filename = String(entry.filename || '').trim();
-      if (!filename) continue;
-
-      if (entry.directory) {
-        await zipWriter.add(filename, undefined, {
-          directory: true,
-          password,
-          encryptionStrength: 3,
-        });
-        continue;
-      }
-
-      const data = await entry.getData(new Uint8ArrayWriter());
-      await zipWriter.add(filename, new Uint8ArrayReader(data), {
-        password,
-        encryptionStrength: 3,
-        level: 6,
-      });
-    }
-
-    return {
-      bytes: await zipWriter.close(),
-      encrypted: true,
-    };
-  } finally {
-    await zipReader.close();
-  }
-}
-
 function nowStamp(now = new Date()): string {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -757,7 +713,7 @@ function nowStamp(now = new Date()): string {
   return `${y}${m}${d}_${hh}${mm}${ss}`;
 }
 
-export function buildExportFileName(format: ExportFormatId, zipEncrypted = false): string {
+export function buildExportFileName(format: ExportFormatId): string {
   const stamp = nowStamp();
   if (
     format === 'bitwarden_csv' ||
@@ -771,7 +727,6 @@ export function buildExportFileName(format: ExportFormatId, zipEncrypted = false
     return `bitwarden_export_${stamp}.json`;
   }
   if (format === 'bitwarden_json_zip' || format === 'bitwarden_encrypted_json_zip') {
-    if (zipEncrypted) return `bitwarden_export_${stamp}.zip`;
     return `bitwarden_export_${stamp}.zip`;
   }
   return `bitwarden_export_${stamp}.bin`;

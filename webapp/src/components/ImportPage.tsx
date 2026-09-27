@@ -2,7 +2,6 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { createPortal } from 'preact/compat';
 import { strFromU8, unzipSync, type UnzipFileInfo } from 'fflate';
-import { BlobReader, Uint8ArrayWriter, ZipReader, configure as configureZipJs } from '@zip.js/zip.js';
 import { Download, FileUp } from 'lucide-preact';
 import ConfirmDialog, { useDialogLifecycle } from '@/components/ConfirmDialog';
 import type { CiphersImportPayload } from '@/lib/api/vault';
@@ -24,8 +23,6 @@ import {
 import { base64ToBytes, decryptStr, hkdfExpand, pbkdf2 } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
 import type { Folder } from '@/lib/types';
-
-configureZipJs({ useWebWorkers: false });
 
 export interface ImportAttachmentFile {
   sourceCipherId: string | null;
@@ -288,110 +285,72 @@ interface PendingPasswordImportContext {
   attachments: ImportAttachmentFile[];
 }
 
-class ZipNeedsPasswordError extends Error {}
-class ZipInvalidPasswordError extends Error {}
-
-function looksLikeZipPasswordError(error: unknown): boolean {
-  const message = error instanceof Error ? String(error.message || '').toLowerCase() : '';
-  if (!message) return false;
-  return message.includes('password') || message.includes('encrypted');
-}
-
 function bitwardenZipAttachmentMatch(name: string): RegExpMatchArray | null {
   return name.match(/^attachments\/([^/]+)\/(.+)$/i);
 }
 
-function zipJsEntrySize(entry: unknown): number | null {
-  const size = Number((entry as { uncompressedSize?: unknown })?.uncompressedSize);
-  return Number.isFinite(size) && size >= 0 ? size : null;
-}
-
-function validateBitwardenZipEntries(entries: Awaited<ReturnType<ZipReader<unknown>['getEntries']>>): void {
-  if (entries.length > MAX_IMPORT_ZIP_ENTRY_COUNT) {
-    throw new Error(t('txt_import_zip_too_many_files'));
-  }
-
+// Bitwarden zips carry data.json plus attachments/<cipherId>/<file>; anything else is skipped before inflating.
+function createBitwardenZipFilter(): (file: UnzipFileInfo) => boolean {
+  let entryCount = 0;
   let totalAttachmentBytes = 0;
-  for (const entry of entries) {
-    if (entry.directory) continue;
-    const name = zipEntryName(entry.filename);
-    assertSafeZipEntryName(name);
-    const lower = name.toLowerCase();
-    const size = zipJsEntrySize(entry);
-    if (lower === 'data.json' && size != null) {
-      assertImportEntrySize(size, MAX_IMPORT_TEXT_ENTRY_BYTES);
-    } else if (bitwardenZipAttachmentMatch(name) && size != null) {
-      assertImportEntrySize(size, MAX_IMPORT_ATTACHMENT_BYTES);
-      totalAttachmentBytes += size;
-      if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
-        throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
-      }
+  return (entry: UnzipFileInfo): boolean => {
+    entryCount += 1;
+    if (entryCount > MAX_IMPORT_ZIP_ENTRY_COUNT) {
+      throw new Error(t('txt_import_zip_too_many_files'));
     }
-  }
+    const name = zipEntryName(entry.name);
+    if (name.endsWith('/')) return false;
+    assertSafeZipEntryName(name);
+    const isDataJson = name.toLowerCase() === 'data.json';
+    if (!isDataJson && !bitwardenZipAttachmentMatch(name)) return false;
+
+    const maxEntryBytes = isDataJson ? MAX_IMPORT_TEXT_ENTRY_BYTES : MAX_IMPORT_ATTACHMENT_BYTES;
+    const originalSize = Number(entry.originalSize);
+    if (!Number.isFinite(originalSize) || originalSize < 0) {
+      throw new Error(t('txt_import_zip_entry_too_large', { size: formatMiB(maxEntryBytes) }));
+    }
+    assertImportEntrySize(originalSize, maxEntryBytes);
+    if (isDataJson) return true;
+    totalAttachmentBytes += originalSize;
+    if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
+      throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
+    }
+    return true;
+  };
 }
 
-async function readBitwardenZipPayload(
-  file: File,
-  passwordRaw: string
-): Promise<{ jsonText: string; attachments: ImportAttachmentFile[] }> {
-  const password = String(passwordRaw || '').trim();
+async function readBitwardenZipPayload(file: File): Promise<{ jsonText: string; attachments: ImportAttachmentFile[] }> {
   assertImportZipSize(file.size);
-  const reader = new ZipReader(new BlobReader(file), { useWebWorkers: false });
-  try {
-    const entries = await reader.getEntries();
-    if (!entries.length) throw new Error(t('txt_import_empty_zip_archive'));
-    validateBitwardenZipEntries(entries);
+  const unzipped = unzipSync(new Uint8Array(await file.arrayBuffer()), { filter: createBitwardenZipFilter() });
 
-    let jsonText = '';
-    let totalAttachmentBytes = 0;
-    const attachments: ImportAttachmentFile[] = [];
-    const options = password ? { password } : undefined;
-
-    for (const entry of entries) {
-      if (entry.directory) continue;
-      const name = zipEntryName(entry.filename);
-      if (!name) continue;
-      assertSafeZipEntryName(name);
-
-      const bytes = await entry.getData(new Uint8ArrayWriter(), options);
-      const lower = name.toLowerCase();
-      if (lower === 'data.json') {
-        assertImportEntrySize(bytes.byteLength, MAX_IMPORT_TEXT_ENTRY_BYTES);
-        jsonText = new TextDecoder().decode(bytes);
-        continue;
-      }
-
-      const attachmentMatch = bitwardenZipAttachmentMatch(name);
-      if (!attachmentMatch) continue;
-      assertImportEntrySize(bytes.byteLength, MAX_IMPORT_ATTACHMENT_BYTES);
-      totalAttachmentBytes += bytes.byteLength;
-      if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
-        throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
-      }
-      const sourceCipherId = String(attachmentMatch[1] || '').trim() || null;
-      const fileName = String(attachmentMatch[2] || '').trim() || 'attachment.bin';
-      attachments.push({
-        sourceCipherId,
-        sourceCipherIndex: null,
-        fileName,
-        bytes,
-      });
+  let jsonText = '';
+  let totalAttachmentBytes = 0;
+  const attachments: ImportAttachmentFile[] = [];
+  for (const [rawName, bytes] of Object.entries(unzipped)) {
+    const name = zipEntryName(rawName);
+    if (name.toLowerCase() === 'data.json') {
+      assertImportEntrySize(bytes.byteLength, MAX_IMPORT_TEXT_ENTRY_BYTES);
+      jsonText = strFromU8(bytes);
+      continue;
     }
 
-    if (!jsonText) throw new Error(t('txt_import_data_json_not_found'));
-    return { jsonText, attachments };
-  } catch (error) {
-    if (looksLikeZipPasswordError(error)) {
-      if (!password) throw new ZipNeedsPasswordError(t('txt_import_zip_password_required'));
-      throw new ZipInvalidPasswordError(t('txt_import_invalid_zip_password'));
+    const attachmentMatch = bitwardenZipAttachmentMatch(name);
+    if (!attachmentMatch) continue;
+    assertImportEntrySize(bytes.byteLength, MAX_IMPORT_ATTACHMENT_BYTES);
+    totalAttachmentBytes += bytes.byteLength;
+    if (totalAttachmentBytes > MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) {
+      throw new Error(t('txt_import_zip_expands_too_large', { size: formatMiB(MAX_IMPORT_ATTACHMENT_TOTAL_BYTES) }));
     }
-    if (!password && error instanceof Error && /invalid|corrupt|unsupported/.test(error.message.toLowerCase())) {
-      throw error;
-    }
-    throw error;
-  } finally {
-    await reader.close();
+    attachments.push({
+      sourceCipherId: String(attachmentMatch[1] || '').trim() || null,
+      sourceCipherIndex: null,
+      fileName: String(attachmentMatch[2] || '').trim() || 'attachment.bin',
+      bytes,
+    });
   }
+
+  if (!jsonText) throw new Error(t('txt_import_data_json_not_found'));
+  return { jsonText, attachments };
 }
 
 function parseNodeWardenAttachmentArray(raw: unknown): ImportAttachmentFile[] {
@@ -428,16 +387,11 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [importPassword, setImportPassword] = useState('');
   const [pendingPasswordImport, setPendingPasswordImport] = useState<PendingPasswordImportContext | null>(null);
-  const [zipPasswordDialogOpen, setZipPasswordDialogOpen] = useState(false);
-  const [zipImportPassword, setZipImportPassword] = useState('');
-  const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
-  const [isZipPasswordSubmitting, setIsZipPasswordSubmitting] = useState(false);
   const [folderMode, setFolderMode] = useState<'original' | 'none' | 'target'>('original');
   const [targetFolderId, setTargetFolderId] = useState('');
   const [exportFormat, setExportFormat] = useState<ExportFormatId>('bitwarden_json');
   const [encryptedJsonMode, setEncryptedJsonMode] = useState<EncryptedJsonMode>('account');
   const [exportPassword, setExportPassword] = useState('');
-  const [zipPassword, setZipPassword] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [exportAuthDialogOpen, setExportAuthDialogOpen] = useState(false);
   const [exportAuthPassword, setExportAuthPassword] = useState('');
@@ -521,37 +475,27 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
     setIsSubmitting(true);
     try {
       if (source === 'bitwarden_zip') {
+        const bundle = await readBitwardenZipPayload(file);
+        let parsed: unknown;
         try {
-          const bundle = await readBitwardenZipPayload(file, '');
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(bundle.jsonText);
-          } catch {
-            throw new Error(t('txt_import_invalid_json_file'));
-          }
-          if (isPasswordProtectedExport(parsed)) {
-            setPendingPasswordImport({
-              parsed,
-              source: 'bitwarden_zip',
-              attachments: bundle.attachments,
-            });
-            setImportPassword('');
-            setPasswordDialogOpen(true);
-            return;
-          }
-          const summary = await runBitwardenJsonImport(parsed, bundle.attachments);
-          setImportSummary(summary);
-          setFile(null);
-          return;
-        } catch (error) {
-          if (error instanceof ZipNeedsPasswordError) {
-            setPendingZipFile(file);
-            setZipImportPassword('');
-            setZipPasswordDialogOpen(true);
-            return;
-          }
-          throw error;
+          parsed = JSON.parse(bundle.jsonText);
+        } catch {
+          throw new Error(t('txt_import_invalid_json_file'));
         }
+        if (isPasswordProtectedExport(parsed)) {
+          setPendingPasswordImport({
+            parsed,
+            source: 'bitwarden_zip',
+            attachments: bundle.attachments,
+          });
+          setImportPassword('');
+          setPasswordDialogOpen(true);
+          return;
+        }
+        const summary = await runBitwardenJsonImport(parsed, bundle.attachments);
+        setImportSummary(summary);
+        setFile(null);
+        return;
       }
 
       const text = await readImportText(file, source);
@@ -616,56 +560,14 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
     }
   }
 
-  async function handleZipPasswordImportConfirm() {
-    if (isZipPasswordSubmitting) return;
-    if (!pendingZipFile) return;
-    setIsZipPasswordSubmitting(true);
-    try {
-      const bundle = await readBitwardenZipPayload(pendingZipFile, zipImportPassword);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(bundle.jsonText);
-      } catch {
-        throw new Error(t('txt_import_invalid_json_file'));
-      }
-      if (isPasswordProtectedExport(parsed)) {
-        setPendingPasswordImport({
-          parsed,
-          source: 'bitwarden_zip',
-          attachments: bundle.attachments,
-        });
-        setImportPassword('');
-        setPasswordDialogOpen(true);
-      } else {
-        const summary = await runBitwardenJsonImport(parsed, bundle.attachments);
-        setImportSummary(summary);
-        setFile(null);
-      }
-      setZipPasswordDialogOpen(false);
-      setPendingZipFile(null);
-      setZipImportPassword('');
-    } catch (error) {
-      if (error instanceof ZipInvalidPasswordError) {
-        onNotify('error', t('txt_import_invalid_zip_password'));
-        return;
-      }
-      const message = error instanceof Error ? error.message : t('txt_import_failed');
-      onNotify('error', message);
-    } finally {
-      setIsZipPasswordSubmitting(false);
-    }
-  }
-
   const exportNeedsMode =
     exportFormat === 'bitwarden_encrypted_json' ||
     exportFormat === 'bitwarden_encrypted_json_zip' ||
     exportFormat === 'nodewarden_encrypted_json';
   const exportNeedsFilePassword = exportNeedsMode && encryptedJsonMode === 'password';
-  const exportIsZip = exportFormat === 'bitwarden_json_zip' || exportFormat === 'bitwarden_encrypted_json_zip';
 
   async function runExportWithMasterPassword(masterPassword: string) {
     const filePassword = exportPassword.trim();
-    const zipPass = zipPassword.trim();
     if (exportNeedsFilePassword && !filePassword) {
       onNotify('error', t('txt_import_file_password_required'));
       return;
@@ -677,7 +579,6 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         format: exportFormat,
         encryptedJsonMode: exportNeedsMode ? encryptedJsonMode : undefined,
         filePassword,
-        zipPassword: exportIsZip ? zipPass : '',
         masterPassword,
       });
       onNotify('success', t('txt_export_completed'));
@@ -839,18 +740,6 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
               />
             </label>
           )}
-
-          {exportIsZip && (
-            <label className="field field-span-2">
-              <span>{t('txt_zip_password_optional')}</span>
-              <input
-                className="input"
-                type="password"
-                value={zipPassword}
-                onInput={(e) => setZipPassword((e.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-          )}
         </div>
 
         <div className="actions">
@@ -913,34 +802,6 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
             type="password"
             value={importPassword}
             onInput={(e) => setImportPassword((e.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={zipPasswordDialogOpen}
-        title={t('txt_import_encrypted_zip_title')}
-        message={t('txt_import_encrypted_zip_message')}
-        confirmText={isZipPasswordSubmitting ? t('txt_loading') : t('txt_import')}
-        cancelText={t('txt_cancel')}
-        showIcon={false}
-        confirmDisabled={isZipPasswordSubmitting}
-        cancelDisabled={isZipPasswordSubmitting}
-        onConfirm={() => void handleZipPasswordImportConfirm()}
-        onCancel={() => {
-          if (isZipPasswordSubmitting) return;
-          setZipPasswordDialogOpen(false);
-          setZipImportPassword('');
-          setPendingZipFile(null);
-        }}
-      >
-        <label className="field">
-          <span>{t('txt_zip_password')}</span>
-          <input
-            className="input"
-            type="password"
-            value={zipImportPassword}
-            onInput={(e) => setZipImportPassword((e.currentTarget as HTMLInputElement).value)}
           />
         </label>
       </ConfirmDialog>
