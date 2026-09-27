@@ -1,6 +1,6 @@
 import type { Env, User } from '../types';
 import { AuthService } from '../services/auth';
-import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { createEmergencyAccessInviteToken, verifyEmergencyAccessInviteToken } from '../utils/jwt';
 import { LIMITS } from '../config/limits';
@@ -9,7 +9,7 @@ import { configuredVaultOrigin, EMAIL_PATTERN, mailStatusCheck, readMailConfig, 
 import { runInBackground } from '../services/mail-notify';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { cipherToResponse } from './ciphers';
-import { parseMasterPasswordUpdate } from './accounts';
+import { MasterPasswordFields, masterPasswordUpdate } from './accounts';
 import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
@@ -310,10 +310,10 @@ export async function handleEmergencyAccessRoute(
     if (!canAct(record, user.id, EmergencyAccessType.Takeover)) return errorResponse('Emergency access not valid', 400);
     const grantor = await userRepo.getUserById(env.DB, record.grantorId);
     if (!grantor) return errorResponse('Grantor user not found', 404);
-    const body = await parseJsonBody(request);
+    const body = await parseBody(request, MasterPasswordFields);
     if (body instanceof Response) return body;
-    const update = parseMasterPasswordUpdate(body, grantor);
-    if (!update.ok) return update.response;
+    const update = masterPasswordUpdate(body, grantor);
+    if (update instanceof Response) return update;
     const auth = new AuthService(env);
     grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, grantor.email);
     grantor.key = update.key;

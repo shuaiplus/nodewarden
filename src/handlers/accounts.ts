@@ -14,7 +14,8 @@ import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCo
 import { upsertCredentialAccount, credentialAccountStatement } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent, auditEventStatement } from '../services/audit-events';
-import { errorResponse, jsonResponse, parseBody, parseJsonBody, readString, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
+import { z } from 'zod';
+import { bodyIssues, errorResponse, jsonResponse, parseBody, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
@@ -24,7 +25,7 @@ import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
 import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken, verifySsoEmail2faSessionToken, createDeleteRecoverToken, verifyDeleteRecoverToken } from '../utils/jwt';
-import { isOpenRegistrationEnabled, RegisterSchema } from '../services/register-payload';
+import { isOpenRegistrationEnabled, KdfSettings, MasterPasswordHint, RegisterSchema } from '../services/register-payload';
 import {
   mailStatusCheck,
   type MailOutcome,
@@ -70,15 +71,6 @@ function looksLikeEncString(value: string): boolean {
   return parts.length >= 2;
 }
 
-function normalizeRecoveryCodeInput(input: string): string {
-  return String(input || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
-}
-
-function normalizeMasterPasswordHint(input: string | null | undefined): string | null {
-  const normalized = String(input || '').trim();
-  return normalized ? normalized : null;
-}
-
 function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
   const secret = (env.JWT_SECRET || '').trim();
   if (!secret) return 'missing';
@@ -97,123 +89,101 @@ async function verifyUserSecret(
 }
 
 
-function readNestedString(source: unknown, path: string[]): string {
-  let current = source;
-  for (const key of path) {
-    if (!current || typeof current !== 'object') return '';
-    current = (current as Record<string, unknown>)[key];
-  }
-  return typeof current === 'string' ? current : '';
+// Account bodies read an absent or wrongly typed string as empty; the verification that follows rejects it.
+const text = z.string().catch('');
+const trimmed = z.string().trim().catch('');
+
+// Mail goes to, and codes bind to, one address the transport accepts.
+export const emailAddress = (error: string) => z.string({ error })
+  .trim()
+  .toLowerCase()
+  .refine((email) => email.length <= 256 && EMAIL_PATTERN.test(email), { error });
+
+// User verification takes the master password hash, which older clients also post as otp or secret.
+const VerifiedBody = z.object({ masterPasswordHash: text, otp: text, OTP: text, secret: text });
+const verificationSecret = (body: z.output<typeof VerifiedBody>) => body.masterPasswordHash || body.otp || body.OTP || body.secret;
+
+// Older clients post the current master password hash as master_password_hash or password.
+const CurrentPasswordHash = z.object({ masterPasswordHash: text, master_password_hash: text, password: text })
+  .transform((body) => (body.masterPasswordHash || body.master_password_hash || body.password).trim())
+  .refine(Boolean, 'masterPasswordHash is required');
+
+// Clients may echo the account KDF; changing it takes the KDF endpoint, which this server does not support.
+function unchangedKdf(user: User, endpoint: 'password' | 'email') {
+  const same = (expected: unknown) => z.unknown()
+    .refine((value) => value === expected, { error: `KDF settings cannot be changed with the ${endpoint} endpoint` })
+    .optional();
+  return {
+    kdf: same(user.kdfType),
+    kdfType: same(user.kdfType),
+    kdfIterations: same(user.kdfIterations),
+    kdfMemory: same(user.kdfMemory ?? null),
+    kdfParallelism: same(user.kdfParallelism ?? null),
+  };
 }
 
-function readNestedNumber(source: unknown, path: string[]): number | undefined {
-  let current = source;
-  for (const key of path) {
-    if (!current || typeof current !== 'object') return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return typeof current === 'number' ? current : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-type MasterPasswordUpdate =
-  | { ok: true; masterPasswordHash: string; key: string }
-  | { ok: false; response: Response };
+const masterPasswordHalf = { salt: text, kdf: KdfSettings };
 
 // A new master password arrives either as web 2026.9's nested authenticationData/unlockData
 // (server MasterPasswordAuthenticationData/UnlockData) or as legacy newMasterPasswordHash + key.
-// Password change and emergency takeover share this parse: the nested halves must agree with each
-// other and with the user's stored KDF and email salt, otherwise the stored hash and wrapped user
-// key stop matching what clients derive at the next login.
-export function parseMasterPasswordUpdate(body: unknown, user: User): MasterPasswordUpdate {
-  const reject = (message: string): MasterPasswordUpdate => ({ ok: false, response: errorResponse(message, 400) });
-  if (!isRecord(body)) return reject('Request body must be a JSON object');
-  const hasAuthenticationData = isRecord(body.authenticationData);
-  const hasUnlockData = isRecord(body.unlockData);
-  if (hasAuthenticationData !== hasUnlockData) {
-    return reject('authenticationData and unlockData must be provided together');
-  }
+export const MasterPasswordFields = z.object({
+  authenticationData: z.object({ ...masterPasswordHalf, masterPasswordAuthenticationHash: trimmed }).optional().catch(undefined),
+  unlockData: z.object({ ...masterPasswordHalf, masterKeyWrappedUserKey: trimmed }).optional().catch(undefined),
+  newMasterPasswordHash: trimmed,
+  newKey: trimmed,
+  key: trimmed,
+}, { error: 'Request body must be a JSON object' });
 
-  const legacyMasterPasswordHash = typeof body.newMasterPasswordHash === 'string'
-    ? body.newMasterPasswordHash.trim()
-    : '';
-  const legacyKey = typeof body.newKey === 'string' && body.newKey.trim()
-    ? body.newKey.trim()
-    : typeof body.key === 'string'
-      ? body.key.trim()
-      : '';
-  let newMasterPasswordHash: string;
-  let nextKey: string;
+// Password change, email change and emergency takeover share this check: the nested halves must agree
+// with each other and with the user's stored KDF and email salt, otherwise the stored hash and wrapped
+// user key stop matching what clients derive at the next login.
+export function masterPasswordUpdate(body: z.output<typeof MasterPasswordFields>, user: User): { masterPasswordHash: string; key: string } | Response {
+  const reject = (message: string) => errorResponse(message, 400);
+  const { authenticationData: auth, unlockData: unlock } = body;
+  if (!auth !== !unlock) return reject('authenticationData and unlockData must be provided together');
+  const update = auth && unlock
+    ? { masterPasswordHash: auth.masterPasswordAuthenticationHash, key: unlock.masterKeyWrappedUserKey }
+    : { masterPasswordHash: body.newMasterPasswordHash, key: body.newKey || body.key };
 
-  if (hasAuthenticationData && hasUnlockData) {
-    newMasterPasswordHash = readNestedString(body, ['authenticationData', 'masterPasswordAuthenticationHash']).trim();
-    nextKey = readNestedString(body, ['unlockData', 'masterKeyWrappedUserKey']).trim();
-    if (!newMasterPasswordHash || !nextKey) {
-      return reject('authenticationData and unlockData are incomplete');
-    }
-
-    const authKdf = readNestedNumber(body, ['authenticationData', 'kdf', 'kdfType']);
-    const authIterations = readNestedNumber(body, ['authenticationData', 'kdf', 'iterations']);
-    const authMemory = readNestedNumber(body, ['authenticationData', 'kdf', 'memory']);
-    const authParallelism = readNestedNumber(body, ['authenticationData', 'kdf', 'parallelism']);
-    const unlockKdf = readNestedNumber(body, ['unlockData', 'kdf', 'kdfType']);
-    const unlockIterations = readNestedNumber(body, ['unlockData', 'kdf', 'iterations']);
-    const unlockMemory = readNestedNumber(body, ['unlockData', 'kdf', 'memory']);
-    const unlockParallelism = readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
-    const authSalt = readNestedString(body, ['authenticationData', 'salt']);
-    const unlockSalt = readNestedString(body, ['unlockData', 'salt']);
-    const expectedSalt = user.email.trim().toLowerCase();
-
-    if (authKdf === undefined || authIterations === undefined || unlockKdf === undefined || unlockIterations === undefined) {
+  if (auth && unlock) {
+    if (!update.masterPasswordHash || !update.key) return reject('authenticationData and unlockData are incomplete');
+    const [authKdf, unlockKdf] = [auth.kdf, unlock.kdf];
+    if (authKdf?.kdfType === undefined || authKdf.iterations === undefined || unlockKdf?.kdfType === undefined || unlockKdf.iterations === undefined) {
       return reject('authenticationData and unlockData must include KDF settings');
     }
-    if (
-      authKdf !== unlockKdf ||
-      authIterations !== unlockIterations ||
-      authMemory !== unlockMemory ||
-      authParallelism !== unlockParallelism
-    ) {
+    if ((['kdfType', 'iterations', 'memory', 'parallelism'] as const).some((name) => authKdf[name] !== unlockKdf[name])) {
       return reject('authenticationData and unlockData must use the same KDF settings');
     }
-    if (!authSalt || authSalt !== unlockSalt || authSalt !== expectedSalt) {
+    if (!auth.salt || auth.salt !== unlock.salt || auth.salt !== user.email.trim().toLowerCase()) {
       return reject('Invalid master password salt');
     }
     if (
-      authKdf !== user.kdfType ||
-      authIterations !== user.kdfIterations ||
-      (authKdf === 1 && (authMemory !== user.kdfMemory || authParallelism !== user.kdfParallelism))
+      authKdf.kdfType !== user.kdfType ||
+      authKdf.iterations !== user.kdfIterations ||
+      (authKdf.kdfType === 1 && (authKdf.memory !== user.kdfMemory || authKdf.parallelism !== user.kdfParallelism))
     ) {
       return reject('KDF settings cannot be changed with the password endpoint');
     }
-  } else {
-    if (!legacyMasterPasswordHash || !legacyKey) {
-      return reject('newMasterPasswordHash and key must be provided together');
-    }
-    newMasterPasswordHash = legacyMasterPasswordHash;
-    nextKey = legacyKey;
+  } else if (!update.masterPasswordHash || !update.key) {
+    return reject('newMasterPasswordHash and key must be provided together');
   }
 
-  if (!looksLikeEncString(nextKey)) {
-    return reject('new key is not a valid encrypted string');
-  }
-  return { ok: true, masterPasswordHash: newMasterPasswordHash, key: nextKey };
+  if (!looksLikeEncString(update.key)) return reject('new key is not a valid encrypted string');
+  return update;
 }
 
-// Account routes accept form posts from older clients as well as JSON; either way keys are normalized.
-async function readRequestBody(request: Request): Promise<Record<string, unknown> | Response> {
+// Account routes accept form posts from older clients as well as JSON; JSON keys are normalized.
+async function readRequestBody<S extends z.ZodType>(request: Request, schema: S): Promise<z.output<S> | Response> {
+  let body: unknown;
   try {
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      return Object.fromEntries((await request.formData()).entries()) as Record<string, unknown>;
-    }
-    const body: unknown = normalizeJsonKeys(await request.json());
-    return isRecord(body) ? body : errorResponse('Invalid JSON', 400);
+    body = request.headers.get('content-type')?.includes('application/x-www-form-urlencoded')
+      ? Object.fromEntries((await request.formData()).entries())
+      : normalizeJsonKeys(await request.json());
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
+  const result = schema.safeParse(body);
+  return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
 }
 
 function masterPasswordPolicyResponse(): Record<string, unknown> {
@@ -406,16 +376,10 @@ export async function handleRegisterSendVerificationEmail(request: Request, env:
     return errorResponse(unsafe === 'missing' ? 'JWT_SECRET is not set' : 'JWT_SECRET must be at least 32 characters', 400);
   }
 
-  let body: { email?: string; name?: string };
-  try {
-    body = await request.json() as { email?: string; name?: string };
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const email = String(body.email || '').trim().toLowerCase();
-  const name = String(body.name || '').trim() || null;
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const body = await parseBody(request, z.object({ email: emailAddress('Invalid email address'), name: trimmed }));
+  if (body instanceof Response) return body;
+  const { email } = body;
+  const name = body.name || null;
 
   const userCount = await userRepo.getUserCount(env.DB);
   if (userCount > 0 && !isOpenRegistrationEnabled(env)) {
@@ -448,14 +412,11 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     return errorResponse('Client IP is required', 403);
   }
 
-  const body = await parseJsonBody<{ email?: string }>(request);
-
+  const body = await parseBody(request, z.object({
+    email: z.string({ error: 'Email is required' }).trim().toLowerCase().min(1, { error: 'Email is required' }),
+  }));
   if (body instanceof Response) return body;
-
-  const email = String(body.email || '').trim().toLowerCase();
-  if (!email) {
-    return errorResponse('Email is required', 400);
-  }
+  const { email } = body;
 
   const rateLimit = new RateLimitService(env);
   const minuteBudget = await rateLimit.consumeStrictBudgetWithWindow(
@@ -508,14 +469,14 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     runInBackground('password-hint', async () => {
       const user = await userRepo.getUser(env.DB, email);
       if (!user || user.status !== 'active') return;
-      const hint = normalizeMasterPasswordHint(user.masterPasswordHint);
+      const hint = user.masterPasswordHint?.trim();
       if (hint) await sendMail(env, user.email, 'passwordHint', { hint });
       else await sendMail(env, user.email, 'noPasswordHint', {});
     });
     return jsonResponse({ object: 'passwordHint', hasHint: false, masterPasswordHint: null, sentByEmail: true });
   }
   const user = await userRepo.getUser(env.DB, email);
-  const hint = user?.status === 'active' ? normalizeMasterPasswordHint(user.masterPasswordHint) : null;
+  const hint = user?.status === 'active' ? user.masterPasswordHint?.trim() || null : null;
   return jsonResponse({
     object: 'passwordHint',
     hasHint: !!hint,
@@ -527,10 +488,9 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
 export async function handleDeleteAccount(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, VerifiedBody);
   if (body instanceof Response) return body;
-  const secret = readString(body, 'masterPasswordHash');
-  if (!await verifyUserSecret(new AuthService(env), user, secret)) return errorResponse('User verification failed.', 400);
+  if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash)) return errorResponse('User verification failed.', 400);
   const result = await deleteUserAccount(env, userId, {
     actorUserId: userId,
     action: 'user.account.delete',
@@ -550,13 +510,12 @@ export async function handleDeleteAccount(request: Request, env: Env, userId: st
 export async function handleEmailToken(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, VerifiedBody.extend({ newEmail: emailAddress('Invalid email address') }));
   if (body instanceof Response) return body;
-  if (!await verifyUserSecret(new AuthService(env), user, readString(body, 'masterPasswordHash'))) {
+  if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash)) {
     return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
   }
-  const email = readString(body, 'newEmail').trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const email = body.newEmail;
   if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
   const target = { purpose: 'email-change' as const, subject: user.id, binding: `${user.securityStamp}:${email}` };
   let outcome: MailOutcome;
@@ -574,19 +533,16 @@ export async function handleEmailToken(request: Request, env: Env, userId: strin
 export async function handleChangeEmail(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, MasterPasswordFields.extend({
+    masterPasswordHash: text, newEmail: emailAddress('Invalid email address'), token: text, ...unchangedKdf(user, 'email'),
+  }));
   if (body instanceof Response) return body;
   const auth = new AuthService(env);
-  if (!await verifyUserSecret(auth, user, readString(body, 'masterPasswordHash'))) return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
-  const email = readString(body, 'newEmail').trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
-  const kdfFields = { kdf: user.kdfType, kdfType: user.kdfType, kdfIterations: user.kdfIterations, kdfMemory: user.kdfMemory ?? null, kdfParallelism: user.kdfParallelism ?? null };
-  for (const [name, expected] of Object.entries(kdfFields)) {
-    if (body[name] !== undefined && body[name] !== expected) return errorResponse('KDF settings cannot be changed with the email endpoint', 400);
-  }
-  const update = parseMasterPasswordUpdate(body, { ...user, email });
-  if (!update.ok) return update.response;
-  if (!await redeemEmailOtp(env, { purpose: 'email-change', subject: user.id, binding: `${user.securityStamp}:${email}` }, readString(body, 'token'))) return errorResponse('Invalid token.', 400);
+  if (!await verifyUserSecret(auth, user, body.masterPasswordHash)) return errorResponse('Invalid password.', 400, {}, { MasterPasswordHash: ['Invalid password.'] });
+  const email = body.newEmail;
+  const update = masterPasswordUpdate(body, { ...user, email });
+  if (update instanceof Response) return update;
+  if (!await redeemEmailOtp(env, { purpose: 'email-change', subject: user.id, binding: `${user.securityStamp}:${email}` }, body.token)) return errorResponse('Invalid token.', 400);
   const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash, email);
   const stamp = generateUUID();
   const now = new Date().toISOString();
@@ -618,10 +574,9 @@ export async function handleChangeEmail(request: Request, env: Env, userId: stri
 }
 
 export async function handleDeleteRecover(request: Request, env: Env): Promise<Response> {
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, z.object({ email: emailAddress('Invalid email address') }));
   if (body instanceof Response) return body;
-  const email = readString(body, 'email').trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const { email } = body;
   const clientId = getClientIdentifier(request);
   if (!clientId) return errorResponse('Client IP is required', 403);
   const budget = await new RateLimitService(env).consumeStrictBudgetWithWindow(`delete-recover:${clientId}`, LIMITS.rateLimit.deleteRecoverPerIpPerHour, 3600);
@@ -640,12 +595,10 @@ export async function handleDeleteRecover(request: Request, env: Env): Promise<R
 
 export async function handleDeleteRecoverToken(request: Request, env: Env): Promise<Response> {
   const invalid = () => errorResponse('Invalid token.', 400);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, z.object({ userId: text, token: text }));
   if (body instanceof Response) return invalid();
-  const userId = readString(body, 'userId');
-  const token = readString(body, 'token');
-  const user = userId ? await userRepo.getUserById(env.DB, userId) : null;
-  if (!user || user.status !== 'active' || !await verifyDeleteRecoverToken(env, user, token)) return invalid();
+  const user = body.userId ? await userRepo.getUserById(env.DB, body.userId) : null;
+  if (!user || user.status !== 'active' || !await verifyDeleteRecoverToken(env, user, body.token)) return invalid();
   const result = await deleteUserAccount(env, user.id, {
     actorUserId: null, action: 'user.account.delete_recover', category: 'security', level: 'security',
     targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
@@ -670,16 +623,10 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await parseJsonBody<{ masterPasswordHint?: string | null; }>(request);
-
+  const body = await parseBody(request, z.object({ masterPasswordHint: MasterPasswordHint }));
   if (body instanceof Response) return body;
 
-  const masterPasswordHint = normalizeMasterPasswordHint(body.masterPasswordHint);
-  if (masterPasswordHint && masterPasswordHint.length > 120) {
-    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
-  }
-
-  user.masterPasswordHint = masterPasswordHint;
+  user.masterPasswordHint = body.masterPasswordHint;
   user.updatedAt = new Date().toISOString();
   if (!await userRepo.saveUser(env.DB, user, ['masterPasswordHint'])) return errorResponse('User verification failed.', 400);
   await writeAuditEvent(env.DB, {
@@ -705,11 +652,10 @@ export async function handleSetVerifyDevices(request: Request, env: Env, userId:
   if (!user) return errorResponse('User not found', 404);
   const mail = readMailConfig(env);
   if (mail.kind !== 'enabled' || !mail.newDeviceVerification) return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, VerifiedBody.extend({ verifyDevices: z.boolean({ error: 'verifyDevices must be true or false' }) }));
   if (body instanceof Response) return body;
-  if (!await verifyUserSecret(new AuthService(env), user, readString(body, 'masterPasswordHash'))) return errorResponse('User verification failed.', 400);
-  const verifyDevices = body.verifyDevices;
-  if (typeof verifyDevices !== 'boolean') return errorResponse('verifyDevices must be true or false', 400);
+  if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash)) return errorResponse('User verification failed.', 400);
+  const { verifyDevices } = body;
   user.verifyDevices = verifyDevices;
   if (!await userRepo.saveUser(env.DB, user, ['verifyDevices'])) return errorResponse('User verification failed.', 400);
   await revisionRepo.updateRevisionDate(env.DB, user.id);
@@ -722,17 +668,16 @@ export async function handleResendNewDeviceOtp(request: Request, env: Env): Prom
   const mail = readMailConfig(env);
   if (mail.kind === 'disabled') return unsupportedResponse('Email delivery is not supported by this server.');
   if (mail.kind === 'misconfigured') return errorResponse('Email sending is not configured', 503);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, VerifiedBody.extend({ email: z.string().trim().toLowerCase().catch(''), deviceType: text }));
   if (body instanceof Response) return body;
   if (mail.newDeviceVerification) runInBackground('new-device-resend', async () => {
-    const email = readString(body, 'email').trim().toLowerCase();
-    const user = email ? await userRepo.getUser(env.DB, email) : null;
+    const user = body.email ? await userRepo.getUser(env.DB, body.email) : null;
     if (!user || user.status !== 'active' || !user.verifyDevices
       || !(Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000)) return;
-    if (!await verifyUserSecret(new AuthService(env), user, readString(body, 'masterPasswordHash'))) return;
+    if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash)) return;
     const hasPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
     if (twoFactorProviders(user, hasPasskey).length || !await env.DB.prepare('SELECT 1 FROM devices WHERE user_id = ? LIMIT 1').bind(user.id).first()) return;
-    const device = readAuthRequestDeviceInfo({ deviceType: readString(body, 'deviceType') }, request);
+    const device = readAuthRequestDeviceInfo({ deviceType: body.deviceType }, request);
     notifyNewDeviceVerification(env, request, user, device.deviceType);
   });
   return jsonResponse('');
@@ -768,7 +713,7 @@ export async function handleSetKeys(request: Request, env: Env, userId: string):
     return errorResponse('User not found', 404);
   }
 
-  const body = await parseJsonBody<{ masterPasswordHash?: string; key?: string; encryptedPrivateKey?: string; publicKey?: string; }>(request);
+  const body = await parseBody(request, z.object({ masterPasswordHash: text, key: text, encryptedPrivateKey: text, publicKey: text }));
 
   if (body instanceof Response) return body;
 
@@ -822,7 +767,16 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await parseJsonBody<{ masterPasswordHash?: string; currentPasswordHash?: string; newMasterPasswordHash?: string; masterPasswordHint?: string | null; key?: string; newKey?: string; encryptedPrivateKey?: string; newEncryptedPrivateKey?: string; publicKey?: string; newPublicKey?: string; kdf?: number; kdfIterations?: number; kdfMemory?: number; kdfParallelism?: number; authenticationData?: Record<string, unknown>; unlockData?: Record<string, unknown>; }>(request);
+  const body = await parseBody(request, MasterPasswordFields.extend({
+    masterPasswordHash: text,
+    currentPasswordHash: text,
+    masterPasswordHint: MasterPasswordHint.optional(),
+    encryptedPrivateKey: text,
+    newEncryptedPrivateKey: text,
+    publicKey: text,
+    newPublicKey: text,
+    ...unchangedKdf(user, 'password'),
+  }));
 
   if (body instanceof Response) return body;
 
@@ -831,35 +785,22 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
 
-  const update = parseMasterPasswordUpdate(body, user);
-  if (!update.ok) return update.response;
+  const update = masterPasswordUpdate(body, user);
+  if (update instanceof Response) return update;
 
   const nextPrivateKey = body.newEncryptedPrivateKey || body.encryptedPrivateKey;
   const nextPublicKey = body.newPublicKey || body.publicKey;
   if (nextPrivateKey && !looksLikeEncString(nextPrivateKey)) {
     return errorResponse('new encryptedPrivateKey is not a valid encrypted string', 400);
   }
-
-  if (
-    (typeof body.kdf === 'number' && body.kdf !== user.kdfType) ||
-    (typeof body.kdfIterations === 'number' && body.kdfIterations !== user.kdfIterations) ||
-    (typeof body.kdfMemory === 'number' && body.kdfMemory !== user.kdfMemory) ||
-    (typeof body.kdfParallelism === 'number' && body.kdfParallelism !== user.kdfParallelism)
-  ) {
-    return errorResponse('KDF settings cannot be changed with the password endpoint', 400);
-  }
-  const shouldUpdateHint = typeof body.masterPasswordHint === 'string' || body.masterPasswordHint === null;
-  const nextMasterPasswordHint = shouldUpdateHint ? normalizeMasterPasswordHint(body.masterPasswordHint) : undefined;
-  if (nextMasterPasswordHint && nextMasterPasswordHint.length > 120) {
-    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
-  }
+  const shouldUpdateHint = 'masterPasswordHint' in body;
 
   user.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, user.email);
   user.key = update.key;
   if (nextPrivateKey) user.privateKey = nextPrivateKey;
   if (nextPublicKey) user.publicKey = nextPublicKey;
   if (shouldUpdateHint) {
-    user.masterPasswordHint = nextMasterPasswordHint ?? null;
+    user.masterPasswordHint = body.masterPasswordHint ?? null;
   }
   const originalSecurityStamp = user.securityStamp;
   user.securityStamp = generateUUID();
@@ -965,12 +906,10 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody);
   if (body instanceof Response) return body;
 
-  const secret = readString(body, ['masterPasswordHash', 'otp', 'OTP', 'secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const verified = await verifyUserSecret(auth, user, verificationSecret(body));
   if (!verified) return errorResponse('User verification failed.', 400);
 
   const key = normalizeTotpSecret(user.totpSecret || '') || new Secret().base32;
@@ -984,12 +923,10 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody);
   if (body instanceof Response) return body;
 
-  const secret = readString(body, ['masterPasswordHash', 'otp', 'OTP', 'secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const verified = await verifyUserSecret(auth, user, verificationSecret(body));
   if (!verified) return errorResponse('User verification failed.', 400);
 
   return jsonResponse({
@@ -998,29 +935,41 @@ export async function handleGetTwoFactorYubiKey(request: Request, env: Env, user
   });
 }
 
+// Upstream binds this model case-insensitively, so keys are compared lower-cased.
+const optionalText = z.string().nullish().transform((value) => value?.trim() ?? '');
+const TwoFactorEmailLoginBody = z.preprocess(
+  (body) => Object.fromEntries(Object.entries(body ?? {}).map(([name, value]) => [name.toLowerCase(), value])),
+  z.object({
+    email: optionalText,
+    authrequestid: optionalText,
+    authrequestaccesscode: optionalText,
+    ssoemail2fasessiontoken: optionalText,
+    masterpasswordhash: optionalText,
+    devicetype: text,
+  }),
+);
+
 export async function handleSendTwoFactorEmailLogin(request: Request, env: Env): Promise<Response> {
   const rejected = () => errorResponse('Cannot send two-factor email.', 400);
-  const raw = await readRequestBody(request);
-  if (raw instanceof Response) return rejected();
-  const body = Object.fromEntries(Object.entries(raw).map(([name, value]) => [name.toLowerCase(), value]));
-  if (['email', 'authrequestid', 'authrequestaccesscode', 'ssoemail2fasessiontoken', 'masterpasswordhash'].some(name => body[name] != null && typeof body[name] !== 'string')) return rejected();
-  const email = readString(body, 'email').trim().toLowerCase();
+  const body = await readRequestBody(request, TwoFactorEmailLoginBody);
+  if (body instanceof Response) return rejected();
+  const email = body.email.toLowerCase();
   const user = email ? await userRepo.getUser(env.DB, email) : null;
   if (!user || user.status !== 'active' || !user.twoFactorEmail) return rejected();
-  const accessCode = readString(body, 'authrequestaccesscode').trim();
-  const sessionToken = readString(body, 'ssoemail2fasessiontoken').trim();
+  const accessCode = body.authrequestaccesscode;
+  const sessionToken = body.ssoemail2fasessiontoken;
   let verified: boolean;
   if (accessCode) {
-    const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, readString(body, 'authrequestid'), user.id);
+    const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, body.authrequestid, user.id);
     verified = isAuthRequestLoginApproved(authRequest, user.id, accessCode);
   } else if (sessionToken) {
     verified = await verifySsoEmail2faSessionToken(env, user, sessionToken);
   } else {
-    verified = await verifyUserSecret(new AuthService(env), user, readString(body, 'masterpasswordhash'));
+    verified = await verifyUserSecret(new AuthService(env), user, body.masterpasswordhash);
   }
   if (!verified) return rejected();
   if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
-  const device = readAuthRequestDeviceInfo({ deviceType: readString(body, 'devicetype') }, request);
+  const device = readAuthRequestDeviceInfo({ deviceType: body.devicetype }, request);
   const outcome = await issueEmailOtp(env, { purpose: 'two-factor-login', subject: user.id, binding: user.securityStamp },
     code => sendMail(env, user.twoFactorEmail!, 'signInCode', { code, reason: 'two-factor', ip: getClientIdentifier(request) ?? 'Unknown', deviceTypeName: deviceTypeName(device.deviceType), utc: new Date().toISOString() }));
   const check = mailStatusCheck(outcome);
@@ -1035,30 +984,29 @@ function twoFactorEmailResponse(email: string | null, userVerificationToken?: st
   };
 }
 
-async function verifyEmailTwoFactorUser(env: Env, user: User, body: Record<string, unknown>): Promise<boolean> {
-  const token = readString(body, 'userVerificationToken');
-  return await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_EMAIL, token)
-    || await verifyUserSecret(new AuthService(env), user, readString(body, ['masterPasswordHash', 'secret']));
+const EmailTwoFactorBody = VerifiedBody.extend({ userVerificationToken: text, email: emailAddress('Invalid email address'), token: text });
+
+async function verifyEmailTwoFactorUser(env: Env, user: User, body: z.output<typeof EmailTwoFactorBody>): Promise<boolean> {
+  return await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_EMAIL, body.userVerificationToken)
+    || await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash || body.secret);
 }
 
 export async function handleGetTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, VerifiedBody);
   if (body instanceof Response) return body;
-  const secret = readString(body, ['masterPasswordHash', 'secret']);
-  if (!await verifyUserSecret(new AuthService(env), user, secret)) return errorResponse('User verification failed.', 400);
+  if (!await verifyUserSecret(new AuthService(env), user, body.masterPasswordHash || body.secret)) return errorResponse('User verification failed.', 400);
   return jsonResponse(twoFactorEmailResponse(user.twoFactorEmail, await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_EMAIL)));
 }
 
 export async function handleSendTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, EmailTwoFactorBody);
   if (body instanceof Response) return body;
   if (!await verifyEmailTwoFactorUser(env, user, body)) return errorResponse('User verification failed.', 400);
-  const email = readString(body, 'email').trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
+  const { email } = body;
   if (readMailConfig(env).kind !== 'enabled') return errorResponse('Email sending is not configured', 503);
   const outcome = await issueEmailOtp(env, { purpose: 'two-factor-setup', subject: user.id, binding: `${user.securityStamp}:${email}` },
     code => sendMail(env, email, 'verificationCode', { code, reason: 'two-factor-setup' }));
@@ -1070,13 +1018,11 @@ export async function handleSendTwoFactorEmail(request: Request, env: Env, userI
 export async function handlePutTwoFactorEmail(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  const body = await readRequestBody(request);
+  const body = await readRequestBody(request, EmailTwoFactorBody);
   if (body instanceof Response) return body;
   if (!await verifyEmailTwoFactorUser(env, user, body)) return errorResponse('User verification failed.', 400);
-  const email = readString(body, 'email').trim().toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || email.length > 256) return errorResponse('Invalid email address', 400);
-  const token = readString(body, 'token');
-  if (!await redeemEmailOtp(env, { purpose: 'two-factor-setup', subject: user.id, binding: `${user.securityStamp}:${email}` }, token)) {
+  const { email } = body;
+  if (!await redeemEmailOtp(env, { purpose: 'two-factor-setup', subject: user.id, binding: `${user.securityStamp}:${email}` }, body.token)) {
     return errorResponse('Invalid token.', 400, {}, { Token: ['Invalid token.'] });
   }
   const changed = await env.DB.prepare("UPDATE users SET two_factor_email = ?, totp_recovery_code = COALESCE(NULLIF(totp_recovery_code, ''), ?), updated_at = ? WHERE id = ? AND security_stamp = ? RETURNING id")
@@ -1121,13 +1067,11 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, z.object({ key: text, token: trimmed, userVerificationToken: text }));
   if (body instanceof Response) return body;
 
-  const key = normalizeTotpSecret(readString(body, 'key'));
-  const token = readString(body, 'token').trim();
-  const userVerificationToken = readString(body, 'userVerificationToken');
+  const key = normalizeTotpSecret(body.key);
+  const { token, userVerificationToken } = body;
   if (!key || !token || !userVerificationToken) {
     return errorResponse('Key, token and userVerificationToken are required', 400);
   }
@@ -1157,23 +1101,16 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody.extend({
+    userVerificationToken: text, key1: text, key2: text, key3: text, key4: text, key5: text, nfc: z.unknown().optional(),
+  }));
   if (body instanceof Response) return body;
 
-  const secret = readString(body, ['masterPasswordHash', 'otp', 'OTP', 'secret']);
-  const userVerificationToken = readString(body, 'userVerificationToken');
-  const verified = await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY, userVerificationToken)
-    || await verifyUserSecret(auth, user, secret);
+  const verified = await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_YUBIKEY, body.userVerificationToken)
+    || await verifyUserSecret(auth, user, verificationSecret(body));
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  const keys = [
-    readString(body, 'key1'),
-    readString(body, 'key2'),
-    readString(body, 'key3'),
-    readString(body, 'key4'),
-    readString(body, 'key5'),
-  ];
+  const keys = [body.key1, body.key2, body.key3, body.key4, body.key5];
   const publicIds: Array<string | null> = [];
   let credentials = await getYubicoCredentials(env.DB);
   let apiKeyBootstrapOtpIndex: number | null = null;
@@ -1225,16 +1162,14 @@ export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env
   if (!user) return errorResponse('User not found', 404);
   if (user.role !== 'admin' || user.status !== 'active') return errorResponse('Forbidden', 403);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody.extend({ yubicoClientId: trimmed, clientId: trimmed, yubicoSecretKey: trimmed, secretKey: trimmed }));
   if (body instanceof Response) return body;
 
-  const secret = readString(body, ['masterPasswordHash', 'otp', 'OTP', 'secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const verified = await verifyUserSecret(auth, user, verificationSecret(body));
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  const clientId = readString(body, ['yubicoClientId', 'clientId']).trim();
-  const secretKey = readString(body, ['yubicoSecretKey', 'secretKey']).trim();
+  const clientId = body.yubicoClientId || body.clientId;
+  const secretKey = body.yubicoSecretKey || body.secretKey;
   if (!clientId || !secretKey) return errorResponse('Yubico Client ID and Secret Key are required.', 400);
 
   await replaceYubicoCredentials(env.DB, { clientId, secretKey });
@@ -1257,15 +1192,13 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody.extend({ token: text }));
   if (body instanceof Response) return body;
 
-  const secret = readString(body, ['masterPasswordHash', 'secret']);
-  const verified = await verifyUserSecret(auth, user, secret);
+  const verified = await verifyUserSecret(auth, user, body.masterPasswordHash || body.secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  const otp = readString(body, ['otp', 'OTP', 'token']).trim();
+  const otp = (body.otp || body.OTP || body.token).trim();
   if (!yubiKeyPublicIdFromOtp(otp)) return errorResponse('Invalid YubiKey OTP.', 400);
   const existing = await getYubicoCredentials(env.DB);
   if (user.role !== 'admin' && existing) {
@@ -1313,8 +1246,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const body = await readRequestBody(request);
-
+  const body = await readRequestBody(request, VerifiedBody.extend({ type: z.unknown().optional(), userVerificationToken: text, key: text }));
   if (body instanceof Response) return body;
 
   const typeRaw = routeType ?? body.type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
@@ -1323,11 +1255,8 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
-  const secret = readString(body, ['masterPasswordHash', 'otp', 'OTP', 'secret']);
-  const userVerificationToken = readString(body, 'userVerificationToken');
-  const key = normalizeTotpSecret(readString(body, 'key'));
-  const verified = (routeType !== undefined && await verifyTwoFactorUserVerificationToken(env, user, type, userVerificationToken, key))
-    || await verifyUserSecret(auth, user, secret);
+  const verified = (routeType !== undefined && await verifyTwoFactorUserVerificationToken(env, user, type, body.userVerificationToken, normalizeTotpSecret(body.key)))
+    || await verifyUserSecret(auth, user, verificationSecret(body));
   if (!verified) return errorResponse('User verification failed.', 400);
 
   const wasEnabled = twoFactorProviders(user, type === TWO_FACTOR_PROVIDER_WEBAUTHN && await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0).some(provider => provider === type);
@@ -1363,21 +1292,8 @@ export async function handleGetTotpRecoveryCode(request: Request, env: Env, user
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  let body: Record<string, string | undefined>;
-  try {
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      body = Object.fromEntries(formData.entries()) as Record<string, string>;
-    } else {
-      body = normalizeJsonKeys(await request.json());
-    }
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const currentHash = String(body.masterPasswordHash || body.master_password_hash || body.password || '').trim();
-  if (!currentHash) return errorResponse('masterPasswordHash is required', 400);
+  const currentHash = await readRequestBody(request, CurrentPasswordHash);
+  if (currentHash instanceof Response) return currentHash;
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
 
@@ -1392,28 +1308,24 @@ export async function handleGetTotpRecoveryCode(request: Request, env: Env, user
   });
 }
 
+// Recovery posts the login form's field names or the API model's; codes compare as upper-case base32.
+const RecoverTwoFactorBody = z.object({
+  email: text, username: text, masterPasswordHash: text, password: text, recoveryCode: text, twoFactorToken: text, recovery_code: text,
+}).transform((body) => ({
+  email: (body.email || body.username).trim().toLowerCase(),
+  masterPasswordHash: (body.masterPasswordHash || body.password).trim(),
+  recoveryCode: (body.recoveryCode || body.twoFactorToken || body.recovery_code).toUpperCase().replace(/[^A-Z2-7]/g, ''),
+}));
+
 // POST /identity/accounts/recover-2fa
 // Disable TOTP by recovery code + password, then rotate recovery code.
 export async function handleRecoverTwoFactor(request: Request, env: Env): Promise<Response> {
   const auth = new AuthService(env);
   const rateLimit = new RateLimitService(env);
 
-  let body: Record<string, string | undefined>;
-  try {
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      body = Object.fromEntries(formData.entries()) as Record<string, string>;
-    } else {
-      body = normalizeJsonKeys(await request.json());
-    }
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const email = String(body.email || body.username || '').trim().toLowerCase();
-  const masterPasswordHash = String(body.masterPasswordHash || body.password || '').trim();
-  const recoveryCode = normalizeRecoveryCodeInput(String(body.recoveryCode || body.twoFactorToken || body.recovery_code || ''));
+  const body = await readRequestBody(request, RecoverTwoFactorBody);
+  if (body instanceof Response) return body;
+  const { email, masterPasswordHash, recoveryCode } = body;
   const clientIdentifier = getClientIdentifier(request);
   if (!clientIdentifier) {
     return errorResponse('Client IP is required', 403);
@@ -1495,24 +1407,20 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
 // Upstream KeyId: exactly 16 bytes as lowercase hex. The SDK rejects a whole sync whose
 // UserKeyId is malformed, so uppercase is refused rather than normalized.
 const USER_KEY_ID_PATTERN = /^[0-9a-f]{32}$/;
+const UserKeyIdBody = z.object({
+  userKeyId: z.string({ error: (issue) => issue.input == null ? 'The UserKeyId field is required.' : 'UserKeyId is not a valid key id.' })
+    .min(1, { error: 'The UserKeyId field is required.', abort: true })
+    .regex(USER_KEY_ID_PATTERN, { error: 'UserKeyId is not a valid key id.' }),
+});
 
 // POST /api/accounts/key-management/user-key-id
 // 2026.9 clients report their user key id once, then clear it and re-post on every unlock
 // unless /api/sync echoes it. The revision bump is what evicts the cached pre-backfill sync.
 export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseJsonBody<{ userKeyId?: unknown }>(request);
+  const body = await parseBody(request, UserKeyIdBody);
   if (body instanceof Response) return body;
 
-  // ASP.NET binds request properties case-insensitively; the SDK sends camelCase.
-  const userKeyId = body.userKeyId;
-  if (userKeyId == null || userKeyId === '') {
-    return errorResponse('The UserKeyId field is required.', 400);
-  }
-  if (typeof userKeyId !== 'string' || !USER_KEY_ID_PATTERN.test(userKeyId)) {
-    return errorResponse('UserKeyId is not a valid key id.', 400);
-  }
-
-  if (!await userRepo.setUserKeyIdIfUnset(env.DB, userId, userKeyId)) {
+  if (!await userRepo.setUserKeyIdIfUnset(env.DB, userId, body.userKeyId)) {
     return errorResponse('User key id is already set.', 400);
   }
   await revisionRepo.updateRevisionDate(env.DB, userId);
@@ -1528,13 +1436,10 @@ export async function handleVerifyPassword(request: Request, env: Env, userId: s
     return errorResponse('User not found', 404);
   }
 
-  const body = await parseJsonBody<{ masterPasswordHash?: string; authenticationData?: Record<string, unknown> }>(request);
-
+  const body = await parseBody(request, MasterPasswordFields.pick({ authenticationData: true }).extend({ masterPasswordHash: text }));
   if (body instanceof Response) return body;
 
-  const masterPasswordHash =
-    body.masterPasswordHash ||
-    readNestedString(body, ['authenticationData', 'masterPasswordAuthenticationHash']);
+  const masterPasswordHash = body.masterPasswordHash || body.authenticationData?.masterPasswordAuthenticationHash;
   if (!masterPasswordHash) {
     return errorResponse('masterPasswordHash is required', 400);
   }
@@ -1562,21 +1467,8 @@ async function apiKey(request: Request, env: Env, userId: string, rotate: boolea
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
 
-  let body: Record<string, string | undefined>;
-  try {
-    const contentType = request.headers.get('content-type') || '';
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      body = Object.fromEntries(formData.entries()) as Record<string, string>;
-    } else {
-      body = normalizeJsonKeys(await request.json());
-    }
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const currentHash = String(body.masterPasswordHash || body.master_password_hash || body.password || '').trim();
-  if (!currentHash) return errorResponse('masterPasswordHash is required', 400);
+  const currentHash = await readRequestBody(request, CurrentPasswordHash);
+  if (currentHash instanceof Response) return currentHash;
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
 
