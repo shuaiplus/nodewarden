@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { and, eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { smProjectMembers, smServiceAccountProjects, smServiceAccounts } from '../db/schema';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -26,7 +30,8 @@ test('project policies require machine write only for creates, preserve exact sh
   const ownAccount = await account();
   const otherAccount = await account(owner);
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
-  await env.DB.prepare('INSERT INTO sm_project_members (project_id, membership_id, write_access) VALUES (?, ?, 0)').bind(otherProject.id, member.id).run();
+  const orm = getOrm(env.DB);
+  await orm.insert(smProjectMembers).values({ projectId: otherProject.id, membershipId: member.id, writeAccess: 0 });
   for (const [kind, expected] of [['service-accounts', ownAccount.id], ['projects', ownProject.id]]) {
     const response = await request(a.id, `/api/organizations/${orgId}/access-policies/${kind}/potential-grantees`);
     assert.equal(response.status, 200);
@@ -43,7 +48,7 @@ test('project policies require machine write only for creates, preserve exact sh
   assert.equal(assigned.status, 200);
   assert.deepEqual(await assigned.json(), { serviceAccountAccessPolicies: [{ serviceAccountId: otherAccount.id, serviceAccountName: ENCRYPTED_FIELD, read: true, write: false, object: 'serviceAccountProjectAccessPolicy' }], object: 'ProjectServiceAccountsAccessPolicies' });
   const before = '2020-01-01T00:00:00.000Z';
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE org_id = ?').bind(before, orgId).run();
+  await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.orgId, orgId));
   const updated = await request(a.id, path, 'PUT', { serviceAccountAccessPolicyRequests: [policy(otherAccount.id, true)] });
   assert.equal(updated.status, 200);
   assert.equal((await updated.json() as any).serviceAccountAccessPolicies[0].write, true);
@@ -88,13 +93,14 @@ test('a concurrent new machine grant causes 409 and rolls back deletions in the 
   const added = await account();
   await smRepo.replaceServiceAccountProjects(env.DB, old.id, [p.id]);
   const before = '2020-01-01T00:00:00.000Z';
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE org_id = ?').bind(before, orgId).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.orgId, orgId));
   const batch = env.DB.batch.bind(env.DB);
   let raced = false;
   env.DB.batch = (async (statements: D1PreparedStatement[]) => {
     if (!raced && statements.some(statement => /INSERT\s+INTO\s+["`]?sm_service_account_projects/i.test((statement as unknown as { query: string }).query))) {
       raced = true;
-      await env.DB.prepare('INSERT INTO sm_service_account_projects (service_account_id, project_id, read_access, write_access) VALUES (?, ?, 1, 0)').bind(added.id, p.id).run();
+      await orm.insert(smServiceAccountProjects).values({ serviceAccountId: added.id, projectId: p.id, readAccess: 1, writeAccess: 0 });
     }
     return batch(statements);
   }) as D1Database['batch'];
@@ -103,6 +109,6 @@ test('a concurrent new machine grant causes 409 and rolls back deletions in the 
   assert.equal(raced, true);
   assert.equal(response.status, 409);
   assert.deepEqual(await smRepo.listReadableServiceAccountProjectIds(env.DB, old.id), [p.id]);
-  assert.equal((await env.DB.prepare('SELECT write_access FROM sm_service_account_projects WHERE service_account_id = ? AND project_id = ?').bind(added.id, p.id).first<{ write_access: number }>())!.write_access, 0);
+  assert.equal((await orm.select({ writeAccess: smServiceAccountProjects.writeAccess }).from(smServiceAccountProjects).where(and(eq(smServiceAccountProjects.serviceAccountId, added.id), eq(smServiceAccountProjects.projectId, p.id))).get())!.writeAccess, 0);
   assert.equal((await smRepo.getServiceAccount(env.DB, old.id))!.updatedAt, before);
 });
