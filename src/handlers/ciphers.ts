@@ -179,7 +179,7 @@ function idList(error?: string) {
   return z.array(z.unknown(), { error }).transform((ids) => [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))]);
 }
 
-function nonEmptyIdList(error: string) {
+export function nonEmptyIdList(error: string) {
   return idList(error).refine((ids) => ids.length > 0, { error });
 }
 

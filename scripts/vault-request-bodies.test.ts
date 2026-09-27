@@ -4,7 +4,8 @@ import test from 'node:test';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
-// Personal cipher bodies as official clients send them to /api/ciphers, its bulk and attachment routes.
+// Vault item and folder bodies as official clients send them to /api/ciphers, its bulk and attachment
+// routes, and /api/folders.
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const LOGIN_TYPE = 1;
 const ARCHIVED_AT = '2026-01-02T03:04:05.000Z';
@@ -83,4 +84,18 @@ test('attachment v2 reads the numeric-string fileSize Android sends and requires
   const missing = await send(env, user, 'POST', path, { fileName: ENCRYPTED, fileSize: 1 });
   assert.equal(missing.status, 400);
   assert.deepEqual(((await missing.json()) as ErrorBody).validationErrors, { key: ['fileName and key are required'] });
+});
+
+test('folder bodies answer a missing or non-string name and a missing id list with their messages', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  for (const [path, body, field, message] of [
+    ['/api/folders', { name: 5 }, 'name', 'Name is required'],
+    ['/api/folders', {}, 'name', 'Name is required'],
+    ['/api/folders/delete', { ids: [' '] }, 'ids', 'Folder ids are required'],
+  ] as const) {
+    const response = await send(env, user, 'POST', path, body);
+    assert.equal(response.status, 400);
+    assert.deepEqual(((await response.json()) as ErrorBody).validationErrors, { [field]: [message] });
+  }
 });

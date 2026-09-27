@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { Env, Folder, FolderResponse } from '../types';
 import {
   notifyUserFolderCreate,
@@ -5,11 +6,12 @@ import {
   notifyUserFolderUpdate,
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
-import { errorResponse, jsonResponse, parseJsonBody } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { writeDataAudit } from '../services/audit-events';
+import { nonEmptyIdList } from './ciphers';
 import * as folderRepo from '../services/storage-folder-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 
@@ -60,14 +62,10 @@ export async function handleGetFolder(request: Request, env: Env, userId: string
 
 // POST /api/folders
 export async function handleCreateFolder(request: Request, env: Env, userId: string): Promise<Response> {
-
-  const body = await parseJsonBody<{ name?: string }>(request);
-
+  const body = await parseBody(request, z.object({
+    name: z.string({ error: 'Name is required' }).min(1, { error: 'Name is required' }),
+  }));
   if (body instanceof Response) return body;
-
-  if (!body.name) {
-    return errorResponse('Name is required', 400);
-  }
 
   const now = new Date().toISOString();
   const folder: Folder = {
@@ -94,8 +92,7 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
     return errorResponse('Folder not found', 404);
   }
 
-  const body = await parseJsonBody<{ name?: string }>(request);
-
+  const body = await parseBody(request, z.object({ name: z.string().nullish() }));
   if (body instanceof Response) return body;
 
   if (body.name) {
@@ -133,15 +130,9 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
 
 // POST /api/folders/delete
 export async function handleBulkDeleteFolders(request: Request, env: Env, userId: string): Promise<Response> {
-
-  const body = await parseJsonBody<{ ids?: string[] }>(request);
-
+  const body = await parseBody(request, z.object({ ids: nonEmptyIdList('Folder ids are required') }));
   if (body instanceof Response) return body;
-
-  const ids = Array.isArray(body.ids) ? body.ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
-  if (!ids.length) {
-    return errorResponse('Folder ids are required', 400);
-  }
+  const { ids } = body;
 
   const folders = (
     await Promise.all(ids.map(async (id) => {
