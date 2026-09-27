@@ -34,16 +34,6 @@ export const COMMON_TIME_ZONES = [
   'America/Los_Angeles',
 ];
 
-export const WEEKDAY_OPTIONS = [
-  { value: 1, label: 'txt_backup_weekday_monday' },
-  { value: 2, label: 'txt_backup_weekday_tuesday' },
-  { value: 3, label: 'txt_backup_weekday_wednesday' },
-  { value: 4, label: 'txt_backup_weekday_thursday' },
-  { value: 5, label: 'txt_backup_weekday_friday' },
-  { value: 6, label: 'txt_backup_weekday_saturday' },
-  { value: 0, label: 'txt_backup_weekday_sunday' },
-] as const;
-
 export function detectBrowserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';

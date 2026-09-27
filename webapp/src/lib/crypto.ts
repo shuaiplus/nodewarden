@@ -559,10 +559,6 @@ function parseTotpConfig(raw: string): TotpConfig {
   return { secret: normalizeTotpSecret(s), steam: false, ...DEFAULT_TOTP_CONFIG };
 }
 
-export function extractTotpSecret(raw: string): string {
-  return parseTotpConfig(raw).secret;
-}
-
 function base32ToBytes(input: string): Uint8Array {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   const clean = input.toUpperCase().replace(/[^A-Z2-7]/g, '');

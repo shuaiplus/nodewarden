@@ -1,4 +1,4 @@
-import { t, translateServerError } from '../i18n';
+import { translateServerError } from '../i18n';
 import type { SessionState, TokenError } from '../types';
 
 export type AuthedFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -53,10 +53,6 @@ export function createApiError(message: string, status?: number): Error & { stat
   const error = new Error(message) as Error & { status?: number };
   if (status !== undefined) error.status = status;
   return error;
-}
-
-export function requiredError(messageKey: string): never {
-  throw new Error(t(messageKey));
 }
 
 interface UploadWithProgressOptions {

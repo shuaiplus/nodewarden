@@ -1,4 +1,4 @@
-import { deriveLoginHashLocally, unlockVaultKey } from '@/lib/api/auth';
+import { unlockVaultKey } from '@/lib/api/auth';
 import type { Profile, SessionState, TokenSuccess } from '@/lib/types';
 
 const OFFLINE_UNLOCK_KEY = 'nodewarden.web.offline-unlock.v1';
@@ -114,20 +114,6 @@ export function clearOfflineUnlockRecord(): void {
   } catch {
     // Ignore storage failures during logout cleanup.
   }
-}
-
-export async function unlockOfflineVault(
-  session: SessionState,
-  profile: Profile | null,
-  password: string
-): Promise<{ session: SessionState; profile: Profile }> {
-  const record = readRecord();
-  const email = normalizeEmail(profile?.email || session.email);
-  if (!record || record.email !== email) {
-    throw new Error('Offline unlock is not available on this device.');
-  }
-  const derived = await deriveLoginHashLocally(record.email, password, record.kdfIterations);
-  return unlockOfflineVaultWithMasterKey(session, profile, derived.masterKey);
 }
 
 export async function unlockOfflineVaultWithMasterKey(

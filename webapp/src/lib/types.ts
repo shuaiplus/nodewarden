@@ -511,16 +511,6 @@ export interface AuthRequest {
   fingerprintPhrase?: string;
 }
 
-export interface AccountPasskeyAssertionOptionsResponse {
-  options: PublicKeyCredentialRequestOptions;
-  token: string;
-}
-
-export interface AccountPasskeyCreationOptionsResponse {
-  options: PublicKeyCredentialCreationOptions;
-  token: string;
-}
-
 export interface AccountPasskeyPrfOption {
   EncryptedPrivateKey?: string;
   EncryptedUserKey?: string;

@@ -36,13 +36,6 @@ export interface OrgMember {
   accessAll: boolean;
 }
 
-export interface OrgGroup {
-  id: string;
-  name: string;
-  accessAll: boolean;
-  users: string[];
-}
-
 export interface OrgPolicy {
   id: string;
   organizationId: string;
@@ -136,11 +129,6 @@ export async function confirmMember(authedFetch: AuthedFetch, orgId: string, mem
 export async function removeMember(authedFetch: AuthedFetch, orgId: string, memberId: string): Promise<void> {
   const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/users/${encodeURIComponent(memberId)}`, { method: 'DELETE' });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Remove member failed'));
-}
-
-export async function listGroups(authedFetch: AuthedFetch, orgId: string): Promise<OrgGroup[]> {
-  const resp = await authedFetch(`/api/organizations/${encodeURIComponent(orgId)}/groups`);
-  return readList<OrgGroup>(resp);
 }
 
 export async function saveGroup(authedFetch: AuthedFetch, orgId: string, name: string, users: string[] = []): Promise<void> {

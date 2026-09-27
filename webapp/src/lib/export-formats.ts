@@ -24,12 +24,6 @@ export interface ExportRequest {
   masterPassword?: string;
 }
 
-export interface ExportDownloadPayload {
-  fileName: string;
-  mimeType: string;
-  bytes: Uint8Array;
-}
-
 export interface ZipAttachmentEntry {
   cipherId: string;
   fileName: string;

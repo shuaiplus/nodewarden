@@ -246,10 +246,6 @@ export function isCipherDeleted(cipher: Cipher): boolean {
   return cipherDeletedValue(cipher);
 }
 
-export function isCipherArchived(cipher: Cipher): boolean {
-  return cipherArchivedValue(cipher) && !cipherDeletedValue(cipher);
-}
-
 export function isCipherVisibleInNormalVault(cipher: Cipher): boolean {
   return !cipherDeletedValue(cipher) && !cipherArchivedValue(cipher);
 }
@@ -303,11 +299,6 @@ export { firstCipherUri, hostFromUri, websiteIconUrl };
 
 export function createEmptyLoginUri(): VaultDraftLoginUri {
   return { uri: '', match: null, originalUri: '', extra: {} };
-}
-
-export function websiteMatchLabel(value: number | null | undefined): string {
-  const normalized = typeof value === 'number' && Number.isFinite(value) ? value : null;
-  return getWebsiteMatchOptions().find((option) => option.value === normalized)?.label || t('txt_uri_match_default_base_domain');
 }
 
 function valueOrFallback(value: string | null | undefined): string {

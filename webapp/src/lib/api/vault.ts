@@ -18,15 +18,9 @@ import {
   type AuthedFetch,
 } from './shared';
 import { readResponseBytesWithProgress } from '../download';
-import { loadVaultCoreSyncSnapshot } from './vault-sync';
 
 type CipherLoginData = NonNullable<Cipher['login']>;
 const NODEWARDEN_WEB_REPAIR_HEADER = 'X-NodeWarden-Web';
-
-export async function getFolders(authedFetch: AuthedFetch, cacheKey: string): Promise<Folder[]> {
-  const body = await loadVaultCoreSyncSnapshot(authedFetch, cacheKey);
-  return body.folders || [];
-}
 
 export async function getFolderById(authedFetch: AuthedFetch, folderId: string): Promise<Folder> {
   const id = String(folderId || '').trim();
@@ -108,11 +102,6 @@ export async function updateFolder(
   const body = await parseJson<Folder>(resp);
   if (!body?.id) throw new Error('Update folder failed');
   return body;
-}
-
-export async function getCiphers(authedFetch: AuthedFetch, cacheKey: string): Promise<Cipher[]> {
-  const body = await loadVaultCoreSyncSnapshot(authedFetch, cacheKey);
-  return body.ciphers || [];
 }
 
 export async function getCipherById(authedFetch: AuthedFetch, cipherId: string): Promise<Cipher> {
