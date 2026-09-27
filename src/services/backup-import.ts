@@ -496,8 +496,7 @@ function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<str
 async function prepareRemoteAttachmentPayload(
   env: Env,
   payload: BackupPayload,
-  files: Record<string, Uint8Array>,
-  source: RemoteAttachmentSource
+  files: Record<string, Uint8Array>
 ): Promise<PreparedBackupImportPayload> {
   const manifestLookup = buildAttachmentBlobLookup(payload.manifest);
   const storageKind = getBlobStorageKind(env);
@@ -703,12 +702,31 @@ export async function importBackupArchiveBytes(
   env: Env,
   actorUserId: string,
   replaceExisting: boolean,
+  source: RemoteAttachmentSource | null = null,
   progress?: BackupRestoreProgressReporter,
   fileName: string = 'nodewarden_backup.zip'
 ): Promise<BackupImportExecutionResult> {
-  const parsed = parseBackupArchive(archiveBytes);
-  validateBackupPayloadContents(parsed.payload, parsed.files);
-  const prepared = prepareImportPayloadForTarget(env, parsed.payload, parsed.files);
+  // A remote archive keeps attachment blobs at the destination instead of inline .bin entries, so its
+  // rows are trimmed to what the source can supply before validation; a local archive validates as-is.
+  const restoreSource = source ? 'remote' : 'local';
+  const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: !!source });
+  let prepared: PreparedBackupImportPayload;
+  if (source) {
+    prepared = await prepareRemoteAttachmentPayload(env, parsed.payload, parsed.files);
+    validateBackupPayloadContents(prepared.payload, parsed.files, { allowExternalAttachmentBlobs: true });
+  } else {
+    validateBackupPayloadContents(parsed.payload, parsed.files);
+    prepared = prepareImportPayloadForTarget(env, parsed.payload, parsed.files);
+  }
+  const report = (step: string, stage: string, outcome: Pick<BackupRestoreProgressEvent, 'done' | 'ok' | 'error'> = {}) => progress?.({
+    source: restoreSource,
+    step: `${restoreSource}_${step}`,
+    fileName,
+    stageTitle: `txt_backup_restore_progress_${restoreSource}_${stage}_title`,
+    stageDetail: `txt_backup_restore_progress_${restoreSource}_${stage}_detail`,
+    replaceExisting,
+    ...outcome,
+  });
 
   try {
     await ensureImportTargetIsFresh(env.DB);
@@ -721,23 +739,9 @@ export async function importBackupArchiveBytes(
   await resetRestoreArtifacts(env.DB);
   const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
   try {
-    await progress?.({
-      source: 'local',
-      step: 'local_create_shadow',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_shadow_title',
-      stageDetail: 'txt_backup_restore_progress_local_shadow_detail',
-      replaceExisting,
-    });
+    await report('create_shadow', 'shadow');
     await createShadowTables(env.DB);
-    await progress?.({
-      source: 'local',
-      step: 'local_import_data',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_data_title',
-      stageDetail: 'txt_backup_restore_progress_local_data_detail',
-      replaceExisting,
-    });
+    await report('import_data', 'data');
     const db = await importPreparedBackupRows(env.DB, prepared.payload.db, env);
     await validateShadowTableCounts(env.DB, {
       config: (db.config || []).length,
@@ -750,15 +754,10 @@ export async function importBackupArchiveBytes(
       attachments: (db.attachments || []).length,
     });
 
-    await progress?.({
-      source: 'local',
-      step: 'local_restore_files',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_files_title',
-      stageDetail: 'txt_backup_restore_progress_local_files_detail',
-      replaceExisting,
-    });
-    const restored = await restoreBlobFiles(env, db, parsed.files);
+    await report('restore_files', 'files');
+    const restored = source
+      ? await restoreRemoteAttachmentFiles(env, prepared.payload, parsed.files, source)
+      : await restoreBlobFiles(env, db, parsed.files);
     const restoredAttachmentKeys = new Set((restored.restoredAttachments || []).map(attachmentRowKey));
     const failedRestoreRows = (db.attachments || []).filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
     await removeAttachmentRows(env.DB, failedRestoreRows, true).catch(() => undefined);
@@ -772,14 +771,7 @@ export async function importBackupArchiveBytes(
       ciphers: (db.ciphers || []).length,
       attachments: restored.restoredAttachments.length,
     });
-    await progress?.({
-      source: 'local',
-      step: 'local_finalize',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_local_finalize_detail',
-      replaceExisting,
-    });
+    await report('finalize', 'finalize');
     await swapShadowTablesIntoPlace(env.DB);
     await syncVaultAdminRoles(env);
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
@@ -790,16 +782,7 @@ export async function importBackupArchiveBytes(
       }
     }
 
-    await progress?.({
-      source: 'local',
-      step: 'local_complete',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_local_finalize_detail',
-      replaceExisting,
-      done: true,
-      ok: true,
-    });
+    await report('complete', 'finalize', { done: true, ok: true });
     return {
       auditActorUserId: (db.users || []).some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
       result: {
@@ -823,165 +806,7 @@ export async function importBackupArchiveBytes(
       },
     };
   } catch (error) {
-    await progress?.({
-      source: 'local',
-      step: 'local_failed',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_local_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_local_finalize_detail',
-      replaceExisting,
-      done: true,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    await resetRestoreArtifacts(env.DB).catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function importRemoteBackupArchiveBytes(
-  archiveBytes: Uint8Array,
-  env: Env,
-  actorUserId: string,
-  replaceExisting: boolean,
-  source: RemoteAttachmentSource,
-  progress?: BackupRestoreProgressReporter,
-  fileName: string = 'nodewarden_backup.zip'
-): Promise<BackupImportExecutionResult> {
-  const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: true });
-  const preparedRemote = await prepareRemoteAttachmentPayload(env, parsed.payload, parsed.files, source);
-  validateBackupPayloadContents(preparedRemote.payload, parsed.files, { allowExternalAttachmentBlobs: true });
-
-  try {
-    await ensureImportTargetIsFresh(env.DB);
-  } catch (error) {
-    if (!replaceExisting) {
-      throw error instanceof Error ? error : new Error('Backup import requires a fresh instance');
-    }
-  }
-
-  await resetRestoreArtifacts(env.DB);
-  const previousBlobKeys = replaceExisting ? await collectCurrentBlobKeys(env.DB) : new Set<string>();
-  try {
-    await progress?.({
-      source: 'remote',
-      step: 'remote_create_shadow',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_shadow_title',
-      stageDetail: 'txt_backup_restore_progress_remote_shadow_detail',
-      replaceExisting,
-    });
-    await createShadowTables(env.DB);
-    await progress?.({
-      source: 'remote',
-      step: 'remote_import_data',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_data_title',
-      stageDetail: 'txt_backup_restore_progress_remote_data_detail',
-      replaceExisting,
-    });
-    const db = await importPreparedBackupRows(env.DB, preparedRemote.payload.db, env);
-    await validateShadowTableCounts(env.DB, {
-      config: (db.config || []).length,
-      users: (db.users || []).length,
-      domain_settings: (db.domain_settings || []).length,
-      user_revisions: (db.user_revisions || []).length,
-      webauthn_credentials: (db.webauthn_credentials || []).length,
-      folders: (db.folders || []).length,
-      ciphers: (db.ciphers || []).length,
-      attachments: (db.attachments || []).length,
-    });
-
-    await progress?.({
-      source: 'remote',
-      step: 'remote_restore_files',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_files_title',
-      stageDetail: 'txt_backup_restore_progress_remote_files_detail',
-      replaceExisting,
-    });
-    const restored = await restoreRemoteAttachmentFiles(env, preparedRemote.payload, parsed.files, source);
-    const restoredAttachmentKeys = new Set((restored.restoredAttachments || []).map(attachmentRowKey));
-    const failedRestoreRows = (db.attachments || []).filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
-    await removeAttachmentRows(env.DB, failedRestoreRows, true).catch(() => undefined);
-    await validateShadowTableCounts(env.DB, {
-      config: (db.config || []).length,
-      users: (db.users || []).length,
-      domain_settings: (db.domain_settings || []).length,
-      user_revisions: (db.user_revisions || []).length,
-      webauthn_credentials: (db.webauthn_credentials || []).length,
-      folders: (db.folders || []).length,
-      ciphers: (db.ciphers || []).length,
-      attachments: restored.restoredAttachments.length,
-    });
-    await progress?.({
-      source: 'remote',
-      step: 'remote_finalize',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_remote_finalize_detail',
-      replaceExisting,
-    });
-    await swapShadowTablesIntoPlace(env.DB);
-    await syncVaultAdminRoles(env);
-    await resetRestoreArtifacts(env.DB).catch(() => undefined);
-
-    if (replaceExisting && previousBlobKeys.size) {
-      const nextBlobKeys = await collectCurrentBlobKeys(env.DB).catch(() => null);
-      if (nextBlobKeys) {
-        await cleanupOrphanedBlobFiles(env, previousBlobKeys, nextBlobKeys).catch(() => undefined);
-      }
-    }
-
-    await progress?.({
-      source: 'remote',
-      step: 'remote_complete',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_remote_finalize_detail',
-      replaceExisting,
-      done: true,
-      ok: true,
-    });
-    const finalSkippedItems = [...preparedRemote.skipped.items, ...restored.skipped.items];
-    const finalSkippedReason = finalSkippedItems.length
-      ? restored.skipped.reason || preparedRemote.skipped.reason
-      : null;
-
-    return {
-      auditActorUserId: (db.users || []).some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
-      result: {
-        object: 'instance-backup-import',
-        imported: {
-          config: (db.config || []).length,
-          users: (db.users || []).length,
-          domainSettings: (db.domain_settings || []).length,
-          userRevisions: (db.user_revisions || []).length,
-          webauthnCredentials: (db.webauthn_credentials || []).length,
-          folders: (db.folders || []).length,
-          ciphers: (db.ciphers || []).length,
-          attachments: restored.restoredAttachments.length,
-          attachmentFiles: restored.imported,
-        },
-        skipped: {
-          reason: finalSkippedReason,
-          attachments: finalSkippedItems.length,
-          items: finalSkippedItems,
-        },
-      },
-    };
-  } catch (error) {
-    await progress?.({
-      source: 'remote',
-      step: 'remote_failed',
-      fileName,
-      stageTitle: 'txt_backup_restore_progress_remote_finalize_title',
-      stageDetail: 'txt_backup_restore_progress_remote_finalize_detail',
-      replaceExisting,
-      done: true,
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    await report('failed', 'finalize', { done: true, ok: false, error: error instanceof Error ? error.message : String(error) });
     await resetRestoreArtifacts(env.DB).catch(() => undefined);
     throw error;
   }

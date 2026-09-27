@@ -30,7 +30,6 @@ import {
   type BackupImportExecutionResult,
   type BackupRestoreProgressReporter,
   importBackupArchiveBytes,
-  importRemoteBackupArchiveBytes,
 } from '../services/backup-import';
 import {
   type RemoteBackupTransferSession,
@@ -725,7 +724,7 @@ export async function importAndAuditRemoteBackupFile(
       targetDeviceIdentifier
     );
   };
-  const result = await importRemoteBackupArchiveBytes(
+  const result = await importBackupArchiveBytes(
     remoteFile.bytes,
     env,
     actorUserId,
@@ -845,7 +844,7 @@ async function runImportAndAudit(
     stageDetail: 'txt_backup_restore_progress_local_upload_detail',
     replaceExisting,
   });
-  const imported = await importBackupArchiveBytes(archiveBytes, env, actorUser.id, replaceExisting, progress, fileName);
+  const imported = await importBackupArchiveBytes(archiveBytes, env, actorUser.id, replaceExisting, null, progress, fileName);
   await writeAuditLog(env.DB, imported.auditActorUserId, 'admin.backup.import', 'backup', null, {
     users: imported.result.imported.users,
     ciphers: imported.result.imported.ciphers,

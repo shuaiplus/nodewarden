@@ -3,7 +3,7 @@ import test from 'node:test';
 import { unzipSync, zipSync } from 'fflate';
 
 import { buildBackupArchive } from '../src/services/backup-archive';
-import { importBackupArchiveBytes, importRemoteBackupArchiveBytes } from '../src/services/backup-import';
+import { importBackupArchiveBytes } from '../src/services/backup-import';
 import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../src/services/backup-config';
 import { parseBackupSettingsEnvelope } from '../src/services/backup-settings-crypto';
 import { AuthService } from '../src/services/auth';
@@ -126,8 +126,7 @@ test('local and remote backup restore preserve verified state, default legacy ro
   const bytes = zipSync(files);
   for (const remote of [false, true]) {
     const env = await createTestEnv({ ADMIN_EMAILS: listed.email });
-    if (remote) await importRemoteBackupArchiveBytes(bytes, env, legacy.id, false, { loadAttachment: async () => null });
-    else await importBackupArchiveBytes(bytes, env, legacy.id, false);
+    await importBackupArchiveBytes(bytes, env, legacy.id, false, remote ? { loadAttachment: async () => null } : null);
     assert.equal((await userRepo.getUserById(env.DB, listed.id))?.role, 'admin');
     assert.equal((await userRepo.getUserById(env.DB, listed.id))?.emailVerified, true);
     assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
