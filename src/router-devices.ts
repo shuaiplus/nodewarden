@@ -17,7 +17,6 @@ import {
   handleUpdateDeviceName,
   handleUpdateDeviceToken,
   handleUpdateDeviceWebPushAuth,
-  handleClearDeviceToken,
   handleRegisterDevice,
   handleReportLostTrust,
 } from './handlers/devices';
@@ -100,12 +99,6 @@ export async function handleAuthenticatedDeviceRoute(
   if (identifierWebPushMatch && (method === 'PUT' || method === 'POST')) {
     const deviceIdentifier = decodeURIComponent(identifierWebPushMatch[1]);
     return handleUpdateDeviceWebPushAuth(request, env, userId, deviceIdentifier);
-  }
-
-  const identifierClearTokenMatch = path.match(devicesPath('/identifier/([^/]+)/clear-token'));
-  if (identifierClearTokenMatch && (method === 'PUT' || method === 'POST')) {
-    const deviceIdentifier = decodeURIComponent(identifierClearTokenMatch[1]);
-    return handleClearDeviceToken(request, env, userId, deviceIdentifier);
   }
 
   const identifierRetrieveKeysMatch = path.match(devicesPath('/([^/]+)/retrieve-keys'));

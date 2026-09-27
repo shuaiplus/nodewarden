@@ -693,21 +693,3 @@ export async function handleUpdateDeviceWebPushAuth(
 }
 
 // PUT/POST /api/devices/:deviceIdentifier/clear-token
-export async function handleClearDeviceToken(
-  request: Request,
-  env: Env,
-  userId: string,
-  deviceIdentifier: string
-): Promise<Response> {
-  void request;
-  const normalized = normalizeIdentifier(deviceIdentifier);
-  if (!normalized) return errorResponse('Invalid device identifier', 400);
-
-  const cleared = await deviceRepo.clearDevicePushToken(env.DB, userId, normalized);
-  if (cleared?.pushUuid) {
-    await unregisterMobilePushDevice(env, cleared.pushUuid);
-  }
-
-  return new Response(null, { status: 200 });
-}
-

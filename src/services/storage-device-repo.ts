@@ -220,25 +220,6 @@ export async function updateDevicePushToken(
   return Number(result.meta.changes ?? 0) > 0;
 }
 
-export async function clearDevicePushToken(
-  db: D1Database,
-  userId: string,
-  deviceIdentifier: string
-): Promise<{ pushUuid: string | null } | null> {
-  const [existing] = await getOrm(db)
-    .select({ pushUuid: devices.pushUuid })
-    .from(devices)
-    .where(deviceKey(userId, deviceIdentifier))
-    .limit(1);
-  if (!existing) return null;
-
-  await getOrm(db)
-    .update(devices)
-    .set({ pushToken: null, updatedAt: new Date().toISOString() })
-    .where(deviceKey(userId, deviceIdentifier));
-  return { pushUuid: existing.pushUuid ?? null };
-}
-
 export async function getDevicePushUuid(
   db: D1Database,
   userId: string,
