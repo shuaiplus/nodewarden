@@ -1,4 +1,5 @@
 import { verifyWithJwks } from 'hono/jwt';
+import { readEnvConfig } from '../config/env';
 import type { Env } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
@@ -8,11 +9,12 @@ import { PolicyType } from '../services/org-types';
 export const FAKE_SSO_IDENTIFIER = '00000000-01DC-01DC-01DC-000000000000';
 
 export function isSsoEnabled(env: Env): boolean {
-  return String(env.SSO_ENABLED || '').trim() === '1' && !!env.SSO_AUTHORITY && !!env.SSO_CLIENT_ID;
+  const config = readEnvConfig(env);
+  return config.SSO_ENABLED && !!config.SSO_AUTHORITY && !!config.SSO_CLIENT_ID;
 }
 
 export function isSsoOnly(env: Env): boolean {
-  return String(env.SSO_ONLY || '').trim() === '1';
+  return readEnvConfig(env).SSO_ONLY;
 }
 
 export async function userRequiresSso(env: Env, userId: string): Promise<boolean> {
@@ -52,12 +54,12 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
     await env.CACHE_KV.put(`sso:state:${state}`, JSON.stringify({ redirectUri, clientId, codeChallenge }), { expirationTtl: 600 });
   }
 
-  const authority = String(env.SSO_AUTHORITY || '').replace(/\/+$/, '');
-  const target = new URL(await discoverAuthorizationEndpoint(authority));
+  const config = readEnvConfig(env);
+  const target = new URL(await discoverAuthorizationEndpoint(config.SSO_AUTHORITY));
   target.searchParams.set('response_type', 'code');
-  target.searchParams.set('client_id', String(env.SSO_CLIENT_ID));
+  target.searchParams.set('client_id', String(config.SSO_CLIENT_ID));
   target.searchParams.set('redirect_uri', `${url.origin}/identity/oidc-signin`);
-  target.searchParams.set('scope', env.SSO_SCOPES || 'openid profile email');
+  target.searchParams.set('scope', config.SSO_SCOPES);
   target.searchParams.set('state', state);
   if (codeChallenge) {
     target.searchParams.set('code_challenge', codeChallenge);
@@ -101,15 +103,16 @@ export interface OidcIdentity {
 }
 
 export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: string, codeVerifier?: string): Promise<OidcIdentity | null> {
-  const authority = String(env.SSO_AUTHORITY || '').replace(/\/+$/, '');
+  const config = readEnvConfig(env);
+  const authority = config.SSO_AUTHORITY;
   const tokenUrl = await discoverTokenEndpoint(authority);
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
-    client_id: String(env.SSO_CLIENT_ID),
+    client_id: String(config.SSO_CLIENT_ID),
     redirect_uri: `${redirectOrigin}/identity/oidc-signin`,
   });
-  if (env.SSO_CLIENT_SECRET) body.set('client_secret', env.SSO_CLIENT_SECRET);
+  if (config.SSO_CLIENT_SECRET) body.set('client_secret', config.SSO_CLIENT_SECRET);
   if (codeVerifier) body.set('code_verifier', codeVerifier);
   const response = await fetch(tokenUrl, {
     method: 'POST',
@@ -209,7 +212,7 @@ async function verifyIdToken(env: Env, authority: string, token: string): Promis
 function hasValidIdTokenClaims(env: Env, authority: string, claims: Record<string, unknown>): boolean {
   if (String(claims.iss || '').replace(/\/+$/, '') !== authority) return false;
   const audiences = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
-  if (!audiences.includes(String(env.SSO_CLIENT_ID))) return false;
+  if (!audiences.includes(String(readEnvConfig(env).SSO_CLIENT_ID))) return false;
 
   const now = Math.floor(Date.now() / 1000);
   const { exp, nbf } = claims;

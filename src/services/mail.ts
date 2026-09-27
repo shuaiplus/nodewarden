@@ -1,4 +1,5 @@
 import { LIMITS } from '../config/limits';
+import { EMAIL_PATTERN } from '../config/env';
 import { RateLimitService } from './ratelimit';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import type { Env } from '../types';
@@ -17,7 +18,7 @@ export interface SendEmailBinding {
   send(message: { to: string; from: { email: string; name: string }; subject: string;
     text: string; html: string; headers?: Record<string, string> }): Promise<{ messageId: string }>;
 }
-export const EMAIL_PATTERN = /^[\x21-\x3f\x41-\x7e]+@[^\s@,;<>"()\[\]\\]+\.\p{L}+$/u;
+export { EMAIL_PATTERN };
 export type MailConfig = { kind: 'disabled' } | { kind: 'misconfigured' }
   | { kind: 'enabled'; binding: SendEmailBinding; from: { email: string; name: string }; sendsPerHour: number; newDeviceNotices: boolean; newDeviceVerification: boolean };
 export type MailOutcome = { kind: 'sent' } | { kind: 'disabled' } | { kind: 'misconfigured' }

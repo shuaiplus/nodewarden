@@ -1,4 +1,5 @@
 import { twoFactorClearStatements } from './two-factor-providers';
+import { readEnvConfig } from '../config/env';
 import type { Env, User } from '../types';
 import { constantTimeEquals, hashApiKey } from '../utils/api-key';
 import { readAuthRequestDeviceInfo } from '../utils/device';
@@ -16,7 +17,8 @@ export interface SsoContinuation extends SsoContinuationContext {
 
 export async function ssoContinuationContext(env: Env, request: Request, body: Record<string, string>, code: string): Promise<SsoContinuationContext> {
   const origin = new URL(request.url).origin;
-  const provider = [String(env.SSO_AUTHORITY || '').replace(/\/+$/, ''), env.SSO_CLIENT_ID];
+  const { SSO_AUTHORITY, SSO_CLIENT_ID } = readEnvConfig(env);
+  const provider = [SSO_AUTHORITY, SSO_CLIENT_ID];
   const device = readAuthRequestDeviceInfo(body, request);
   return {
     id: `${PURPOSE}:${await hashApiKey(JSON.stringify([...provider, code]))}`,

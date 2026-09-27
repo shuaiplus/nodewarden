@@ -1,6 +1,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { sha256 } from 'hono/utils/crypto';
 import { LIMITS } from './config/limits';
+import { readEnvConfig } from './config/env';
 import {
   handleAccessSend,
   handleAccessSendFile,
@@ -62,10 +63,8 @@ export interface WebBootstrapResponse {
 }
 
 export function jwtSecretUnsafeReason(env: Env): JwtUnsafeReason {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret) return 'missing';
-  if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
-  return null;
+  const { kind } = readEnvConfig(env).JWT_SECRET;
+  return kind === 'safe' ? null : kind;
 }
 
 function isSameOriginWriteRequest(request: Request, env: Env): boolean {

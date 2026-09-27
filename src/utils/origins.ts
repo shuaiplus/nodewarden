@@ -1,4 +1,7 @@
+import { normalizeOrigin } from '../config/env';
 import type { Env } from '../types';
+
+export { normalizeOrigin };
 
 // Keep this list aligned with Bitwarden server's default FIDO2 origins.
 // These are the stable store IDs for the official Chromium-based extensions.
@@ -22,19 +25,6 @@ export function requestPublicOrigin(request: Request): string {
     return `${forwardedProto}://${forwardedHost}`;
   }
   return new URL(request.url).origin;
-}
-
-export function normalizeOrigin(value: unknown): string | null {
-  const raw = String(value || '').trim();
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw);
-    if (!url.protocol || !url.host) return null;
-    return `${url.protocol}//${url.host}`;
-  } catch {
-    return null;
-  }
 }
 
 export function isBrowserExtensionOrigin(origin: unknown): boolean {

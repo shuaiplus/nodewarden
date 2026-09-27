@@ -1,4 +1,4 @@
-import { LIMITS } from '../config/limits';
+import { readEnvConfig } from '../config/env';
 import { Env } from '../types';
 import { errorResponse } from './response';
 
@@ -29,11 +29,8 @@ export function buildDirectUploadUrl(request: Request, path: string, token: stri
 }
 
 export function getSafeJwtSecret(env: Env): string | null {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength) {
-    return null;
-  }
-  return secret;
+  const jwtSecret = readEnvConfig(env).JWT_SECRET;
+  return jwtSecret.kind === 'safe' ? jwtSecret.secret : null;
 }
 
 export function getMultipartRequestMaxBytes(maxFileSize: number): number {
