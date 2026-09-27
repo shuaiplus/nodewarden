@@ -137,10 +137,9 @@ export class AuthService {
     return device;
   }
 
-  // Second-layer hash: PBKDF2-SHA256(clientHash, email-salt, iterations).
-  // Ensures database contents alone cannot be used to authenticate (pass-the-hash defense).
-  // Result is prefixed to distinguish server-hashed credentials from invalid legacy rows.
-  async hashPasswordServer(clientHash: string, _email?: string): Promise<string> {
+  // Second-layer hash of the client hash (random salt, see auth-password.ts), so database contents alone
+  // cannot be used to authenticate (pass-the-hash defense).
+  async hashPasswordServer(clientHash: string): Promise<string> {
     return hashPassword(clientHash);
   }
 

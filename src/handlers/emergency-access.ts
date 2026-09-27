@@ -318,7 +318,7 @@ export async function handleEmergencyAccessRoute(
     const update = masterPasswordUpdate(body, grantor);
     if (update instanceof Response) return update;
     const auth = new AuthService(env);
-    grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, grantor.email);
+    grantor.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash);
     grantor.key = update.key;
     const originalSecurityStamp = grantor.securityStamp;
     grantor.securityStamp = generateUUID();

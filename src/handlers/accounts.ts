@@ -220,7 +220,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
 
   const now = new Date().toISOString();
   const auth = new AuthService(env);
-  const serverHash = await auth.hashPasswordServer(masterPasswordHash, email);
+  const serverHash = await auth.hashPasswordServer(masterPasswordHash);
 
   const user: User = {
     id: generateUUID(),
@@ -512,7 +512,7 @@ export async function handleChangeEmail(request: Request, env: Env, userId: stri
   const update = masterPasswordUpdate(body, { ...user, email });
   if (update instanceof Response) return update;
   if (!await redeemEmailOtp(env, { purpose: 'email-change', subject: user.id, binding: `${user.securityStamp}:${email}` }, body.token)) return errorResponse('Invalid token.', 400);
-  const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash, email);
+  const passwordHash = await auth.hashPasswordServer(update.masterPasswordHash);
   const stamp = generateUUID();
   const now = new Date().toISOString();
   const orm = getOrm(env.DB);
@@ -769,7 +769,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   }
   const shouldUpdateHint = 'masterPasswordHint' in body;
 
-  user.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash, user.email);
+  user.masterPasswordHash = await auth.hashPasswordServer(update.masterPasswordHash);
   user.key = update.key;
   if (nextPrivateKey) user.privateKey = nextPrivateKey;
   if (nextPublicKey) user.publicKey = nextPublicKey;
