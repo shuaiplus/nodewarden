@@ -47,7 +47,7 @@ If you add or change a table, column, or index:
 
 - Edit `src/db/schema.ts` (and `relations.ts` when a foreign key changes).
 - Run `npm run db:generate` and `npm test`.
-- Bump `STORAGE_SCHEMA_VERSION` in `src/services/storage.ts`.
+- Bump `STORAGE_SCHEMA_VERSION` in `src/db/migrate.ts`.
 - Decide whether the data should be included in instance backup.
 
 ### Backup And Restore
