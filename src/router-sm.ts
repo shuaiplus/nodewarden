@@ -1,7 +1,5 @@
-import type { Principal } from './services/auth';
+import { Hono } from 'hono';
 import { handleMachinePolicies, handlePotentialMachines, handleSecretPolicies, handlePeoplePolicies, handlePotentialPeople } from './handlers/sm-access-policies';
-import type { Env } from './types';
-import { errorResponse } from './utils/response';
 import {
   handleCreateAccessToken,
   handleCreateProject,
@@ -26,72 +24,57 @@ import {
   handleSecretsSync,
   handleSecretsTrash,
 } from './handlers/secrets-manager';
+import type { AppEnv } from './router';
 
-export async function handleSmRoute(request: Request, env: Env, principal: Principal, path: string, method: string): Promise<Response | null> {
-  path = path.toLowerCase();
-  const trash = path.match(/^\/api\/secrets\/([a-f0-9-]+)\/trash(?:\/(empty|restore))?$/i);
-  if (trash && ((!trash[2] && method === 'GET') || (trash[2] && method === 'POST'))) return handleSecretsTrash(request, env, principal, trash[1], trash[2] as 'empty' | 'restore' | undefined);
-  const secretPolicies = path.match(/^\/api\/secrets\/([a-f0-9-]+)\/access-policies$/i);
-  if (secretPolicies && method === 'GET') return handleSecretPolicies(env, principal, secretPolicies[1]);
-  const machinePolicies = path.match(/^\/api\/projects\/([a-f0-9-]+)\/access-policies\/service-accounts$/i);
-  if (machinePolicies && (method === 'GET' || method === 'PUT')) return handleMachinePolicies(request, env, principal, 'project', machinePolicies[1]);
-  const granted = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/granted-policies$/i);
-  if (granted && (method === 'GET' || method === 'PUT')) return handleMachinePolicies(request, env, principal, 'serviceAccount', granted[1]);
-  const people = path.match(/^\/api\/(projects|service-accounts)\/([a-f0-9-]+)\/access-policies\/people$/i);
-  if (people && (method === 'GET' || method === 'PUT')) return handlePeoplePolicies(request, env, principal, people[1] === 'projects' ? 'project' : 'serviceAccount', people[2]);
-  const event = path.match(/^\/api\/organization\/([a-f0-9-]+)\/(projects|secrets|service-account)\/([a-f0-9-]+)\/events$/i);
-  if (event && method === 'GET') return handleSmEvents(request, env, principal, event[2] as 'projects' | 'secrets' | 'service-account', event[3], event[1]);
-  const accountEvent = path.match(/^\/api\/sm\/events\/service-accounts\/([a-f0-9-]+)$/i);
-  if (accountEvent && method === 'GET') return handleSmEvents(request, env, principal, 'service-account', accountEvent[1]);
-  if (path === '/api/service-accounts/delete' && method === 'POST') return handleDeleteServiceAccounts(request, env, principal);
-  const account = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)(\/sm-counts)?$/i);
-  if (account && (method === 'GET' || (!account[2] && method === 'PUT'))) return handleServiceAccount(request, env, principal, account[1], !!account[2]);
-  const revoke = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/access-tokens\/revoke$/i);
-  if (revoke && method === 'POST') return handleRevokeAccessTokens(request, env, principal, revoke[1]);
-  if (path === '/api/projects/delete' && method === 'POST') return handleDeleteProjects(request, env, principal);
-  if (path === '/api/secrets/get-by-ids' && method === 'POST') return handleSecretsByIds(request, env, principal);
-  const projectSecrets = path.match(/^\/api\/projects\/([a-f0-9-]+)\/secrets$/i);
-  if (projectSecrets && method === 'GET') return handleProjectSecrets(env, principal, projectSecrets[1]);
-  const project = path.match(/^\/api\/projects\/([a-f0-9-]+)(\/sm-counts)?$/i);
-  if (project && (method === 'GET' || (!project[2] && method === 'PUT'))) return handleProject(request, env, principal, project[1], !!project[2]);
-  if (path === '/api/secrets/delete' && method === 'POST') return handleDeleteSecrets(request, env, principal);
-
-  const secretMatch = path.match(/^\/api\/secrets\/([a-f0-9-]+)$/i);
-  if (secretMatch) {
-    if (method === 'GET') return handleGetSecret(request, env, principal, secretMatch[1]);
-    if (method === 'PUT') return handleUpdateSecret(request, env, principal, secretMatch[1]);
-  }
-
-  const saTokenMatch = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)\/access-tokens$/i);
-  if (saTokenMatch) {
-    if (method === 'GET') return handleListAccessTokens(env, principal, saTokenMatch[1]);
-    if (method === 'POST') return handleCreateAccessToken(request, env, principal, saTokenMatch[1]);
-  }
-
-  const orgMatch = path.match(/^\/api\/organizations\/([a-f0-9-]+)(\/.*)?$/i);
-  if (!orgMatch) return null;
-  const orgId = orgMatch[1];
-  const sub = orgMatch[2] || '';
-  if (sub === '/access-policies/service-accounts/potential-grantees' && method === 'GET') return handlePotentialMachines(env, principal, orgId, 'serviceAccounts');
-  if (sub === '/access-policies/projects/potential-grantees' && method === 'GET') return handlePotentialMachines(env, principal, orgId, 'projects');
-  if (sub === '/access-policies/people/potential-grantees' && method === 'GET') return handlePotentialPeople(env, principal, orgId);
-  if (sub === '/sm-counts' && method === 'GET') return handleSmCounts(env, principal, orgId);
-  if (sub === '/secrets' && method === 'GET') return handleListSecrets(env, principal, orgId);
-  if (sub === '/secrets' && method === 'POST') return handleCreateSecret(request, env, principal, orgId);
-  if (sub === '/secrets/sync' && method === 'GET') return handleSecretsSync(request, env, principal, orgId);
-  if (sub === '/projects' && method === 'GET') return handleListProjects(env, principal, orgId);
-  if (sub === '/projects' && method === 'POST') return handleCreateProject(request, env, principal, orgId);
-  if (sub === '/service-accounts' && method === 'GET') return handleListServiceAccounts(env, principal, orgId);
-  if (sub === '/service-accounts' && method === 'POST') return handleCreateServiceAccount(request, env, principal, orgId);
-
-  return null;
+// The subset of Secrets Manager routes a machine access token may call.
+export function isMachineAllowedRoute(path: string, method: string): boolean {
+  return ((method === 'GET' || method === 'POST') && /^\/api\/organizations\/[a-f0-9-]+\/(projects|secrets)$/.test(path))
+    || ((method === 'GET' || method === 'PUT') && /^\/api\/(projects|secrets)\/[a-f0-9-]+$/.test(path))
+    || (method === 'POST' && /^\/api\/(projects\/delete|secrets\/(delete|get-by-ids))$/.test(path))
+    || (method === 'GET' && /^\/api\/projects\/[a-f0-9-]+\/secrets$/.test(path))
+    || (method === 'GET' && /^\/api\/organizations\/[a-f0-9-]+\/secrets\/sync$/.test(path));
 }
 
-export async function handleSmMachineRoute(request: Request, env: Env, principal: Extract<Principal, { kind: 'serviceAccount' }>, path: string, method: string): Promise<Response> {
-  const allowed = ((method === 'GET' || method === 'POST') && /^\/api\/organizations\/[a-f0-9-]+\/(projects|secrets)$/i.test(path))
-    || ((method === 'GET' || method === 'PUT') && /^\/api\/(projects|secrets)\/[a-f0-9-]+$/i.test(path))
-    || (method === 'POST' && /^\/api\/(projects\/delete|secrets\/(delete|get-by-ids))$/i.test(path))
-    || (method === 'GET' && /^\/api\/projects\/[a-f0-9-]+\/secrets$/i.test(path))
-    || (method === 'GET' && /^\/api\/organizations\/[a-f0-9-]+\/secrets\/sync$/i.test(path));
-  return allowed ? (await handleSmRoute(request, env, principal, path, method)) ?? errorResponse('Not found', 404) : errorResponse('Not found', 404);
-}
+export const secretsManagerRoutes = new Hono<AppEnv>();
+
+const secret = '/api/secrets/:secretId{[a-f0-9-]+}';
+const project = '/api/projects/:projectId{[a-f0-9-]+}';
+const serviceAccount = '/api/service-accounts/:serviceAccountId{[a-f0-9-]+}';
+const org = '/api/organizations/:orgId{[a-f0-9-]+}';
+
+secretsManagerRoutes.get(`${secret}/trash`, (c) => handleSecretsTrash(c.req.raw, c.env, c.get('principal'), c.req.param('secretId'), undefined));
+secretsManagerRoutes.post(`${secret}/trash/:action{(?:empty|restore)}`, (c) => handleSecretsTrash(c.req.raw, c.env, c.get('principal'), c.req.param('secretId'), c.req.param('action') as 'empty' | 'restore'));
+secretsManagerRoutes.get(`${secret}/access-policies`, (c) => handleSecretPolicies(c.env, c.get('principal'), c.req.param('secretId')));
+secretsManagerRoutes.on(['GET', 'PUT'], `${project}/access-policies/service-accounts`, (c) => handleMachinePolicies(c.req.raw, c.env, c.get('principal'), 'project', c.req.param('projectId')));
+secretsManagerRoutes.on(['GET', 'PUT'], `${serviceAccount}/granted-policies`, (c) => handleMachinePolicies(c.req.raw, c.env, c.get('principal'), 'serviceAccount', c.req.param('serviceAccountId')));
+secretsManagerRoutes.on(['GET', 'PUT'], `${project}/access-policies/people`, (c) => handlePeoplePolicies(c.req.raw, c.env, c.get('principal'), 'project', c.req.param('projectId')));
+secretsManagerRoutes.on(['GET', 'PUT'], `${serviceAccount}/access-policies/people`, (c) => handlePeoplePolicies(c.req.raw, c.env, c.get('principal'), 'serviceAccount', c.req.param('serviceAccountId')));
+secretsManagerRoutes.get('/api/organization/:orgId{[a-f0-9-]+}/:kind{(?:projects|secrets|service-account)}/:id{[a-f0-9-]+}/events', (c) => handleSmEvents(c.req.raw, c.env, c.get('principal'), c.req.param('kind') as 'projects' | 'secrets' | 'service-account', c.req.param('id'), c.req.param('orgId')));
+secretsManagerRoutes.get('/api/sm/events/service-accounts/:serviceAccountId{[a-f0-9-]+}', (c) => handleSmEvents(c.req.raw, c.env, c.get('principal'), 'service-account', c.req.param('serviceAccountId')));
+
+secretsManagerRoutes.post('/api/service-accounts/delete', (c) => handleDeleteServiceAccounts(c.req.raw, c.env, c.get('principal')));
+secretsManagerRoutes.on(['GET', 'PUT'], serviceAccount, (c) => handleServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId'), false));
+secretsManagerRoutes.get(`${serviceAccount}/sm-counts`, (c) => handleServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId'), true));
+secretsManagerRoutes.post(`${serviceAccount}/access-tokens/revoke`, (c) => handleRevokeAccessTokens(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId')));
+secretsManagerRoutes.post('/api/projects/delete', (c) => handleDeleteProjects(c.req.raw, c.env, c.get('principal')));
+secretsManagerRoutes.post('/api/secrets/get-by-ids', (c) => handleSecretsByIds(c.req.raw, c.env, c.get('principal')));
+secretsManagerRoutes.get(`${project}/secrets`, (c) => handleProjectSecrets(c.env, c.get('principal'), c.req.param('projectId')));
+secretsManagerRoutes.on(['GET', 'PUT'], project, (c) => handleProject(c.req.raw, c.env, c.get('principal'), c.req.param('projectId'), false));
+secretsManagerRoutes.get(`${project}/sm-counts`, (c) => handleProject(c.req.raw, c.env, c.get('principal'), c.req.param('projectId'), true));
+secretsManagerRoutes.post('/api/secrets/delete', (c) => handleDeleteSecrets(c.req.raw, c.env, c.get('principal')));
+secretsManagerRoutes.get(secret, (c) => handleGetSecret(c.req.raw, c.env, c.get('principal'), c.req.param('secretId')));
+secretsManagerRoutes.put(secret, (c) => handleUpdateSecret(c.req.raw, c.env, c.get('principal'), c.req.param('secretId')));
+secretsManagerRoutes.get(`${serviceAccount}/access-tokens`, (c) => handleListAccessTokens(c.env, c.get('principal'), c.req.param('serviceAccountId')));
+secretsManagerRoutes.post(`${serviceAccount}/access-tokens`, (c) => handleCreateAccessToken(c.req.raw, c.env, c.get('principal'), c.req.param('serviceAccountId')));
+
+secretsManagerRoutes.get(`${org}/access-policies/service-accounts/potential-grantees`, (c) => handlePotentialMachines(c.env, c.get('principal'), c.req.param('orgId'), 'serviceAccounts'));
+secretsManagerRoutes.get(`${org}/access-policies/projects/potential-grantees`, (c) => handlePotentialMachines(c.env, c.get('principal'), c.req.param('orgId'), 'projects'));
+secretsManagerRoutes.get(`${org}/access-policies/people/potential-grantees`, (c) => handlePotentialPeople(c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/sm-counts`, (c) => handleSmCounts(c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/secrets`, (c) => handleListSecrets(c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/secrets`, (c) => handleCreateSecret(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/secrets/sync`, (c) => handleSecretsSync(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/projects`, (c) => handleListProjects(c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/projects`, (c) => handleCreateProject(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.get(`${org}/service-accounts`, (c) => handleListServiceAccounts(c.env, c.get('principal'), c.req.param('orgId')));
+secretsManagerRoutes.post(`${org}/service-accounts`, (c) => handleCreateServiceAccount(c.req.raw, c.env, c.get('principal'), c.req.param('orgId')));

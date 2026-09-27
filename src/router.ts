@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { handleSmMachineRoute, handleSmRoute } from './router-sm';
+import { isMachineAllowedRoute, secretsManagerRoutes } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
 import { handleAdminPortal } from './handlers/admin-portal';
 import type { Env, User } from './types';
@@ -11,7 +11,8 @@ import { handleAuthenticatedRoute } from './router-authenticated';
 import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
 
 // Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
-// are only set for user principals.
+// are only set for user principals; the guard before the authenticated routes keeps machine
+// tokens out of them.
 export type AppEnv = {
   Bindings: Env;
   Variables: { principal: Principal; userId: string; currentUser: User };
@@ -104,9 +105,16 @@ async function enforceRequestBodyLimit(
   });
 }
 
-// Routes match the raw pathname, exactly as index.ts normalised it; Hono's default path getter
-// would percent-decode it before matching.
-export const app = new Hono<AppEnv>({ getPath: (request) => new URL(request.url).pathname });
+// Routes match the raw pathname exactly as index.ts normalised it (Hono's default path getter
+// would percent-decode it first). Secrets Manager routes are the exception: they match a
+// lower-cased path and hand lower-cased ids to their handlers, so upper-case ids keep working.
+export const app = new Hono<AppEnv>({
+  getPath: (request) => {
+    const path = new URL(request.url).pathname;
+    const lowerCased = path.toLowerCase();
+    return secretsManagerRoutes.router.match(request.method, lowerCased)[0].length ? lowerCased : path;
+  },
+});
 
 app.use(async (c, next) => {
   if (c.req.method === 'OPTIONS' && !isAdminPortalPath(c.req.path)) return handleCors(c.req.raw, c.env);
@@ -139,7 +147,8 @@ app.use(async (c, next) => {
   if (verified.kind === 'serviceAccount') {
     const budget = await new RateLimitService(c.env.DB).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
     if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
-    return handleSmMachineRoute(c.req.raw, c.env, verified, c.req.path, c.req.method);
+    if (!isMachineAllowedRoute(c.req.path, c.req.method)) return errorResponse('Not found', 404);
+    return next();
   }
 
   const { payload, user } = verified;
@@ -162,9 +171,11 @@ app.use(async (c, next) => {
   await next();
 });
 
+app.route('/', secretsManagerRoutes);
+
+// A machine token that passed the allowlist but matched no Secrets Manager route ends here.
 app.use(async (c, next) => {
-  const smResponse = await handleSmRoute(c.req.raw, c.env, c.get('principal'), c.req.path, c.req.method);
-  if (smResponse) return smResponse;
+  if (c.get('principal').kind !== 'user') return errorResponse('Not found', 404);
   await next();
 });
 
