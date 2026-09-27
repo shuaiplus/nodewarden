@@ -1,11 +1,12 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import { sha256 } from 'hono/utils/crypto';
 import { z } from 'zod';
-import { asc, getColumns, getTableName, sql } from 'drizzle-orm';
+import { asc, getColumns, getTableName } from 'drizzle-orm';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
 import { attachments, ciphers, config, domainSettings, folders, userRevisions, users, webauthnCredentials } from '../db/schema';
+import { unmapped } from '../db/sql';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
@@ -123,7 +124,7 @@ export interface BackupArchiveBuildProgressEvent {
 export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgressEvent) => Promise<void>;
 
 // Archive rows keep database column names, their order and the raw stored values: each listed column
-// is selected through a bare sql`${column}`, so no drizzle value mapping runs. A name the schema lacks
+// is selected through unmapped(), so no drizzle value mapping runs. A name the schema lacks
 // throws instead of exporting undefined.
 async function queryRows(db: D1Database, table: SQLiteTable, columnNames: string[], orderBy: string[]): Promise<SqlRow[]> {
   const columns = new Map(Object.values(getColumns(table)).map((column) => [column.name, column]));
@@ -133,7 +134,7 @@ async function queryRows(db: D1Database, table: SQLiteTable, columnNames: string
     return column;
   };
   return getOrm(db)
-    .select(Object.fromEntries(columnNames.map((name) => [name, sql<string | number | null>`${schemaColumn(name)}`])))
+    .select(Object.fromEntries(columnNames.map((name) => [name, unmapped<string | number | null>(schemaColumn(name))])))
     .from(table)
     .orderBy(...orderBy.map((name) => asc(schemaColumn(name))));
 }
