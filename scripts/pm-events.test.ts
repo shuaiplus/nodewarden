@@ -12,6 +12,7 @@ const { createOwnedOrganization } = await import('../src/handlers/organizations'
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const ORG_KEY = '4.dGVzdA==';
+const CLIENT_IP = '203.0.113.10';
 
 async function setup() {
   const mail = captureEmail();
@@ -73,7 +74,7 @@ test('organization cipher events retain immutable scope through deletion and ski
   await assertTypes(env, org.id, [1100, 1101, 1106, 1115, 1116, 1102]);
   const saved = await rows(env, org.id);
   assert.ok(saved.every(row => row.resourceId === id && row.resourceType === 'cipher' && row.actingUserId === owner.id));
-  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === '203.0.113.10'));
+  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP));
   assert.ok(!JSON.stringify(saved).includes(ENCRYPTED));
   assert.equal((await getOrm(env.DB).select().from(events)).length, saved.length);
 });
@@ -137,6 +138,7 @@ test('collections, groups, settings and policies emit changed events without enc
   assert.ok(saved.filter(row => [1400, 1401, 1402].includes(row.type)).every(row => row.resourceId === groupId));
   assert.ok(!JSON.stringify(saved).includes(ENCRYPTED));
   assert.ok(!JSON.stringify(saved).includes('Renamed'));
+  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP), 'every admin change keeps its client and address');
 });
 
 test('membership events cover actual transitions and preserve the affected account after removal or leaving', async () => {
@@ -176,4 +178,17 @@ test('membership events cover actual transitions and preserve the affected accou
   await assertTypes(env, foreign.id, []);
   assert.ok(!saved.some(row => row.resourceId === other.member.id));
   assert.ok(!JSON.stringify(saved).includes(inviteEmail));
+  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP), 'leave keeps its client and address');
+});
+
+test('single-member revoke, restore and remove record the acting client and address', async () => {
+  const { env, org, call } = await setup();
+  const { member } = await seedMember(env, org.id);
+  const base = `/api/organizations/${org.id}/users/${member.id}`;
+  assert.equal((await call('PUT', `${base}/revoke`)).status, 200);
+  assert.equal((await call('PUT', `${base}/restore`)).status, 200);
+  assert.equal((await call('DELETE', base)).status, 200);
+  const saved = await rows(env, org.id);
+  assert.deepEqual(saved.map(row => row.type).sort(), [EventType.OrganizationUserRevoked, EventType.OrganizationUserRestored, EventType.OrganizationUserRemoved].sort());
+  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP && row.resourceId === member.id));
 });

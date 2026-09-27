@@ -83,7 +83,7 @@ export async function handleOrganizationRoute(
     if (method === 'DELETE') return handleDeleteOrganization(env, userId, orgId);
   }
   if (sub === '/delete' && method === 'POST') return handleDeleteOrganization(env, userId, orgId);
-  if (sub === '/leave' && method === 'POST') return handleLeaveOrganization(env, userId, orgId);
+  if (sub === '/leave' && method === 'POST') return handleLeaveOrganization(request, env, userId, orgId);
   if (sub === '/keys' && method === 'POST') return handlePostOrganizationKeys(request, env, userId, orgId);
   if ((sub === '/keys' || sub === '/public-key') && method === 'GET') return handleGetOrganizationKeys(env, userId, orgId);
   if (sub === '/auto-enroll-status' && method === 'GET') return handleGetAutoEnrollStatus(env, userId, orgId);
@@ -105,7 +105,7 @@ export async function handleOrganizationRoute(
   const colMatch = sub.match(/^\/collections\/([a-f0-9-]+)(?:\/(delete|details|users))?$/i);
   if (colMatch) {
     if ((method === 'PUT' || method === 'POST') && !colMatch[2]) return handleUpdateOrgCollection(request, env, userId, orgId, colMatch[1]);
-    if ((method === 'DELETE' || (method === 'POST' && colMatch[2] === 'delete'))) return handleDeleteOrgCollection(env, userId, orgId, colMatch[1]);
+    if ((method === 'DELETE' || (method === 'POST' && colMatch[2] === 'delete'))) return handleDeleteOrgCollection(request, env, userId, orgId, colMatch[1]);
     if (method === 'GET' && colMatch[2] === 'details') return handleGetOrgCollectionDetails(env, userId, orgId, colMatch[1]);
     if (method === 'GET' && colMatch[2] === 'users') return handleListOrgCollectionUsers(env, userId, orgId, colMatch[1]);
   }
@@ -130,11 +130,11 @@ export async function handleOrganizationRoute(
     if (action === 'accept' && method === 'POST') return handleAcceptInvite(request, env, currentUser, orgId, memberId);
     if (action === 'confirm' && method === 'POST') return handleConfirmMember(request, env, userId, orgId, memberId);
     if (action === 'reinvite' && method === 'POST') return handleReinviteMember(request, env, userId, orgId, memberId);
-    if (action === 'revoke' && (method === 'PUT' || method === 'PATCH')) return handleRevokeMember(env, userId, orgId, memberId);
-    if ((action === 'restore' || action === 'restore/vnext') && (method === 'PUT' || method === 'PATCH')) return handleRestoreMember(env, userId, orgId, memberId);
+    if (action === 'revoke' && (method === 'PUT' || method === 'PATCH')) return handleRevokeMember(request, env, userId, orgId, memberId);
+    if ((action === 'restore' || action === 'restore/vnext') && (method === 'PUT' || method === 'PATCH')) return handleRestoreMember(request, env, userId, orgId, memberId);
     if (method === 'GET' && !action) return handleGetMember(request, env, userId, orgId, memberId);
     if ((method === 'PUT' || method === 'POST') && !action) return handleEditMember(request, env, userId, orgId, memberId);
-    if (method === 'DELETE') return handleDeleteMember(env, userId, orgId, memberId);
+    if (method === 'DELETE') return handleDeleteMember(request, env, userId, orgId, memberId);
   }
 
   if ((sub === '/groups' || sub === '/groups/details') && method === 'GET') return handleListGroups(env, userId, orgId);
@@ -142,7 +142,7 @@ export async function handleOrganizationRoute(
   const groupMatch = sub.match(/^\/groups\/([a-f0-9-]+)(?:\/delete)?$/i);
   if (groupMatch) {
     if (method === 'POST' || method === 'PUT') return handleSaveGroup(request, env, userId, orgId, groupMatch[1]);
-    if (method === 'DELETE') return handleDeleteGroup(env, userId, orgId, groupMatch[1]);
+    if (method === 'DELETE') return handleDeleteGroup(request, env, userId, orgId, groupMatch[1]);
   }
 
   if (sub === '/policies' && method === 'GET') return handleListPolicies(env, userId, orgId);

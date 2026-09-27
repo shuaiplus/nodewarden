@@ -249,14 +249,14 @@ export async function handleDeleteOrganization(env: Env, userId: string, orgId: 
   return jsonResponse({});
 }
 
-export async function handleLeaveOrganization(env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleLeaveOrganization(request: Request, env: Env, userId: string, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (member.type === MembershipType.Owner && (await orgRepo.countConfirmedOwners(env.DB, orgId)) <= 1) {
     return errorResponse('The last owner cannot leave', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [member.id], 'remove');
-  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserLeft, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserLeft, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId }]);
   return jsonResponse({});
 }
 
@@ -483,7 +483,7 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
 
-export async function handleDeleteOrgCollection(env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
+export async function handleDeleteOrgCollection(request: Request, env: Env, userId: string, orgId: string, collectionId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   const collection = await orgRepo.getCollection(env.DB, collectionId);
@@ -492,7 +492,7 @@ export async function handleDeleteOrgCollection(env: Env, userId: string, orgId:
     return errorResponse('Access denied', 403);
   }
   await orgRepo.deleteCollection(env.DB, collectionId);
-  await recordEvents(env, null, { userId }, [{ type: EventType.CollectionDeleted, organizationId: collection.orgId, resourceType: 'collection', resourceId: collection.id }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.CollectionDeleted, organizationId: collection.orgId, resourceType: 'collection', resourceId: collection.id }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -1026,7 +1026,7 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   return jsonResponse({});
 }
 
-export async function handleDeleteMember(env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleDeleteMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -1038,11 +1038,11 @@ export async function handleDeleteMember(env: Env, userId: string, orgId: string
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'remove');
-  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRemoved, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRemoved, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
-export async function handleRevokeMember(env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleRevokeMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -1055,11 +1055,11 @@ export async function handleRevokeMember(env: Env, userId: string, orgId: string
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'revoke');
-  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRevoked, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRevoked, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
-export async function handleRestoreMember(env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+export async function handleRestoreMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
@@ -1068,7 +1068,7 @@ export async function handleRestoreMember(env: Env, userId: string, orgId: strin
   const removalCheck = memberRemovalCheck(actor, membership, 'restore');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'restore');
-  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRestored, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRestored, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
@@ -1170,14 +1170,14 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   });
 }
 
-export async function handleDeleteGroup(env: Env, userId: string, orgId: string, groupId: string): Promise<Response> {
+export async function handleDeleteGroup(request: Request, env: Env, userId: string, orgId: string, groupId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
   if (!canManageGroups(member)) return errorResponse('Access denied', 403);
   const group = await orgRepo.getGroup(env.DB, groupId);
   if (!group || group.orgId !== orgId) return errorResponse('Group not found', 404);
   await orgRepo.deleteGroup(env.DB, groupId);
-  await recordEvents(env, null, { userId }, [{ type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id }]);
+  await recordEvents(env, request, { userId }, [{ type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
