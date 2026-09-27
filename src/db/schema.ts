@@ -742,3 +742,29 @@ export const emergencyAccess = sqliteTable('emergency_access', {
   index('idx_emergency_access_grantee').on(table.granteeId, table.status),
   index('idx_emergency_access_email').on(table.email),
 ]);
+
+// Bitwarden-compatible event history. Actor/resource IDs are snapshots, retained after deletion.
+export const events = sqliteTable('events', {
+  id: text('id').primaryKey(),
+  organizationId: text('organization_id'),
+  type: integer('type').notNull(),
+  date: text('date').notNull(),
+  recordedAt: text('recorded_at').notNull(),
+  actingUserId: text('acting_user_id'),
+  userId: text('user_id'),
+  resourceType: text('resource_type'),
+  resourceId: text('resource_id'),
+  serviceAccountId: text('service_account_id'),
+  grantedServiceAccountId: text('granted_service_account_id'),
+  deviceType: integer('device_type'),
+  ipAddress: text('ip_address'),
+  systemUser: integer('system_user'),
+}, (table) => [
+  foreignKey({ columns: [table.organizationId], foreignColumns: [organizations.id] }).onDelete('cascade'),
+  index('idx_events_recorded').on(table.recordedAt, table.id),
+  index('idx_events_org_date').on(table.organizationId, table.date, table.id),
+  index('idx_events_actor_date').on(table.actingUserId, table.date, table.id),
+  index('idx_events_resource_date').on(table.resourceType, table.resourceId, table.date, table.id),
+  index('idx_events_service_account_date').on(table.serviceAccountId, table.date, table.id),
+  index('idx_events_granted_service_account_date').on(table.grantedServiceAccountId, table.date, table.id),
+]);

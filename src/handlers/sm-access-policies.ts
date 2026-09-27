@@ -6,6 +6,7 @@ import * as smRepo from '../services/storage-secret-repo';
 import { diffPolicies, parsePolicyRequests, projectAccess, secretAccess, serviceAccountAccess } from '../services/sm-authz';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { listResponse, smContext } from './secrets-manager';
+import { EventType, recordEvents, type EventInput } from '../services/events';
 
 export async function peopleDirectory(env: Env, orgId: string, membershipId: string) {
   const [members, groups, ownGroups] = await Promise.all([
@@ -52,7 +53,19 @@ export async function handlePeoplePolicies(request: Request, env: Env, principal
     const memberIds = new Set(directory.members.map(({ item }) => item.id));
     const groupIds = new Set(directory.groups.map(group => group.id));
     if ([...users.value.keys()].some(id => !memberIds.has(id)) || [...groups.value.keys()].some(id => !groupIds.has(id))) return errorResponse('Not found', 404);
-    await smRepo.replacePeoplePolicies(env.DB, kind, id, users.value, groups.value);
+    const current = await smRepo.replacePeoplePolicies(env.DB, kind, id, users.value, groups.value);
+    if (kind === 'serviceAccount' && principal.kind === 'user') {
+      const userChanges = diffPolicies(current.users, users.value);
+      const groupChanges = diffPolicies(current.groups, groups.value);
+      const events: EventInput[] = [
+        ...userChanges.created.map(resourceId => ({ type: EventType.ServiceAccountUserAdded, resourceType: 'organizationUser' as const, resourceId })),
+        ...userChanges.deleted.map(resourceId => ({ type: EventType.ServiceAccountUserRemoved, resourceType: 'organizationUser' as const, resourceId })),
+        ...groupChanges.created.map(resourceId => ({ type: EventType.ServiceAccountGroupAdded, resourceType: 'group' as const, resourceId })),
+        ...groupChanges.deleted.map(resourceId => ({ type: EventType.ServiceAccountGroupRemoved, resourceType: 'group' as const, resourceId })),
+      ].map(event => ({ ...event, organizationId: row.orgId, grantedServiceAccountId: id,
+        userId: event.resourceType === 'organizationUser' ? event.resourceId : undefined }));
+      await recordEvents(env, request, { userId: principal.user.id }, events);
+    }
   }
   return jsonResponse(await peoplePolicyResponse(env, kind, id, row.orgId, context.actor.membershipId));
 }

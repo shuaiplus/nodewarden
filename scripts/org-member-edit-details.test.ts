@@ -312,6 +312,7 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   const request = { method: 'PUT', path: `/api/organizations/${orgId}/users/revoke`, body: { ids }, userId: owner.id };
   const failed = await authedFetch(env, request);
   assert.equal(failed.status, 500);
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS count FROM events WHERE organization_id = ?').bind(orgId).first('count'), 0);
   assert.ok((await orgRepo.listMembershipsByOrg(env.DB, orgId)).every((member) => member.status === MembershipStatus.Confirmed));
   assert.deepEqual(await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first(), revisionBefore);
   await env.DB.exec('DROP TRIGGER fail_last_member');
@@ -321,7 +322,8 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   const result = await response.json() as { data: Array<{ error: string }> };
   assert.equal(result.data.length, 150);
   assert.ok(result.data.every((item) => item.error === ''));
-  assert.equal(batch.mock.callCount(), 1);
+  assert.equal(batch.mock.callCount(), 2); // Atomic membership writes, then chunked event records.
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS count FROM events WHERE organization_id = ? AND type = 1511').bind(orgId).first('count'), 150);
   assert.equal((await orgRepo.listMembershipsByOrg(env.DB, orgId)).filter((member) => member.status < 0).length, 150);
 });
 

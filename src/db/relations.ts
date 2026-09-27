@@ -121,6 +121,7 @@ export const relations = defineRelations(schema, (r) => ({
   },
 
   organizations: {
+    events: r.many.events(),
     memberships: r.many.organizationMemberships(),
     collections: r.many.collections(),
     groups: r.many.orgGroups(),
@@ -279,6 +280,10 @@ export const relations = defineRelations(schema, (r) => ({
       to: r.smServiceAccounts.id,
       optional: false,
     }),
+  },
+
+  events: {
+    organization: r.one.organizations({ from: r.events.organizationId, to: r.organizations.id }),
   },
 
   emergencyAccess: {

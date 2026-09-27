@@ -1,3 +1,4 @@
+import { handleEventRoute } from './handlers/events';
 import type { Env, User } from './types';
 import { errorResponse, jsonResponse, unsupportedResponse } from './utils/response';
 import {
@@ -122,6 +123,8 @@ export async function handleAuthenticatedRoute(
   path: string,
   method: string
 ): Promise<Response | null> {
+  const eventResponse = await handleEventRoute(request, env, currentUser, path, method);
+  if (eventResponse) return eventResponse;
   if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
     const blockedAccountPaths = new Set([
       '/api/accounts/set-password',

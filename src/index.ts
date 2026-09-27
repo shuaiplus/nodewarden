@@ -1,3 +1,4 @@
+import { pruneEvents } from './services/events';
 import { purgeExpiredEmailOtps } from './services/email-otp';
 import { purgeSecretsTrash } from './services/storage-secret-repo';
 import { syncVaultAdminRoles } from './services/vault-admin-role';
@@ -132,6 +133,7 @@ export default {
       return;
     }
     ctx.waitUntil(Promise.all([
+      pruneEvents(env).catch(() => console.error('Event cleanup failed')),
       purgeExpiredEmailOtps(env).catch(() => console.error('Email code cleanup failed')),
       runScheduledBackupIfDue(env).catch((error) => {
         console.error('Scheduled backup failed:', error);

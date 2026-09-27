@@ -2,6 +2,7 @@ import { twoFactorProviders } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
 import { LIMITS } from '../config/limits';
 import { StorageService } from '../services/storage';
+import { EventType, recordEvents } from '../services/events';
 import { AuthService } from '../services/auth';
 import {
   acceptInviteCheck,
@@ -222,10 +223,14 @@ export async function handleUpdateOrganization(request: Request, env: Env, userI
   if (!org) return errorResponse('Organization not found', 404);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
+  const previousSettings = [org.name, org.billingEmail];
   org.name = asString(readBody(body, ['name', 'Name'])) || org.name;
   org.billingEmail = asString(readBody(body, ['billingEmail', 'BillingEmail'])) || org.billingEmail;
   org.updatedAt = new Date().toISOString();
   await orgRepo.updateOrganization(env.DB, org);
+  if (org.name !== previousSettings[0] || org.billingEmail !== previousSettings[1]) {
+    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
+  }
   return jsonResponse(organizationResponse(org));
 }
 
@@ -251,6 +256,7 @@ export async function handleLeaveOrganization(env: Env, userId: string, orgId: s
     return errorResponse('The last owner cannot leave', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [member.id], 'remove');
+  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserLeft, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId }]);
   return jsonResponse({});
 }
 
@@ -262,10 +268,14 @@ export async function handlePostOrganizationKeys(request: Request, env: Env, use
   if (!org) return errorResponse('Organization not found', 404);
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
+  const previousKeys = [org.publicKey, org.privateKey];
   org.publicKey = asString(readBody(body, ['publicKey', 'PublicKey'])) || org.publicKey;
   org.privateKey = asString(readBody(body, ['encryptedPrivateKey', 'EncryptedPrivateKey'])) || org.privateKey;
   org.updatedAt = new Date().toISOString();
   await orgRepo.updateOrganization(env.DB, org);
+  if (org.publicKey !== previousKeys[0] || org.privateKey !== previousKeys[1]) {
+    await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUpdated, organizationId: orgId }]);
+  }
   return jsonResponse({ publicKey: org.publicKey, privateKey: org.privateKey, object: 'organizationKeys' });
 }
 
@@ -449,6 +459,7 @@ export async function handleCreateOrgCollection(request: Request, env: Env, user
   if (!collection.name) return errorResponse('Name is required', 400);
   await orgRepo.saveCollection(env.DB, collection);
   await applyCollectionAccess(env.DB, orgId, collection.id, body);
+  await recordEvents(env, request, { userId }, [{ type: EventType.CollectionCreated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
@@ -459,11 +470,15 @@ export async function handleUpdateOrgCollection(request: Request, env: Env, user
   const { member, collection } = target;
   const body = await parseJsonBody(request);
   if (body instanceof Response) return body;
+  const previousSettings = [collection.name, collection.externalId];
   collection.name = asString(readBody(body, ['name', 'Name'])) || collection.name;
   collection.externalId = asString(readBody(body, ['externalId', 'ExternalId'])) || collection.externalId;
   collection.updatedAt = new Date().toISOString();
   await orgRepo.saveCollection(env.DB, collection);
-  await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
+  const accessChanged = await applyCollectionAccess(env.DB, collection.orgId, collection.id, body);
+  if (accessChanged || collection.name !== previousSettings[0] || collection.externalId !== previousSettings[1]) {
+    await recordEvents(env, request, { userId }, [{ type: EventType.CollectionUpdated, organizationId: orgId, resourceType: 'collection', resourceId: collection.id }]);
+  }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(await savedCollectionJson(env.DB, userId, member, collection));
 }
@@ -477,6 +492,7 @@ export async function handleDeleteOrgCollection(env: Env, userId: string, orgId:
     return errorResponse('Access denied', 403);
   }
   await orgRepo.deleteCollection(env.DB, collectionId);
+  await recordEvents(env, null, { userId }, [{ type: EventType.CollectionDeleted, organizationId: collection.orgId, resourceType: 'collection', resourceId: collection.id }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -500,6 +516,10 @@ function grantedSelections<T extends { id: string }, R>(entries: unknown, record
   });
 }
 
+function accessEventState(entries: unknown[]): string {
+  return JSON.stringify(entries.map(entry => JSON.stringify(entry, Object.keys(entry as object).sort())).sort());
+}
+
 // As upstream ReplaceAsync, an omitted list leaves that access as is and an empty one removes it,
 // since official web's collection dialog always posts the full lists it opened with. The org's
 // members and groups are read once rather than per entry, as every save posts back each grant.
@@ -508,17 +528,22 @@ async function applyCollectionAccess(
   orgId: string,
   collectionId: string,
   body: Record<string, unknown>
-): Promise<void> {
+): Promise<boolean> {
   const users = readBody(body, ['users', 'Users']);
   const groups = readBody(body, ['groups', 'Groups']);
+  if (!Array.isArray(users) && !Array.isArray(groups)) return false;
   const [members, groupRecords] = await Promise.all([
     Array.isArray(users) ? orgRepo.listMembershipsByOrg(db, orgId) : [],
     Array.isArray(groups) ? orgRepo.listGroupsByOrg(db, orgId) : [],
   ]);
-  await orgRepo.replaceCollectionAccess(db, collectionId, {
+  const previous = (await orgRepo.listCollectionAccessGrants(db, orgId, collectionId)).get(collectionId) ?? { users: [], groups: [] };
+  const selection = {
     users: grantedSelections(users, members, (member) => ({ member })),
     groups: grantedSelections(groups, groupRecords, (group) => ({ groupId: group.id })),
-  });
+  };
+  await orgRepo.replaceCollectionAccess(db, collectionId, selection);
+  return (selection.users !== undefined && accessEventState(previous.users) !== accessEventState(selection.users.map(({ member, ...flags }) => ({ id: member.id, ...flags }))))
+    || (selection.groups !== undefined && accessEventState(previous.groups) !== accessEventState(selection.groups.map(({ groupId, ...flags }) => ({ id: groupId, ...flags }))));
 }
 
 // Upstream deleted Manager (3), so EnumDataType on the request's Type rejects it like any unknown value.
@@ -718,6 +743,7 @@ export async function handleInviteMembers(request: Request, env: Env, user: User
     createdAt: now,
     updatedAt: now,
   })), { ...change, collections });
+  await recordEvents(env, request, { userId: user.id }, invites.map(invite => ({ type: EventType.OrganizationUserInvited, organizationId: orgId, resourceType: 'organizationUser', resourceId: invite.id })));
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -876,6 +902,7 @@ export async function handleConfirmMember(request: Request, env: Env, userId: st
   const confirmed = confirmedWithKey(check, key);
   if (!confirmed.ok) return errorResponse(confirmed.message, 400);
   await orgRepo.saveMembership(env.DB, confirmed.member);
+  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserConfirmed, organizationId: orgId, resourceType: 'organizationUser', resourceId: confirmed.member.id, userId: confirmed.member.userId }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   notifyConfirmedMembers(request, env, orgId, [confirmed.member]);
   return jsonResponse({});
@@ -908,6 +935,7 @@ export async function handleBulkConfirmMembers(request: Request, env: Env, userI
   const confirmed = results.flatMap(({ check }) => (check.ok ? [check.member] : []));
   if (confirmed.length) {
     await orgRepo.saveMemberships(env.DB, confirmed);
+    await recordEvents(env, request, { userId }, confirmed.map(member => ({ type: EventType.OrganizationUserConfirmed, organizationId: orgId, resourceType: 'organizationUser', resourceId: member.id, userId: member.userId })));
     await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
     notifyConfirmedMembers(request, env, orgId, confirmed);
   }
@@ -972,6 +1000,11 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   if (change.type !== MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
+  const previousType = membership.type;
+  const previousPermissions = JSON.stringify(membership.permissions);
+  const previousAccessAll = membership.accessAll;
+  const previousCollections = collections ? await orgRepo.listMemberCollectionAccess(env.DB, membership) : [];
+  const previousGroups = change.groupIds ? await orgRepo.listMembershipGroupIds(env.DB, membership.id) : [];
   membership.type = change.type;
   membership.permissions = storedPermissions(change);
   // Upstream's update request has no AccessAll: Owners and Admins get full access from their type,
@@ -982,6 +1015,13 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   // Upstream skips groups on a restricted self-edit rather than failing it, as groups carry collection access.
   const groupIds = restrictsEditingSelf(actor, membership) ? undefined : change.groupIds;
   await orgRepo.saveMembershipWithAccess(env.DB, membership, { collections, groupIds });
+  const memberChanged = previousType !== membership.type || previousPermissions !== JSON.stringify(membership.permissions)
+    || previousAccessAll !== membership.accessAll || (collections !== undefined && accessEventState(previousCollections) !== accessEventState(collections));
+  const groupsChanged = groupIds !== undefined && JSON.stringify([...new Set(previousGroups)].sort()) !== JSON.stringify([...new Set(groupIds)].sort());
+  await recordEvents(env, request, { userId }, [
+    ...(memberChanged ? [EventType.OrganizationUserUpdated] : []),
+    ...(groupsChanged ? [EventType.OrganizationUserUpdatedGroups] : []),
+  ].map(type => ({ type, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId })));
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -998,6 +1038,7 @@ export async function handleDeleteMember(env: Env, userId: string, orgId: string
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'remove');
+  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRemoved, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
@@ -1014,6 +1055,7 @@ export async function handleRevokeMember(env: Env, userId: string, orgId: string
     return errorResponse('Organization must have at least one confirmed owner.', 400);
   }
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'revoke');
+  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRevoked, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
@@ -1026,6 +1068,7 @@ export async function handleRestoreMember(env: Env, userId: string, orgId: strin
   const removalCheck = memberRemovalCheck(actor, membership, 'restore');
   if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
   await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'restore');
+  await recordEvents(env, null, { userId }, [{ type: EventType.OrganizationUserRestored, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
   return jsonResponse({});
 }
 
@@ -1052,7 +1095,10 @@ export async function handleBulkMemberAction(request: Request, env: Env, userId:
       for (const result of removedOwners) result.error = 'Organization must have at least one confirmed owner.';
     }
   }
-  await orgRepo.applyMembershipAction(env.DB, orgId, results.filter((result) => !result.error).map((result) => result.id), action);
+  const successful = results.filter(result => !result.error);
+  await orgRepo.applyMembershipAction(env.DB, orgId, successful.map(result => result.id), action);
+  const type = { remove: EventType.OrganizationUserRemoved, revoke: EventType.OrganizationUserRevoked, restore: EventType.OrganizationUserRestored }[action];
+  await recordEvents(env, request, { userId }, successful.map(({ id }) => ({ type, organizationId: orgId, resourceType: 'organizationUser', resourceId: id, userId: byId.get(id)!.userId })));
   return bulkResultsResponse(results);
 }
 
@@ -1088,8 +1134,9 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
   const users = ((readBody(body, ['users', 'Users']) as string[]) || []).map((id) => String(id));
   // Upstream ValidateMemberAccessAsync: missing and foreign membership ids fail alike, before any
   // write, so the response cannot probe other organizations. Like upstream, skip it without users.
+  const orgMemberships = users.length ? await orgRepo.listMembershipsByOrg(env.DB, orgId) : [];
   if (users.length) {
-    const orgMembershipIds = new Set((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((membership) => membership.id));
+    const orgMembershipIds = new Set(orgMemberships.map(membership => membership.id));
     if (users.some((id) => !orgMembershipIds.has(id))) return errorResponse('Resource not found.', 404);
   }
   const group = {
@@ -1101,8 +1148,17 @@ export async function handleSaveGroup(request: Request, env: Env, userId: string
     createdAt: existing?.createdAt || now,
     updatedAt: now,
   };
+  const previousUsers = existing ? await orgRepo.listGroupMemberIds(env.DB, group.id) : [];
   await orgRepo.saveGroup(env.DB, group);
   if (users.length || !existing) await orgRepo.replaceGroupMembers(env.DB, group.id, users);
+  const previousUserIds = new Set(previousUsers);
+  const currentUserIds = new Set(users.length || !existing ? users : previousUsers);
+  const changedUsers = orgMemberships.filter(membership => previousUserIds.has(membership.id) !== currentUserIds.has(membership.id));
+  const groupChanged = !existing || changedUsers.length > 0 || existing.name !== group.name || existing.accessAll !== group.accessAll || existing.externalId !== group.externalId;
+  await recordEvents(env, request, { userId }, [
+    ...(groupChanged ? [{ type: existing ? EventType.GroupUpdated : EventType.GroupCreated, organizationId: orgId, resourceType: 'group' as const, resourceId: group.id }] : []),
+    ...changedUsers.map(membership => ({ type: EventType.OrganizationUserUpdatedGroups, organizationId: orgId, resourceType: 'organizationUser' as const, resourceId: membership.id, userId: membership.userId })),
+  ]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({
     id: group.id,
@@ -1121,6 +1177,7 @@ export async function handleDeleteGroup(env: Env, userId: string, orgId: string,
   const group = await orgRepo.getGroup(env.DB, groupId);
   if (!group || group.orgId !== orgId) return errorResponse('Group not found', 404);
   await orgRepo.deleteGroup(env.DB, groupId);
+  await recordEvents(env, null, { userId }, [{ type: EventType.GroupDeleted, organizationId: group.orgId, resourceType: 'group', resourceId: group.id }]);
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse({});
 }
@@ -1168,6 +1225,9 @@ export async function handlePutPolicy(request: Request, env: Env, userId: string
     updatedAt: new Date().toISOString(),
   };
   await orgRepo.savePolicy(env.DB, policy);
+  if (!existing || existing.enabled !== policy.enabled || JSON.stringify(existing.data) !== JSON.stringify(policy.data)) {
+    await recordEvents(env, request, { userId }, [{ type: EventType.PolicyUpdated, organizationId: orgId, resourceType: 'policy', resourceId: policy.id }]);
+  }
   await orgRepo.bumpOrgMemberRevisions(env.DB, orgId);
   return jsonResponse(policyResponse(policy));
 }

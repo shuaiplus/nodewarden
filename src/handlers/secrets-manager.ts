@@ -9,6 +9,14 @@ import { errorResponse, jsonResponse } from '../utils/response';
 import { generateUUID, isUUID } from '../utils/uuid';
 import { hashApiKey, randomStringAlphanum } from '../utils/api-key';
 import { publishSecretChanged } from '../services/queue-publisher';
+import { EventType, listEventsResponse, recordEvents } from '../services/events';
+import { canAccessEventLogs, isActiveMember } from '../services/org-authz';
+import { MembershipType } from '../services/org-types';
+import { getMembershipByUserAndOrg } from '../services/storage-org-repo';
+
+function eventActor(principal: Principal) {
+  return principal.kind === 'user' ? { userId: principal.user.id } : { serviceAccountId: principal.serviceAccountId };
+}
 
 // Upstream ProjectsAreInOrganization: a missing or foreign project is 404 before any write, so a
 // secret or machine account in one org can never link to another org's project. Like upstream's
@@ -78,16 +86,18 @@ export async function handleCreateSecret(request: Request, env: Env, principal: 
   if (policies instanceof Response) return policies;
   try { await smRepo.createSecret(env.DB, secret, policies); }
   catch (error) { const conflict = policyConflict(error); if (conflict) return conflict; throw error; }
+  await recordEvents(env, request, eventActor(principal), [{ organizationId: orgId, type: EventType.SecretCreated, resourceType: 'secret', resourceId: secret.id }]);
   await publishSecretChanged(env, orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, orgId)));
 }
 
-export async function handleGetSecret(env: Env, principal: Principal, secretId: string): Promise<Response> {
+export async function handleGetSecret(request: Request, env: Env, principal: Principal, secretId: string): Promise<Response> {
   const secret = await smRepo.getSecret(env.DB, secretId);
   const context = secret && !secret.deletedAt && await smContext(env, principal, secret.orgId);
   if (!secret || !context) return errorResponse('Not found', 404);
   const access = secretAccess(context.actor, context.grants, secret);
   if (access === 'none') return errorResponse('Not found', 404);
+  await recordEvents(env, request, eventActor(principal), [{ organizationId: secret.orgId, type: EventType.SecretRetrieved, resourceType: 'secret', resourceId: secret.id }]);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId), access));
 }
 
@@ -105,6 +115,7 @@ export async function handleUpdateSecret(request: Request, env: Env, principal: 
   try {
     if (!await smRepo.updateSecret(env.DB, secret, existing.projectIds, existing.updatedAt, policies)) return errorResponse('Not found', 404);
   } catch (error) { const conflict = policyConflict(error); if (conflict) return conflict; throw error; }
+  await recordEvents(env, request, eventActor(principal), [{ organizationId: secret.orgId, type: EventType.SecretEdited, resourceType: 'secret', resourceId: secret.id }]);
   await publishSecretChanged(env, secret.orgId, secret.id);
   return jsonResponse(secretResponse(secret, await projectNames(env, secret.orgId)));
 }
@@ -120,7 +131,8 @@ export async function handleDeleteSecrets(request: Request, env: Env, principal:
   if (!context) return errorResponse('Not found', 404);
   const data = secrets.map(secret => ({ id: secret.id, error: secretAccess(context.actor, context.grants, secret) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
   const allowed = data.filter(item => !item.error).map(item => item.id);
-  await smRepo.deleteSecrets(env.DB, orgId, allowed);
+  const changed = await smRepo.deleteSecrets(env.DB, orgId, allowed);
+  await recordEvents(env, request, eventActor(principal), changed.map(resourceId => ({ organizationId: orgId, type: EventType.SecretDeleted, resourceType: 'secret', resourceId })));
   await Promise.all(allowed.map(id => publishSecretChanged(env, orgId, id)));
   return jsonResponse(listResponse(data));
 }
@@ -136,6 +148,7 @@ export async function handleSecretsByIds(request: Request, env: Env, principal: 
   const context = await smContext(env, principal, orgId);
   if (!context || secrets.some(secret => secretAccess(context.actor, context.grants, secret) === 'none')) return errorResponse('Not found', 404);
   const names = await projectNames(env, orgId);
+  await recordEvents(env, request, eventActor(principal), secrets.map(secret => ({ organizationId: orgId, type: EventType.SecretRetrieved, resourceType: 'secret', resourceId: secret.id })));
   return jsonResponse(listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))));
 }
 
@@ -175,6 +188,7 @@ export async function handleCreateProject(request: Request, env: Env, principal:
   const now = new Date().toISOString();
   const project = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo.createProject(env.DB, project, context.actor);
+  await recordEvents(env, request, eventActor(principal), [{ organizationId: orgId, type: EventType.ProjectCreated, resourceType: 'project', resourceId: project.id }]);
   return jsonResponse(projectResponse(project, 'write'));
 }
 
@@ -191,6 +205,7 @@ export async function handleProject(request: Request, env: Env, principal: Princ
     project.name = body.name; project.updatedAt = new Date().toISOString();
     if (!await smRepo.updateProject(env.DB, project)) return errorResponse('Not found', 404);
   }
+  await recordEvents(env, request, eventActor(principal), [{ organizationId: project.orgId, type: request.method === 'PUT' ? EventType.ProjectEdited : EventType.ProjectRetrieved, resourceType: 'project', resourceId: id }]);
   return jsonResponse(projectResponse(project, access));
 }
 
@@ -204,7 +219,8 @@ export async function handleDeleteProjects(request: Request, env: Env, principal
   const context = await smContext(env, principal, orgId);
   if (!context) return errorResponse('Not found', 404);
   const data = ids.map(id => ({ id, error: projectAccess(context.actor, context.grants, id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
-  await smRepo.deleteProjects(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  const changed = await smRepo.deleteProjects(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  await recordEvents(env, request, eventActor(principal), changed.map(resourceId => ({ organizationId: orgId, type: EventType.ProjectDeleted, resourceType: 'project', resourceId })));
   return jsonResponse(listResponse(data));
 }
 
@@ -228,6 +244,10 @@ export async function handleCreateServiceAccount(request: Request, env: Env, pri
   const now = new Date().toISOString();
   const account = { id: generateUUID(), orgId, name: body.name, createdAt: now, updatedAt: now };
   await smRepo.createServiceAccount(env.DB, account, context.actor.membershipId);
+  await recordEvents(env, request, eventActor(principal), [
+    { organizationId: orgId, type: EventType.ServiceAccountCreated, grantedServiceAccountId: account.id },
+    { organizationId: orgId, type: EventType.ServiceAccountUserAdded, grantedServiceAccountId: account.id, resourceType: 'organizationUser', resourceId: context.actor.membershipId, userId: context.actor.membershipId },
+  ]);
   return jsonResponse(serviceAccountResponse(account));
 }
 
@@ -257,7 +277,8 @@ export async function handleDeleteServiceAccounts(request: Request, env: Env, pr
   const context = await smContext(env, principal, orgId);
   if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const data = accounts.map(account => ({ id: account.id, error: serviceAccountAccess(context.actor, context.grants, account.id) === 'write' ? null : 'access denied', object: 'BulkDeleteResponseModel' }));
-  await smRepo.deleteServiceAccounts(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  const changed = await smRepo.deleteServiceAccounts(env.DB, orgId, data.filter(item => !item.error).map(item => item.id));
+  await recordEvents(env, request, eventActor(principal), changed.map(grantedServiceAccountId => ({ organizationId: orgId, type: EventType.ServiceAccountDeleted, grantedServiceAccountId })));
   return jsonResponse(listResponse(data));
 }
 
@@ -300,13 +321,31 @@ export async function handleListAccessTokens(env: Env, principal: Principal, ser
   return jsonResponse(listResponse(tokens.map(token => ({ id: token.id, name: token.name, scopes: ['api.secrets'], expireAt: token.expireAt, creationDate: token.createdAt, revisionDate: token.createdAt, object: 'accessToken' }))));
 }
 
-export async function handleSmEvents(env: Env, principal: Principal, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {
+export async function handleSmEvents(request: Request, env: Env, principal: Principal, kind: 'projects' | 'secrets' | 'service-account', id: string, orgId?: string): Promise<Response> {
+  if (principal.kind === 'serviceAccount') return errorResponse('Not found', 404);
   const row = kind === 'projects' ? await smRepo.getProject(env.DB, id) : kind === 'secrets' ? await smRepo.getSecret(env.DB, id) : await smRepo.getServiceAccount(env.DB, id);
-  if (!row || (orgId && row.orgId !== orgId) || ('deletedAt' in row && row.deletedAt)) return errorResponse('Not found', 404);
-  const context = await smContext(env, principal, row.orgId);
-  if (!context || context.actor.kind === 'serviceAccount') return errorResponse('Not found', 404);
-  const access = kind === 'projects' ? projectAccess(context.actor, context.grants, id) : 'projectIds' in row ? secretAccess(context.actor, context.grants, row) : serviceAccountAccess(context.actor, context.grants, id);
-  return access === 'none' ? errorResponse('Not found', 404) : jsonResponse(listResponse([]));
+  if (orgId) {
+    if (row && row.orgId !== orgId) return errorResponse('Not found', 404);
+    const member = await getMembershipByUserAndOrg(env.DB, principal.user.id, orgId);
+    if (!isActiveMember(member)) return errorResponse('Not found', 404);
+    if (!canAccessEventLogs(member)) return errorResponse('Access denied', 403);
+    if (kind === 'secrets') {
+      if (!row || ('deletedAt' in row && row.deletedAt)) {
+        if (member.type !== MembershipType.Owner && member.type !== MembershipType.Admin) return errorResponse('Not found', 404);
+      } else {
+        const context = await smContext(env, principal, orgId);
+        if (!context || !('projectIds' in row) || secretAccess(context.actor, context.grants, row) === 'none') return errorResponse('Not found', 404);
+      }
+    }
+  } else {
+    if (!row) return errorResponse('Not found', 404);
+    orgId = row.orgId;
+    const context = await smContext(env, principal, orgId);
+    if (!context || serviceAccountAccess(context.actor, context.grants, id) === 'none') return errorResponse('Not found', 404);
+  }
+  return listEventsResponse(request, env, kind === 'service-account'
+    ? { organizationId: orgId, serviceAccountId: id }
+    : { organizationId: orgId, resourceType: kind === 'secrets' ? 'secret' : 'project', resourceId: id });
 }
 
 export async function handleSecretsSync(request: Request, env: Env, principal: Principal, orgId: string): Promise<Response> {
@@ -322,6 +361,7 @@ export async function handleSecretsSync(request: Request, env: Env, principal: P
   if (!hasChanges) return jsonResponse({ hasChanges, secrets: null, object: 'secretsSync' });
   const names = await projectNames(env, orgId);
   const secrets = (await smRepo.listSecrets(env.DB, orgId)).filter(secret => secretAccess(context.actor, context.grants, secret) !== 'none');
+  await recordEvents(env, request, eventActor(principal), secrets.map(secret => ({ organizationId: orgId, type: EventType.SecretRetrieved, resourceType: 'secret', resourceId: secret.id })));
   return jsonResponse({ hasChanges, secrets: listResponse(secrets.map(secret => secretResponse(secret, names, 'read', true))), object: 'secretsSync' });
 }
 
@@ -334,7 +374,8 @@ export async function handleSecretsTrash(request: Request, env: Env, principal: 
   if (!ids.length || new Set(ids).size !== ids.length) return errorResponse('Not found', 404);
   const secrets = await smRepo.getSecretsByIds(env.DB, ids);
   if (secrets.length !== ids.length || secrets.some(secret => secret.orgId !== orgId || !secret.deletedAt)) return errorResponse('Not found', 404);
-  await smRepo.changeSecretsTrash(env.DB, orgId, ids, action === 'restore');
+  const changed = await smRepo.changeSecretsTrash(env.DB, orgId, ids, action === 'restore');
+  await recordEvents(env, request, eventActor(principal), changed.map(resourceId => ({ organizationId: orgId, type: action === 'restore' ? EventType.SecretRestored : EventType.SecretPermanentlyDeleted, resourceType: 'secret', resourceId })));
   await Promise.all(ids.map(id => publishSecretChanged(env, orgId, id)));
   return new Response(null, { status: 200 });
 }

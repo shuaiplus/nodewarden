@@ -1,3 +1,4 @@
+import { EventType, recordUserEvent } from '../services/events';
 import { sql } from 'drizzle-orm';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
@@ -995,6 +996,7 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   AuthService.invalidateUserCache(user.id);
   if (!await upsertCredentialAccount(env.DB, user.id, user.masterPasswordHash, user.securityStamp)) return errorResponse('User verification failed.', 400);
   await storage.deleteRefreshTokensByUserId(user.id);
+  await recordUserEvent(env, request, user.id, EventType.UserChangedPassword);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'user.password.change',
@@ -1230,6 +1232,7 @@ export async function handlePutTwoFactorEmail(request: Request, env: Env, userId
   if (!changed) return errorResponse('User verification failed.', 400);
   await storage.updateRevisionDate(user.id);
   AuthService.invalidateUserCache(user.id);
+  if (user.twoFactorEmail !== email) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
   await writeAuditEvent(storage, {
     actorUserId: user.id, action: 'account.two_factor.email.enable', category: 'security', level: 'security',
     targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
@@ -1279,6 +1282,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
     return errorResponse('Invalid token.', 400);
   }
 
+  const factorChanged = user.totpSecret !== key;
   user.totpSecret = key;
   user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
@@ -1287,6 +1291,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'account.totp.enable',
@@ -1355,6 +1360,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   }
   if (!publicIds.some(Boolean)) return errorResponse('At least one YubiKey OTP is required.', 400);
 
+  const factorChanged = [user.yubikeyKey1, user.yubikeyKey2, user.yubikeyKey3, user.yubikeyKey4, user.yubikeyKey5].some((key, index) => key !== (publicIds[index] ?? null)) || user.yubikeyNfc !== !!(body.nfc ?? body.Nfc);
   user.yubikeyKey1 = publicIds[0] ?? null;
   user.yubikeyKey2 = publicIds[1] ?? null;
   user.yubikeyKey3 = publicIds[2] ?? null;
@@ -1367,6 +1373,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   if (!await storage.saveUser(user, ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'])) return errorResponse('User verification failed.', 400);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'account.yubikey.enable',
@@ -1504,6 +1511,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     || await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
+  const wasEnabled = twoFactorProviders(user, type === TWO_FACTOR_PROVIDER_WEBAUTHN && await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0).some(provider => provider === type);
   if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
     user.totpSecret = null;
   } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
@@ -1527,6 +1535,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   }
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: type === TWO_FACTOR_PROVIDER_AUTHENTICATOR
@@ -1593,6 +1602,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
       return errorResponse('Invalid TOTP token', 400);
     }
+    const factorChanged = user.totpSecret !== normalizedSecret;
     user.totpSecret = normalizedSecret;
     user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
     if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
@@ -1601,6 +1611,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
     await storage.deleteRefreshTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
+    if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
     await writeAuditEvent(storage, {
       actorUserId: user.id,
       action: 'account.totp.enable',
@@ -1620,12 +1631,14 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     const valid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
     if (!valid) return errorResponse('Invalid password', 400);
 
+    const wasEnabled = !!user.totpSecret;
     user.totpSecret = null;
     user.updatedAt = new Date().toISOString();
     if (!await storage.saveUser(user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
     await deleteTwoFactorSecret(env.DB, user.id);
     await storage.deleteRefreshTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
+    if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
     await writeAuditEvent(storage, {
       actorUserId: user.id,
       action: 'account.totp.disable',
@@ -1747,6 +1760,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
     return errorResponse('Invalid credentials or recovery code', 400);
   }
   AuthService.invalidateUserCache(user.id);
+  await recordUserEvent(env, request, user.id, EventType.UserRecovered2fa);
   notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
   await rateLimit.clearLoginAttempts(recoverLimitKey);
   await safeWriteAuditEvent(env, {

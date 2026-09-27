@@ -317,10 +317,11 @@ export async function createProject(db: D1Database, project: SmProject, actor: S
   await orm.batch([orm.insert(smProjects).values(project), grant]);
 }
 
-export async function deleteProjects(db: D1Database, orgId: string, ids: string[]): Promise<void> {
-  if (!ids.length) return;
+export async function deleteProjects(db: D1Database, orgId: string, ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
   const orm = getOrm(db);
-  await orm.batch([bumpServiceAccounts(db, orgId), ...chunkRows(ids, 1, 1).map(chunk => orm.delete(smProjects).where(and(eq(smProjects.orgId, orgId), inArray(smProjects.id, chunk))))]);
+  const [, ...results] = await orm.batch([bumpServiceAccounts(db, orgId), ...chunkRows(ids, 1, 1).map(chunk => orm.delete(smProjects).where(and(eq(smProjects.orgId, orgId), inArray(smProjects.id, chunk))).returning({ id: smProjects.id }))]);
+  return results.flat().map(row => row.id);
 }
 
 export async function projectCounts(db: D1Database, project: SmProject, access: SmAccess) {
@@ -392,11 +393,12 @@ export async function getSecretsByIds(db: D1Database, ids: string[]): Promise<Sm
   return results.flat();
 }
 
-export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]): Promise<void> {
-  if (!ids.length) return;
+export async function deleteSecrets(db: D1Database, orgId: string, ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
   const orm = getOrm(db);
   const now = new Date().toISOString();
-  await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))))]);
+  const [, ...results] = await orm.batch([bumpServiceAccounts(db, orgId, now), ...chunkRows(ids, 1, 3).map(chunk => orm.update(smSecrets).set({ deletedAt: now, updatedAt: now }).where(and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNull(smSecrets.deletedAt))).returning({ id: smSecrets.id }))]);
+  return results.flat().map(row => row.id);
 }
 
 export async function createServiceAccount(db: D1Database, account: SmServiceAccount, membershipId: string): Promise<void> {
@@ -418,11 +420,12 @@ export async function getServiceAccountsByIds(db: D1Database, ids: string[]): Pr
   return (await Promise.all(chunkRows(ids, 1).map(chunk => orm.select().from(smServiceAccounts).where(inArray(smServiceAccounts.id, chunk))))).flat().map(mapServiceAccount);
 }
 
-export async function deleteServiceAccounts(db: D1Database, orgId: string, ids: string[]): Promise<void> {
-  if (!ids.length) return;
+export async function deleteServiceAccounts(db: D1Database, orgId: string, ids: string[]): Promise<string[]> {
+  if (!ids.length) return [];
   const orm = getOrm(db);
-  const statements = chunkRows(ids, 1, 1).map(chunk => orm.delete(smServiceAccounts).where(and(eq(smServiceAccounts.orgId, orgId), inArray(smServiceAccounts.id, chunk))));
-  await orm.batch([statements[0], ...statements.slice(1)]);
+  const statements = chunkRows(ids, 1, 1).map(chunk => orm.delete(smServiceAccounts).where(and(eq(smServiceAccounts.orgId, orgId), inArray(smServiceAccounts.id, chunk))).returning({ id: smServiceAccounts.id }));
+  const results = await orm.batch([statements[0], ...statements.slice(1)]);
+  return results.flat().map(row => row.id);
 }
 
 export async function revokeAccessTokens(db: D1Database, serviceAccountId: string, ids: string[]): Promise<void> {
@@ -469,16 +472,18 @@ export async function readPeoplePolicies(db: D1Database, kind: SmPeopleTarget, i
   return { users: new Map(rows[0].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])), groups: new Map(rows[1].results.map(row => [row.id, row.write_access ? 'write' as const : 'read' as const])) };
 }
 
-export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string, users: Map<string, SmAccess>, groups: Map<string, SmAccess>): Promise<void> {
+export async function replacePeoplePolicies(db: D1Database, kind: SmPeopleTarget, id: string, users: Map<string, SmAccess>, groups: Map<string, SmAccess>): Promise<{ users: Map<string, SmAccess>; groups: Map<string, SmAccess> }> {
   const tables = peoplePolicyTables[kind];
-  const statements = [db.prepare(`DELETE FROM ${tables.member} WHERE ${tables.target} = ?`).bind(id), db.prepare(`DELETE FROM ${tables.group} WHERE ${tables.target} = ?`).bind(id)];
+  const accessColumn = kind === 'serviceAccount' ? '1 AS write_access' : 'write_access';
+  const statements = [db.prepare(`DELETE FROM ${tables.member} WHERE ${tables.target} = ? RETURNING membership_id AS id, ${accessColumn}`).bind(id), db.prepare(`DELETE FROM ${tables.group} WHERE ${tables.target} = ? RETURNING group_id AS id, ${accessColumn}`).bind(id)];
   for (const [table, column, policies] of [[tables.member, 'membership_id', users], [tables.group, 'group_id', groups]] as const) {
     const columns = kind === 'serviceAccount' ? 2 : 3;
     for (const rows of chunkRows([...policies], columns)) {
       statements.push(db.prepare(`INSERT INTO ${table} (${tables.target}, ${column}${columns === 3 ? ', write_access' : ''}) VALUES ${rows.map(() => `(${Array(columns).fill('?').join(',')})`).join(',')}`).bind(...rows.flatMap(([granteeId, access]) => columns === 3 ? [id, granteeId, access === 'write' ? 1 : 0] : [id, granteeId])));
     }
   }
-  await db.batch(statements);
+  const [previousUsers, previousGroups] = await db.batch<{ id: string; write_access: number }>(statements);
+  return { users: new Map(previousUsers.results.map(row => [row.id, row.write_access ? 'write' : 'read'])), groups: new Map(previousGroups.results.map(row => [row.id, row.write_access ? 'write' : 'read'])) };
 }
 
 export const machinePolicyTables = {
@@ -521,14 +526,16 @@ export async function getAccessTokenWithAccount(db: D1Database, id: string): Pro
   return row ? { ...mapAccessToken(row.token), orgId: row.orgId } : null;
 }
 
-export async function changeSecretsTrash(db: D1Database, orgId: string, ids: string[], restore: boolean): Promise<void> {
+export async function changeSecretsTrash(db: D1Database, orgId: string, ids: string[], restore: boolean): Promise<string[]> {
+  if (!ids.length) return [];
   const orm = getOrm(db);
   const now = new Date().toISOString();
   const statements = chunkRows(ids, 1, restore ? 3 : 1).map(chunk => {
     const where = and(eq(smSecrets.orgId, orgId), inArray(smSecrets.id, chunk), isNotNull(smSecrets.deletedAt));
-    return restore ? orm.update(smSecrets).set({ deletedAt: null, updatedAt: now }).where(where) : orm.delete(smSecrets).where(where);
+    return restore ? orm.update(smSecrets).set({ deletedAt: null, updatedAt: now }).where(where).returning({ id: smSecrets.id }) : orm.delete(smSecrets).where(where).returning({ id: smSecrets.id });
   });
-  await orm.batch([bumpServiceAccounts(db, orgId, now), ...statements]);
+  const [, ...results] = await orm.batch([bumpServiceAccounts(db, orgId, now), ...statements]);
+  return results.flat().map(row => row.id);
 }
 
 export async function purgeSecretsTrash(db: D1Database, now = Date.now()): Promise<void> {

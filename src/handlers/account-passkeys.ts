@@ -1,3 +1,4 @@
+import { EventType, recordUserEvent } from '../services/events';
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -476,6 +477,7 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   await storage.deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);
 
+  await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
   await safeWriteAuditEvent(env, {
     actorUserId: userId,
     action: 'account.webauthn_2fa.enable',
@@ -517,6 +519,7 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
   await storage.deleteRefreshTokensByUserId(userId);
   AuthService.invalidateUserCache(userId);
 
+  await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
   await safeWriteAuditEvent(env, {
     actorUserId: userId,
     action: 'account.webauthn_2fa.delete',

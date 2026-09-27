@@ -28,6 +28,7 @@ import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from '.
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+import { EventType, recordEvents } from '../services/events';
 import * as orgRepo from '../services/storage-org-repo';
 import {
   checkCollectionAssignment,
@@ -212,6 +213,19 @@ async function writeCipherAudit(
       ...auditRequestMetadata(request),
     },
   });
+}
+
+export async function recordCipherEvents(env: Env, request: Request, userId: string, type: number, ciphers: Cipher[]): Promise<void> {
+  await recordEvents(env, request, { userId }, [...new Map(ciphers.map(cipher => [cipher.id, cipher])).values()]
+    .flatMap(cipher => cipher.organizationId
+      ? [{ type, organizationId: cipher.organizationId, resourceType: 'cipher' as const, resourceId: cipher.id }]
+      : []));
+}
+
+function cipherEventState(cipher: Cipher, attachments: Attachment[]): string {
+  const { revisionDate, creationDate, lastKnownRevisionDate, LastKnownRevisionDate, attachments2, Attachments2, ...state } = cipherToResponse(cipher, attachments);
+  return JSON.stringify(state, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) : value);
 }
 
 function isValidEncString(value: unknown): value is string {
@@ -1065,6 +1079,7 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherCreateForRequest(request, env, cipher, revisionDate);
   const responseOptions = cipherResponseOptionsForRequest(request);
+  await recordCipherEvents(env, request, userId, EventType.CipherCreated, [cipher]);
 
   return jsonResponse(
     cipherToResponse(cipher, [], responseOptions),
@@ -1185,12 +1200,17 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     if (!folderOk) return errorResponse('Folder not found', 404);
   }
 
+  const previousState = cipher.organizationId
+    ? cipherEventState(existingCipher, await storage.getAttachmentsByCipher(cipher.id)) : null;
   await syncIncomingAttachmentMetadata(storage, cipher.id, cipherData);
   await storage.saveCipher(cipher);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
+  if (previousState !== null && previousState !== cipherEventState(cipher, attachments)) {
+    await recordCipherEvents(env, request, userId, EventType.CipherUpdated, [cipher]);
+  }
   const responseOptions = cipherResponseOptionsForRequest(request);
 
   return jsonResponse(
@@ -1233,6 +1253,7 @@ async function shareOwnedCiphers(
   const changedAttachments = withAttachmentMetadata.flatMap(({ existing, cipherData }) =>
     applyIncomingAttachmentMetadata(currentAttachments.get(existing.id) || [], cipherData));
   await orgRepo.shareCiphers(env.DB, sharedCiphers, collectionIds, changedAttachments);
+  await recordCipherEvents(env, request, userId, EventType.CipherShared, sharedCiphers);
   const revisionDate = await storage.updateRevisionDate(userId);
   await orgRepo.bumpOrgMemberRevisions(env.DB, organizationId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
@@ -1349,6 +1370,9 @@ export async function handleUpdateCipherCollections(
   const change = await planCipherCollectionChange(env, storage, userId, id, requested, mode);
   if (!change.ok) return errorResponse(change.message, change.status);
   await orgRepo.updateCipherCollections(env.DB, change.cipher.id, change.plan);
+  if (change.plan.insert.length || change.plan.remove.length) {
+    await recordCipherEvents(env, request, userId, EventType.CipherUpdatedCollections, [change.cipher]);
+  }
   const revisionDate = await storage.updateRevisionDate(userId);
   await orgRepo.bumpOrgMemberRevisions(env.DB, change.organizationId);
   const cipher = { ...change.cipher, collectionIds: await orgRepo.listCipherCollectionIds(env.DB, change.cipher.id) };
@@ -1375,11 +1399,13 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
   const cipher = await loadAccessibleCipher(env, storage, userId, id, asAdmin ? 'admin-edit' : 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
+  const wasDeleted = !!cipher.deletedAt;
   // Soft delete
   cipher.deletedAt = new Date().toISOString();
   cipher.updatedAt = cipher.deletedAt;
   syncCipherComputedAliases(cipher);
   await storage.saveCipher(cipher);
+  if (!wasDeleted) await recordCipherEvents(env, request, userId, EventType.CipherSoftDeleted, [cipher]);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
@@ -1407,6 +1433,7 @@ export async function handleDeleteCipherCompat(request: Request, env: Env, userI
   if (cipher.deletedAt) {
     await deleteAllAttachmentsForCipher(env, id);
     await deleteAuthorizedCipher(storage, cipher, userId);
+    await recordCipherEvents(env, request, userId, EventType.CipherDeleted, [cipher]);
     const revisionDate = await storage.updateRevisionDate(userId);
     notifyVaultSyncForRequest(request, env, userId, revisionDate);
     notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
@@ -1432,6 +1459,7 @@ export async function handlePermanentDeleteCipher(request: Request, env: Env, us
   await deleteAllAttachmentsForCipher(env, id);
 
   await deleteAuthorizedCipher(storage, cipher, userId);
+  await recordCipherEvents(env, request, userId, EventType.CipherDeleted, [cipher]);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
@@ -1450,10 +1478,12 @@ export async function handleRestoreCipher(request: Request, env: Env, userId: st
   const cipher = await loadAccessibleCipher(env, storage, userId, id, 'edit');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
+  const wasDeleted = !!cipher.deletedAt;
   cipher.deletedAt = null;
   cipher.updatedAt = new Date().toISOString();
   syncCipherComputedAliases(cipher);
   await storage.saveCipher(cipher);
+  if (wasDeleted) await recordCipherEvents(env, request, userId, EventType.CipherRestored, [cipher]);
   const revisionDate = await storage.updateRevisionDate(userId);
   notifyVaultSyncForRequest(request, env, userId, revisionDate);
   notifyCipherUpdateForRequest(request, env, cipher, revisionDate);

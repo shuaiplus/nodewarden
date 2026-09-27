@@ -40,9 +40,9 @@ export async function handleSmRoute(request: Request, env: Env, principal: Princ
   const people = path.match(/^\/api\/(projects|service-accounts)\/([a-f0-9-]+)\/access-policies\/people$/i);
   if (people && (method === 'GET' || method === 'PUT')) return handlePeoplePolicies(request, env, principal, people[1] === 'projects' ? 'project' : 'serviceAccount', people[2]);
   const event = path.match(/^\/api\/organization\/([a-f0-9-]+)\/(projects|secrets|service-account)\/([a-f0-9-]+)\/events$/i);
-  if (event && method === 'GET') return handleSmEvents(env, principal, event[2] as 'projects' | 'secrets' | 'service-account', event[3], event[1]);
+  if (event && method === 'GET') return handleSmEvents(request, env, principal, event[2] as 'projects' | 'secrets' | 'service-account', event[3], event[1]);
   const accountEvent = path.match(/^\/api\/sm\/events\/service-accounts\/([a-f0-9-]+)$/i);
-  if (accountEvent && method === 'GET') return handleSmEvents(env, principal, 'service-account', accountEvent[1]);
+  if (accountEvent && method === 'GET') return handleSmEvents(request, env, principal, 'service-account', accountEvent[1]);
   if (path === '/api/service-accounts/delete' && method === 'POST') return handleDeleteServiceAccounts(request, env, principal);
   const account = path.match(/^\/api\/service-accounts\/([a-f0-9-]+)(\/sm-counts)?$/i);
   if (account && (method === 'GET' || (!account[2] && method === 'PUT'))) return handleServiceAccount(request, env, principal, account[1], !!account[2]);
@@ -58,7 +58,7 @@ export async function handleSmRoute(request: Request, env: Env, principal: Princ
 
   const secretMatch = path.match(/^\/api\/secrets\/([a-f0-9-]+)$/i);
   if (secretMatch) {
-    if (method === 'GET') return handleGetSecret(env, principal, secretMatch[1]);
+    if (method === 'GET') return handleGetSecret(request, env, principal, secretMatch[1]);
     if (method === 'PUT') return handleUpdateSecret(request, env, principal, secretMatch[1]);
   }
 

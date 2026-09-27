@@ -56,6 +56,10 @@ export function resolvePermissions(member: MembershipRecord): OrgPermissions {
   return EMPTY_PERMISSIONS;
 }
 
+export function canAccessEventLogs(member: MembershipRecord | null | undefined): boolean {
+  return isActiveMember(member) && resolvePermissions(member).accessEventLogs;
+}
+
 export function canManageMembers(member: MembershipRecord): boolean {
   return isActiveMember(member) && (
     member.type === MembershipType.Owner

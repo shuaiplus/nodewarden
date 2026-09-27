@@ -1,3 +1,4 @@
+import { EventType, recordUserEvent } from '../services/events';
 import { markEmailVerified } from '../services/vault-admin-role';
 import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
@@ -348,6 +349,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     user: User,
     providerType: number
   ): Promise<Response> {
+    await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn2fa);
     notifyFailedTwoFactor(env, request, user, providerType);
     const failed = await rateLimit.recordFailedLogin(loginIdentifier);
     if (failed.locked) {
@@ -472,6 +474,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
+      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
       await safeWriteAuditEvent(env, {
         actorUserId: user.id,
         action: 'auth.login.failed.user_inactive',
@@ -509,6 +512,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       valid = viaSsoShim || await auth.verifyPassword(passwordHash, user.masterPasswordHash, user.email);
     }
     if (!valid) {
+      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
       await safeWriteAuditEvent(env, {
         actorUserId: user.id,
         action: normalizedAuthRequestId ? 'auth.login.failed.bad_auth_request' : 'auth.login.failed.bad_password',
@@ -659,6 +663,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (recovery) {
       user.securityStamp = recovery.securityStamp;
       AuthService.invalidateUserCache(user.id);
+      await recordUserEvent(env, request, user.id, EventType.UserRecovered2fa);
       notifyMail(env, user.email, 'twoFactorRecovered', { time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
     }
     if (trustedTwoFactorTokenToReturn && deviceInfo.deviceIdentifier) {
@@ -682,6 +687,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
     const accountKeys = buildAccountKeys(user);
     const userDecryptionOptions = buildUserDecryptionOptions(user);
+    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
     await safeWriteAuditEvent(env, {
       actorUserId: user.id,
       action: 'auth.login.success',
@@ -797,6 +803,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const accountKeys = buildAccountKeys(user);
     const webAuthnPrfOption = buildAccountPasskeyTokenUserDecryptionOption(credential);
     const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOption);
+    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
     await safeWriteAuditEvent(env, {
       actorUserId: user.id,
       action: 'auth.passkey.login.success',
@@ -891,6 +898,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
     if (user.status !== 'active') {
       await rateLimit.recordFailedLogin(loginIdentifier);
+      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
       await safeWriteAuditEvent(env, {
         actorUserId: user.id,
         action: 'auth.login.failed.user_inactive',
@@ -909,6 +917,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     if (!user.apiKey || !(await verifyApiKey(clientSecret, user.apiKey))) {
       await rateLimit.recordFailedLogin(loginIdentifier);
+      await recordUserEvent(env, request, user.id, EventType.UserFailedLogIn);
       await safeWriteAuditEvent(env, {
         actorUserId: user.id,
         action: 'auth.login.failed.bad_api_key',
@@ -939,6 +948,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
     const accountKeys = buildAccountKeys(user);
     const userDecryptionOptions = buildUserDecryptionOptions(user);
+    await recordUserEvent(env, request, user.id, EventType.UserLoggedIn);
     await safeWriteAuditEvent(env, {
       actorUserId: user.id,
       action: 'auth.login.success',

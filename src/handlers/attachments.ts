@@ -11,7 +11,7 @@ import {
   verifyAttachmentUploadToken,
   verifyFileDownloadToken,
 } from '../utils/jwt';
-import { applyCipherEmbeddedAttachmentMetadata, cipherToResponse } from './ciphers';
+import { applyCipherEmbeddedAttachmentMetadata, cipherToResponse, recordCipherEvents } from './ciphers';
 import { LIMITS } from '../config/limits';
 import { readActingDeviceIdentifier } from '../utils/device';
 import {
@@ -24,6 +24,7 @@ import {
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { createR2PresignedPutUrl, shouldPresignUpload } from '../services/r2-presign';
 import { loadAccessibleCipher } from './cipher-access';
+import { EventType } from '../services/events';
 
 function notifyVaultSyncForRequest(
   request: Request,
@@ -236,6 +237,7 @@ export async function handleCreateAttachment(
     ? await createR2PresignedPutUrl(env, getAttachmentObjectKey(cipherId, attachmentId))
     : buildDirectUploadUrl(request, `/api/ciphers/${cipherId}/attachment/${attachmentId}`, uploadToken);
 
+  await recordCipherEvents(env, request, userId, EventType.CipherAttachmentCreated, [cipher]);
   return jsonResponse({
     object: 'attachment-fileUpload',
     attachmentId: attachmentId,
@@ -503,6 +505,7 @@ export async function handleDeleteAttachment(
     : await storage.getCipherForUser(cipherId, userId);
   const attachments = await storage.getAttachmentsByCipher(cipherId);
   const cipherResponse = cipherToResponse(updatedCipher || cipher, attachments);
+  await recordCipherEvents(env, request, userId, EventType.CipherAttachmentDeleted, [cipher]);
 
   return jsonResponse({
     Cipher: cipherResponse,
