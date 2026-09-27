@@ -41,14 +41,6 @@ class_name = "NotificationsHub"
 name = "BACKUP_TRANSFER_RUNNER"
 class_name = "BackupTransferRunner"
 
-[[durable_objects.bindings]]
-name = "ORGANIZATION_HUB"
-class_name = "OrganizationHub"
-
-[[durable_objects.bindings]]
-name = "DIRECTORY_SYNC"
-class_name = "DirectorySyncActor"
-
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "nodewarden-attachments"
@@ -64,3 +56,7 @@ new_sqlite_classes = [ "BackupTransferRunner" ]
 [[migrations]]
 tag = "v3-organization-directory"
 new_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]
+
+[[migrations]]
+tag = "v4-drop-organization-directory"
+deleted_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]

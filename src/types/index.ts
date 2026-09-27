@@ -3,8 +3,6 @@ export interface Env {
   DB: D1Database;
   NOTIFICATIONS_HUB: DurableObjectNamespace;
   BACKUP_TRANSFER_RUNNER: DurableObjectNamespace;
-  ORGANIZATION_HUB?: DurableObjectNamespace;
-  DIRECTORY_SYNC?: DurableObjectNamespace;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
@@ -28,13 +26,8 @@ export interface Env {
   EMAIL_FROM_NAME?: string;
   EVENTS_QUEUE?: Queue;
   SECRET_CHANGES_QUEUE?: Queue;
-  DIRECTORY_SYNC_WORKFLOW?: Workflow;
   JWT_SECRET: string;
-  WEBAUTHN_RP_ID?: string;
-  WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
-  YUBICO_VALIDATION_URLS?: string;
-  'globalSettings__yubico__validationUrls'?: string;
   SSO_ENABLED?: string;
   SSO_AUTHORITY?: string;
   SSO_CLIENT_ID?: string;

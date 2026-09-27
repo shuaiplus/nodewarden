@@ -6,18 +6,7 @@ export type PlatformEvent =
   | { type: 'directory.applied'; orgId: string; resource: 'user' | 'group'; resourceId: string };
 
 export async function publishPlatformEvent(env: Env, event: PlatformEvent): Promise<void> {
-  if (env.EVENTS_QUEUE) {
-    await env.EVENTS_QUEUE.send(event);
-    return;
-  }
-  if (event.type === 'org.revision' && env.ORGANIZATION_HUB) {
-    const stub = env.ORGANIZATION_HUB.get(env.ORGANIZATION_HUB.idFromName(event.orgId));
-    await stub.fetch('https://organization-hub/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(event),
-    }).catch(() => undefined);
-  }
+  if (env.EVENTS_QUEUE) await env.EVENTS_QUEUE.send(event);
 }
 
 export async function publishSecretChanged(env: Env, orgId: string, secretId: string): Promise<void> {

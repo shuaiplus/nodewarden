@@ -5,7 +5,6 @@ import { syncVaultAdminRoles } from './services/vault-admin-role';
 import { Env } from './types';
 import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
-import { DirectorySyncActor, OrganizationHub } from './durable/organization-hub';
 import type { PlatformEvent } from './services/queue-publisher';
 import * as orgRepo from './services/storage-org-repo';
 import { handleRequest } from './router';
@@ -168,5 +167,3 @@ export default {
 
 export { NotificationsHub };
 export { BackupTransferRunner };
-export { OrganizationHub };
-export { DirectorySyncActor };

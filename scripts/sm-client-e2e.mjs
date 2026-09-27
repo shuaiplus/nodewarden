@@ -71,14 +71,14 @@ env.NODE_EXTRA_CA_CERTS = ca;
 const config = join(run, 'wrangler.json');
 const state = join(run, 'state');
 const log = join(run, 'worker.log');
-const classes = ['NotificationsHub', 'BackupTransferRunner', 'OrganizationHub', 'DirectorySyncActor'];
+const classes = ['NotificationsHub', 'BackupTransferRunner'];
 writeFileSync(config, JSON.stringify({
   name: 'nodewarden-sm-client-e2e', main: join(repo, 'src/index.ts'),
   compatibility_date: '2024-09-23', compatibility_flags: ['nodejs_compat'],
   vars: { ALLOW_OPEN_REGISTRATION: '1', JWT_SECRET: randomBytes(48).toString('base64') },
   d1_databases: [{ binding: 'DB', database_name: 'sm-client-e2e', database_id: randomUUID() }],
   durable_objects: { bindings: classes.map((class_name, i) => ({
-    name: ['NOTIFICATIONS_HUB', 'BACKUP_TRANSFER_RUNNER', 'ORGANIZATION_HUB', 'DIRECTORY_SYNC'][i], class_name,
+    name: ['NOTIFICATIONS_HUB', 'BACKUP_TRANSFER_RUNNER'][i], class_name,
   })) },
   migrations: [{ tag: 'v1', new_sqlite_classes: classes }],
 }));

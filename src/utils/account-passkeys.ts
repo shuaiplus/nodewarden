@@ -157,12 +157,9 @@ export async function verifyAccountPasskeyToken(
 
 export function getAccountPasskeyRpConfig(request: Request, env: Env): { rpId: string; rpName: string; origins: string[] } {
   const url = new URL(request.url);
-  const configuredRpId = String(env.WEBAUTHN_RP_ID || '').trim();
-  const rpId = configuredRpId || url.hostname;
-  const rpName = String(env.WEBAUTHN_RP_NAME || '').trim() || DEFAULT_RP_NAME;
   const configuredOrigins = getConfiguredWebAuthnAllowedOrigins(env);
   const origins = new Set<string>([url.origin, ...configuredOrigins]);
-  return { rpId, rpName, origins: Array.from(origins) };
+  return { rpId: url.hostname, rpName: DEFAULT_RP_NAME, origins: Array.from(origins) };
 }
 
 export function userIdToWebAuthnUserId(userId: string): Uint8Array {

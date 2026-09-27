@@ -104,14 +104,6 @@ function canonicalQuery(params: URLSearchParams): string {
     .join('&');
 }
 
-function validationUrls(env: Env): string[] {
-  const configured = String(env['globalSettings__yubico__validationUrls'] || env.YUBICO_VALIDATION_URLS || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return configured.length > 0 ? configured : [YUBICO_DEFAULT_VALIDATION_URL];
-}
-
 export async function requestYubicoApiCredentials(email: string, otpInput: string): Promise<YubicoApiCredentials | null> {
   const otp = normalizeYubiKeyOtp(otpInput);
   if (!isYubiKeyOtp(otp)) return null;
@@ -158,7 +150,7 @@ export async function verifyYubicoOtp(
     return false;
   }
 
-  for (const baseUrl of validationUrls(env)) {
+  for (const baseUrl of [YUBICO_DEFAULT_VALIDATION_URL]) {
     try {
       const response = await fetch(`${baseUrl}?${params.toString()}`, { method: 'GET' });
       if (!response.ok) continue;
