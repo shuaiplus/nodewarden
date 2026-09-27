@@ -1187,6 +1187,17 @@ export async function handlePutDeviceVerificationSettings(request: Request, env:
 }
 
 // PUT/POST /api/two-factor/authenticator
+// Every factor change revokes refresh tokens and cached auth state, then records the event and audit row.
+async function finalizeTwoFactorChange(request: Request, env: Env, user: User, action: string, eventType: number | null): Promise<void> {
+  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
+  AuthService.invalidateUserCache(user.id);
+  if (eventType) await recordUserEvent(env, request, user.id, eventType);
+  await writeAuditEvent(env.DB, {
+    actorUserId: user.id, action, category: 'security', level: 'security', targetType: 'user', targetId: user.id,
+    metadata: auditRequestMetadata(request),
+  });
+}
+
 export async function handlePutTwoFactorAuthenticator(request: Request, env: Env, userId: string): Promise<Response> {
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
@@ -1216,18 +1227,7 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
-  AuthService.invalidateUserCache(user.id);
-  if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await writeAuditEvent(env.DB, {
-    actorUserId: user.id,
-    action: 'account.totp.enable',
-    category: 'security',
-    level: 'security',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: auditRequestMetadata(request),
-  });
+  await finalizeTwoFactorChange(request, env, user, 'account.totp.enable', factorChanged ? EventType.UserUpdated2fa : null);
 
   return jsonResponse(twoFactorAuthenticatorResponse(true, key));
 }
@@ -1294,18 +1294,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (!await userRepo.saveUser(env.DB, user, ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'])) return errorResponse('User verification failed.', 400);
-  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
-  AuthService.invalidateUserCache(user.id);
-  if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-  await writeAuditEvent(env.DB, {
-    actorUserId: user.id,
-    action: 'account.yubikey.enable',
-    category: 'security',
-    level: 'security',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: auditRequestMetadata(request),
-  });
+  await finalizeTwoFactorChange(request, env, user, 'account.yubikey.enable', factorChanged ? EventType.UserUpdated2fa : null);
 
   return jsonResponse({ ...await yubiKeySettingsResponse(env, user), Object: 'twoFactorYubiKeyUpdate' });
 }
@@ -1443,24 +1432,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
     await env.DB.prepare("DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND EXISTS (SELECT 1 FROM users WHERE id = ? AND security_stamp = ?)").bind(user.id, user.id, user.securityStamp).run();
   }
-  await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
-  AuthService.invalidateUserCache(user.id);
-  if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
-  await writeAuditEvent(env.DB, {
-    actorUserId: user.id,
-    action: type === TWO_FACTOR_PROVIDER_AUTHENTICATOR
-      ? 'account.totp.disable'
-      : type === TWO_FACTOR_PROVIDER_EMAIL
-        ? 'account.two_factor.email.disable'
-        : type === TWO_FACTOR_PROVIDER_YUBIKEY
-        ? 'account.yubikey.disable'
-        : 'account.webauthn_2fa.disable',
-    category: 'security',
-    level: 'security',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: auditRequestMetadata(request),
-  });
+  await finalizeTwoFactorChange(request, env, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? 'account.totp.disable' : type === TWO_FACTOR_PROVIDER_EMAIL ? 'account.two_factor.email.disable' : type === TWO_FACTOR_PROVIDER_YUBIKEY ? 'account.yubikey.disable' : 'account.webauthn_2fa.disable', wasEnabled ? EventType.UserDisabled2fa : null);
 
   await revisionRepo.updateRevisionDate(env.DB, user.id);
   return routeType === undefined ? jsonResponse(twoFactorProviderResponse(type, false)) : new Response(null, { status: 204 });
@@ -1508,18 +1480,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
     user.updatedAt = new Date().toISOString();
     if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
-    AuthService.invalidateUserCache(user.id);
-    if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
-    await writeAuditEvent(env.DB, {
-      actorUserId: user.id,
-      action: 'account.totp.enable',
-      category: 'security',
-      level: 'security',
-      targetType: 'user',
-      targetId: user.id,
-      metadata: auditRequestMetadata(request),
-    });
+    await finalizeTwoFactorChange(request, env, user, 'account.totp.enable', factorChanged ? EventType.UserUpdated2fa : null);
     return jsonResponse({ enabled: true, recoveryCode: user.totpRecoveryCode, object: 'twoFactor' });
   }
 
@@ -1534,18 +1495,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     user.totpSecret = null;
     user.updatedAt = new Date().toISOString();
     if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
-    AuthService.invalidateUserCache(user.id);
-    if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);
-    await writeAuditEvent(env.DB, {
-      actorUserId: user.id,
-      action: 'account.totp.disable',
-      category: 'security',
-      level: 'security',
-      targetType: 'user',
-      targetId: user.id,
-      metadata: auditRequestMetadata(request),
-    });
+    await finalizeTwoFactorChange(request, env, user, 'account.totp.disable', wasEnabled ? EventType.UserDisabled2fa : null);
     return jsonResponse({ enabled: false, object: 'twoFactor' });
   }
 
