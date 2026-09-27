@@ -138,49 +138,6 @@ async function queryRows(db: D1Database, table: SQLiteTable, columnNames: string
     .orderBy(...orderBy.map((name) => asc(schemaColumn(name))));
 }
 
-function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
-  const sanitized: SqlRow[] = [];
-  for (const row of rows) {
-    const key = String(row.key || '').trim();
-    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) continue;
-
-    if (key === BACKUP_SETTINGS_CONFIG_KEY) {
-      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
-      if (portableOnly) sanitized.push({ ...row, value: portableOnly });
-      continue;
-    }
-
-    sanitized.push({ ...row });
-  }
-  return sanitized;
-}
-
-function getDateParts(date: Date, timeZone: string): string {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  });
-  const parts = formatter.formatToParts(date);
-  const pick = (type: string): string => parts.find((part) => part.type === type)?.value || '';
-  return `${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}`;
-}
-
-function buildBackupFileNameInTimeZone(
-  date: Date = new Date(),
-  checksumPrefix: string | null = null,
-  timeZone: string = 'UTC'
-): string {
-  const parts = getDateParts(date, timeZone);
-  const suffix = checksumPrefix ? `_${checksumPrefix}` : '';
-  return `nodewarden_backup_${parts}${suffix}.zip`;
-}
-
 export function extractBackupFileChecksumPrefix(fileName: string): string | null {
   const normalized = String(fileName || '').trim();
   const match = normalized.match(/_([0-9a-f]{5})\.zip$/i);
@@ -206,12 +163,6 @@ export async function verifyBackupArchiveFileNameChecksum(bytes: Uint8Array, fil
   return result.matches;
 }
 
-function validateArchiveSize(bytes: Uint8Array): void {
-  if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
-    throw new Error(`Backup archive is too large. The current restore limit is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))} MiB`);
-  }
-}
-
 function isSafeBackupPathSegment(value: string): boolean {
   if (!value || value.length > MAX_BACKUP_PATH_SEGMENT_LENGTH) return false;
   if (value === '.' || value === '..') return false;
@@ -224,12 +175,6 @@ export function isSafeBackupAttachmentBlobName(value: unknown): boolean {
   return parts.length === 2 && parts.every(isSafeBackupPathSegment);
 }
 
-function isSafeBackupAttachmentEntryName(value: string): boolean {
-  if (!value.startsWith('attachments/') || !value.endsWith('.bin')) return false;
-  const relative = value.slice('attachments/'.length, -'.bin'.length);
-  return isSafeBackupAttachmentBlobName(relative);
-}
-
 function validateBackupEntryName(name: string): void {
   const normalized = String(name || '').trim();
   if (normalized !== name || !normalized) {
@@ -238,58 +183,18 @@ function validateBackupEntryName(name: string): void {
   if (normalized.includes('\\') || normalized.includes('\0') || normalized.startsWith('/') || normalized.includes('//')) {
     throw new Error(`Backup archive contains an unsafe file name: ${normalized}`);
   }
-  if (normalized !== 'manifest.json' && normalized !== 'db.json' && !isSafeBackupAttachmentEntryName(normalized)) {
+  // Besides the two metadata files, only attachments/<cipher>/<attachment>.bin with safe segments is accepted.
+  const attachmentEntry = normalized.startsWith('attachments/') && normalized.endsWith('.bin')
+    && isSafeBackupAttachmentBlobName(normalized.slice('attachments/'.length, -'.bin'.length));
+  if (normalized !== 'manifest.json' && normalized !== 'db.json' && !attachmentEntry) {
     throw new Error(`Backup archive contains an unsupported file: ${normalized}`);
   }
-}
-
-function createBackupUnzipFilter(): (file: UnzipFileInfo) => boolean {
-  let entryCount = 0;
-  let totalOriginalBytes = 0;
-  return (file: UnzipFileInfo): boolean => {
-    entryCount += 1;
-    if (entryCount > MAX_BACKUP_ARCHIVE_ENTRY_COUNT) {
-      throw new Error('Backup archive contains too many files');
-    }
-    validateBackupEntryName(file.name);
-    const originalSize = Number(file.originalSize);
-    if (!Number.isFinite(originalSize) || originalSize < 0) {
-      throw new Error(`Backup archive contains an invalid file size: ${file.name}`);
-    }
-    if (file.name === 'db.json' && originalSize > MAX_BACKUP_DB_JSON_BYTES) {
-      throw new Error('Backup archive database payload is too large');
-    }
-    totalOriginalBytes += originalSize;
-    if (totalOriginalBytes > MAX_BACKUP_EXTRACTED_BYTES) {
-      throw new Error('Backup archive expands beyond the current restore limit');
-    }
-    return true;
-  };
-}
-
-function getRequiredZipEntries(db: BackupPayload['db']): string[] {
-  const entries: string[] = [];
-  for (const row of db.attachments) {
-    const cipherId = String(row.cipher_id || '').trim();
-    const attachmentId = String(row.id || '').trim();
-    if (!cipherId || !attachmentId) continue;
-    entries.push(`attachments/${cipherId}/${attachmentId}.bin`);
-  }
-  return entries;
 }
 
 function externalAttachmentPaths(manifest: BackupPayload['manifest'], allowExternalAttachmentBlobs = false): Set<string> {
   return new Set(allowExternalAttachmentBlobs
     ? manifest.attachmentBlobs.map(({ cipherId, attachmentId }) => `attachments/${cipherId}/${attachmentId}.bin`)
     : []);
-}
-
-function createZipEntries(files: Record<string, Uint8Array>): Record<string, Uint8Array | [Uint8Array, { level: 0 | 1 | 6 }]> {
-  const entries: Record<string, Uint8Array | [Uint8Array, { level: 0 | 1 | 6 }]> = {};
-  for (const [path, bytes] of Object.entries(files)) {
-    entries[path] = [bytes, { level: BACKUP_TEXT_COMPRESSION_LEVEL }];
-  }
-  return entries;
 }
 
 export interface ParseBackupArchiveOptions {
@@ -300,10 +205,36 @@ export function parseBackupArchive(
   bytes: Uint8Array,
   options: ParseBackupArchiveOptions = {}
 ): { payload: BackupPayload; files: Record<string, Uint8Array> } {
-  validateArchiveSize(bytes);
+  if (bytes.byteLength > MAX_BACKUP_ARCHIVE_BYTES) {
+    throw new Error(`Backup archive is too large. The current restore limit is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))} MiB`);
+  }
+  // The filter vets each entry's name and declared size before fflate inflates it; the loop below
+  // re-checks the sizes actually extracted.
+  let entryCount = 0;
+  let totalOriginalBytes = 0;
   let zipped: Record<string, Uint8Array>;
   try {
-    zipped = unzipSync(bytes, { filter: createBackupUnzipFilter() });
+    zipped = unzipSync(bytes, {
+      filter: (file: UnzipFileInfo): boolean => {
+        entryCount += 1;
+        if (entryCount > MAX_BACKUP_ARCHIVE_ENTRY_COUNT) {
+          throw new Error('Backup archive contains too many files');
+        }
+        validateBackupEntryName(file.name);
+        const originalSize = Number(file.originalSize);
+        if (!Number.isFinite(originalSize) || originalSize < 0) {
+          throw new Error(`Backup archive contains an invalid file size: ${file.name}`);
+        }
+        if (file.name === 'db.json' && originalSize > MAX_BACKUP_DB_JSON_BYTES) {
+          throw new Error('Backup archive database payload is too large');
+        }
+        totalOriginalBytes += originalSize;
+        if (totalOriginalBytes > MAX_BACKUP_EXTRACTED_BYTES) {
+          throw new Error('Backup archive expands beyond the current restore limit');
+        }
+        return true;
+      },
+    });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Backup archive ')) {
       throw error;
@@ -350,9 +281,12 @@ export function parseBackupArchive(
   const payload = parsed.data;
 
   const externalAttachmentKeys = externalAttachmentPaths(payload.manifest, options.allowExternalAttachmentBlobs);
-  const requiredEntries = getRequiredZipEntries(payload.db).filter((entry) => !externalAttachmentKeys.has(entry));
-  for (const entry of requiredEntries) {
-    if (!zipped[entry]) {
+  for (const row of payload.db.attachments) {
+    const cipherId = String(row.cipher_id || '').trim();
+    const attachmentId = String(row.id || '').trim();
+    if (!cipherId || !attachmentId) continue;
+    const entry = `attachments/${cipherId}/${attachmentId}.bin`;
+    if (!externalAttachmentKeys.has(entry) && !zipped[entry]) {
       throw new Error(`Backup archive is missing required file: ${entry}`);
     }
   }
@@ -496,7 +430,17 @@ export async function buildBackupArchive(
     queryRows(env.DB, attachments, ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], ['cipher_id', 'id']),
     queryRows(env.DB, webauthnCredentials, ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'], ['created_at']),
   ]);
-  const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
+  // Runner locks and the Yubico bootstrap claim stay with this instance; backup settings leave only as
+  // their portable envelope.
+  const exportedConfigRows = configRows.flatMap((row): SqlRow[] => {
+    const key = String(row.key || '').trim();
+    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) return [];
+    if (key === BACKUP_SETTINGS_CONFIG_KEY) {
+      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
+      return portableOnly ? [{ ...row, value: portableOnly }] : [];
+    }
+    return [{ ...row }];
+  });
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
   const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
     const cipherId = String(row.cipher_id || '').trim();
@@ -558,10 +502,21 @@ export async function buildBackupArchive(
       : 'txt_backup_archive_progress_package_detail',
     includeAttachments,
   });
-  const bytes = zipSync(createZipEntries(files));
+  const bytes = zipSync(Object.fromEntries(Object.entries(files)
+    .map(([path, content]): [string, [Uint8Array, { level: 0 | 1 | 6 }]] => [path, [content, { level: BACKUP_TEXT_COMPRESSION_LEVEL }]])));
   const fileHashPrefix = String(await sha256(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
-  const backupTimeZone = options.timeZone || 'UTC';
-  const fileName = buildBackupFileNameInTimeZone(date, fileHashPrefix, backupTimeZone);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: options.timeZone || 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const pick = (type: string): string => parts.find((part) => part.type === type)?.value || '';
+  const fileName = `nodewarden_backup_${pick('year')}${pick('month')}${pick('day')}_${pick('hour')}${pick('minute')}${pick('second')}_${fileHashPrefix}.zip`;
   await options.progress?.({
     step: 'archive_ready',
     fileName,
