@@ -1,4 +1,7 @@
+import { and, eq, like, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
+import { getOrm } from '../db/client';
+import { organizationMemberships, organizations, verification } from '../db/schema';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { AuthService } from '../services/auth';
 import { notifyUserLogout } from '../durable/notifications-hub';
@@ -93,7 +96,10 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       if (!value) { console.warn('Invalid administrator sign-in link'); return invalidLink(); }
       if (directory.admins.get(value.email) !== value.stampHash) { await audit('admin.portal.login.denied'); return invalidLink(); }
       const session = await createAdminSession(env, value.email, value.stampHash);
-      await env.DB.prepare("DELETE FROM verification WHERE (identifier LIKE 'admin-login:%' OR identifier LIKE 'admin-session:%') AND expires_at < ?").bind(Date.now()).run();
+      await getOrm(env.DB).delete(verification).where(and(
+        or(like(verification.identifier, 'admin-login:%'), like(verification.identifier, 'admin-session:%')),
+        lt(verification.expiresAt, Date.now()),
+      ));
       await audit('admin.portal.login', value.email);
       return portalRedirect(adminReturnPath(value.returnPath, url.origin), [adminCookie(ADMIN_LOGIN_COOKIE), adminCookie(ADMIN_COOKIE, session.token, LIMITS.admin.sessionTtlSeconds)]);
     }
@@ -106,7 +112,7 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     if (form && !constantTimeEquals(form.csrf, session.csrf)) return forbidden();
     if (path === '/admin/login/logout') {
       if (request.method !== 'POST') return methodNotAllowed();
-      await env.DB.prepare('DELETE FROM verification WHERE id=?').bind(session.id).run();
+      await getOrm(env.DB).delete(verification).where(eq(verification.id, session.id));
       await audit('admin.portal.logout', session.email);
       return portalRedirect('/admin/login?m=loggedout', [adminCookie(ADMIN_COOKIE)]);
     }
@@ -184,12 +190,12 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
       }
       const [personalItems, memberships, passkeys] = await Promise.all([
         countPersonalCiphers(env.DB, user.id),
-        env.DB.prepare('SELECT count(*) AS total FROM organization_memberships WHERE user_id=?').bind(user.id).first<{ total: number }>(),
+        getOrm(env.DB).$count(organizationMemberships, eq(organizationMemberships.userId, user.id)),
         passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'),
       ]);
       const providers = twoFactorProviders(user, passkeys > 0);
       return portalPage('User details', html`${portalNavigation(session.csrf)}${refusal ? html`<p class="notice">${refusal}</p>` : html``}${portalFields([
-        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', providers.map(provider => ({ 0: 'Authenticator', 1: 'Email', 3: 'YubiKey', 7: 'WebAuthn' })[provider]).join(', ') || 'None'], ['Personal items', personalItems], ['Organization memberships', memberships?.total ?? 0],
+        ['Id', user.id], ['Email', user.email], ['Email verified', user.emailVerified ? 'Yes' : 'No (registered without an emailed token)'], ['Name', user.name ?? ''], ['Status', user.status], ['Vault role', user.role], ['Created', user.createdAt], ['Modified', user.updatedAt], ['Two-factor', providers.map(provider => ({ 0: 'Authenticator', 1: 'Email', 3: 'YubiKey', 7: 'WebAuthn' })[provider]).join(', ') || 'None'], ['Personal items', personalItems], ['Organization memberships', memberships],
       ])}${user.emailVerified ? html`` : verifyEmailForm(user.id, session.csrf, user.email, directory.admins.has(user.email))}${userStatusForm(user.id, session.csrf, user.status)}${providers.length ? removeTwoFactorForm(user.id, session.csrf, user.email) : html``}${deleteForm('/admin/users/delete/' + encodeURIComponent(user.id), session.csrf, user.email)}`, refusal ? 400 : 200);
     }
     if (path === '/admin/organizations') {
@@ -220,14 +226,14 @@ export async function handleAdminPortal(request: Request, env: Env): Promise<Res
     }
     if (path === '/admin' || path === '/admin/') {
       if (request.method !== 'GET') return methodNotAllowed();
-      const counts = await env.DB.prepare('SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM organizations) AS organizations').first<{ users: number; organizations: number }>();
       const mail = readMailConfig(env);
-      const [events, pushId, pushKey, yubico] = await Promise.all([
+      const [userCount, organizationCount, events, pushId, pushKey, yubico] = await Promise.all([
+        userRepo.getUserCount(env.DB), getOrm(env.DB).$count(organizations),
         listAuditLogs(env.DB, { actionPrefix: 'admin.portal.', limit: LIMITS.admin.recentAuditEvents, offset: 0 }),
         configRepo.getConfigValue(env.DB, 'push.installation.id'), configRepo.getConfigValue(env.DB, 'push.installation.key'), getYubicoCredentials(env.DB),
       ]);
       const settings: Array<[string, string | number]> = [
-        ['Users', counts?.users ?? 0], ['Organizations', counts?.organizations ?? 0], ['Administrators', directory.admins.size],
+        ['Users', userCount], ['Organizations', organizationCount], ['Administrators', directory.admins.size],
         ['Compatible server version', LIMITS.compatibility.bitwardenServerVersion], ['Mail', mail.kind],
         ['Sender', mail.kind === 'enabled' ? `${mail.from.name} <${mail.from.email}>` : 'Unavailable'],
         ['Open registration', isOpenRegistrationEnabled(env) ? 'Yes' : 'No'], ['Vault origins', getConfiguredWebVaultOrigins(env).join(', ') || 'None'],
