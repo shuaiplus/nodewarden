@@ -3,14 +3,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
-import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 
 test('project routes enforce creator and group grants, bulk isolation, encrypted names and counts', async () => {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
-  const b = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
+  const { user: b } = await seedMember(env, orgId);
   const request = (userId: string, path: string, method = 'GET', body?: unknown) => authedFetch(env, { userId, path, method, body });
   const projectPath = `/api/organizations/${orgId}/projects`;
   assert.deepEqual((await (await request(a.id, projectPath)).json() as any).data, []);

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authedFetch, createTestEnv, drainWaitUntil, seedUser } from './support/env';
+import { seedMembership } from './support/sm';
 import { hashPassword } from '../src/services/auth-password';
-import * as orgRepo from '../src/services/storage-org-repo';
+import { MembershipStatus } from '../src/services/org-types';
 import * as userRepo from '../src/services/storage-user-repo';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const PASSWORD = 'event-test-password';
@@ -33,7 +34,7 @@ test('client export events fan out only to confirmed organizations and factor fa
   const acceptedOrg = await createOwnedOrganization(env, owner, { name: 'Accepted only', key: '4.dGVzdA==' });
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), totpSecret: 'JBSWY3DPEHPK3PXP' });
   const org = await createOwnedOrganization(env, user, { name: 'Confirmed', key: '4.dGVzdA==' });
-  await orgRepo.saveMembership(env.DB, { id: crypto.randomUUID(), orgId: acceptedOrg.id, userId: user.id, email: user.email, invitedByEmail: null, status: 1, type: 2, accessAll: false, key: '', permissions: null, resetPasswordKey: null, externalId: null, createdAt: user.createdAt, updatedAt: user.updatedAt });
+  await seedMembership(env, acceptedOrg.id, { userId: user.id, email: user.email, status: MembershipStatus.Accepted });
   await env.DB.prepare('DELETE FROM events').run();
   assert.equal((await authedFetch(env, { method: 'POST', path: '/events/collect', userId: user.id, body: [{ type: 1007, date: new Date().toISOString(), organizationId: acceptedOrg.id }] })).status, 200);
   assert.equal((await authedFetch(env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'password', username: user.email, password: PASSWORD, twoFactorProvider: '0', twoFactorToken: 'wrong' } })).status, 400);

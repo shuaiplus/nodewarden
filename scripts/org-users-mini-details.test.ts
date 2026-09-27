@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { MembershipStatus, MembershipType, revokeStatus } from '../src/services/org-types';
-import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -35,28 +35,6 @@ async function assertOrganizationNotFound(response: Response): Promise<void> {
   assert.equal((await response.json() as { error: string }).error, 'Organization not found');
 }
 
-async function addMember(env: Env, orgId: string, status: number): Promise<User> {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: MEMBER_KEY,
-    status,
-    type: MembershipType.User,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return user;
-}
-
 test('mini-details lists every member, invited and revoked ones included, with exactly the upstream keys', async () => {
   const env = await createTestEnv();
   const owner = await seedUser(env);
@@ -69,7 +47,7 @@ test('mini-details lists every member, invited and revoked ones included, with e
     userId: owner.id,
   });
   assert.equal(invited.status, 200);
-  const revoked = await addMember(env, orgId, revokeStatus(MembershipStatus.Confirmed));
+  const { user: revoked } = await seedMember(env, orgId, { status: revokeStatus(MembershipStatus.Confirmed) });
 
   const response = await miniDetails(env, owner, orgId);
   assert.equal(response.status, 200);
@@ -103,8 +81,8 @@ test('mini-details is served to any confirmed member but not to outsiders or unc
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
-  const plainMember = await addMember(env, orgId, MembershipStatus.Confirmed);
-  const accepted = await addMember(env, orgId, MembershipStatus.Accepted);
+  const { user: plainMember } = await seedMember(env, orgId);
+  const { user: accepted } = await seedMember(env, orgId, { status: MembershipStatus.Accepted });
   const outsider = await seedUser(env);
 
   assert.equal((await miniDetails(env, plainMember, orgId)).status, 200);

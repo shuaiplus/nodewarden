@@ -11,8 +11,9 @@ import { deleteOrganizationAccount, deleteUserAccount } from '../src/services/ac
 import { type AuditEventInput } from '../src/services/audit-events';
 import { getAttachmentObjectKey, getSendFileObjectKey } from '../src/services/blob-store';
 import * as orgRepo from '../src/services/storage-org-repo';
-import type { Env, User } from '../src/types';
+import type { Env } from '../src/types';
 import { authedFetch, createTestEnv, memoryKv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 import * as attachmentRepo from '../src/services/storage-attachment-repo';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
 import * as revisionRepo from '../src/services/storage-revision-repo';
@@ -25,12 +26,9 @@ const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 const PAST = '2020-01-01T00:00:00.000Z';
 const audit: AuditEventInput = { action: 'admin.user.delete', category: 'security', level: 'security' };
 
-async function addMember(env: Env, orgId: string, user: User, type = 0, createdAt = PAST) {
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(), userId: user.id, orgId, email: user.email, invitedByEmail: null,
-    accessAll: true, key: '4.dGVzdA==', status: 2, type, permissions: null, resetPasswordKey: null,
-    externalId: null, createdAt, updatedAt: createdAt,
-  });
+// Members join with full access at `createdAt`: the successor is the oldest other Owner, else the oldest member.
+function addMember(env: Env, orgId: string, type = 0, createdAt = PAST) {
+  return seedMember(env, orgId, { type, accessAll: true, createdAt, updatedAt: createdAt });
 }
 
 async function addCipher(env: Env, userId: string, organizationId: string | null) {
@@ -53,8 +51,7 @@ async function setup() {
   const admin = await seedUser(env, { role: 'admin' });
   const target = await seedUser(env);
   const org = await createOwnedOrganization(env, target, { name: 'Co-owned', key: '4.dGVzdA==' });
-  const successor = await seedUser(env);
-  await addMember(env, org.id, successor);
+  const { user: successor } = await addMember(env, org.id);
   const orgCipher = await addCipher(env, target.id, org.id);
   const personalCipher = await addCipher(env, target.id, null);
   const sendId = crypto.randomUUID();
@@ -89,10 +86,8 @@ async function assertIntact(f: Awaited<ReturnType<typeof setup>>) {
 
 test('admin user delete keeps org items with the oldest other Owner and cleans personal data, sessions, EA and invites', async () => {
   const f = await setup();
-  const olderAdmin = await seedUser(f.env);
-  const newerOwner = await seedUser(f.env);
-  await addMember(f.env, f.org.id, olderAdmin, 1, '2010-01-01T00:00:00.000Z');
-  await addMember(f.env, f.org.id, newerOwner, 0, '2021-01-01T00:00:00.000Z');
+  await addMember(f.env, f.org.id, 1, '2010-01-01T00:00:00.000Z');
+  await addMember(f.env, f.org.id, 0, '2021-01-01T00:00:00.000Z');
 
   const response = await authedFetch(f.env, {
     method: 'DELETE', path: `/api/admin/users/${f.target.id}`, userId: f.admin.id,
@@ -117,8 +112,7 @@ test('admin user delete keeps org items with the oldest other Owner and cleans p
 test('user delete falls back to the oldest confirmed member when no other Owner exists', async () => {
   const f = await setup();
   await getOrm(f.env.DB).update(organizationMemberships).set({ type: 1 });
-  const newer = await seedUser(f.env);
-  await addMember(f.env, f.org.id, newer, 1, '2021-01-01T00:00:00.000Z');
+  await addMember(f.env, f.org.id, 1, '2021-01-01T00:00:00.000Z');
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
   assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.successor.id);
   assert.ok(f.blobs.values.has(f.orgCipher.key));
@@ -238,7 +232,7 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
   const otherOrg = await createOwnedOrganization(f.env, otherOwner, { name: 'Unchanged', key: '4.dGVzdA==' });
   const otherCipher = await addCipher(f.env, otherOwner.id, otherOrg.id);
   for (const org of [f.org, otherOrg]) await addSecretsManagerData(f.env, org.id);
-  for (let index = 0; index < 100; index++) await addMember(f.env, f.org.id, await seedUser(f.env), 2);
+  for (let index = 0; index < 100; index++) await addMember(f.env, f.org.id, 2);
   await f.env.DB.prepare('UPDATE user_revisions SET revision_date = ?').bind(PAST).run();
   // Leave one member with no revision row, which the batch must create.
   await getOrm(f.env.DB).delete(userRevisions).where(eq(userRevisions.userId, f.successor.id));

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createTestEnv, authedFetch, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 import { EventType, recordEvents, pruneEvents } from '../src/services/events';
 import { saveAuditLogSettings } from '../src/services/audit-events';
-import { EMPTY_PERMISSIONS } from '../src/services/org-types';
+import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { LIMITS } from '../src/config/limits';
@@ -17,11 +18,6 @@ async function setup() {
   const org = await createOwnedOrganization(env, owner, { name: 'Event test', key: '4.dGVzdA==' });
   await env.DB.prepare('DELETE FROM events').run();
   return { env, owner, org };
-}
-async function member(env: Env, orgId: string, user: User, accessEventLogs: boolean) {
-  const id = crypto.randomUUID();
-  await orgRepo.saveMembership(env.DB, { id, orgId, userId: user.id, email: user.email, invitedByEmail: null, status: 2, type: 4, accessAll: false, key: '4.dGVzdA==', permissions: { ...EMPTY_PERMISSIONS, accessEventLogs }, resetPasswordKey: null, externalId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-  return id;
 }
 async function cipher(env: Env, owner: User, orgId: string | null) {
   const id = crypto.randomUUID();
@@ -78,10 +74,8 @@ test('event scope is immutable across moves/deletion; membership filters use the
   const { env, owner, org } = await setup();
   const otherOwner = await seedUser(env);
   const other = await createOwnedOrganization(env, otherOwner, { name: 'Other', key: '4.dGVzdA==' });
-  const actor = await seedUser(env);
-  const actorMembership = await member(env, org.id, actor, true);
-  const ordinary = await seedUser(env);
-  await member(env, org.id, ordinary, false);
+  const { user: actor, memberId: actorMembership } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: true } });
+  const { user: ordinary } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: false } });
   const id = await cipher(env, owner, org.id);
   await env.DB.prepare('DELETE FROM events').run();
   await recordEvents(env, null, { userId: actor.id }, [{ type: 1100, organizationId: org.id, resourceType: 'cipher', resourceId: id }]);
@@ -122,7 +116,7 @@ test('collector records authorized client actions, derives actor/scope and hides
     const response = await post([{ ...entry, date }]); assert.equal(response.status, 200); assert.equal(await response.text(), '');
   }
   assert.equal(await count(env), 1);
-  const reader = await seedUser(env); await member(env, org.id, reader, true);
+  const { user: reader } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: true } });
   assert.equal((await post([{ type: 1107, cipherId: id, date }], reader.id)).status, 200);
   assert.equal(await count(env), 1, 'log readers cannot claim actions on inaccessible ciphers');
   assert.equal((await post(Array.from({ length: 100 }, () => ({ type: 1111, cipherId: id, date })))).status, 200);

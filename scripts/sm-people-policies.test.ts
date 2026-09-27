@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MembershipStatus, MembershipType } from '../src/services/org-types';
+import { MembershipStatus } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
@@ -11,7 +11,7 @@ const policy = (granteeId: string, write = false) => ({ granteeId, read: true, w
 async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
   const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
   const aMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
   const project = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
@@ -90,8 +90,8 @@ test('people policies reject duplicates, invalid permissions, and foreign member
 
 test('machine-account people policies are RW and potential grantees list only confirmed users plus every group', async () => {
   const { env, orgId, owner, a, ownerMember, aMember, account, project, groupId, request } = await setup();
-  const invited = await seedMember(env, orgId, MembershipType.User, MembershipStatus.Invited);
-  const accepted = await seedMember(env, orgId, MembershipType.User, MembershipStatus.Accepted);
+  const { user: invited } = await seedMember(env, orgId, { status: MembershipStatus.Invited });
+  const { user: accepted } = await seedMember(env, orgId, { status: MembershipStatus.Accepted });
   const invitedMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, invited.id, orgId))!;
   const acceptedMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, accepted.id, orgId))!;
   const grantees = await request(owner.id, `/api/organizations/${orgId}/access-policies/people/potential-grantees`);

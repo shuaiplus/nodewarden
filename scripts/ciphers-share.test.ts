@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { LIMITS } from '../src/config/limits';
-import { MembershipStatus, MembershipType } from '../src/services/org-types';
-import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 import * as attachmentRepo from '../src/services/storage-attachment-repo';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
 
@@ -60,29 +59,6 @@ async function setup(): Promise<Fixture> {
   const owner = await seedUser(env);
   const orgId = (await createOwnedOrganization(env, owner, { name: 'Acme', key: ORG_KEY })).id;
   return { env, owner, orgId, collectionId: await createCollection(env, owner, orgId) };
-}
-
-// A confirmed plain User holding direct access to one collection.
-async function addMember(env: Env, orgId: string, collectionId: string, readOnly: boolean): Promise<User> {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  await orgRepo.saveMembershipWithAccess(env.DB, {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: ORG_KEY,
-    status: MembershipStatus.Confirmed,
-    type: MembershipType.User,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  }, { collections: [{ collectionId, readOnly, hidePasswords: false, manage: false }] });
-  return user;
 }
 
 async function createPersonalCipher(env: Env, user: User): Promise<string> {
@@ -147,7 +123,7 @@ async function syncedCipherIds(env: Env, user: User): Promise<string[]> {
 
 test('PUT /ciphers/{id}/share moves a personal cipher into the org with its re-encrypted data and collections', async () => {
   const { env, owner, orgId, collectionId } = await setup();
-  const member = await addMember(env, orgId, collectionId, false);
+  const { user: member } = await seedMember(env, orgId, { collections: [{ collectionId, readOnly: false, hidePasswords: false, manage: false }] });
   const cipherId = await createPersonalCipher(env, owner);
   const attachmentId = await addAttachment(env, cipherId);
   assert.deepEqual(await syncedCipherIds(env, member), []);
@@ -181,7 +157,7 @@ test('POST /ciphers/{id}/share is the deprecated alias and shares instead of ech
 test('share refuses ciphers that are not the caller\'s personal items, orgs it is not in, and collections it cannot write', async () => {
   const { env, owner, orgId, collectionId } = await setup();
   const outsider = await seedUser(env);
-  const readOnlyMember = await addMember(env, orgId, collectionId, true);
+  const { user: readOnlyMember } = await seedMember(env, orgId, { collections: [{ collectionId, readOnly: true, hidePasswords: false, manage: false }] });
   const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
   const ownerCipherId = await createPersonalCipher(env, owner);

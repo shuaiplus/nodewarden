@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MembershipStatus, MembershipType, revokeStatus } from '../src/services/org-types';
+import { MembershipStatus, revokeStatus } from '../src/services/org-types';
 import * as emergencyRepo from '../src/services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../src/services/storage-emergency-repo';
-import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -35,27 +35,9 @@ interface MemberPublicKey {
   object: string;
 }
 
-async function addMember(env: Env, orgId: string, status: number, publicKey: string | null = PUBLIC_KEY) {
-  const user = await seedUser(env, { publicKey });
-  const now = new Date().toISOString();
-  const membership = {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: status === MembershipStatus.Confirmed ? WRAPPED_KEY : '',
-    status,
-    type: MembershipType.User,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await orgRepo.saveMembership(env.DB, membership);
-  return { user, memberId: membership.id };
+// Members hold RSA keys unless seeded without any, like an account that never logged in.
+function addMember(env: Env, orgId: string, status: number, publicKey: string | null = PUBLIC_KEY) {
+  return seedMember(env, orgId, { status, user: { publicKey } });
 }
 
 async function errorOf(response: Response): Promise<{ status: number; error: string }> {

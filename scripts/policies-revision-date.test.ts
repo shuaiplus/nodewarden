@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import * as orgRepo from '../src/services/storage-org-repo';
-import { MembershipStatus, MembershipType, PolicyType } from '../src/services/org-types';
-import type { Env } from '../src/types';
+import { MembershipType, PolicyType } from '../src/services/org-types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMembership } from './support/sm';
 
 const MS_PER_SECOND = 1000;
 
@@ -16,26 +16,6 @@ interface PolicyBody {
   type: number;
   enabled: boolean;
   revisionDate?: string;
-}
-
-async function seedOrgMember(env: Env, orgId: string, userId: string, type: number): Promise<void> {
-  const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(),
-    userId,
-    orgId,
-    email: null,
-    invitedByEmail: null,
-    accessAll: false,
-    key: '4.dGVzdA==',
-    status: MembershipStatus.Confirmed,
-    type,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  });
 }
 
 function assertIsoRevisionDate(policy: PolicyBody | undefined, expected: string): void {
@@ -60,8 +40,8 @@ test('saved policies carry the same ISO revisionDate in the PUT response, the or
     createdAt: now,
     updatedAt: now,
   });
-  await seedOrgMember(env, orgId, owner.id, MembershipType.Owner);
-  await seedOrgMember(env, orgId, member.id, MembershipType.User);
+  await seedMembership(env, orgId, { userId: owner.id, type: MembershipType.Owner });
+  await seedMembership(env, orgId, { userId: member.id });
 
   const saved = await authedFetch(env, {
     method: 'PUT',

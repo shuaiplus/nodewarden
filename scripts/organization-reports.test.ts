@@ -3,18 +3,11 @@ import test from 'node:test';
 
 import { getOrm } from '../src/db/client';
 import { cipherUpsert } from '../src/services/storage-cipher-repo';
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../src/services/org-types';
+import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
-import type { Cipher, Env } from '../src/types';
+import type { Cipher } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
-
-async function addMember(env: Env, orgId: string, type: number, permissions: Partial<OrgPermissions> = {}, accessAll = false, status: number = MembershipStatus.Confirmed) {
-  const user = await seedMember(env, orgId, type, status);
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
-  await orgRepo.saveMembership(env.DB, { ...member, accessAll, permissions: type === MembershipType.Custom ? { ...EMPTY_PERMISSIONS, ...permissions } : null });
-  return user;
-}
 
 function encryptedCipher(userId: string, organizationId: string | null): Cipher {
   const now = new Date().toISOString();
@@ -95,14 +88,14 @@ test('report and admin-detail gates use explicit org permissions rather than ord
   const cases = [
     { user: owner, list: true, detail: true },
     { user: admin, list: true, detail: true },
-    { user: await addMember(env, orgId, MembershipType.Custom, { accessReports: true }), list: true, detail: false },
-    { user: await addMember(env, orgId, MembershipType.Custom, { accessImportExport: true }), list: true, detail: false },
-    { user: await addMember(env, orgId, MembershipType.Custom, { editAnyCollection: true }), list: true, detail: true },
-    { user: await addMember(env, orgId, MembershipType.Custom, { deleteAnyCollection: true }), list: false, detail: true },
-    { user: await addMember(env, orgId, MembershipType.User), list: false, detail: false },
-    { user: await addMember(env, orgId, MembershipType.User, {}, true), list: false, detail: false },
-    { user: await addMember(env, orgId, MembershipType.Admin, {}, false, MembershipStatus.Revoked), list: false, detail: false },
-    { user: await addMember(env, orgId, MembershipType.Admin, {}, false, MembershipStatus.Accepted), list: false, detail: false },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessReports: true } })).user, list: true, detail: false },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessImportExport: true } })).user, list: true, detail: false },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } })).user, list: true, detail: true },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { deleteAnyCollection: true } })).user, list: false, detail: true },
+    { user: (await seedMember(env, orgId)).user, list: false, detail: false },
+    { user: (await seedMember(env, orgId, { accessAll: true })).user, list: false, detail: false },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Admin, status: MembershipStatus.Revoked })).user, list: false, detail: false },
+    { user: (await seedMember(env, orgId, { type: MembershipType.Admin, status: MembershipStatus.Accepted })).user, list: false, detail: false },
     { user: await seedUser(env), list: false, detail: false },
   ];
   for (const { user, list, detail } of cases) {
@@ -124,7 +117,7 @@ test('report and admin-detail gates use explicit org permissions rather than ord
 
 test('member list includes only same-org group IDs on includeGroups=true and omits groups by default', async () => {
   const { env, orgId, owner, admin, request } = await setup();
-  const user = await addMember(env, orgId, MembershipType.User);
+  const { user } = await seedMember(env, orgId);
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
   const foreign = await seedSmOrg(env);
   const groupIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
@@ -149,8 +142,8 @@ test('member list includes only same-org group IDs on includeGroups=true and omi
 
 test('a report-only Custom member can load V2 report dependencies without gaining collection or cipher management', async () => {
   const { env, orgId, owner, collection, target, request } = await setup();
-  const reporter = await addMember(env, orgId, MembershipType.Custom, { accessReports: true });
-  const ordinary = await addMember(env, orgId, MembershipType.User);
+  const { user: reporter } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessReports: true } });
+  const { user: ordinary } = await seedMember(env, orgId);
   const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
   const group = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/groups`, { name: ENCRYPTED_FIELD, users: [ownerMember.id] });
   await orgRepo.replaceCollectionAccess(env.DB, collection.id, {

@@ -1,22 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../src/services/org-types';
+import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
-import type { Env } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
 
 const CHANGED = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';
 const FIELDS = { type: 1, name: ENCRYPTED_FIELD, notes: ENCRYPTED_FIELD, login: { username: ENCRYPTED_FIELD, password: ENCRYPTED_FIELD } };
-
-async function addMember(env: Env, orgId: string, type: number, permissions: Partial<OrgPermissions> = {}, accessAll = false, status: number = MembershipStatus.Confirmed) {
-  const user = await seedMember(env, orgId, type, status);
-  const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
-  await orgRepo.saveMembership(env.DB, { ...member, accessAll, permissions: type === MembershipType.Custom ? { ...EMPTY_PERMISSIONS, ...permissions } : null });
-  return user;
-}
 
 async function setup() {
   const env = await createTestEnv();
@@ -30,7 +22,7 @@ async function setup() {
 
 test('confirmed owners, admins and edit-any Custom members can remediate assigned and unassigned org ciphers', async () => {
   const { env, orgId, owner, admin, collection, create, updateBody, request, storage } = await setup();
-  const custom = await addMember(env, orgId, MembershipType.Custom, { editAnyCollection: true });
+  const { user: custom } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
   for (const actor of [owner, admin, custom]) {
     for (const assigned of [true, false]) {
       const cipher = await create(assigned);
@@ -67,12 +59,12 @@ test('admin remediation denies report, export, delete-only and ordinary roles wi
   const cipher = await create();
   const original = await cipherRepo.getCipher(storage, cipher.id);
   const denied = [
-    await addMember(env, orgId, MembershipType.Custom, { accessReports: true }),
-    await addMember(env, orgId, MembershipType.Custom, { accessImportExport: true }),
-    await addMember(env, orgId, MembershipType.Custom, { deleteAnyCollection: true }),
-    await addMember(env, orgId, MembershipType.User),
-    await addMember(env, orgId, MembershipType.User, {}, true),
-    await addMember(env, orgId, MembershipType.Admin, {}, false, MembershipStatus.Revoked),
+    (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessReports: true } })).user,
+    (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessImportExport: true } })).user,
+    (await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { deleteAnyCollection: true } })).user,
+    (await seedMember(env, orgId)).user,
+    (await seedMember(env, orgId, { accessAll: true })).user,
+    (await seedMember(env, orgId, { type: MembershipType.Admin, status: MembershipStatus.Revoked })).user,
     await seedUser(env),
   ];
   for (const actor of denied) {
@@ -114,8 +106,8 @@ test('admin PUT validates revisions and organization ownership while preserving 
 
 test('ordinary personal and collection-authorized org mutation routes keep their original permission rules', async () => {
   const { env, orgId, owner, collection, create, updateBody, request, storage } = await setup();
-  const editor = await addMember(env, orgId, MembershipType.User);
-  const reporter = await addMember(env, orgId, MembershipType.Custom, { accessReports: true });
+  const { user: editor } = await seedMember(env, orgId);
+  const { user: reporter } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { accessReports: true } });
   const editorMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, editor.id, orgId))!;
   await orgRepo.replaceCollectionAccess(env.DB, collection.id, { users: [{ member: editorMember, readOnly: false, hidePasswords: false, manage: false }] });
   const cipher = await create();
@@ -153,7 +145,7 @@ test('legacy foreign collection links stay excluded from admin edit responses', 
 
 test('a Custom organization editor can complete the report form collection-change sequence without personal read access', async () => {
   const { env, orgId, owner, create, updateBody, request } = await setup();
-  const custom = await addMember(env, orgId, MembershipType.Custom, { editAnyCollection: true });
+  const { user: custom } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
   const destination = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/collections`, { name: ENCRYPTED_FIELD });
   const cipher = await create(false);
   assert.equal((await request(custom.id, cipher.id, 'GET', '')).status, 404);

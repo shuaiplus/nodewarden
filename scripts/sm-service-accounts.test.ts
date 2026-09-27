@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { handleCreateServiceAccount } from '../src/handlers/secrets-manager';
-import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import * as smRepo from '../src/services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -11,8 +10,8 @@ import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, smUser, TOKE
 async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
-  const b = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
+  const { user: b } = await seedMember(env, orgId);
   const path = `/api/organizations/${orgId}/service-accounts`;
   const request = (userId: string, path: string, method = 'GET', body?: unknown) => authedFetch(env, { userId, path, method, body });
   const account = (user = a, projectIds: string[] = []) => postJson<{ id: string }>(env, user, path, { name: ENCRYPTED_FIELD, projectIds });

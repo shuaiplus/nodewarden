@@ -7,6 +7,7 @@ import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { createOrgInviteToken } from '../src/utils/jwt';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -47,30 +48,6 @@ async function errorMessage(response: Response): Promise<string> {
 
 async function createOrg(env: Env, owner: User): Promise<string> {
   return (await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY })).id;
-}
-
-// Seeds a confirmed member directly, since the invite flow itself is covered elsewhere.
-async function addMember(env: Env, orgId: string, type: number, permissions: Partial<OrgPermissions> | null = null) {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  const membership = {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: MEMBER_KEY,
-    status: MembershipStatus.Confirmed,
-    type,
-    permissions: permissions ? { ...EMPTY_PERMISSIONS, ...permissions } : null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await orgRepo.saveMembership(env.DB, membership);
-  return { user, memberId: membership.id };
 }
 
 function putMember(env: Env, actor: User, orgId: string, memberId: string, body: Record<string, unknown>): Promise<Response> {
@@ -124,8 +101,8 @@ test('an Admin can neither grant Owner nor edit or demote an Owner, on PUT or in
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-  const admin = await addMember(env, orgId, MembershipType.Admin);
-  const member = await addMember(env, orgId, MembershipType.User);
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
+  const member = await seedMember(env, orgId);
 
   await expectRejected(putMember(env, admin.user, orgId, member.memberId, { type: MembershipType.Owner }), 400, ONLY_OWNERS);
   await expectRejected(putMember(env, admin.user, orgId, admin.memberId, { type: MembershipType.Owner }), 400, ONLY_OWNERS);
@@ -143,9 +120,9 @@ test('a Custom manageUsers member only manages Users and Custom members with per
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true, accessReports: true });
-  const member = await addMember(env, orgId, MembershipType.User);
-  const admin = await addMember(env, orgId, MembershipType.Admin);
+  const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true, accessReports: true } });
+  const member = await seedMember(env, orgId);
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
 
   await expectRejected(putMember(env, custom.user, orgId, member.memberId, { type: MembershipType.Admin }), 400, CUSTOM_NOT_ADMINS);
   await expectRejected(putMember(env, custom.user, orgId, admin.memberId, { type: MembershipType.User }), 400, CUSTOM_NOT_ADMINS);
@@ -169,7 +146,7 @@ test('PUT requires a real member type and keeps a confirmed owner', async () => 
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-  const admin = await addMember(env, orgId, MembershipType.Admin);
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
 
   await expectRejected(putMember(env, owner, orgId, admin.memberId, {}), 400, 'The Type field is required.');
   await expectRejected(putMember(env, owner, orgId, admin.memberId, { type: MembershipType.Manager }), 400, 'The field Type is invalid.');
@@ -194,10 +171,10 @@ test('only an Owner removes, revokes or restores an Owner, and a Custom member n
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const secondOwner = await addMember(env, orgId, MembershipType.Owner);
-  const admin = await addMember(env, orgId, MembershipType.Admin);
-  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
-  const member = await addMember(env, orgId, MembershipType.User);
+  const secondOwner = await seedMember(env, orgId, { type: MembershipType.Owner });
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
+  const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
+  const member = await seedMember(env, orgId);
 
   await expectRejected(removeMember(env, admin.user, orgId, secondOwner.memberId), 400, 'Only owners can remove other owners.');
   await expectRejected(removeMember(env, custom.user, orgId, secondOwner.memberId), 400, 'Only owners can remove other owners.');
@@ -231,7 +208,7 @@ test('the last confirmed owner cannot be revoked or removed', async () => {
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-  const secondOwner = await addMember(env, orgId, MembershipType.Owner);
+  const secondOwner = await seedMember(env, orgId, { type: MembershipType.Owner });
 
   assert.equal((await setMemberRevoked(env, owner, orgId, secondOwner.memberId, 'revoke')).status, 200);
   await expectRejected(setMemberRevoked(env, owner, orgId, ownerMemberId, 'revoke'), 400, 'You cannot revoke yourself.');
@@ -244,8 +221,8 @@ test('member actions reject self-management and repeated revoke or restore witho
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const admin = await addMember(env, orgId, MembershipType.Admin);
-  const member = await addMember(env, orgId, MembershipType.User);
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
+  const member = await seedMember(env, orgId);
 
   await expectRejected(removeMember(env, admin.user, orgId, admin.memberId), 400, 'You cannot remove yourself.');
   for (const action of ['revoke', 'restore'] as const) {
@@ -266,10 +243,10 @@ test('bulk member actions report per-member errors, preserve other organizations
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const self = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-  const admin = await addMember(env, orgId, MembershipType.Admin);
-  const member = await addMember(env, orgId, MembershipType.User);
+  const admin = await seedMember(env, orgId, { type: MembershipType.Admin });
+  const member = await seedMember(env, orgId);
   const foreignOrg = await createOrg(env, await seedUser(env));
-  const foreign = await addMember(env, foreignOrg, MembershipType.User);
+  const foreign = await seedMember(env, foreignOrg);
   const missing = crypto.randomUUID();
   const bulk = async (method: string, suffix: string, ids: string[]) => {
     const response = await authedFetch(env, {
@@ -305,7 +282,7 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const ids: string[] = [];
-  for (let i = 0; i < 150; i++) ids.push((await addMember(env, orgId, MembershipType.User)).memberId);
+  for (let i = 0; i < 150; i++) ids.push((await seedMember(env, orgId)).memberId);
   const revisionBefore = await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first();
   await env.DB.prepare(`CREATE TRIGGER fail_last_member BEFORE UPDATE ON organization_memberships
     WHEN NEW.id = '${ids[149]}' BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
@@ -334,7 +311,7 @@ test('demoting the organization creator drops the full collection access it was 
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const creatorMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
-  const secondOwner = await addMember(env, orgId, MembershipType.Owner);
+  const secondOwner = await seedMember(env, orgId, { type: MembershipType.Owner });
 
   const demotion = { type: MembershipType.User, collections: [], groups: [], accessSecretsManager: false, accessPam: false };
   assert.equal((await putMember(env, secondOwner.user, orgId, creatorMemberId, demotion)).status, 200);
@@ -347,7 +324,7 @@ test('accessAll in an invite or PUT body grants no full collection access', asyn
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
+  const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
   const selfEdit = { type: MembershipType.Custom, permissions: { manageUsers: true }, accessAll: true };
   assert.equal((await putMember(env, custom.user, orgId, custom.memberId, selfEdit)).status, 200);
   const email = 'alt@example.test';
@@ -368,8 +345,8 @@ test('a Custom manageUsers member grants only collections it manages, and never 
   const orgId = await createOrg(env, owner);
   const ownerMemberId = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
   const [managed, unmanaged] = [await createCollection(env, owner, orgId), await createCollection(env, owner, orgId)];
-  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
-  const member = await addMember(env, orgId, MembershipType.User);
+  const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
+  const member = await seedMember(env, orgId);
   const customBody = { type: MembershipType.Custom, permissions: { manageUsers: true } };
   assert.equal((await putMember(env, owner, orgId, custom.memberId, { ...customBody, collections: [manageAccess(managed)] })).status, 200);
 
@@ -393,7 +370,7 @@ test('a Custom manageUsers member grants only collections it manages, and never 
 
   // Managed collections stay grantable, as does any collection for editAnyCollection members and Owners.
   assert.equal((await putMember(env, custom.user, orgId, member.memberId, { type: MembershipType.User, collections: [manageAccess(managed)] })).status, 200);
-  const editor = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true, editAnyCollection: true });
+  const editor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true, editAnyCollection: true } });
   assert.equal((await invite(env, editor.user, orgId, { emails: [email], type: MembershipType.User, collections: grant })).status, 200);
   assert.equal((await putMember(env, owner, orgId, ownerMemberId, { type: MembershipType.Owner, collections: grant })).status, 200);
 });
@@ -410,8 +387,8 @@ test('PUT keeps member access to collections the actor cannot manage', async () 
     await createCollection(env, owner, orgId),
     await createCollection(env, owner, orgId),
   ];
-  const custom = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
-  const member = await addMember(env, orgId, MembershipType.User);
+  const custom = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
+  const member = await seedMember(env, orgId);
   const customBody = { type: MembershipType.Custom, permissions: { manageUsers: true }, collections: [manageAccess(managed), editAccess(editable)] };
   assert.equal((await putMember(env, owner, orgId, custom.memberId, customBody)).status, 200);
   assert.equal((await putMember(env, owner, orgId, member.memberId, { type: MembershipType.User, collections: [viewAccess(editable), viewAccess(hidden)] })).status, 200);
@@ -494,7 +471,7 @@ test('member details are only served to member managers of the same organization
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const member = await addMember(env, orgId, MembershipType.User);
+  const member = await seedMember(env, orgId);
   const otherOrgId = await createOrg(env, owner);
 
   const forbidden = await authedFetch(env, { path: `/api/organizations/${orgId}/users/${member.memberId}`, userId: member.user.id });
@@ -507,7 +484,7 @@ test('collection access larger than one D1 statement is saved in chunks for invi
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
-  const member = await addMember(env, orgId, MembershipType.User);
+  const member = await seedMember(env, orgId);
   const now = new Date().toISOString();
   const collectionIds = Array.from({ length: MANY_COLLECTIONS }, () => crypto.randomUUID());
   for (const id of collectionIds) {
@@ -550,7 +527,7 @@ test('saving a collection for many members writes their access in multi-row stat
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollection(env, owner, orgId);
-  const members = await Promise.all(Array.from({ length: MANY_MEMBERS }, () => addMember(env, orgId, MembershipType.User)));
+  const members = await Promise.all(Array.from({ length: MANY_MEMBERS }, () => seedMember(env, orgId)));
   // D1 counts every statement in a batch toward the per-invocation query limit.
   const batchSizes: number[] = [];
   const runBatch = env.DB.batch.bind(env.DB);
@@ -573,7 +550,7 @@ test('accepting a new invite drops collection access left from an earlier member
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollection(env, owner, orgId);
-  const former = await addMember(env, orgId, MembershipType.User);
+  const former = await seedMember(env, orgId);
   const access = { id: collectionId, readOnly: true, hidePasswords: false, manage: false };
   assert.equal((await putMember(env, owner, orgId, former.memberId, { type: MembershipType.User, collections: [access] })).status, 200);
   const removed = await authedFetch(env, { method: 'DELETE', path: `/api/organizations/${orgId}/users/${former.memberId}`, userId: owner.id });

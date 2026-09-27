@@ -5,10 +5,11 @@ import { getColumns } from 'drizzle-orm';
 
 import { D1_MAX_BOUND_PARAMETERS } from '../src/db/client';
 import { collectionGroups } from '../src/db/schema';
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../src/services/org-types';
+import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -61,30 +62,6 @@ async function ownerMemberId(env: Env, owner: User, orgId: string): Promise<stri
   return (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!.id;
 }
 
-// Seeds a confirmed member directly, since the invite flow itself is covered elsewhere.
-async function addMember(env: Env, orgId: string, type: number, permissions: Partial<OrgPermissions> | null = null) {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  const memberId = crypto.randomUUID();
-  await orgRepo.saveMembership(env.DB, {
-    id: memberId,
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: MEMBER_KEY,
-    status: MembershipStatus.Confirmed,
-    type,
-    permissions: permissions ? { ...EMPTY_PERMISSIONS, ...permissions } : null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return { user, memberId };
-}
-
 function collectionsPath(orgId: string, suffix = ''): string {
   return `/api/organizations/${orgId}/collections${suffix}`;
 }
@@ -130,7 +107,7 @@ test('the collection dialog opens with every grant and saving it back keeps them
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollectionId(env, owner, orgId);
-  const [alice, bob] = [await addMember(env, orgId, MembershipType.User), await addMember(env, orgId, MembershipType.User)];
+  const [alice, bob] = [await seedMember(env, orgId), await seedMember(env, orgId)];
   const groupId = await createGroup(env, owner, orgId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
   // An invited member's grant waits in pending_collection_users until accept.
@@ -187,7 +164,7 @@ test('saving the dialog with an empty list removes those grants and an omitted l
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollectionId(env, owner, orgId);
-  const alice = await addMember(env, orgId, MembershipType.User);
+  const alice = await seedMember(env, orgId);
   const groupId = await createGroup(env, owner, orgId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: [editAccess(alice.memberId)], groups: [manageAccess(groupId)] })).status, 200);
 
@@ -203,7 +180,7 @@ test('single collection details is one object in the shape `bw get org-collectio
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollectionId(env, owner, orgId);
-  const alice = await addMember(env, orgId, MembershipType.User);
+  const alice = await seedMember(env, orgId);
 
   const unmanaged = await singleDetails(env, owner, orgId, collectionId);
   assert.equal(Array.isArray(unmanaged), false);
@@ -252,7 +229,7 @@ test('create and update answer with the saved collection access details', async 
   );
 
   // A creator that may not read access gets upstream's bare response: no grants and every flag false.
-  const creator = await addMember(env, orgId, MembershipType.Custom, { createNewCollections: true });
+  const creator = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { createNewCollections: true } });
   const bare = await createCollection(env, creator.user, orgId, { users: [editAccess(creator.memberId)] });
   assert.equal(bare.status, 200);
   const bareBody = await bare.json() as AccessDetails;
@@ -273,10 +250,10 @@ test('access details are served only to members who may read that access', async
   const outsider = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const [managed, other] = [await createCollectionId(env, owner, orgId), await createCollectionId(env, owner, orgId)];
-  const manager = await addMember(env, orgId, MembershipType.User);
-  const editor = await addMember(env, orgId, MembershipType.User);
-  const userManager = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
-  const groupManager = await addMember(env, orgId, MembershipType.Custom, { manageGroups: true });
+  const manager = await seedMember(env, orgId);
+  const editor = await seedMember(env, orgId);
+  const userManager = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
+  const groupManager = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageGroups: true } });
   const grants = { users: [manageAccess(manager.memberId), editAccess(editor.memberId)] };
   assert.equal((await putCollection(env, owner, orgId, managed, grants)).status, 200);
   const status = async (actor: User, suffix: string) => (await get(env, actor, collectionsPath(orgId, suffix))).status;
@@ -322,9 +299,9 @@ test('only members who manage a collection may update it', async () => {
   const owner = await seedUser(env);
   const orgId = await createOrg(env, owner);
   const collectionId = await createCollectionId(env, owner, orgId);
-  const manager = await addMember(env, orgId, MembershipType.User);
-  const editor = await addMember(env, orgId, MembershipType.Custom, { manageUsers: true });
-  const collectionEditor = await addMember(env, orgId, MembershipType.Custom, { editAnyCollection: true });
+  const manager = await seedMember(env, orgId);
+  const editor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { manageUsers: true } });
+  const collectionEditor = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
   const grants = [manageAccess(manager.memberId), editAccess(editor.memberId)].sort(byId);
   assert.equal((await putCollection(env, owner, orgId, collectionId, { users: grants })).status, 200);
 

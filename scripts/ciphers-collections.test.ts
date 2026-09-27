@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { D1_MAX_BOUND_PARAMETERS } from '../src/db/client';
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type CollectionAccess, type OrgPermissions } from '../src/services/org-types';
+import { MembershipType, type CollectionAccess } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -63,31 +64,6 @@ function access(collectionId: string, overrides: Partial<CollectionAccess> = {})
   return { collectionId, readOnly: false, hidePasswords: false, manage: false, ...overrides };
 }
 
-// A confirmed member holding direct access to the given collections.
-async function addMember(
-  env: Env, orgId: string, collections: CollectionAccess[], type: number = MembershipType.User, permissions: OrgPermissions | null = null
-): Promise<User> {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  await orgRepo.saveMembershipWithAccess(env.DB, {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: ORG_KEY,
-    status: MembershipStatus.Confirmed,
-    type,
-    permissions,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  }, { collections });
-  return user;
-}
-
 function postCipher(env: Env, user: User, organizationId: string | null, collectionIds: string[]): Promise<Response> {
   return authedFetch(env, {
     method: 'POST',
@@ -122,7 +98,7 @@ async function syncedCollectionIds(env: Env, user: User, cipherId: string): Prom
 
 test('PUT /ciphers/{id}/collections_v2 moves an org cipher and answers with optionalCipherDetails', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const member = await addMember(env, orgId, [access(collectionA), access(collectionB)]);
+  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB)] });
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
   // Prime both users' cached sync: a missed revision bump would keep serving collection A.
   assert.deepEqual(await syncedCollectionIds(env, owner, cipherId), [collectionA]);
@@ -151,7 +127,7 @@ test('POST /ciphers/{id}/collections_v2 is the deprecated alias', async () => {
 
 test('collections_v2 touches only the member\'s writable collections and reports an item it can no longer see', async () => {
   const { env, owner, orgId, collectionA, collectionB, collectionC } = await setup();
-  const member = await addMember(env, orgId, [access(collectionB), access(collectionC)]);
+  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionB), access(collectionC)] });
   const cipherId = await createCipher(env, owner, orgId, [collectionA, collectionB]);
 
   // A is outside the member's access, so asking to drop it (by omission) keeps it.
@@ -170,7 +146,7 @@ test('collections_v2 touches only the member\'s writable collections and reports
 test('collections_v2 honours write access granted through a group and keeps read-only collections', async () => {
   const { env, owner, orgId, collectionA, collectionB, collectionC } = await setup();
   // A is read-only to the member; B and C are writable only through its group.
-  const member = await addMember(env, orgId, [access(collectionA, { readOnly: true })]);
+  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA, { readOnly: true })] });
   const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, member.id, orgId);
   assert.ok(membership);
   const now = new Date().toISOString();
@@ -188,8 +164,8 @@ test('collections_v2 honours write access granted through a group and keeps read
 test('collections_v2 refuses personal items, outsiders, hidden passwords and read-only members', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
   const outsider = await seedUser(env);
-  const hiddenMember = await addMember(env, orgId, [access(collectionA, { hidePasswords: true })]);
-  const readOnlyMember = await addMember(env, orgId, [access(collectionA, { readOnly: true })]);
+  const { user: hiddenMember } = await seedMember(env, orgId, { collections: [access(collectionA, { hidePasswords: true })] });
+  const { user: readOnlyMember } = await seedMember(env, orgId, { collections: [access(collectionA, { readOnly: true })] });
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
   const personalCipherId = await createCipher(env, owner, null, []);
   const request = { collectionIds: [collectionB] };
@@ -223,7 +199,7 @@ test('PUT /ciphers/{id}/collections-admin reassigns any org collection and answe
 
 test('collections-admin admits a custom member with editAnyCollection', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const collectionEditor = await addMember(env, orgId, [], MembershipType.Custom, { ...EMPTY_PERMISSIONS, editAnyCollection: true });
+  const { user: collectionEditor } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { editAnyCollection: true } });
   const cipherId = await createCipher(env, owner, orgId, [collectionA]);
 
   assert.equal((await putCollections(env, collectionEditor, cipherId, 'collections-admin', { collectionIds: [collectionB] })).status, 200);
@@ -232,7 +208,7 @@ test('collections-admin admits a custom member with editAnyCollection', async ()
 
 test('collections-admin refuses non-admins, another org\'s collections and personal items', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const member = await addMember(env, orgId, [access(collectionA), access(collectionB)]);
+  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB)] });
   const outsider = await seedUser(env);
   const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);
@@ -248,7 +224,7 @@ test('collections-admin refuses non-admins, another org\'s collections and perso
 
 test('creating an org cipher refuses it whole unless the member can write every posted collection', async () => {
   const { env, owner, orgId, collectionA, collectionB } = await setup();
-  const member = await addMember(env, orgId, [access(collectionA), access(collectionB, { readOnly: true })]);
+  const { user: member } = await seedMember(env, orgId, { collections: [access(collectionA), access(collectionB, { readOnly: true })] });
   const outsider = await seedUser(env);
   const otherOrgId = (await createOwnedOrganization(env, outsider, { name: 'Other', key: ORG_KEY })).id;
   const otherOrgCollectionId = await createCollection(env, outsider, otherOrgId);

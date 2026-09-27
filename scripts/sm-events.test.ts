@@ -12,7 +12,7 @@ const policy = (granteeId: string, write = true) => ({ granteeId, read: true, wr
 async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const user = await seedMember(env, orgId, MembershipType.User);
+  const { user } = await seedMember(env, orgId);
   const project = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const secret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, FIELDS);
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });

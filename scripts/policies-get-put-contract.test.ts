@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, PolicyType, type OrgPermissions } from '../src/services/org-types';
+import { MembershipType, PolicyType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
-import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -23,28 +23,6 @@ interface PolicyBody {
   object: string;
 }
 
-async function addMember(env: Env, orgId: string, type: number, permissions: Partial<OrgPermissions> | null = null): Promise<User> {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: MEMBER_KEY,
-    status: MembershipStatus.Confirmed,
-    type,
-    permissions: permissions ? { ...EMPTY_PERMISSIONS, ...permissions } : null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-  return user;
-}
-
 function policyPath(orgId: string, type: number): string {
   return `/api/organizations/${orgId}/policies/${type}`;
 }
@@ -53,7 +31,7 @@ test('the SavePolicyRequest envelope round-trips enabled and data through GET /p
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY });
-  const member = await addMember(env, orgId, MembershipType.User);
+  const { user: member } = await seedMember(env, orgId);
 
   const absent = await authedFetch(env, { path: policyPath(orgId, PolicyType.MasterPassword), userId: owner.id });
   assert.equal(absent.status, 200);
@@ -96,8 +74,8 @@ test('a Custom policy manager reads a single policy while other members cannot r
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const { id: orgId } = await createOwnedOrganization(env, owner, { name: 'Acme', key: MEMBER_KEY });
-  const member = await addMember(env, orgId, MembershipType.User);
-  const policyManager = await addMember(env, orgId, MembershipType.Custom, { managePolicies: true });
+  const { user: member } = await seedMember(env, orgId);
+  const { user: policyManager } = await seedMember(env, orgId, { type: MembershipType.Custom, permissions: { managePolicies: true } });
   const outsider = await seedUser(env);
 
   const managerRead = await authedFetch(env, { path: policyPath(orgId, PolicyType.TwoFactorAuthentication), userId: policyManager.id });

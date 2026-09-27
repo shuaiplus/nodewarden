@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventType } from '../src/services/events';
-import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType } from '../src/services/org-types';
-import * as orgRepo from '../src/services/storage-org-repo';
-import type { Env, User } from '../src/types';
+import { MembershipType } from '../src/services/org-types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -27,13 +26,6 @@ async function list(call: (method: string, path: string) => Promise<Response>, p
   const response = await call('GET', path);
   assert.equal(response.status, 200, path);
   return (await response.json() as { data: EventRow[] }).data;
-}
-
-async function member(env: Env, orgId: string, user: User, accessEventLogs: boolean): Promise<void> {
-  const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, { id: crypto.randomUUID(), orgId, userId: user.id, email: user.email, invitedByEmail: null,
-    status: MembershipStatus.Confirmed, type: MembershipType.Custom, accessAll: false, key: ORG_KEY,
-    permissions: { ...EMPTY_PERMISSIONS, accessEventLogs }, resetPasswordKey: null, externalId: null, createdAt: now, updatedAt: now });
 }
 
 test('Send create, edit and delete reach the personal log and every confirmed organization of the owner', async () => {
@@ -69,14 +61,12 @@ test('an external Send access is attributed to nobody in the organization and th
   assert.deepEqual(rows.results.map(row => [row.organization_id, row.acting_user_id, row.user_id]).sort(),
     [[null, owner.id, owner.id], [org.id, null, owner.id]].sort());
 
-  const reader = await seedUser(env);
-  await member(env, org.id, reader, false);
+  const { user: reader } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: false } });
   const outsider = await seedUser(env);
   for (const userId of [reader.id, outsider.id]) {
     assert.equal((await call('GET', `/api/organizations/${org.id}/sends/${id}/events`, undefined, userId)).status, 404);
   }
-  const auditor = await seedUser(env);
-  await member(env, org.id, auditor, true);
+  const { user: auditor } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: true } });
   assert.ok((await (await call('GET', `/api/organizations/${org.id}/sends/${id}/events`, undefined, auditor.id)).json() as { data: EventRow[] })
     .data.some(row => row.type === EventType.SendAccessedText));
   const outsiderSend = await call('POST', '/api/sends', textSend, outsider.id);

@@ -104,7 +104,7 @@ for (const { role, type, status, access } of MEMBER_ACCESS_CASES) {
   test(`${role} gets accessSecretsManager ${access} in the profile, member list and member detail`, async () => {
     const env = await createTestEnv();
     const { orgId, owner } = await seedSmOrg(env);
-    const member = await seedMember(env, orgId, type, status);
+    const { user: member } = await seedMember(env, orgId, { type, status });
     assert.deepEqual(await secretsManagerAccess(env, orgId, owner, member), { profile: access, list: access, detail: access });
   });
 }

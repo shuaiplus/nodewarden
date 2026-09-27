@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { handleUpdateSecret } from '../src/handlers/secrets-manager';
-import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import * as smRepo from '../src/services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -16,8 +15,8 @@ const policies = (users: ReturnType<typeof policy>[] = [], groups: ReturnType<ty
 async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
-  const b = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
+  const { user: b } = await seedMember(env, orgId);
   const aMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
   const bMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId))!;
   const project = (user = owner) => postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });

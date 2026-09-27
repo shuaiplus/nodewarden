@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { MembershipStatus, MembershipType } from '../../src/services/org-types';
+import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type CollectionAccess, type MembershipRecord, type OrgPermissions } from '../../src/services/org-types';
 import { AuthService, type Principal } from '../../src/services/auth';
 import * as orgRepo from '../../src/services/storage-org-repo';
 import type { Env, User } from '../../src/types';
@@ -42,28 +42,46 @@ export async function postJson<T>(env: Env, owner: User, path: string, body: unk
   return await response.json() as T;
 }
 
-// A new account holding a membership of `orgId` in the given role and status. Only confirming a
-// member stores the org key, so earlier statuses keep it empty as the invite flow does.
-export async function seedMember(env: Env, orgId: string, type: number, status: number = MembershipStatus.Confirmed): Promise<User> {
-  const user = await seedUser(env);
+// Column overrides for one membership row, plus the member's direct collection access. Partial
+// `permissions` are completed with EMPTY_PERMISSIONS the way the member dialog sends them.
+export type MembershipSeed = Omit<Partial<MembershipRecord>, 'permissions'> & {
+  permissions?: Partial<OrgPermissions> | null;
+  collections?: CollectionAccess[];
+};
+
+// One membership row of `orgId`: a confirmed plain User with no account bound, unless overridden.
+// Only confirming a member stores the org key, so other statuses keep it empty as the invite flow
+// does. Returns the membership id.
+export async function seedMembership(env: Env, orgId: string, { collections, permissions = null, ...fields }: MembershipSeed = {}): Promise<string> {
   const now = new Date().toISOString();
-  await orgRepo.saveMembership(env.DB, {
+  const status = fields.status ?? MembershipStatus.Confirmed;
+  const member: MembershipRecord = {
     id: crypto.randomUUID(),
-    userId: user.id,
+    userId: null,
     orgId,
-    email: user.email,
+    email: null,
     invitedByEmail: null,
     accessAll: false,
     key: status === MembershipStatus.Confirmed ? TEST_ORG_KEY : '',
     status,
-    type,
-    permissions: null,
+    type: MembershipType.User,
+    permissions: permissions && { ...EMPTY_PERMISSIONS, ...permissions },
     resetPasswordKey: null,
     externalId: null,
     createdAt: now,
     updatedAt: now,
-  });
-  return user;
+    ...fields,
+  };
+  await orgRepo.saveMembershipWithAccess(env.DB, member, { collections });
+  return member.id;
+}
+
+// A new account, seeded with the `user` overrides, holding a membership of `orgId`.
+export async function seedMember(
+  env: Env, orgId: string, { user: account, ...membership }: MembershipSeed & { user?: Partial<User> } = {},
+): Promise<{ user: User; memberId: string }> {
+  const user = await seedUser(env, account);
+  return { user, memberId: await seedMembership(env, orgId, { userId: user.id, email: user.email, ...membership }) };
 }
 
 // An org its owner created by posting `createBody` to `createPath`, plus a confirmed Admin.
@@ -76,5 +94,5 @@ export async function seedSmOrg(
   const created = await authedFetch(env, { method: 'POST', path: createPath, body: createBody, userId: owner.id });
   if (!created.ok) throw new Error(`seedSmOrg: ${createPath} answered ${created.status}`);
   const { id: orgId } = await created.json() as { id: string };
-  return { orgId, owner, admin: await seedMember(env, orgId, MembershipType.Admin) };
+  return { orgId, owner, admin: (await seedMember(env, orgId, { type: MembershipType.Admin })).user };
 }

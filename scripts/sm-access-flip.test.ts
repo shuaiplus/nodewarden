@@ -16,10 +16,10 @@ test('confirmed User and Custom members have SM in every response while unconfir
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
   const cases = [
-    [await seedMember(env, orgId, MembershipType.User), true],
-    [await seedMember(env, orgId, MembershipType.Custom), true],
-    [await seedMember(env, orgId, MembershipType.User, MembershipStatus.Invited), false],
-    [await seedMember(env, orgId, MembershipType.Admin, MembershipStatus.Accepted), false],
+    [(await seedMember(env, orgId)).user, true],
+    [(await seedMember(env, orgId, { type: MembershipType.Custom })).user, true],
+    [(await seedMember(env, orgId, { status: MembershipStatus.Invited })).user, false],
+    [(await seedMember(env, orgId, { type: MembershipType.Admin, status: MembershipStatus.Accepted })).user, false],
   ] as const;
   for (const upload of [false, true]) {
     if (upload) assert.equal((await authedFetch(env, { userId: owner.id, path: `/api/organizations/licenses/self-hosted/${orgId}`, method: 'POST', body: disabledLicense() })).status, 200);
@@ -45,8 +45,8 @@ test('confirmed User and Custom members have SM in every response while unconfir
 test('enable SM is an authorized no-op, standalone metadata is on, and machine login survives license changes', async () => {
   const env = await createTestEnv();
   const { orgId, owner, admin } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
-  const invited = await seedMember(env, orgId, MembershipType.User, MembershipStatus.Invited);
+  const { user: a } = await seedMember(env, orgId);
+  const { user: invited } = await seedMember(env, orgId, { status: MembershipStatus.Invited });
   const before = await orgRepo.getMembershipByUserAndOrg(env.DB, invited.id, orgId);
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
   const path = `/api/organizations/${orgId}/users/enable-secrets-manager`;
@@ -71,7 +71,7 @@ test('enable SM is an authorized no-op, standalone metadata is on, and machine l
 test('a newly enabled member starts empty, sees their created project, and cannot see admin resources or trash', async () => {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
   const hidden = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const hiddenSecret = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD, projectIds: [hidden.id] });
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });

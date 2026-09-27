@@ -6,8 +6,10 @@ import { getOrm } from '../src/db/client';
 import { ciphers } from '../src/db/schema';
 import { AuthService } from '../src/services/auth';
 import { getAttachmentObjectKey } from '../src/services/blob-store';
+import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import { authedFetch, createTestEnv, drainWaitUntil, memoryKv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 import * as sessionRepo from '../src/services/storage-session-repo';
 import * as attachmentRepo from '../src/services/storage-attachment-repo';
 import * as cipherRepo from '../src/services/storage-cipher-repo';
@@ -49,13 +51,8 @@ test('self-deletion transfers org items, cleans personal blobs and revokes acces
   const blobs = memoryKv();
   const env = await createTestEnv({ ATTACHMENTS_KV: blobs.binding });
   const user = await seedUser(env);
-  const successor = await seedUser(env);
   const org = await createOwnedOrganization(env, user, { name: 'Shared org', key: '4.dGVzdA==' });
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(), userId: successor.id, orgId: org.id, email: successor.email, invitedByEmail: null,
-    accessAll: true, key: '4.dGVzdA==', status: 2, type: 0, permissions: null, resetPasswordKey: null,
-    externalId: null, createdAt: user.createdAt, updatedAt: user.updatedAt,
-  });
+  const { user: successor } = await seedMember(env, org.id, { type: MembershipType.Owner, accessAll: true });
   const orgCipher = crypto.randomUUID();
   const personalCipher = crypto.randomUUID();
   const personalBlob = getAttachmentObjectKey(personalCipher, 'attachment');

@@ -4,10 +4,11 @@ import { eq } from 'drizzle-orm';
 import { getOrm } from '../src/db/client';
 import { events } from '../src/db/schema';
 import { EventType } from '../src/services/events';
-import { MembershipStatus, MembershipType, type MembershipRecord } from '../src/services/org-types';
+import { MembershipStatus } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
-import type { Env, User } from '../src/types';
+import type { Env } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, MAILABLE_DOMAIN, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -32,16 +33,6 @@ async function rows(env: Env, orgId: string) {
 
 async function assertTypes(env: Env, orgId: string, expected: number[]) {
   assert.deepEqual((await rows(env, orgId)).map(row => row.type).sort(), expected.toSorted());
-}
-
-async function seedMember(env: Env, orgId: string, status = MembershipStatus.Confirmed): Promise<{ user: User; member: MembershipRecord }> {
-  const user = await seedUser(env);
-  const now = new Date().toISOString();
-  const member = { id: crypto.randomUUID(), orgId, userId: user.id, email: user.email, invitedByEmail: null,
-    accessAll: false, key: ORG_KEY, status, type: MembershipType.User, permissions: null, resetPasswordKey: null,
-    externalId: null, createdAt: now, updatedAt: now };
-  await orgRepo.saveMembership(env.DB, member);
-  return { user, member };
 }
 
 test('organization cipher events retain immutable scope through deletion and skip personal, denied and idempotent operations', async () => {
@@ -144,24 +135,24 @@ test('collections, groups, settings and policies emit changed events without enc
 test('membership events cover actual transitions and preserve the affected account after removal or leaving', async () => {
   const { env, owner, org, call } = await setup();
   const foreign = await createOwnedOrganization(env, owner, { name: 'Other', key: ORG_KEY });
-  const target = await seedMember(env, org.id, MembershipStatus.Accepted);
-  const other = await seedMember(env, foreign.id, MembershipStatus.Accepted);
+  const target = await seedMember(env, org.id, { status: MembershipStatus.Accepted });
+  const other = await seedMember(env, foreign.id, { status: MembershipStatus.Accepted });
   const base = `/api/organizations/${org.id}`;
   const inviteEmail = `invite-${crypto.randomUUID()}@${MAILABLE_DOMAIN}`;
   assert.equal((await call('POST', `${base}/users/invite`, { emails: [inviteEmail], type: 2 })).status, 200);
   assert.equal((await call('POST', `${base}/users/invite`, { emails: [inviteEmail], type: 2 })).status, 200);
   const invite = (await orgRepo.listMembershipsByOrg(env.DB, org.id)).find(member => member.email === inviteEmail)!;
-  const confirm = { keys: [{ id: target.member.id, key: ORG_KEY }, { id: other.member.id, key: ORG_KEY }, { id: invite.id, key: ORG_KEY }] };
+  const confirm = { keys: [{ id: target.memberId, key: ORG_KEY }, { id: other.memberId, key: ORG_KEY }, { id: invite.id, key: ORG_KEY }] };
   assert.equal((await call('POST', `${base}/users/confirm`, confirm)).status, 200);
   assert.equal((await call('POST', `${base}/users/confirm`, confirm)).status, 200);
-  assert.equal((await call('PUT', `${base}/users/${target.member.id}`, { type: 1 })).status, 200);
-  assert.equal((await call('PUT', `${base}/users/${target.member.id}`, { type: 1 })).status, 200);
-  const group = await call('POST', `${base}/groups`, { name: 'Private group', users: [target.member.id] });
+  assert.equal((await call('PUT', `${base}/users/${target.memberId}`, { type: 1 })).status, 200);
+  assert.equal((await call('PUT', `${base}/users/${target.memberId}`, { type: 1 })).status, 200);
+  const group = await call('POST', `${base}/groups`, { name: 'Private group', users: [target.memberId] });
   const { id: groupId } = await group.json() as { id: string };
-  assert.equal((await call('PUT', `${base}/groups/${groupId}`, { users: [target.member.id] })).status, 200);
-  assert.equal((await call('PUT', `${base}/users/${target.member.id}`, { type: 1, groups: [] })).status, 200);
-  assert.equal((await call('PUT', `${base}/users/${target.member.id}`, { type: 1, groups: [] })).status, 200);
-  const ids = [target.member.id, other.member.id, crypto.randomUUID()];
+  assert.equal((await call('PUT', `${base}/groups/${groupId}`, { users: [target.memberId] })).status, 200);
+  assert.equal((await call('PUT', `${base}/users/${target.memberId}`, { type: 1, groups: [] })).status, 200);
+  assert.equal((await call('PUT', `${base}/users/${target.memberId}`, { type: 1, groups: [] })).status, 200);
+  const ids = [target.memberId, other.memberId, crypto.randomUUID()];
   assert.equal((await call('PUT', `${base}/users/revoke`, { ids })).status, 200);
   assert.equal((await call('PUT', `${base}/users/revoke`, { ids })).status, 200);
   assert.equal((await call('PUT', `${base}/users/restore`, { ids })).status, 200);
@@ -170,25 +161,25 @@ test('membership events cover actual transitions and preserve the affected accou
   const departing = await seedMember(env, org.id);
   assert.equal((await call('POST', `${base}/leave`, undefined, departing.user)).status, 200);
   const saved = await rows(env, org.id);
-  assert.deepEqual(saved.filter(row => row.resourceId === target.member.id).map(row => row.type).sort(), [1501, 1502, 1502, 1504, 1511, 1512, 1503].sort());
-  assert.ok(saved.filter(row => row.resourceId === target.member.id).every(row => row.userId === target.user.id && row.actingUserId === owner.id));
+  assert.deepEqual(saved.filter(row => row.resourceId === target.memberId).map(row => row.type).sort(), [1501, 1502, 1502, 1504, 1511, 1512, 1503].sort());
+  assert.ok(saved.filter(row => row.resourceId === target.memberId).every(row => row.userId === target.user.id && row.actingUserId === owner.id));
   assert.deepEqual(saved.filter(row => row.resourceId === invite.id).map(row => row.type), [1500]);
   assert.equal(saved.find(row => row.type === 1516)?.userId, departing.user.id);
   assert.equal(saved.find(row => row.type === 1516)?.actingUserId, departing.user.id);
   await assertTypes(env, foreign.id, []);
-  assert.ok(!saved.some(row => row.resourceId === other.member.id));
+  assert.ok(!saved.some(row => row.resourceId === other.memberId));
   assert.ok(!JSON.stringify(saved).includes(inviteEmail));
   assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP), 'leave keeps its client and address');
 });
 
 test('single-member revoke, restore and remove record the acting client and address', async () => {
   const { env, org, call } = await setup();
-  const { member } = await seedMember(env, org.id);
-  const base = `/api/organizations/${org.id}/users/${member.id}`;
+  const { memberId } = await seedMember(env, org.id);
+  const base = `/api/organizations/${org.id}/users/${memberId}`;
   assert.equal((await call('PUT', `${base}/revoke`)).status, 200);
   assert.equal((await call('PUT', `${base}/restore`)).status, 200);
   assert.equal((await call('DELETE', base)).status, 200);
   const saved = await rows(env, org.id);
   assert.deepEqual(saved.map(row => row.type).sort(), [EventType.OrganizationUserRevoked, EventType.OrganizationUserRestored, EventType.OrganizationUserRemoved].sort());
-  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP && row.resourceId === member.id));
+  assert.ok(saved.every(row => row.deviceType === 8 && row.ipAddress === CLIENT_IP && row.resourceId === memberId));
 });

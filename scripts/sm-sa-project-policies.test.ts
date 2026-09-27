@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import * as smRepo from '../src/services/storage-secret-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -13,7 +12,7 @@ const granted = (grantedId: string, write = false) => ({ grantedId, read: true, 
 async function setup() {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);
-  const a = await seedMember(env, orgId, MembershipType.User);
+  const { user: a } = await seedMember(env, orgId);
   const project = (user = a) => postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const account = (user = a) => postJson<{ id: string }>(env, user, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
   const request = (userId: string, path: string, method = 'GET', body?: unknown) => authedFetch(env, { userId, path, method, body });

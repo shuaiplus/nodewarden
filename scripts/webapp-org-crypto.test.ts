@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MembershipStatus, MembershipType } from '../src/services/org-types';
+import { MembershipStatus } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
 import { confirmMember, createProject, createSecret, getUserPublicKey, listProjects } from '../webapp/src/lib/api/orgs';
@@ -9,6 +9,7 @@ import type { AuthedFetch } from '../webapp/src/lib/api/shared';
 import { base64ToBytes, bytesToBase64, concatBytes, encryptBw, toBufferSource } from '../webapp/src/lib/crypto';
 import { createOrgKey, decryptWithOrgKey, encryptWithOrgKey, unwrapOrgKey, wrapOrgKeyForMember } from '../webapp/src/lib/org-crypto';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember } from './support/sm';
 
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 
@@ -30,29 +31,6 @@ function webappFetch(env: Env, actor: User): AuthedFetch {
   });
 }
 
-async function addAcceptedMember(env: Env, orgId: string, publicKey: string) {
-  const user = await seedUser(env, { publicKey });
-  const now = new Date().toISOString();
-  const membership = {
-    id: crypto.randomUUID(),
-    userId: user.id,
-    orgId,
-    email: user.email,
-    invitedByEmail: null,
-    accessAll: false,
-    key: '',
-    status: MembershipStatus.Accepted,
-    type: MembershipType.User,
-    permissions: null,
-    resetPasswordKey: null,
-    externalId: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await orgRepo.saveMembership(env.DB, membership);
-  return { user, memberId: membership.id };
-}
-
 async function setup() {
   const env = await createTestEnv();
   const owner = await seedUser(env);
@@ -67,7 +45,7 @@ test('webapp confirm wraps the org key for the member public key, and the server
   const { env, adminSession, orgKey, orgId, ownerFetch } = await setup();
   const member = await crypto.subtle.generateKey(MEMBER_RSA_KEY_PARAMS, true, ['encrypt', 'decrypt']);
   const memberPublicKey = bytesToBase64(new Uint8Array(await crypto.subtle.exportKey('spki', member.publicKey)));
-  const { user, memberId } = await addAcceptedMember(env, orgId, memberPublicKey);
+  const { user, memberId } = await seedMember(env, orgId, { status: MembershipStatus.Accepted, user: { publicKey: memberPublicKey } });
 
   // Same sequence as OrganizationPage onConfirm.
   const fetchedKey = await getUserPublicKey(ownerFetch, user.id);

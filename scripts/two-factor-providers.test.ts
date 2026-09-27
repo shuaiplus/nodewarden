@@ -2,11 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { hashPassword } from '../src/services/auth-password';
-import { MembershipStatus, MembershipType } from '../src/services/org-types';
-import * as orgRepo from '../src/services/storage-org-repo';
 import { twoFactorClearStatements } from '../src/services/two-factor-providers';
 import type { Env, User } from '../src/types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { seedMember, seedMembership } from './support/sm';
 import * as passkeyRepo from '../src/services/storage-account-passkey-repo';
 import * as deviceRepo from '../src/services/storage-device-repo';
 import * as sessionRepo from '../src/services/storage-session-repo';
@@ -26,14 +25,6 @@ async function seedPasskey(env: Env, user: User, purpose: 'login' | 'twoFactor')
   return id;
 }
 
-async function member(env: Env, orgId: string, user: User) {
-  await orgRepo.saveMembership(env.DB, {
-    id: crypto.randomUUID(), userId: user.id, orgId, email: user.email, invitedByEmail: null,
-    type: MembershipType.User, status: MembershipStatus.Confirmed, accessAll: false, key: '4.dGVzdA==',
-    permissions: null, resetPasswordKey: null, externalId: null, createdAt: user.createdAt, updatedAt: user.updatedAt,
-  });
-}
-
 test('TOTP, YubiKey and WebAuthn are reported consistently; login passkeys are not two-factor', async (t) => {
   const env = await createTestEnv();
   const owner = await seedUser(env, { role: 'admin' });
@@ -47,7 +38,7 @@ test('TOTP, YubiKey and WebAuthn are reported consistently; login passkeys are n
   await seedPasskey(env, users[2], 'twoFactor');
   await seedPasskey(env, users[3], 'login');
   for (const [index, user] of users.entries()) {
-    await member(env, org.id, user);
+    await seedMembership(env, org.id, { userId: user.id, email: user.email });
     const profile = await authedFetch(env, { path: '/api/accounts/profile', userId: user.id });
     assert.equal((await profile.json() as { twoFactorEnabled: boolean }).twoFactorEnabled, index < 3);
     const providers = await authedFetch(env, { path: '/api/two-factor', userId: user.id });
@@ -72,7 +63,7 @@ test('TOTP, YubiKey and WebAuthn are reported consistently; login passkeys are n
       assert.equal(result.rows.find(row => (row.userId ?? row.id) === user.id)?.twoFactorEnabled, index < 3, JSON.stringify({ index, rows: result.rows }));
     }
   }
-  for (let i = 5; i < 60; i++) await member(env, org.id, await seedUser(env));
+  for (let i = 5; i < 60; i++) await seedMember(env, org.id);
   const largeMembers = await list(memberPath);
   const largeAdmins = await list('/api/admin/users');
   assert.equal(largeMembers.rows.length, 60);
