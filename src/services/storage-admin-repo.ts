@@ -22,18 +22,13 @@ export interface AuditLogListResult {
   hasMore: boolean;
 }
 
-function inviteStatus(value: string): Invite['status'] {
-  if (value === 'used' || value === 'revoked' || value === 'expired') return value;
-  return 'active';
-}
-
 function mapInvite(row: typeof invites.$inferSelect): Invite {
   return {
     code: row.code,
     createdBy: row.createdBy,
     usedBy: row.usedBy ?? null,
     expiresAt: row.expiresAt,
-    status: inviteStatus(row.status),
+    status: row.status === 'used' || row.status === 'revoked' || row.status === 'expired' ? row.status : 'active',
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -161,8 +156,8 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
   const target = alias(users, 'target');
   const filters = [];
   if (options.actionPrefix) filters.push(sql`${auditLogs.action} LIKE ${options.actionPrefix.replace(/[\\%_]/g, (value) => `\\${value}`) + '%'} ESCAPE '\\'`);
-  if (options.from) filters.push(gteCreated(options.from));
-  if (options.to) filters.push(lteCreated(options.to));
+  if (options.from) filters.push(sql`${auditLogs.createdAt} >= ${options.from}`);
+  if (options.to) filters.push(sql`${auditLogs.createdAt} <= ${options.to}`);
   if (options.category) filters.push(eq(auditLogs.category, options.category));
   if (options.level) filters.push(eq(auditLogs.level, options.level));
   if (options.q) {
@@ -199,13 +194,15 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
     .limit(limit + 1)
     .offset(offset);
 
-  const logs = rows.slice(0, limit).map((row) => ({
+  const logs = rows.slice(0, limit).map((row): AuditLog => ({
     id: row.id,
     actorUserId: row.actorUserId ?? null,
     actorEmail: row.actorEmail ?? null,
     action: row.action,
-    category: auditCategory(row.category),
-    level: auditLevel(row.level),
+    category: row.category === 'auth' || row.category === 'security' || row.category === 'device' || row.category === 'data'
+      ? row.category
+      : 'system',
+    level: row.level === 'warn' || row.level === 'error' || row.level === 'security' ? row.level : 'info',
     targetType: row.targetType ?? null,
     targetId: row.targetId ?? null,
     targetUserEmail: row.targetUserEmail ?? null,
@@ -218,22 +215,4 @@ export async function listAuditLogs(db: D1Database, options: AuditLogListOptions
     total: offset + logs.length + (rows.length > limit ? 1 : 0),
     hasMore: rows.length > limit,
   };
-}
-
-function auditCategory(value: string): AuditLog['category'] {
-  if (value === 'auth' || value === 'security' || value === 'device' || value === 'data') return value;
-  return 'system';
-}
-
-function auditLevel(value: string): AuditLog['level'] {
-  if (value === 'warn' || value === 'error' || value === 'security') return value;
-  return 'info';
-}
-
-function gteCreated(from: string) {
-  return sql`${auditLogs.createdAt} >= ${from}`;
-}
-
-function lteCreated(to: string) {
-  return sql`${auditLogs.createdAt} <= ${to}`;
 }
