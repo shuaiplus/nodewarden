@@ -11,7 +11,7 @@
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
     "domains:sync": "node scripts/sync-global-domains.mjs",
     "test": "tsx --test 'src/**/*.test.ts' 'src/**/*.test.mjs'",
-    "lint": "eslint src",
+    "lint": "eslint src scripts e2e shared official-web/functions eslint.config.mjs",
     "db:generate": "drizzle-kit generate && node scripts/embed-baseline.mjs",
     "db:embed": "node scripts/embed-baseline.mjs",
     "db:seed": "tsx scripts/seed.ts",

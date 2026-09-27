@@ -51,15 +51,72 @@ const noRawSql = {
   },
 };
 
-export default defineConfig({
-  files: ['src/**/*.ts'],
-  // Tests seed and inspect the database directly; the rule guards what ships in the Worker.
-  ignores: ['src/**/*.test.ts', 'src/test/**'],
-  languageOptions: {
-    parser: tseslint.parser,
-    parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+const FUNCTION_VALUES = new Set(['ArrowFunctionExpression', 'FunctionExpression']);
+
+// A module-local function referenced from exactly one place is a named detour: inline it there.
+// Exported functions are the module's API (routers, other modules and tests call them), so only their
+// own callers decide whether they earn a name.
+const noSingleUseFunction = {
+  meta: {
+    type: 'suggestion',
+    docs: { description: 'Forbid module-local functions that are referenced only once; inline them at the call site.' },
+    messages: { singleUse: '{{name}} is only used once. Inline it at its single call site.' },
+    schema: [],
   },
-  linterOptions: { reportUnusedDisableDirectives: 'error' },
-  plugins: { nodewarden: { rules: { 'no-raw-sql': noRawSql } } },
-  rules: { 'nodewarden/no-raw-sql': 'error' },
-});
+  create(context) {
+    const exportedNames = new Set();
+    const functionBody = (definition) => {
+      if (definition.type === 'FunctionName' && definition.node.type === 'FunctionDeclaration') return definition.node;
+      if (definition.type === 'Variable' && definition.parent.kind === 'const' && FUNCTION_VALUES.has(definition.node.init?.type)) {
+        return definition.node.init;
+      }
+      return null;
+    };
+    const isExported = (definition) => {
+      const declaration = definition.type === 'FunctionName' ? definition.node : definition.parent;
+      return ['ExportNamedDeclaration', 'ExportDefaultDeclaration'].includes(declaration.parent?.type);
+    };
+    return {
+      ExportSpecifier(node) {
+        exportedNames.add(node.local.name);
+      },
+      'Program:exit'() {
+        for (const scope of context.sourceCode.scopeManager.scopes) {
+          for (const variable of scope.variables) {
+            const definition = variable.defs.find(functionBody);
+            if (!definition || isExported(definition) || exportedNames.has(variable.name)) continue;
+            const body = functionBody(definition);
+            // A recursive call is not a second caller.
+            const callers = variable.references.filter(({ identifier: { range: [start, end] } }) => start < body.range[0] || end > body.range[1]);
+            if (callers.length === 1) context.report({ node: definition.name, messageId: 'singleUse', data: { name: variable.name } });
+          }
+        }
+      },
+    };
+  },
+};
+
+export default defineConfig([
+  {
+    files: ['**/*.{ts,mts,js,mjs,cjs}'],
+    languageOptions: { parser: tseslint.parser },
+    linterOptions: { reportUnusedDisableDirectives: 'error' },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+      nodewarden: { rules: { 'no-raw-sql': noRawSql, 'no-single-use-function': noSingleUseFunction } },
+    },
+    rules: {
+      // Rest siblings are how a field is dropped from a copy ({ secret: _omitted, ...rest }).
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
+      '@typescript-eslint/no-unused-expressions': 'error',
+      'nodewarden/no-single-use-function': 'error',
+    },
+  },
+  {
+    files: ['src/**/*.ts'],
+    // Tests seed and inspect the database directly; the rule guards what ships in the Worker.
+    ignores: ['src/**/*.test.ts', 'src/test/**'],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    rules: { 'nodewarden/no-raw-sql': 'error' },
+  },
+]);
