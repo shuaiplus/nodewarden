@@ -6,7 +6,7 @@ import type { Env } from '../src/types';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, TOKEN_FIELDS } from './support/sm';
 
-// The webapp's token button posted the raw 64-byte org key (encryption + MAC halves), base64-encoded.
+// The former NodeWarden webapp's token button posted the raw 64-byte org key (encryption + MAC halves), base64-encoded.
 const ORG_KEY_BYTES = 64;
 const PLAINTEXT_ORG_KEY = Buffer.alloc(ORG_KEY_BYTES, 1).toString('base64');
 
@@ -15,7 +15,7 @@ interface IssuedToken {
   clientSecret: string;
 }
 
-// A token of a new machine account, created the way the webapp's token button did.
+// A token of a new machine account, created the way that token button did.
 async function issueTokenWithOrgKey(): Promise<{ env: Env; orgId: string; token: IssuedToken }> {
   const env = await createTestEnv();
   const { orgId, owner } = await seedSmOrg(env);

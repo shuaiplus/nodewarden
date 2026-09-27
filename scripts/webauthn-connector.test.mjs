@@ -7,7 +7,7 @@ import {
   normalizePublicKeyOptions,
   parseConnectorRequest,
   resolveParentChannel,
-} from '../webapp/public/webauthn-connector.js';
+} from '../public/webauthn-connector.js';
 
 function encodeBase64Utf8(value) {
   return Buffer.from(value, 'utf8').toString('base64');
@@ -109,10 +109,9 @@ test('accepts configured official extension origins and rejects arbitrary parent
 });
 
 test('uses the official postMessage message contract and iframe-sized fallback styling', async () => {
-  const [html, source, viteConfig] = await Promise.all([
-    readFile(new URL('../webapp/public/webauthn-connector.html', import.meta.url), 'utf8'),
-    readFile(new URL('../webapp/public/webauthn-connector.js', import.meta.url), 'utf8'),
-    readFile(new URL('../webapp/vite.config.ts', import.meta.url), 'utf8'),
+  const [html, source] = await Promise.all([
+    readFile(new URL('../public/webauthn-connector.html', import.meta.url), 'utf8'),
+    readFile(new URL('../public/webauthn-connector.js', import.meta.url), 'utf8'),
   ]);
   assert.match(html, /id="webauthn-button"/);
   assert.match(html, /min-height:\s*40px/);
@@ -122,5 +121,4 @@ test('uses the official postMessage message contract and iframe-sized fallback s
   assert.match(source, /post\(`error\|\$\{browserErrorMessage\(error\)\}`\)/);
   assert.match(source, /event\.data === 'stop'/);
   assert.match(source, /event\.data === 'start'/);
-  assert.match(viteConfig, /endsWith\('-connector\.html'\)/);
 });

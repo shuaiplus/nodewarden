@@ -13,9 +13,6 @@ try { configuredAdmins ||= readFileSync('.dev.vars', 'utf8').match(/^ADMIN_EMAIL
 const email = configuredAdmins.split(',')[0]?.trim().split(':')[0];
 
 async function signIn(page: Page) {
-  await page.goto(origin!);
-  await page.evaluate(async () => { await navigator.serviceWorker.ready; });
-  await expect.poll(() => page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
   const started = Date.now();
   await page.goto(`${origin}/admin/login`);
   await page.getByLabel('Email', { exact: true }).fill(email);
@@ -43,14 +40,13 @@ async function signIn(page: Page) {
   expect((await page.context().cookies()).find((cookie) => cookie.name === '__Host-nw_admin')).toMatchObject({ secure: true, httpOnly: true, sameSite: 'Strict', path: '/' });
 }
 
-test('administrator sign-in survives an active webapp service worker and isolates scripts, popups and frames', async ({ page, context }) => {
+test('administrator sign-in isolates the portal from same-origin scripts, popups and frames', async ({ page, context }) => {
   test.skip(!localOrigin || !email, 'Requires local Wrangler with E2E_ORIGIN=http://localhost:<port> and ADMIN_EMAILS.');
+  // The WebAuthn connector is the only other page this origin serves, so it stands in for a hostile same-origin script.
   const app = await context.newPage();
-  await app.goto(origin!);
-  await app.evaluate(async () => { await navigator.serviceWorker.ready; });
-  await expect.poll(() => app.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+  await app.goto(`${origin}/webauthn-connector.html`);
   await signIn(page);
-  // Portal CSP blocks its own fetches before HTTP; exercise the actual webapp attacker context.
+  // Portal CSP blocks its own fetches before HTTP; exercise a real same-origin page instead.
   expect(await app.evaluate(async () => (await fetch('/admin')).status)).toBe(403);
   const popupPromise = app.waitForEvent('popup');
   await app.evaluate(() => { window.open('/admin'); });

@@ -9,7 +9,7 @@ import {
   normalizePublicKeyOptions,
   parseConnectorRequest,
   resolveMobileCallbackUri,
-} from '../webapp/public/webauthn-mobile-connector.js';
+} from '../public/webauthn-mobile-connector.js';
 
 function encodeBase64Utf8(value) {
   return Buffer.from(value, 'utf8').toString('base64');
@@ -108,7 +108,7 @@ test('encodes success and error callbacks safely', () => {
 });
 
 test('HTML matches the fallback connector visual structure', async () => {
-  const html = await readFile(new URL('../webapp/public/webauthn-mobile-connector.html', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../public/webauthn-mobile-connector.html', import.meta.url), 'utf8');
   assert.match(html, /id="webauthn-header"/);
   assert.match(html, /id="webauthn-button"/);
   assert.match(html, /class="connector-card"/);
@@ -121,15 +121,8 @@ test('HTML matches the fallback connector visual structure', async () => {
 });
 
 test('runtime uses Bitwarden-compatible replacement navigation', async () => {
-  const source = await readFile(new URL('../webapp/public/webauthn-mobile-connector.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../public/webauthn-mobile-connector.js', import.meta.url), 'utf8');
   assert.match(source, /window\.location\.replace\(uri\)/);
   assert.doesNotMatch(source, /location\.assign/);
   assert.doesNotMatch(source, /safeCallbackFromPayload/);
-});
-
-test('Service Worker keeps connector navigations out of the SPA shell', async () => {
-  const config = await readFile(new URL('../webapp/vite.config.ts', import.meta.url), 'utf8');
-  assert.match(config, /url\.pathname\.endsWith\('-connector\.html'\)/);
-  assert.match(config, /connectorNavigation\(request\)/);
-  assert.match(config, /WebAuthn connector is unavailable while offline/);
 });
