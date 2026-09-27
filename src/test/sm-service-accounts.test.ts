@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { and, eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { orgGroupMembers, orgGroups, smSecrets, smSecretServiceAccounts, smServiceAccountGroups, smServiceAccountMembers, smServiceAccountProjects } from '../db/schema';
 import { handleCreateServiceAccount } from '../handlers/secrets-manager';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -23,7 +27,8 @@ test('machine-account creator and group policies gate management, and revocation
   const sa = await account();
   const detailPath = `/api/service-accounts/${sa.id}`;
   const aMember = await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId);
-  assert.ok(await env.DB.prepare('SELECT 1 FROM sm_service_account_members WHERE service_account_id = ? AND membership_id = ?').bind(sa.id, aMember!.id).first());
+  const orm = getOrm(env.DB);
+  assert.ok(await orm.select().from(smServiceAccountMembers).where(and(eq(smServiceAccountMembers.serviceAccountId, sa.id), eq(smServiceAccountMembers.membershipId, aMember!.id))).get());
   assert.deepEqual((await (await request(a.id, path)).json() as any).data.map((item: any) => item.id), [sa.id]);
   assert.deepEqual((await (await request(b.id, path)).json() as any).data, []);
   for (const [suffix, method] of [['', 'GET'], ['', 'PUT'], ['/access-tokens', 'GET'], ['/access-tokens', 'POST'], ['/access-tokens/revoke', 'POST']]) {
@@ -33,10 +38,10 @@ test('machine-account creator and group policies gate management, and revocation
   const groupId = crypto.randomUUID();
   const bMember = await orgRepo.getMembershipByUserAndOrg(env.DB, b.id, orgId);
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(groupId, orgId, 'Operators', now, now),
-    env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(groupId, bMember!.id),
-    env.DB.prepare('INSERT INTO sm_service_account_groups (service_account_id, group_id) VALUES (?, ?)').bind(sa.id, groupId),
+  await orm.batch([
+    orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Operators', createdAt: now, updatedAt: now }),
+    orm.insert(orgGroupMembers).values({ groupId, membershipId: bMember!.id }),
+    orm.insert(smServiceAccountGroups).values({ serviceAccountId: sa.id, groupId }),
   ]);
   assert.equal((await request(b.id, detailPath)).status, 200);
   assert.equal((await request(b.id, detailPath, 'PUT', { name: ENCRYPTED_FIELD })).status, 200);
@@ -67,10 +72,11 @@ test('machine accessToSecrets is distinct across direct and project policies, an
   const throughProject = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/secrets`, { ...fields, projectIds: [project.id] });
   const direct = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/secrets`, fields);
   const trashed = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/secrets`, { ...fields, projectIds: [project.id] });
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO sm_service_account_projects (service_account_id, project_id, read_access, write_access) VALUES (?, ?, 1, 0)').bind(sa.id, project.id),
-    ...[throughProject.id, direct.id, trashed.id].map(id => env.DB.prepare('INSERT INTO sm_secret_service_accounts (secret_id, service_account_id, write_access) VALUES (?, ?, 0)').bind(id, sa.id)),
-    env.DB.prepare('UPDATE sm_secrets SET deleted_at = ? WHERE id = ?').bind(new Date().toISOString(), trashed.id),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(smServiceAccountProjects).values({ serviceAccountId: sa.id, projectId: project.id, readAccess: 1, writeAccess: 0 }),
+    orm.insert(smSecretServiceAccounts).values([throughProject.id, direct.id, trashed.id].map(secretId => ({ secretId, serviceAccountId: sa.id, writeAccess: 0 }))),
+    orm.update(smSecrets).set({ deletedAt: new Date().toISOString() }).where(eq(smSecrets.id, trashed.id)),
   ]);
   const listed = await request(a.id, path);
   assert.equal(listed.status, 200);
@@ -93,10 +99,12 @@ test('machine creation ignores legacy projectIds, rolls back creator grants atom
   const ownProject = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const deniedProject = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   assert.equal((await request(a.id, path, 'POST', { name: 'plaintext' })).status, 400);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the creator grant inside SQLite
   await env.DB.exec("CREATE TRIGGER fail_machine_grant BEFORE INSERT ON sm_service_account_members BEGIN SELECT RAISE(ABORT, 'test machine rollback'); END;");
   await assert.rejects(async () => handleCreateServiceAccount(new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify({ name: ENCRYPTED_FIELD, projectIds: [ownProject.id] }) }), env, await smUser(env, a), orgId), /test machine rollback/);
   assert.equal((await smRepo.listServiceAccounts(env.DB, orgId)).length, 0);
-  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_service_account_members').first<{ n: number }>())!.n, 0);
+  assert.equal(await getOrm(env.DB).$count(smServiceAccountMembers), 0);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- dropping the fault-injection trigger is DDL with no drizzle builder
   await env.DB.exec('DROP TRIGGER fail_machine_grant;');
   const own = await account(a, [ownProject.id, deniedProject.id, crypto.randomUUID()]);
   const denied = await account(owner);
