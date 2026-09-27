@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, eq } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { events as eventLog, orgGroups, smServiceAccountMembers, smServiceAccounts } from '../db/schema';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 import { MembershipType } from '../services/org-types';
@@ -25,7 +28,7 @@ async function setup() {
     assert.equal(body.continuationToken, null);
     return body.data;
   };
-  const count = async () => (await env.DB.prepare('SELECT COUNT(*) AS n FROM events WHERE organization_id = ?').bind(orgId).first<{ n: number }>())!.n;
+  const count = () => getOrm(env.DB).$count(eventLog, eq(eventLog.organizationId, orgId));
   return { env, orgId, owner, user, project, secret, account, request, events, count };
 }
 
@@ -96,10 +99,12 @@ test('SM records completed lifecycle actions and partial bulk successes without 
   const partial = await request('/api/secrets/delete', 'POST', [secret.id, allowed.id], user.id);
   assert.equal(partial.status, 200);
   assert.deepEqual((await partial.json() as any).data.map((r: any) => [r.id, r.error]).sort(), [[secret.id, 'access denied'], [allowed.id, null]].sort());
-  const deleted = await env.DB.prepare('SELECT resource_id FROM events WHERE type = 2103 AND acting_user_id = ?').bind(user.id).all<{ resource_id: string }>();
-  assert.deepEqual(deleted.results.map(r => r.resource_id), [allowed.id]);
-  const serialized = JSON.stringify((await env.DB.prepare('SELECT * FROM events WHERE organization_id = ?').bind(orgId).all()).results);
+  const orm = getOrm(env.DB);
+  const deleted = await orm.select({ resourceId: eventLog.resourceId }).from(eventLog).where(and(eq(eventLog.type, 2103), eq(eventLog.actingUserId, user.id)));
+  assert.deepEqual(deleted.map(r => r.resourceId), [allowed.id]);
+  const serialized = JSON.stringify(await orm.select().from(eventLog).where(eq(eventLog.organizationId, orgId)));
   assert.ok(!serialized.includes(ENCRYPTED_FIELD) && !serialized.includes(CHANGED));
+  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the delete inside SQLite
   await env.DB.exec(`CREATE TRIGGER fail_event_delete BEFORE UPDATE OF deleted_at ON sm_secrets WHEN OLD.id = '${secret.id}' BEGIN SELECT RAISE(ABORT, 'audit rollback check'); END;`);
   const beforeFailure = await count();
   assert.equal((await request('/api/secrets/delete', 'POST', [secret.id])).status, 500);
@@ -112,7 +117,7 @@ test('machine people policies record only added and removed users/groups', async
   const userMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
   const group = crypto.randomUUID();
   const now = new Date().toISOString();
-  await env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(group, orgId, 'Team', now, now).run();
+  await getOrm(env.DB).insert(orgGroups).values({ id: group, orgId, name: 'Team', createdAt: now, updatedAt: now });
   const path = `/api/service-accounts/${account.id}/access-policies/people`;
   const policies = { userAccessPolicyRequests: [policy(ownerMember.id), policy(userMember.id)], groupAccessPolicyRequests: [policy(group)] };
   assert.equal((await request(path, 'PUT', policies)).status, 200);
@@ -137,7 +142,7 @@ test('machine people policies record only added and removed users/groups', async
   env.DB.batch = async statements => {
     if (replacing) {
       replacing = false;
-      await prepare('INSERT INTO sm_service_account_members (service_account_id, membership_id) VALUES (?, ?)').bind(account.id, userMember.id).run();
+      await getOrm(env.DB).insert(smServiceAccountMembers).values({ serviceAccountId: account.id, membershipId: userMember.id });
     }
     return batch(statements);
   };
@@ -168,7 +173,7 @@ test('machine retrieval audits only returned secrets and unchanged sync emits no
   assert.equal((await machine(`/api/secrets/${visible.id}`)).status, 200);
   assert.equal((await machine(`/api/organizations/${orgId}/secrets/sync`)).status, 200);
   const afterReads = await count();
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', account.id).run();
+  await getOrm(env.DB).update(smServiceAccounts).set({ updatedAt: '2020-01-01T00:00:00.000Z' }).where(eq(smServiceAccounts.id, account.id));
   const unchanged = await machine(`/api/organizations/${orgId}/secrets/sync?lastSyncedDate=2021-01-01T00:00:00.000Z`);
   assert.equal(unchanged.status, 200);
   assert.equal((await unchanged.json() as any).hasChanges, false);
