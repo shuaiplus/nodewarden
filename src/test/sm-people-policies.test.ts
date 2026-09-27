@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { getOrm } from '../db/client';
+import { orgGroupMembers, orgGroups } from '../db/schema';
 import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import { authedFetch, createTestEnv } from './support/env';
@@ -18,9 +20,10 @@ async function setup() {
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
   const groupId = crypto.randomUUID();
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(groupId, orgId, 'Team', now, now),
-    env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(groupId, ownerMember.id),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Team', createdAt: now, updatedAt: now }),
+    orm.insert(orgGroupMembers).values({ groupId, membershipId: ownerMember.id }),
   ]);
   const request = (userId: string, path: string, method = 'GET', body?: unknown) => authedFetch(env, { userId, path, method, body });
   return { env, orgId, owner, a, ownerMember, aMember, project, account, groupId, request };
@@ -79,7 +82,7 @@ test('people policies reject duplicates, invalid permissions, and foreign member
   const foreignMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, foreign.owner.id, foreign.orgId))!;
   const foreignGroup = crypto.randomUUID();
   const now = new Date().toISOString();
-  await env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(foreignGroup, foreign.orgId, 'Elsewhere', now, now).run();
+  await getOrm(env.DB).insert(orgGroups).values({ id: foreignGroup, orgId: foreign.orgId, name: 'Elsewhere', createdAt: now, updatedAt: now });
   for (const path of [projectPath, accountPath]) {
     for (const body of [{ userAccessPolicyRequests: [policy(foreignMember.id, true)] }, { groupAccessPolicyRequests: [policy(foreignGroup, true)] }]) {
       assert.equal((await request(owner.id, path, 'PUT', body)).status, 404);
