@@ -1977,8 +1977,9 @@ export default function App() {
     sendUploadPercent: vaultSendActions.sendUploadPercent,
     onChangePassword: accountSecurityActions.changePassword,
     onSavePasswordHint: accountSecurityActions.savePasswordHint,
-    onEnableTotp: async (secret: string, token: string, masterPassword: string) => {
-      await accountSecurityActions.enableTotp(secret, token, masterPassword);
+    onBeginTotpSetup: accountSecurityActions.beginTotpSetup,
+    onEnableTotp: async (token: string) => {
+      await accountSecurityActions.enableTotp(token);
       await twoFactorStatusQuery.refetch();
     },
     onOpenDisableTotp: () => setDisableTotpOpen(true),

@@ -1,4 +1,4 @@
-import { useMemo } from 'preact/hooks';
+import { useMemo, useRef } from 'preact/hooks';
 import {
   changeMasterPassword,
   bootstrapYubiKeyOtpApiCredentials,
@@ -27,7 +27,9 @@ import {
   saveTwoFactorPasskey,
   saveYubiKeyOtpApiCredentials,
   saveYubiKeyOtpSettings,
-  setTotp,
+  disableTotp as disableTotpApi,
+  enableTotp as enableTotpApi,
+  getTwoFactorAuthenticator,
   trustAuthorizedDevicePermanently,
   updateAuthorizedDeviceName,
   updateProfile,
@@ -77,6 +79,9 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
     refetchTwoFactorStatus,
     refetchAuthorizedDevices,
   } = options;
+
+  // Key and verification token issued by get-authenticator for the setup in progress.
+  const totpSetup = useRef<{ key: string; userVerificationToken: string } | null>(null);
 
   return useMemo(
     () => {
@@ -157,30 +162,22 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
         }
       },
 
-      async enableTotp(secret: string, token: string, masterPassword: string) {
-        if (!profile) {
-          const error = new Error(t('txt_profile_unavailable'));
-          onNotify('error', error.message);
-          throw error;
-        }
-        if (!secret.trim() || !token.trim()) {
+      async beginTotpSetup(masterPassword: string): Promise<string> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        if (!masterPassword) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, masterPassword, defaultKdfIterations);
+        totpSetup.current = await getTwoFactorAuthenticator(authedFetch, derived.hash);
+        return totpSetup.current.key;
+      },
+
+      async enableTotp(token: string) {
+        if (!totpSetup.current || !token.trim()) {
           const error = new Error(t('txt_secret_and_code_are_required'));
           onNotify('error', error.message);
           throw error;
         }
-        if (!masterPassword) {
-          const error = new Error(t('txt_master_password_is_required'));
-          onNotify('error', error.message);
-          throw error;
-        }
         try {
-          const derived = await deriveLoginHash(profile.email, masterPassword, defaultKdfIterations);
-          await setTotp(authedFetch, {
-            enabled: true,
-            secret: secret.trim(),
-            token: token.trim(),
-            masterPasswordHash: derived.hash,
-          });
+          await enableTotpApi(authedFetch, { ...totpSetup.current, token: token.trim() });
           onNotify('success', t('txt_totp_enabled'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_enable_totp_failed'));
@@ -196,7 +193,7 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
         }
         try {
           const derived = await deriveLoginHash(profile.email, disableTotpPassword, defaultKdfIterations);
-          await setTotp(authedFetch, { enabled: false, masterPasswordHash: derived.hash });
+          await disableTotpApi(authedFetch, derived.hash);
           clearDisableTotpDialog();
           await refetchTwoFactorStatus();
           onNotify('success', t('txt_totp_disabled'));

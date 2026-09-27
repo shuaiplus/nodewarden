@@ -697,14 +697,45 @@ export async function changeMasterPassword(
   if (!resp.ok) throw new Error('Change master password failed');
 }
 
-export async function setTotp(
+// The official flow: the server issues the authenticator key and a verification token once the
+// master password checks out, then the client proves possession with a code from that key.
+export async function getTwoFactorAuthenticator(
   authedFetch: AuthedFetch,
-  payload: { enabled: boolean; token?: string; secret?: string; masterPasswordHash?: string }
+  masterPasswordHash: string
+): Promise<{ key: string; userVerificationToken: string }> {
+  const resp = await authedFetch('/api/two-factor/get-authenticator', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masterPasswordHash }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_master_password_verify_failed')));
+  }
+  const raw = (await parseJson<{ key?: string; Key?: string; userVerificationToken?: string; UserVerificationToken?: string }>(resp)) || {};
+  return { key: String(raw.key ?? raw.Key ?? ''), userVerificationToken: String(raw.userVerificationToken ?? raw.UserVerificationToken ?? '') };
+}
+
+export async function enableTotp(
+  authedFetch: AuthedFetch,
+  payload: { key: string; token: string; userVerificationToken: string }
 ): Promise<void> {
-  const resp = await authedFetch('/api/accounts/totp', {
+  const resp = await authedFetch('/api/two-factor/authenticator', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_totp_update_failed')));
+  }
+}
+
+export async function disableTotp(authedFetch: AuthedFetch, masterPasswordHash: string): Promise<void> {
+  const resp = await authedFetch('/api/two-factor/disable', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 0, masterPasswordHash }),
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
@@ -1088,7 +1119,7 @@ export async function getTotpRecoveryCode(
   authedFetch: AuthedFetch,
   masterPasswordHash: string
 ): Promise<string> {
-  const resp = await authedFetch('/api/accounts/totp/recovery-code', {
+  const resp = await authedFetch('/api/two-factor/get-recover', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ masterPasswordHash }),

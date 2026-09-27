@@ -18,7 +18,8 @@ interface SettingsPageProps {
   onVerifyMasterPassword: (email: string, password: string) => Promise<void>;
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
-  onEnableTotp: (secret: string, token: string, masterPassword: string) => Promise<void>;
+  onBeginTotpSetup: (masterPassword: string) => Promise<string>;
+  onEnableTotp: (token: string) => Promise<void>;
   onOpenDisableTotp: () => void;
   onGetYubiKeySettings: (masterPassword: string) => Promise<YubiKeyOtpSettings>;
   onSaveYubiKeySettings: (keys: string[], nfc: boolean, masterPassword: string) => Promise<YubiKeyOtpSettings>;
@@ -46,7 +47,6 @@ type ThemePreference = 'system' | 'light' | 'dark';
 type SettingsSection = 'appearance' | 'session' | 'masterPassword' | 'twoStep' | 'keys';
 
 type MasterPasswordPromptAction =
-  | 'enableTotp'
   | 'recovery'
   | 'apiKey'
   | 'rotateApiKey'
@@ -75,21 +75,6 @@ function formatStoredYubiKey(value: string): string {
 
 function normalizeYubiKeyFieldValue(value: string): string {
   return value.replace(/\s+/g, '').toLowerCase();
-}
-
-function randomBase32Secret(length: number): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let out = '';
-  const maxUnbiasedByte = Math.floor(256 / alphabet.length) * alphabet.length;
-  while (out.length < length) {
-    const random = crypto.getRandomValues(new Uint8Array(length));
-    for (const x of random) {
-      if (x >= maxUnbiasedByte) continue;
-      out += alphabet[x % alphabet.length];
-      if (out.length >= length) break;
-    }
-  }
-  return out;
 }
 
 function buildOtpUri(email: string, secret: string): string {
@@ -122,7 +107,7 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [newPassword, setNewPassword] = useState('');
   const [newPassword2, setNewPassword2] = useState('');
   const [passwordHint, setPasswordHint] = useState(props.profile.masterPasswordHint || '');
-  const [secret, setSecret] = useState(() => randomBase32Secret(32));
+  const [secret, setSecret] = useState('');
   const [token, setToken] = useState('');
   const [totpLocked, setTotpLocked] = useState(props.totpEnabled);
   const [recoveryCode, setRecoveryCode] = useState('');
@@ -158,7 +143,6 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [twoFactorPasskeySubmitting, setTwoFactorPasskeySubmitting] = useState(false);
   const [twoFactorStatusRefreshing, setTwoFactorStatusRefreshing] = useState(false);
   const [recoveryCodeDialogOpen, setRecoveryCodeDialogOpen] = useState(false);
-  const [totpManagePassword, setTotpManagePassword] = useState('');
   const [masterPasswordPrompt, setMasterPasswordPrompt] = useState<MasterPasswordPromptAction | null>(null);
   const [masterPasswordPromptValue, setMasterPasswordPromptValue] = useState('');
   const [masterPasswordPromptSubmitting, setMasterPasswordPromptSubmitting] = useState(false);
@@ -202,15 +186,6 @@ export default function SettingsPage(props: SettingsPageProps) {
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   }, [props.profile.email, secret]);
 
-  async function enableTotp(): Promise<void> {
-    if (totpLocked) return;
-    if (!secret.trim() || !token.trim()) {
-      props.onNotify?.('error', t('txt_secret_and_code_are_required'));
-      return;
-    }
-    openMasterPasswordPrompt('enableTotp');
-  }
-
   async function refreshAccountPasskeys(): Promise<void> {
     setAccountPasskeysLoading(true);
     try {
@@ -240,10 +215,7 @@ export default function SettingsPage(props: SettingsPageProps) {
     const masterPassword = masterPasswordPromptValue;
     setMasterPasswordPromptSubmitting(true);
     try {
-      if (masterPasswordPrompt === 'enableTotp') {
-        await props.onEnableTotp(secret, token, masterPassword);
-        setTotpLocked(true);
-      } else if (masterPasswordPrompt === 'recovery') {
+      if (masterPasswordPrompt === 'recovery') {
         const code = await props.onGetRecoveryCode(masterPassword);
         setRecoveryCode(code);
         setRecoveryCodeDialogOpen(true);
@@ -258,8 +230,7 @@ export default function SettingsPage(props: SettingsPageProps) {
         setApiKeyDialogOpen(true);
         props.onNotify?.('success', t('txt_api_key_rotated'));
       } else if (masterPasswordPrompt === 'manageTotp') {
-        await props.onVerifyMasterPassword(props.profile.email, masterPassword);
-        setTotpManagePassword(masterPassword);
+        setSecret(await props.onBeginTotpSetup(masterPassword));
         setTotpManageDialogOpen(true);
       } else if (masterPasswordPrompt === 'manageYubiKey') {
         const settings = await props.onGetYubiKeySettings(masterPassword);
@@ -297,9 +268,7 @@ export default function SettingsPage(props: SettingsPageProps) {
   }
 
   const masterPasswordPromptTitle =
-    masterPasswordPrompt === 'enableTotp'
-      ? t('txt_enable_totp')
-      : masterPasswordPrompt === 'recovery'
+    masterPasswordPrompt === 'recovery'
       ? t('txt_view_recovery_code')
       : masterPasswordPrompt === 'rotateApiKey'
         ? t('txt_rotate_api_key')
@@ -332,7 +301,6 @@ export default function SettingsPage(props: SettingsPageProps) {
 
   function closeTotpManageDialog(): void {
     setTotpManageDialogOpen(false);
-    setTotpManagePassword('');
   }
 
   function applyYubiKeySettings(settings: YubiKeyOtpSettings): void {
@@ -496,12 +464,12 @@ export default function SettingsPage(props: SettingsPageProps) {
 
   async function enableTotpFromManageDialog(): Promise<void> {
     if (totpLocked) return;
-    if (!secret.trim() || !token.trim()) {
+    if (!token.trim()) {
       props.onNotify?.('error', t('txt_secret_and_code_are_required'));
       return;
     }
     try {
-      await props.onEnableTotp(secret, token, totpManagePassword);
+      await props.onEnableTotp(token);
       setTotpLocked(true);
     } catch (error) {
       props.onNotify?.('error', error instanceof Error ? error.message : t('txt_enable_totp_failed'));
@@ -902,18 +870,8 @@ export default function SettingsPage(props: SettingsPageProps) {
               <label className="field">
                 <span>{t('txt_authenticator_key')}</span>
                 <div className="totp-secret-input-wrap">
-                  <input className="input totp-secret-input" value={secret} disabled={totpLocked} onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value.toUpperCase())} />
+                  <input className="input totp-secret-input" value={secret} readOnly />
                   <div className="totp-secret-actions">
-                    <button
-                      type="button"
-                      className="btn btn-secondary small totp-secret-icon-btn"
-                      disabled={totpLocked}
-                      title={t('txt_regenerate')}
-                      aria-label={t('txt_regenerate')}
-                      onClick={() => setSecret(randomBase32Secret(32))}
-                    >
-                      <RefreshCw size={14} className="btn-icon" />
-                    </button>
                     <button
                       type="button"
                       className="btn btn-secondary small totp-secret-icon-btn"
@@ -947,7 +905,7 @@ export default function SettingsPage(props: SettingsPageProps) {
                     {t('txt_disable_totp')}
                   </button>
                 ) : (
-                  <button type="button" className="btn btn-primary" disabled={!totpManagePassword} onClick={() => void enableTotpFromManageDialog()}>
+                  <button type="button" className="btn btn-primary" disabled={!token.trim()} onClick={() => void enableTotpFromManageDialog()}>
                     <ShieldCheck size={14} className="btn-icon" />
                     {t('txt_enable_totp')}
                   </button>

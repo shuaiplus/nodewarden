@@ -124,7 +124,8 @@ export interface AppMainRoutesProps {
   sendUploadPercent: number | null;
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
-  onEnableTotp: (secret: string, token: string, masterPassword: string) => Promise<void>;
+  onBeginTotpSetup: (masterPassword: string) => Promise<string>;
+  onEnableTotp: (token: string) => Promise<void>;
   onOpenDisableTotp: () => void;
   onGetYubiKeySettings: (masterPassword: string) => Promise<YubiKeyOtpSettings>;
   onSaveYubiKeySettings: (keys: string[], nfc: boolean, masterPassword: string) => Promise<YubiKeyOtpSettings>;
@@ -321,6 +322,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                 onVerifyMasterPassword={props.onVerifyMasterPassword}
                 onChangePassword={props.onChangePassword}
                 onSavePasswordHint={props.onSavePasswordHint}
+                onBeginTotpSetup={props.onBeginTotpSetup}
                 onEnableTotp={props.onEnableTotp}
                 onOpenDisableTotp={props.onOpenDisableTotp}
                 onGetYubiKeySettings={props.onGetYubiKeySettings}
