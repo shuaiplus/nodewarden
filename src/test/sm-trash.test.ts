@@ -7,7 +7,7 @@ import { getOrm } from '../db/client';
 import { smSecretMembers, smSecrets, smSecretServiceAccounts, smServiceAccounts } from '../db/schema';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
-import { authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -80,11 +80,11 @@ test('emptying 150 trash rows stays under the D1 cap and rolls back every chunk 
     orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, account.id)),
     ...ids.map(id => orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: now, updatedAt: now, deletedAt: now })),
   ]);
-  await env.DB.exec(`CREATE TRIGGER fail_last_trash BEFORE DELETE ON sm_secrets WHEN OLD.id = '${ids.at(-1)}' BEGIN SELECT RAISE(ABORT, 'test trash rollback'); END;`);
+  const removeFault = await abortWrites(env, { table: smSecrets, event: 'DELETE', rowId: ids[ids.length - 1] }, 'test trash rollback');
   assert.equal((await request(owner.id, `${trashPath}/empty`, 'POST', ids)).status, 500);
   assert.equal(await orm.$count(smSecrets, eq(smSecrets.orgId, orgId)), ids.length);
   assert.equal((await smRepo.getServiceAccount(env.DB, account.id))!.updatedAt, before);
-  await env.DB.exec('DROP TRIGGER fail_last_trash;');
+  await removeFault();
   const response = await request(owner.id, `${trashPath}/empty`, 'POST', ids);
   assert.equal(response.status, 200);
   assert.equal(await response.text(), '');

@@ -8,7 +8,7 @@ import { orgGroupMembers, orgGroups, smProjectGroups, smProjectMembers, smProjec
 import { handleDeleteSecrets, handleUpdateSecret } from '../handlers/secrets-manager';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
-import { authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedMember, seedSmOrg, smUser } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -189,12 +189,12 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   const get = await request(owner.id, '/api/secrets/get-by-ids', 'POST', { ids });
   assert.equal(get.status, 200);
   assert.equal((await get.json() as any).data.length, ids.length);
-  await env.DB.exec(`CREATE TRIGGER fail_last_secret BEFORE UPDATE OF deleted_at ON sm_secrets WHEN NEW.id = '${ids.at(-1)}' BEGIN SELECT RAISE(ABORT, 'test bulk rollback'); END;`);
+  const removeFault = await abortWrites(env, { table: smSecrets, event: 'UPDATE', column: smSecrets.deletedAt, rowId: ids[ids.length - 1] }, 'test bulk rollback');
   const deleteRequest = () => new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify(ids) });
   await assert.rejects(async () => handleDeleteSecrets(deleteRequest(), env, await smUser(env, owner)), /test bulk rollback/);
   assert.equal(await orm.$count(smSecrets, isNotNull(smSecrets.deletedAt)), 0);
   assert.equal((await smRepo.getServiceAccount(env.DB, accountId))!.updatedAt, before);
-  await env.DB.exec('DROP TRIGGER fail_last_secret;');
+  await removeFault();
   const deleted = await request(owner.id, '/api/secrets/delete', 'POST', ids);
   assert.equal(deleted.status, 200);
   const body = await deleted.json() as any;

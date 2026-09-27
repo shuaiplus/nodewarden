@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { getOrm } from '../db/client';
 import { smAccessTokens, smProjects, smSecretServiceAccounts, smServiceAccountProjects } from '../db/schema';
 import { signHs256Jwt } from '../utils/jwt';
-import { authedFetch, createTestEnv } from './support/env';
+import { abortWrites, authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 
 const FIELDS = { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD, note: ENCRYPTED_FIELD };
@@ -146,7 +146,7 @@ test('machine authentication rejects signed tokens with malformed or mismatched 
 
 test('machine mutation failures use the API error response and roll back creator grants', async () => {
   const { env, orgId, request } = await setup();
-  await env.DB.exec("CREATE TRIGGER fail_machine_project BEFORE INSERT ON sm_service_account_projects BEGIN SELECT RAISE(ABORT, 'test machine project failure'); END;");
+  await abortWrites(env, { table: smServiceAccountProjects, event: 'INSERT' }, 'test machine project failure');
   const response = await request(`/api/organizations/${orgId}/projects`, 'POST', { name: ENCRYPTED_FIELD });
   assert.equal(response.status, 500);
   assert.equal((await response.json() as any).message, 'Internal server error');
