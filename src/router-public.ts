@@ -58,29 +58,6 @@ export function jwtSecretUnsafeReason(env: Env): JwtUnsafeReason {
   return kind === 'safe' ? null : kind;
 }
 
-function isSameOriginWriteRequest(request: Request, env: Env): boolean {
-  const targetOrigin = new URL(request.url).origin;
-  const originHeader = request.headers.get('Origin');
-  if (originHeader) {
-    if (originHeader === targetOrigin) return true;
-    return isConfiguredWebVaultOrigin(env, originHeader);
-  }
-
-  const referer = request.headers.get('Referer');
-  if (referer) {
-    try {
-      const refererOrigin = new URL(referer).origin;
-      if (refererOrigin === targetOrigin) return true;
-      return isConfiguredWebVaultOrigin(env, refererOrigin);
-    } catch {
-      return false;
-    }
-  }
-
-  // Non-browser API clients (CLI, Playwright request, curl) omit Origin.
-  return true;
-}
-
 const DEFAULT_WEBSITE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="Globe icon"><circle cx="48" cy="48" r="34" fill="none" stroke="#8ea9c7" stroke-width="6"/><path d="M14 48h68M48 14c10 10 16 21.5 16 34s-6 24-16 34c-10-10-16-21.5-16-34s6-24 16-34zm-24 10c8 5 17 8 24 8s16-3 24-8m-48 48c8-5 17-8 24-8s16 3 24 8" fill="none" stroke="#8ea9c7" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 function handleNwFavicon(): Response {
@@ -102,22 +79,6 @@ function handleMissingWebsiteIcon(): Response {
   });
 }
 
-function normalizeIconHost(rawHost: string): string | null {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(String(rawHost || '').trim()).toLowerCase().replace(/\.+$/, '');
-  } catch {
-    return null;
-  }
-  if (!decoded || decoded.includes('/') || decoded.includes('\\')) return null;
-  try {
-    const parsed = new URL(`https://${decoded}`);
-    return parsed.hostname === decoded ? decoded : null;
-  } catch {
-    return null;
-  }
-}
-
 const ICON_UPSTREAM_TIMEOUT_MS = 2500;
 const ICON_MAX_BUFFER_BYTES = 256 * 1024;
 const BITWARDEN_DEFAULT_GLOBE_ICON_BYTES = 500;
@@ -131,135 +92,6 @@ type IconSource = {
   };
   headers?: HeadersInit;
 };
-
-async function fetchIconSource(source: { url: string; headers?: HeadersInit }): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ICON_UPSTREAM_TIMEOUT_MS);
-  try {
-    return await fetch(source.url, {
-      headers: source.headers,
-      redirect: 'follow',
-      signal: controller.signal,
-      cf: {
-        cacheEverything: true,
-        cacheTtl: LIMITS.cache.iconTtlSeconds,
-      },
-    } as RequestInit & { cf: { cacheEverything: boolean; cacheTtl: number } });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function getPositiveContentLength(headers: Headers): number | null {
-  const raw = headers.get('Content-Length');
-  if (!raw) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-async function readIconBytes(response: Response, maxBytes: number): Promise<ArrayBuffer | null> {
-  if (!response.body) return null;
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    void reader.cancel().catch(() => undefined);
-  }, ICON_UPSTREAM_TIMEOUT_MS);
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  if (timedOut || totalBytes === 0) return null;
-
-  const output = new ArrayBuffer(totalBytes);
-  const bytes = new Uint8Array(output);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return output;
-}
-
-function iconResponse(body: BodyInit | null, contentType: string | null): Response {
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'Content-Type': contentType || 'image/png',
-      'Cache-Control': `public, max-age=${LIMITS.cache.iconTtlSeconds}, immutable`,
-      'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; sandbox",
-    },
-  });
-}
-
-async function handleWebsiteIcon(host: string, fallbackMode: 'default' | 'not-found' = 'default'): Promise<Response> {
-  const normalizedHost = normalizeIconHost(host);
-  if (!normalizedHost) return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
-
-  const encodedHost = encodeURIComponent(normalizedHost);
-  const requestHeaders = { 'User-Agent': 'NodeWarden/1.0' };
-  const upstreamSources: IconSource[] = [
-    {
-      url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
-      headers: requestHeaders,
-    },
-    {
-      url: `https://icons.bitwarden.net/${encodedHost}/icon.png`,
-      rejectImage: {
-        byteLength: BITWARDEN_DEFAULT_GLOBE_ICON_BYTES,
-        sha256: BITWARDEN_DEFAULT_GLOBE_ICON_SHA256,
-      },
-      headers: requestHeaders,
-    },
-  ];
-
-  for (const source of upstreamSources) {
-    try {
-      const resp = await fetchIconSource(source);
-
-      if (!resp.ok) continue;
-      const contentType = String(resp.headers.get('Content-Type') || '').toLowerCase();
-      if (!isSafeWebsiteIconContentType(contentType)) continue;
-
-      const contentLength = getPositiveContentLength(resp.headers);
-      if (contentLength !== null && contentLength > ICON_MAX_BUFFER_BYTES) continue;
-
-      const bytes = await readIconBytes(resp, ICON_MAX_BUFFER_BYTES);
-      if (!bytes) continue;
-      if (
-        source.rejectImage &&
-        bytes.byteLength === source.rejectImage.byteLength &&
-        (await sha256(bytes)) === source.rejectImage.sha256
-      ) {
-        continue;
-      }
-
-      return iconResponse(bytes, resp.headers.get('Content-Type'));
-    } catch {
-      continue;
-    }
-  }
-
-  return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
-}
 
 export function tooManyRequests(retryAfterSeconds: number | undefined): Response {
   return new Response(
@@ -317,7 +149,23 @@ const publicSensitive = publicRateLimit('public-sensitive', LIMITS.rateLimit.sen
 const register = publicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
 
 const requireSameOriginWrite: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (!isSameOriginWriteRequest(c.req.raw, c.env)) {
+  const request = c.req.raw;
+  const targetOrigin = new URL(request.url).origin;
+  const originHeader = request.headers.get('Origin');
+  const referer = originHeader ? null : request.headers.get('Referer');
+  // Non-browser API clients (CLI, Playwright request, curl) omit Origin.
+  let sameOrigin = true;
+  if (originHeader) {
+    sameOrigin = originHeader === targetOrigin || isConfiguredWebVaultOrigin(c.env, originHeader);
+  } else if (referer) {
+    try {
+      const refererOrigin = new URL(referer).origin;
+      sameOrigin = refererOrigin === targetOrigin || isConfiguredWebVaultOrigin(c.env, refererOrigin);
+    } catch {
+      sameOrigin = false;
+    }
+  }
+  if (!sameOrigin) {
     return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
@@ -335,9 +183,120 @@ publicRoutes.on('ALL', ['/api/auth', '/api/auth/*'], (c) => createAuth(c.env, c.
 publicRoutes.get('/fill-assist/manifest.json', publicRead, () => handleFillAssistManifest());
 publicRoutes.on('GET', ['/v1/assetlinks:check', '/api/v1/assetlinks:check'], publicRead, () => handleDigitalAssetLinkCheck());
 publicRoutes.get('/fill-assist/:filename', publicRead, (c) => handleFillAssistForms(c.req.param('filename')));
-publicRoutes.get('/icons/:host/icon.png', publicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute), (c) => {
+publicRoutes.get('/icons/:host/icon.png', publicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute), async (c) => {
   const fallbackMode = c.req.query('fallback') === '404' ? 'not-found' : 'default';
-  return handleWebsiteIcon(c.req.param('host'), fallbackMode);
+  // Only a host that decodes to exactly its own URL hostname is looked up upstream.
+  let normalizedHost: string | null;
+  try {
+    const decoded = decodeURIComponent(String(c.req.param('host') || '').trim()).toLowerCase().replace(/\.+$/, '');
+    normalizedHost = decoded && !decoded.includes('/') && !decoded.includes('\\') && new URL(`https://${decoded}`).hostname === decoded ? decoded : null;
+  } catch {
+    normalizedHost = null;
+  }
+  if (!normalizedHost) return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
+
+  const encodedHost = encodeURIComponent(normalizedHost);
+  const requestHeaders = { 'User-Agent': 'NodeWarden/1.0' };
+  const upstreamSources: IconSource[] = [
+    {
+      url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
+      headers: requestHeaders,
+    },
+    {
+      url: `https://icons.bitwarden.net/${encodedHost}/icon.png`,
+      rejectImage: {
+        byteLength: BITWARDEN_DEFAULT_GLOBE_ICON_BYTES,
+        sha256: BITWARDEN_DEFAULT_GLOBE_ICON_SHA256,
+      },
+      headers: requestHeaders,
+    },
+  ];
+
+  for (const source of upstreamSources) {
+    try {
+      const controller = new AbortController();
+      const fetchTimeout = setTimeout(() => controller.abort(), ICON_UPSTREAM_TIMEOUT_MS);
+      let resp: Response;
+      try {
+        resp = await fetch(source.url, {
+          headers: source.headers,
+          redirect: 'follow',
+          signal: controller.signal,
+          cf: {
+            cacheEverything: true,
+            cacheTtl: LIMITS.cache.iconTtlSeconds,
+          },
+        } as RequestInit & { cf: { cacheEverything: boolean; cacheTtl: number } });
+      } finally {
+        clearTimeout(fetchTimeout);
+      }
+
+      if (!resp.ok) continue;
+      const contentType = String(resp.headers.get('Content-Type') || '').toLowerCase();
+      if (!isSafeWebsiteIconContentType(contentType)) continue;
+
+      const declaredLength = Number(resp.headers.get('Content-Length'));
+      if (Number.isFinite(declaredLength) && declaredLength > ICON_MAX_BUFFER_BYTES) continue;
+
+      // Buffer at most ICON_MAX_BUFFER_BYTES, and give up on an upstream that stalls.
+      if (!resp.body) continue;
+      const reader = resp.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      let timedOut = false;
+      const readTimeout = setTimeout(() => {
+        timedOut = true;
+        void reader.cancel().catch(() => undefined);
+      }, ICON_UPSTREAM_TIMEOUT_MS);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+
+          totalBytes += value.byteLength;
+          if (totalBytes > ICON_MAX_BUFFER_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            break;
+          }
+          chunks.push(value);
+        }
+      } catch {
+        continue;
+      } finally {
+        clearTimeout(readTimeout);
+      }
+      if (timedOut || totalBytes === 0 || totalBytes > ICON_MAX_BUFFER_BYTES) continue;
+
+      const iconBuffer = new ArrayBuffer(totalBytes);
+      const iconBytes = new Uint8Array(iconBuffer);
+      let offset = 0;
+      for (const chunk of chunks) {
+        iconBytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      if (
+        source.rejectImage &&
+        iconBuffer.byteLength === source.rejectImage.byteLength &&
+        (await sha256(iconBuffer)) === source.rejectImage.sha256
+      ) {
+        continue;
+      }
+
+      return new Response(iconBuffer, {
+        status: 200,
+        headers: {
+          'Content-Type': resp.headers.get('Content-Type') || 'image/png',
+          'Cache-Control': `public, max-age=${LIMITS.cache.iconTtlSeconds}, immutable`,
+          'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; sandbox",
+        },
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
 });
 
 publicRoutes.get('/api/attachments/:cipherId{[a-f0-9-]+}/:attachmentId{[a-f0-9-]+}', (c) => handlePublicDownloadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId')));
