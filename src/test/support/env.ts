@@ -206,6 +206,7 @@ export async function signInToAdminPortal(env: Env, email: string): Promise<{ co
 // The tests' one seam onto the raw binding: every statement drizzle prepares from now on passes through
 // wrap, which may read its SQL text, fail it by throwing, or return a wrapped statement. Returns the undo.
 export function wrapStatements(env: Env, wrap: (query: string, statement: D1PreparedStatement) => D1PreparedStatement): () => void {
+  // eslint-disable-next-line nodewarden/no-raw-sql -- test seam: forwards the statements drizzle prepares
   const prepare = env.DB.prepare.bind(env.DB);
   env.DB.prepare = (query: string) => wrap(query, prepare(query));
   return () => { env.DB.prepare = prepare; };

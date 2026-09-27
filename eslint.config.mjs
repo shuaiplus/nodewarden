@@ -10,6 +10,10 @@ const RAW_SQL_METHODS = new Map([
   ['D1DatabaseSession', new Set(['prepare', 'batch'])],
   ['SqlStorage', new Set(['exec'])],
 ]);
+// Reading one of these as a value (env.DB.prepare.bind(env.DB), passing it along) hands out the raw entry
+// point just like calling it. Installing a wrapper over it (a test seam) stays allowed, and so does forwarding
+// batch, which only accepts statements that prepare already produced.
+const RAW_SQL_ENTRY_POINTS = new Set(['prepare', 'exec', 'dump', 'withSession']);
 // Drizzle database methods that execute a whole hand-written statement: they take a sql`...` value or a
 // plain string (SQLWrapper | string). Passing a query builder to them stays allowed.
 const DRIZZLE_STATEMENT_EXECUTORS = new Set(['run', 'all', 'get', 'values']);
@@ -23,6 +27,7 @@ const noRawSql = {
       binding: '{{type}}.{{method}}() runs hand-written SQL. Use the drizzle query builder through getOrm(db) (drizzle-orm/durable-sqlite in Durable Objects).',
       statement: '{{method}}() on the drizzle database runs a hand-written statement. Build it with the drizzle query builder instead.',
       sqlRaw: 'sql.raw() splices unescaped text into SQL. Use sql`...` parameters or the query builder.',
+      entryPoint: '{{type}}.{{method}} read as a value hands out the raw SQL entry point. Build queries with drizzle; tests observe statements through wrapStatements (src/test/support/env.ts).',
     },
     schema: [],
   },
@@ -35,22 +40,32 @@ const noRawSql = {
       return flatten(checker.getNonNullableType(services.getTypeAtLocation(node)));
     };
     const typeNames = (node) => typeParts(node).map((part) => part.getSymbol()?.getName());
+    const rawSqlOwner = (object, method) => typeNames(object).find((name) => RAW_SQL_METHODS.get(name)?.has(method));
+    const memberName = (member) => (member.computed ? member.property.type === 'Literal' && member.property.value : member.property.name);
     const isHandWrittenStatement = (query, receiver) =>
       typeNames(query).includes('SQL') ||
       (typeParts(query).every((part) => part.flags & ts.TypeFlags.StringLike) && typeNames(receiver).some((name) => DRIZZLE_DATABASES.has(name)));
     return {
       CallExpression(node) {
         const { callee } = node;
-        if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier') return;
-        const method = callee.property.name;
+        if (callee.type !== 'MemberExpression') return;
+        const method = memberName(callee);
         if (method === 'raw' && callee.object.type === 'Identifier' && callee.object.name === 'sql') {
           context.report({ node, messageId: 'sqlRaw' });
         } else if (DRIZZLE_STATEMENT_EXECUTORS.has(method) && node.arguments[0] && isHandWrittenStatement(node.arguments[0], callee.object)) {
           context.report({ node, messageId: 'statement', data: { method } });
         } else {
-          const type = typeNames(callee.object).find((name) => RAW_SQL_METHODS.get(name)?.has(method));
+          const type = rawSqlOwner(callee.object, method);
           if (type) context.report({ node, messageId: 'binding', data: { type, method } });
         }
+      },
+      MemberExpression(node) {
+        const method = memberName(node);
+        if (!RAW_SQL_ENTRY_POINTS.has(method)) return;
+        const { parent } = node;
+        if ((parent.type === 'CallExpression' && parent.callee === node) || (parent.type === 'AssignmentExpression' && parent.left === node)) return;
+        const type = rawSqlOwner(node.object, method);
+        if (type) context.report({ node, messageId: 'entryPoint', data: { type, method } });
       },
     };
   },
