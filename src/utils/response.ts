@@ -9,18 +9,6 @@ import {
   normalizeOrigin,
 } from './origins';
 
-function isWildcardCorsPath(path: string): boolean {
-  return (
-    path.startsWith('/icons/')
-    || path.startsWith('/fill-assist/')
-    || path === '/v1/assetlinks:check'
-    || path === '/api/v1/assetlinks:check'
-    || path === '/config'
-    || path === '/api/config'
-    || path === '/api/version'
-  );
-}
-
 export type CorsPolicy = { kind: 'credentialed'; origin: string } | { kind: 'public' } | { kind: 'none' };
 
 // This Worker, configured vault origins and trusted extension or desktop origins may read responses
@@ -36,7 +24,16 @@ export function corsPolicy(request: Request, env: Env): CorsPolicy {
   )) {
     return { kind: 'credentialed', origin };
   }
-  return isWildcardCorsPath(url.pathname) ? { kind: 'public' } : { kind: 'none' };
+  const path = url.pathname;
+  return (
+    path.startsWith('/icons/')
+    || path.startsWith('/fill-assist/')
+    || path === '/v1/assetlinks:check'
+    || path === '/api/v1/assetlinks:check'
+    || path === '/config'
+    || path === '/api/config'
+    || path === '/api/version'
+  ) ? { kind: 'public' } : { kind: 'none' };
 }
 
 // Responses built outside the Hono app (static assets, the database-unavailable error) miss its cors
@@ -189,18 +186,7 @@ export async function readFormOrJson(request: Request): Promise<unknown> {
     : normalizeJsonKeys(await request.json());
 }
 
-// Reads the body or answers 400. Scalars read as an empty object; arrays pass through for the routes
-// that take a bare list.
-async function readBodyObject(request: Request, message = 'Invalid JSON'): Promise<object | Response> {
-  try {
-    const body = await readFormOrJson(request);
-    return body && typeof body === 'object' ? body : {};
-  } catch {
-    return errorResponse(message, 400);
-  }
-}
-
-// Zod request bodies. parseBody reads the body through readBodyObject, so the schema sees camelCase keys
+// Zod request bodies. parseBody reads the body through readFormOrJson, so the schema sees camelCase keys
 // even when official clients send PascalCase, and resolves to the schema output or to a 400 Response callers
 // return as is: `message` (default 'Invalid JSON') for an unreadable body, otherwise the first issue's
 // message with validationErrors from bodyIssues, every issue message grouped under its dotted path ('' for
@@ -212,8 +198,11 @@ export function bodyIssues(error: z.ZodError): Record<string, string[]> {
   }, new Map<string, string[]>()));
 }
 
-export async function parseBody<S extends z.ZodType>(request: Request, schema: S, message?: string): Promise<z.output<S> | Response> {
-  const body = await readBodyObject(request, message);
+export async function parseBody<S extends z.ZodType>(request: Request, schema: S, message = 'Invalid JSON'): Promise<z.output<S> | Response> {
+  // Scalars read as an empty object; arrays pass through for the routes that take a bare list.
+  const body = await readFormOrJson(request)
+    .then((payload) => (payload && typeof payload === 'object' ? payload : {}))
+    .catch(() => errorResponse(message, 400));
   if (body instanceof Response) return body;
   const result = schema.safeParse(body);
   return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
