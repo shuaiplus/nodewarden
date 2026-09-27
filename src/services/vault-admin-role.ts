@@ -1,3 +1,7 @@
+import { and, eq, exists, inArray, ne, sql } from 'drizzle-orm';
+import { alias, type SQLiteColumn } from 'drizzle-orm/sqlite-core';
+import { getOrm } from '../db/client';
+import { users } from '../db/schema';
 import type { Env } from '../types';
 import { parseAdminDirectory } from './admin-portal-auth';
 import { AuthService } from './auth';
@@ -7,16 +11,21 @@ import { normalizeImportedBackupSettings } from './backup-config';
 export async function syncVaultAdminRoles(env: Env): Promise<void> {
   const directory = parseAdminDirectory(env);
   if (directory.kind !== 'enabled') return;
-  const changed = await env.DB.prepare(`
-    WITH directory(email) AS (SELECT value FROM json_each(?))
-    UPDATE users SET role = CASE WHEN email IN (SELECT email FROM directory) AND email_verified = 1 THEN 'admin' ELSE 'user' END,
-      updated_at = ?
-    WHERE role <> CASE WHEN email IN (SELECT email FROM directory) AND email_verified = 1 THEN 'admin' ELSE 'user' END
-      AND EXISTS (SELECT 1 FROM users u WHERE u.email IN (SELECT email FROM directory) AND u.email_verified = 1 AND u.status = 'active')
-    RETURNING id, role
-  `).bind(JSON.stringify([...directory.admins.keys()]), new Date().toISOString()).all<{ id: string; role: string }>();
-  if (!changed.results.length) return;
-  for (const user of changed.results) {
+  const orm = getOrm(env.DB);
+  // Bind the listed addresses once; every membership test below reads this CTE.
+  const listed = orm.$with('directory').as(orm.select({ email: sql<string>`value`.as('email') })
+    .from(sql`json_each(${JSON.stringify([...directory.admins.keys()])})`));
+  const isListed = (email: SQLiteColumn) => inArray(email, orm.select({ email: listed.email }).from(listed));
+  const derivedRole = sql<string>`CASE WHEN ${isListed(users.email)} AND ${users.emailVerified} = 1 THEN 'admin' ELSE 'user' END`;
+  // No-lockout guard: roles move only while some listed address belongs to a verified, active account.
+  const listedAdmin = alias(users, 'u');
+  const changed = await orm.with(listed).update(users)
+    .set({ role: derivedRole, updatedAt: new Date().toISOString() })
+    .where(and(ne(users.role, derivedRole), exists(orm.select({ id: listedAdmin.id }).from(listedAdmin)
+      .where(and(isListed(listedAdmin.email), eq(listedAdmin.emailVerified, 1), eq(listedAdmin.status, 'active'))))))
+    .returning({ id: users.id, role: users.role });
+  if (!changed.length) return;
+  for (const user of changed) {
     AuthService.invalidateUserCache(user.id);
     await writeAuditEvent(env.DB, {
       action: 'admin.vault_role.sync', category: 'security', level: 'security', actorUserId: null,
@@ -27,8 +36,8 @@ export async function syncVaultAdminRoles(env: Env): Promise<void> {
 }
 
 export async function markEmailVerified(env: Env, userId: string): Promise<void> {
-  const changed = await env.DB.prepare('UPDATE users SET email_verified = 1 WHERE id = ? AND email_verified = 0 RETURNING id')
-    .bind(userId).first();
+  const [changed] = await getOrm(env.DB).update(users).set({ emailVerified: 1 })
+    .where(and(eq(users.id, userId), eq(users.emailVerified, 0))).returning({ id: users.id });
   if (!changed) return;
   AuthService.invalidateUserCache(userId);
   await syncVaultAdminRoles(env);
