@@ -27,33 +27,6 @@ import * as userRepo from '../services/storage-user-repo';
 // Filtering invalid cipher responses here protects clients from stored rows that
 // would otherwise make official apps fail after an HTTP 200 sync.
 // Keep this aligned with src/handlers/ciphers.ts when adding new vault fields.
-function buildSyncCacheRequest(
-  request: Request,
-  userId: string,
-  revisionDate: string,
-  accountPasskeyCacheTag: string,
-  excludeDomains: boolean,
-  excludeSends: boolean,
-  preserveRepairableUris: boolean
-): Request {
-  const url = new URL(request.url);
-  const cacheUrl = new URL(
-    `/__nodewarden/cache/sync/${encodeURIComponent(userId)}/${encodeURIComponent(revisionDate)}/${encodeURIComponent(accountPasskeyCacheTag)}/${excludeDomains ? '1' : '0'}/${excludeSends ? '1' : '0'}/${preserveRepairableUris ? '1' : '0'}`,
-    url.origin
-  );
-  return new Request(cacheUrl.toString(), { method: 'GET' });
-}
-
-async function readSyncCache(cacheRequest: Request): Promise<Response | null> {
-  const hit = await caches.default.match(cacheRequest);
-  if (!hit) return null;
-  return new Response(hit.body, hit);
-}
-
-async function writeSyncCache(cacheRequest: Request, response: Response): Promise<void> {
-  await caches.default.put(cacheRequest, response.clone());
-}
-
 // GET /api/sync
 export async function handleSync(request: Request, env: Env, userId: string): Promise<Response> {
   const url = new URL(request.url);
@@ -77,10 +50,14 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
       credential.encryptedUserKey && credential.encryptedPublicKey && credential.encryptedPrivateKey ? '1' : '0',
     ].join(':'))
     .join(',');
-  const cacheRequest = buildSyncCacheRequest(request, userId, revisionDate, accountPasskeyCacheTag, excludeDomains, excludeSends, preserveRepairableUris);
-  const cachedResponse = await readSyncCache(cacheRequest);
+  // The cache key carries the revision, the passkey state and every response option.
+  const cacheRequest = new Request(new URL(
+    `/__nodewarden/cache/sync/${encodeURIComponent(userId)}/${encodeURIComponent(revisionDate)}/${encodeURIComponent(accountPasskeyCacheTag)}/${excludeDomains ? '1' : '0'}/${excludeSends ? '1' : '0'}/${preserveRepairableUris ? '1' : '0'}`,
+    url.origin
+  ).toString(), { method: 'GET' });
+  const cachedResponse = await caches.default.match(cacheRequest);
   if (cachedResponse) {
-    return cachedResponse;
+    return new Response(cachedResponse.body, cachedResponse);
   }
 
   const user = await userRepo.getUserById(env.DB, userId);
@@ -207,6 +184,6 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
       'Cache-Control': `private, max-age=${Math.max(1, Math.floor(LIMITS.cache.syncResponseTtlMs / 1000))}`,
     },
   });
-  await writeSyncCache(cacheRequest, response);
+  await caches.default.put(cacheRequest, response.clone());
   return response;
 }
