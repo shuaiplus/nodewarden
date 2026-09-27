@@ -159,6 +159,30 @@ test('collector accepts PascalCase uploads and records organization client event
   ], 'a non-member upload for the organization stores nothing');
 });
 
+test('uploads spend a per-minute budget of 100-row batches, counting export copies, apart from vault calls', async (t) => {
+  // Freeze the clock so both uploads always fall in the same rate-limit window.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const { env, owner, org } = await setup();
+  const id = await cipher(env, owner, org.id);
+  await env.DB.prepare('DELETE FROM events').run();
+  const date = new Date().toISOString();
+  const post = (body: unknown, userId = owner.id) => authedFetch(env, { method: 'POST', path: '/events/collect', userId, body });
+  const minuteOfBatches = 100 * LIMITS.rateLimit.apiRequestsPerMinute;
+  assert.equal((await post(Array.from({ length: minuteOfBatches }, () => ({ type: 1111, cipherId: id, date })))).status, 200);
+  assert.equal(await count(env), minuteOfBatches);
+  const limited = await post([{ type: 1107, cipherId: id, date }]);
+  assert.equal(limited.status, 429, 'a client keeps its queue and retries after the window');
+  assert.ok(Number(limited.headers.get('Retry-After')) > 0);
+  assert.equal(await count(env), minuteOfBatches);
+  assert.equal((await authedFetch(env, { path: '/api/accounts/profile', userId: owner.id })).status, 200, 'vault calls keep their own budget');
+
+  const exporter = await seedUser(env);
+  for (const name of ['First', 'Second']) await createOwnedOrganization(env, exporter, { name, key: '4.dGVzdA==' });
+  const exportsOverOneMinute = Math.floor(minuteOfBatches / 3) + 1;
+  assert.equal((await post(Array.from({ length: exportsOverOneMinute }, () => ({ type: 1007, date })), exporter.id)).status, 400,
+    'two organization copies per export count toward the budget');
+});
+
 test('event cleanup reuses audit retention and deletes at most 1000 rows using receipt time', async () => {
   const { env, owner, org } = await setup();
   await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 1005 }, () => ({ type: 1600, organizationId: org.id, date: '2099-01-01T00:00:00.000Z' })));

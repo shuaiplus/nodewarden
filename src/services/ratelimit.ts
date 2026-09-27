@@ -142,7 +142,8 @@ export class RateLimitService {
   private async consumeFixedWindowBudget(
     identifier: string,
     maxRequests: number,
-    windowSeconds: number
+    windowSeconds: number,
+    cost = 1
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
     const nowSec = Math.floor(Date.now() / 1000);
     const windowStart = nowSec - (nowSec % windowSeconds);
@@ -158,11 +159,11 @@ export class RateLimitService {
       count = parseInt(await cached.text(), 10) || 0;
     }
 
-    if (count >= maxRequests) {
-      return { allowed: false, remaining: 0, retryAfterSeconds: ttl };
+    if (count + cost > maxRequests) {
+      return { allowed: false, remaining: Math.max(0, maxRequests - count), retryAfterSeconds: ttl };
     }
 
-    count++;
+    count += cost;
     await cache.put(
       cacheKey,
       new Response(String(count), {
@@ -233,11 +234,13 @@ export class RateLimitService {
   // Callers supply an identifier (must be unique per rate-limit category) and the
   // per-window maximum.  This single method replaces all previous specialised
   // budget helpers (write / sync / knownDevice / publicSend).
+  // cost charges one call as several units, e.g. an upload that carries many client batches.
   async consumeBudget(
     identifier: string,
-    maxRequests: number
+    maxRequests: number,
+    cost = 1
   ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
-    return this.consumeFixedWindowBudget(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS);
+    return this.consumeFixedWindowBudget(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS, cost);
   }
 
   async consumeBudgetWithWindow(

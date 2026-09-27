@@ -8,6 +8,7 @@ import * as orgRepo from '../services/storage-org-repo';
 import { StorageService } from '../services/storage';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
 import { LIMITS } from '../config/limits';
+import { RateLimitService } from '../services/ratelimit';
 
 const CLIENT_CIPHER_TYPES = new Set([
   ...Array.from({ length: 8 }, (_, i) => 1107 + i),
@@ -16,9 +17,12 @@ const CLIENT_CIPHER_TYPES = new Set([
 const CLIENT_ORGANIZATION_TYPES = new Set([1602, 1522, 1618, 1619]);
 // Official TypeScript clients post their queue in batches of 100 (ApiService.EventUploadBatchSize), but
 // native mobile clients post it whole and retry forever on 400, so an offline backlog must still fit.
-// Upstream has no cap; this one only stops a single request from exceeding a full minute of batches.
+// Each upload is charged one unit per 100 stored rows in its own per-minute budget: an account can store
+// no more than those batched clients could, and a backlog never competes with vault API calls. A body
+// larger than one minute's budget could never be admitted, so it is rejected outright.
 const CLIENT_EVENT_UPLOAD_BATCH = 100;
-const MAX_COLLECTED_EVENTS = CLIENT_EVENT_UPLOAD_BATCH * LIMITS.rateLimit.apiRequestsPerMinute;
+const EVENT_BATCHES_PER_MINUTE = LIMITS.rateLimit.apiRequestsPerMinute;
+const MAX_COLLECTED_EVENTS = CLIENT_EVENT_UPLOAD_BATCH * EVENT_BATCHES_PER_MINUTE;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 interface ClientEvent { type: number; date: string; cipherId: string | null; organizationId: string | null }
 
@@ -39,11 +43,17 @@ async function collectEvents(request: Request, env: Env, user: User): Promise<Re
     input.push({ type, date: new Date(date).toISOString(), cipherId, organizationId });
   }
   const memberships = (await orgRepo.listMembershipsByUser(env.DB, user.id)).filter(isActiveMember);
+  // Charge before any lookup, counting the organization copies an export fans out to.
+  const exportCopies = input.filter(event => event.type === EventType.UserClientExportedVault).length * memberships.length;
+  const batches = Math.ceil((input.length + exportCopies) / CLIENT_EVENT_UPLOAD_BATCH);
+  if (batches > EVENT_BATCHES_PER_MINUTE) return errorResponse('Invalid events.', 400);
+  const budget = await new RateLimitService(env.DB).consumeBudget(`${user.id}:events`, EVENT_BATCHES_PER_MINUTE, batches);
+  if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
   const memberByOrg = new Map(memberships.map(member => [member.orgId, member]));
   const ids = [...new Set(input.filter(event => CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId).map(event => event.cipherId!))];
   const cipherRows = (await Promise.all(chunkRows(ids, 1).map(chunk => getOrm(env.DB).select({ id: ciphers.id, organizationId: ciphers.organizationId })
     .from(ciphers).where(inArray(ciphers.id, chunk))))).flat();
-  const collections = await orgRepo.listCipherCollectionIdsByCipherIds(env.DB, ids);
+  const collections = await orgRepo.listCipherCollectionIdsByCipherIds(env.DB, cipherRows.map(cipher => cipher.id));
   const accessByOrg = new Map(await Promise.all([...new Set(cipherRows.map(cipher => cipher.organizationId))].filter((orgId): orgId is string => {
     const member = orgId ? memberByOrg.get(orgId) : undefined;
     return !!member && !hasFullCollectionAccess(member);
