@@ -1,4 +1,8 @@
+import { and, eq, gt, sql } from 'drizzle-orm';
+
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
+import { verification } from '../db/schema';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { toSafeUrl } from '../utils/html';
 import { RateLimitService } from './ratelimit';
@@ -64,8 +68,10 @@ export async function createAdminSession(env: Env, email: string, stampHash: str
   const token = randomAdminToken();
   const authTime = Date.now();
   const id = `admin-session:${await sha256Base64Url(token)}`;
-  await env.DB.prepare('INSERT INTO verification (id,identifier,value,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?)')
-    .bind(id, id, JSON.stringify({ email, stampHash, authTime }), authTime + LIMITS.admin.sessionTtlSeconds * 1000, authTime, authTime).run();
+  await getOrm(env.DB).insert(verification).values({
+    id, identifier: id, value: JSON.stringify({ email, stampHash, authTime }),
+    expiresAt: authTime + LIMITS.admin.sessionTtlSeconds * 1000, createdAt: authTime, updatedAt: authTime,
+  });
   return { email, stampHash, authTime, id, token, csrf: await sha256Base64Url(`admin-csrf:${token}`) };
 }
 
@@ -73,8 +79,9 @@ export async function readAdminSession(request: Request, env: Env, admins: Reado
   const token = readAdminCookie(request, ADMIN_COOKIE);
   if (!ADMIN_TOKEN_PATTERN.test(token)) return { session: null, denied: false };
   const id = `admin-session:${await sha256Base64Url(token)}`;
-  const row = await env.DB.prepare('SELECT value, expires_at FROM verification WHERE id=?').bind(id).first<{ value: string; expires_at: number }>();
-  if (!row || row.expires_at <= Date.now()) return { session: null, denied: false };
+  const row = await getOrm(env.DB).select({ value: verification.value, expiresAt: verification.expiresAt })
+    .from(verification).where(eq(verification.id, id)).get();
+  if (!row || row.expiresAt <= Date.now()) return { session: null, denied: false };
   const value = JSON.parse(row.value) as { email: string; stampHash: string; authTime: number };
   if (admins.get(value.email) !== value.stampHash) return { session: null, denied: true };
   return { session: { ...value, token, id, csrf: await sha256Base64Url(`admin-csrf:${token}`) }, denied: false };
@@ -86,14 +93,21 @@ export async function issueAdminLogin(env: Env, request: Request, email: string,
   const token = randomAdminToken();
   const id = `admin-login:${await sha256Base64Url(token)}`;
   const now = Date.now();
-  await env.DB.prepare('INSERT INTO verification (id,identifier,value,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?)')
-    .bind(id, id, JSON.stringify({ email, stampHash, returnPath, browser: await sha256Base64Url(browser) }), now + LIMITS.admin.loginLinkTtlSeconds * 1000, now, now).run();
+  await getOrm(env.DB).insert(verification).values({
+    id, identifier: id, value: JSON.stringify({ email, stampHash, returnPath, browser: await sha256Base64Url(browser) }),
+    expiresAt: now + LIMITS.admin.loginLinkTtlSeconds * 1000, createdAt: now, updatedAt: now,
+  });
   await sendMail(env, email, 'adminSignIn', { url: toSafeUrl(new URL(`/admin/login/confirm?token=${token}`, new URL(request.url).origin)) });
 }
 
 export async function redeemAdminLogin(env: Env, token: string, browser: string): Promise<{ email: string; stampHash: string; returnPath: string } | null> {
   if (!ADMIN_TOKEN_PATTERN.test(token) || !ADMIN_TOKEN_PATTERN.test(browser)) return null;
-  const row = await env.DB.prepare("DELETE FROM verification WHERE id=? AND expires_at>? AND json_extract(value,'$.browser')=? RETURNING value")
-    .bind(`admin-login:${await sha256Base64Url(token)}`, Date.now(), await sha256Base64Url(browser)).first<{ value: string }>();
+  const row = await getOrm(env.DB).delete(verification)
+    .where(and(
+      eq(verification.id, `admin-login:${await sha256Base64Url(token)}`),
+      gt(verification.expiresAt, Date.now()),
+      sql`json_extract(${verification.value}, '$.browser') = ${await sha256Base64Url(browser)}`,
+    ))
+    .returning({ value: verification.value }).get();
   return row ? JSON.parse(row.value) : null;
 }
