@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
+import { eq, lt } from 'drizzle-orm';
 import { TOTP } from 'otpauth';
+import { getOrm } from '../db/client';
+import { devices, session, trustedTwoFactorDeviceTokens, users, verification } from '../db/schema';
+import { SINGLE_ROW, jsonSet } from '../db/sql';
 import type { User } from '../types';
 import { verifyJWT } from '../utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
@@ -51,10 +55,11 @@ async function setup(t: TestContext, userOverrides: Partial<User> = {}) {
     assert.equal(response.status, 400);
     assert.deepEqual((await response.json() as any).TwoFactorProviders, ['0']);
   };
-  const state = async () => env.DB.prepare("SELECT id, value, expires_at FROM verification WHERE identifier = 'sso-continuation'").first<{ id: string; value: string; expires_at: number }>();
+  const state = async () => getOrm(env.DB).select({ id: verification.id, value: verification.value, expiresAt: verification.expiresAt })
+    .from(verification).where(eq(verification.identifier, 'sso-continuation')).get();
   const counts = async () => {
-    const [result] = await env.DB.batch([env.DB.prepare('SELECT (SELECT COUNT(*) FROM session) AS sessions, (SELECT COUNT(*) FROM trusted_two_factor_device_tokens) AS remembered, (SELECT COUNT(*) FROM devices) AS devices')]);
-    return result.results[0];
+    const orm = getOrm(env.DB);
+    return orm.select({ sessions: orm.$count(session), remembered: orm.$count(trustedTwoFactorDeviceTokens), devices: orm.$count(devices) }).from(SINGLE_ROW).get();
   };
   return { env, user, mail, login, challenge, state, counts, exchanges: () => exchanges, idToken };
 }
@@ -65,7 +70,7 @@ test('SSO exchanges its PKCE code once across challenge, invalid/context retries
   const before = (await f.state())!;
   const value = JSON.parse(before.value);
   assert.ok(value.expiresAt > Date.now() && value.expiresAt <= Date.now() + 300_000);
-  assert.ok(before.expires_at > value.expiresAt);
+  assert.ok(before.expiresAt > value.expiresAt);
   for (const sensitive of [CODE, VERIFIER, f.idToken, 'never-store-this-idp-access-token', f.user.masterPasswordHash, f.user.key]) assert.equal(before.value.includes(sensitive), false);
   assert.equal((await f.login({ twoFactorProvider: '0', twoFactorToken: 'wrong' })).status, 400);
   for (const changed of [{ client_id: 'desktop' }, { deviceIdentifier: 'other-device' }, { deviceType: '8' }, { code_verifier: 'wrong-verifier' }, { redirect_uri: 'https://other.test/callback' }, { scope: 'other' }]) {
@@ -89,9 +94,10 @@ test('SSO exchanges its PKCE code once across challenge, invalid/context retries
 test('expired SSO proof survives Better Auth cleanup as a tombstone and never re-exchanges', async t => {
   const f = await setup(t);
   await f.challenge();
-  await f.env.DB.prepare("UPDATE verification SET value = json_set(value, '$.expiresAt', ?) WHERE identifier = 'sso-continuation'").bind(Date.now() - 1).run();
+  await getOrm(f.env.DB).update(verification).set({ value: jsonSet(verification.value, '$.expiresAt', Date.now() - 1) })
+    .where(eq(verification.identifier, 'sso-continuation'));
   // The installed Better Auth internal adapter performs this global expiry cleanup.
-  await f.env.DB.prepare('DELETE FROM verification WHERE expires_at < ?').bind(Date.now()).run();
+  await getOrm(f.env.DB).delete(verification).where(lt(verification.expiresAt, Date.now()));
   assert.ok(await f.state());
   assert.equal((await f.login({ twoFactorProvider: '0', twoFactorToken: totp() })).status, 400);
   assert.equal(f.exchanges(), 1);
@@ -102,11 +108,11 @@ test('disabled, stamp-changed and email-reassigned accounts cannot resume verifi
   const f = await setup(t);
   await f.challenge();
   const factors = { twoFactorProvider: '0', twoFactorToken: totp() };
-  await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.user.id).run();
+  await getOrm(f.env.DB).update(users).set({ status: 'banned' }).where(eq(users.id, f.user.id));
   assert.equal((await f.login(factors)).status, 400);
-  await f.env.DB.prepare("UPDATE users SET status = 'active', security_stamp = 'changed' WHERE id = ?").bind(f.user.id).run();
+  await getOrm(f.env.DB).update(users).set({ status: 'active', securityStamp: 'changed' }).where(eq(users.id, f.user.id));
   assert.equal((await f.login(factors)).status, 400);
-  await f.env.DB.prepare('UPDATE users SET security_stamp = ?, email = ? WHERE id = ?').bind(f.user.securityStamp, 'changed@example.test', f.user.id).run();
+  await getOrm(f.env.DB).update(users).set({ securityStamp: f.user.securityStamp, email: 'changed@example.test' }).where(eq(users.id, f.user.id));
   await seedUser(f.env, { email: f.user.email });
   assert.equal((await f.login(factors)).status, 400);
   assert.equal(f.exchanges(), 1);
@@ -131,7 +137,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   t.mock.method(f.env.DB, 'batch', async (statements: D1PreparedStatement[]) => {
     if (injectConflict && (statements[0] as any).query?.startsWith('update "verification" set "value"')) {
       injectConflict = false;
-      await f.env.DB.prepare("UPDATE verification SET value = json_set(value, '$.consumed', 1) WHERE identifier = 'sso-continuation'").run();
+      await getOrm(f.env.DB).update(verification).set({ value: jsonSet(verification.value, '$.consumed', 1) }).where(eq(verification.identifier, 'sso-continuation'));
     }
     return originalBatch(statements);
   });
@@ -143,7 +149,7 @@ test('recovery-factor rotation and continuation claim commit together, and a los
   assert.equal(stored!.totpRecoveryCode, RECOVERY);
   assert.deepEqual(await f.counts(), { sessions: 0, remembered: 0, devices: 0 });
   // Restore the fixture to the original unconsumed state to exercise the winning path.
-  await f.env.DB.prepare("UPDATE verification SET value = json_set(value, '$.consumed', 0) WHERE identifier = 'sso-continuation'").run();
+  await getOrm(f.env.DB).update(verification).set({ value: jsonSet(verification.value, '$.consumed', 0) }).where(eq(verification.identifier, 'sso-continuation'));
   const response = await f.login(factors);
   assert.equal(response.status, 200);
   const finalUser = (await userRepo.getUserById(f.env.DB, f.user.id))!;
@@ -162,7 +168,7 @@ test('the final SSO claim checks fresh account state before creating remembered 
   t.mock.method(f.env.DB, 'batch', async (statements: D1PreparedStatement[]) => {
     if (!changed && (statements[0] as any).query?.startsWith('update "verification" set "value"')) {
       changed = true;
-      await f.env.DB.prepare("UPDATE users SET security_stamp = 'changed-before-claim' WHERE id = ?").bind(f.user.id).run();
+      await getOrm(f.env.DB).update(users).set({ securityStamp: 'changed-before-claim' }).where(eq(users.id, f.user.id));
     }
     return originalBatch(statements);
   });
