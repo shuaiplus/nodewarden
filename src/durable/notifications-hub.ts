@@ -1,9 +1,13 @@
+import { z } from 'zod';
 import { DurableObject, waitUntil } from 'cloudflare:workers';
 import type { Env } from '../types';
 import { notifyMobilePush } from '../services/push-relay';
 
 const SIGNALR_RECORD_SEPARATOR = 0x1e;
 const SIGNALR_HANDSHAKE_ACK = new Uint8Array([0x7b, 0x7d, SIGNALR_RECORD_SEPARATOR]);
+// A SignalR handshake request is {"protocol":"json"|"messagepack","version":1}; a frame that is not an
+// object waits for the next one, and any protocol other than json falls back to MessagePack.
+const HandshakeFrame = z.object({ protocol: z.string().optional() });
 const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_UPDATE = 0;
 const SIGNALR_UPDATE_TYPE_SYNC_CIPHER_CREATE = 1;
 const SIGNALR_UPDATE_TYPE_SYNC_FOLDER_DELETE = 3;
@@ -385,8 +389,8 @@ export class NotificationsHub extends DurableObject<Env> {
       const frames = text.split(String.fromCharCode(SIGNALR_RECORD_SEPARATOR)).filter(Boolean);
       for (const frame of frames) {
         try {
-          const handshake = JSON.parse(frame) as { protocol?: string };
-          attachment.protocol = handshake.protocol === 'json' ? 'json' : 'messagepack';
+          const { protocol } = HandshakeFrame.parse(JSON.parse(frame));
+          attachment.protocol = protocol === 'json' ? 'json' : 'messagepack';
           attachment.handshakeComplete = true;
           ws.serializeAttachment(attachment);
           ws.send(SIGNALR_HANDSHAKE_ACK);
