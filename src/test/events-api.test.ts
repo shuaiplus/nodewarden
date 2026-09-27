@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { ciphers, events, users } from '../db/schema';
 import { createTestEnv, authedFetch, seedUser } from './support/env';
 import { seedMember } from './support/sm';
 import { EventType, recordEvents, pruneEvents } from '../services/events';
@@ -16,7 +19,7 @@ async function setup() {
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const org = await createOwnedOrganization(env, owner, { name: 'Event test', key: '4.dGVzdA==' });
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   return { env, owner, org };
 }
 async function cipher(env: Env, owner: User, orgId: string | null) {
@@ -24,7 +27,7 @@ async function cipher(env: Env, owner: User, orgId: string | null) {
   await cipherRepo.saveCipher(env.DB, { id, userId: owner.id, organizationId: orgId, type: 1, folderId: null, name: ENC, notes: null, favorite: false, data: '{}', key: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), deletedAt: null });
   return id;
 }
-const count = (env: Env) => env.DB.prepare('SELECT count(*) AS n FROM events').first<number>('n');
+const count = (env: Env) => getOrm(env.DB).$count(events);
 type EventRow = { type: number; date: string; actingUserId: string | null; userId: string | null; organizationId: string | null; cipherId: string | null; ipAddress: string | null; deviceType: number | null };
 type EventPage = { data: EventRow[]; continuationToken: string | null; object: string };
 
@@ -77,7 +80,7 @@ test('event scope is immutable across moves/deletion; membership filters use the
   const { user: actor, memberId: actorMembership } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: true } });
   const { user: ordinary } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: false } });
   const id = await cipher(env, owner, org.id);
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   await recordEvents(env, null, { userId: actor.id }, [{ type: 1100, organizationId: org.id, resourceType: 'cipher', resourceId: id }]);
   await recordEvents(env, null, { userId: owner.id }, [{ type: 1500, organizationId: org.id, resourceType: 'organizationUser', resourceId: actorMembership, userId: actor.id }]);
   const memberEvents = await (await authedFetch(env, { path: `/api/organizations/${org.id}/users/${actorMembership}/events`, userId: owner.id })).json() as EventPage;
@@ -85,12 +88,12 @@ test('event scope is immutable across moves/deletion; membership filters use the
   assert.equal((await authedFetch(env, { path: `/api/ciphers/${id}/events`, userId: actor.id })).status, 200, 'event permission is independent of vault-item read permission');
   assert.equal((await authedFetch(env, { path: `/api/organizations/${org.id}/events`, userId: ordinary.id })).status, 404);
   assert.equal((await authedFetch(env, { path: `/api/organizations/${org.id}/events`, userId: otherOwner.id })).status, 404);
-  await env.DB.prepare('UPDATE ciphers SET organization_id=? WHERE id=?').bind(other.id, id).run();
+  await getOrm(env.DB).update(ciphers).set({ organizationId: other.id }).where(eq(ciphers.id, id));
   assert.equal((await authedFetch(env, { path: `/api/ciphers/${id}/events`, userId: actor.id })).status, 404);
   const moved = await (await authedFetch(env, { path: `/api/ciphers/${id}/events`, userId: otherOwner.id })).json() as EventPage;
   assert.equal(moved.data.length, 0, 'new owner does not inherit previous organization history');
-  await env.DB.prepare('DELETE FROM ciphers WHERE id=?').bind(id).run();
-  await env.DB.prepare('DELETE FROM users WHERE id=?').bind(actor.id).run();
+  await getOrm(env.DB).delete(ciphers).where(eq(ciphers.id, id));
+  await getOrm(env.DB).delete(users).where(eq(users.id, actor.id));
   const history = await (await authedFetch(env, { path: `/api/organizations/${org.id}/events`, userId: owner.id })).json() as EventPage;
   assert.equal(history.data.find(event => event.type === 1100)?.actingUserId, actor.id);
   assert.equal(history.data.find(event => event.type === 1100)?.cipherId, id);
@@ -105,12 +108,12 @@ test('collector records authorized client actions, derives actor/scope and hides
   const id = await cipher(env, owner, org.id);
   const foreign = await cipher(env, otherOwner, other.id);
   const personal = await cipher(env, owner, null);
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   const date = new Date().toISOString();
   const post = (body: unknown, userId = owner.id) => authedFetch(env, { method: 'POST', path: '/events/collect', userId, body, headers: { 'CF-Connecting-IP': '203.0.113.77', 'Device-Type': '9' } });
   assert.equal((await post([{ type: 1107, cipherId: id, date, actingUserId: otherOwner.id, ipAddress: 'FAKE', name: 'PLAINTEXT MUST NOT STORE' }])).status, 200);
-  const row = await env.DB.prepare('SELECT * FROM events').first<Record<string, unknown>>();
-  assert.equal(row?.organization_id, org.id); assert.equal(row?.acting_user_id, owner.id); assert.equal(row?.ip_address, '203.0.113.77');
+  const row = await getOrm(env.DB).select().from(events).get();
+  assert.equal(row?.organizationId, org.id); assert.equal(row?.actingUserId, owner.id); assert.equal(row?.ipAddress, '203.0.113.77');
   assert.ok(!JSON.stringify(row).includes('PLAINTEXT'));
   for (const entry of [{ type: 1100, cipherId: id }, { type: 1107, cipherId: foreign }, { type: 1107, cipherId: crypto.randomUUID() }, { type: 1107, cipherId: personal }, { type: 1107, cipherId: id, organizationId: other.id }]) {
     const response = await post([{ ...entry, date }]); assert.equal(response.status, 200); assert.equal(await response.text(), '');
@@ -133,7 +136,7 @@ test('collector accepts PascalCase uploads and records organization client event
   const id = await cipher(env, owner, org.id);
   const ownerMembership = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, org.id))!;
   const outsider = await seedUser(env);
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   const date = new Date().toISOString();
   const post = (body: unknown, userId = owner.id) => authedFetch(env, { method: 'POST', path: '/events/collect', userId, body });
   assert.equal((await post([{ Type: EventType.CipherClientViewed, CipherId: id, Date: date }])).status, 200);
@@ -141,10 +144,13 @@ test('collector accepts PascalCase uploads and records organization client event
   const MEMBER_CLIENT_EVENTS = [1522, 1618, 1619];
   assert.equal((await post([ORGANIZATION_CLIENT_EXPORTED_VAULT, ...MEMBER_CLIENT_EVENTS].map(type => ({ type, organizationId: org.id, date })))).status, 200);
   assert.equal((await post([ORGANIZATION_CLIENT_EXPORTED_VAULT, ...MEMBER_CLIENT_EVENTS].map(type => ({ type, organizationId: org.id, date })), outsider.id)).status, 200);
-  const rows = await env.DB.prepare('SELECT type, organization_id, acting_user_id, user_id, resource_type, resource_id FROM events ORDER BY type').all<Record<string, string | number | null>>();
+  const rows = await getOrm(env.DB).select({
+    type: events.type, organizationId: events.organizationId, actingUserId: events.actingUserId,
+    userId: events.userId, resourceType: events.resourceType, resourceId: events.resourceId,
+  }).from(events).orderBy(events.type);
   const row = (type: number, userId: string | null, resourceType: string | null, resourceId: string | null) =>
-    ({ type, organization_id: org.id, acting_user_id: owner.id, user_id: userId, resource_type: resourceType, resource_id: resourceId });
-  assert.deepEqual(rows.results, [
+    ({ type, organizationId: org.id, actingUserId: owner.id, userId, resourceType, resourceId });
+  assert.deepEqual(rows, [
     row(EventType.CipherClientViewed, null, 'cipher', id),
     row(MEMBER_CLIENT_EVENTS[0], owner.id, 'organizationUser', ownerMembership.id),
     row(ORGANIZATION_CLIENT_EXPORTED_VAULT, null, null, null),
@@ -158,7 +164,7 @@ test('uploads spend a per-minute budget of 100-row batches, counting export copi
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const { env, owner, org } = await setup();
   const id = await cipher(env, owner, org.id);
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   const date = new Date().toISOString();
   const post = (body: unknown, userId = owner.id) => authedFetch(env, { method: 'POST', path: '/events/collect', userId, body });
   const minuteOfBatches = 100 * LIMITS.rateLimit.apiRequestsPerMinute;
@@ -180,7 +186,7 @@ test('uploads spend a per-minute budget of 100-row batches, counting export copi
 test('event cleanup reuses audit retention and deletes at most 1000 rows using receipt time', async () => {
   const { env, owner, org } = await setup();
   await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 1005 }, () => ({ type: 1600, organizationId: org.id, date: '2099-01-01T00:00:00.000Z' })));
-  await env.DB.prepare("UPDATE events SET recorded_at='2000-01-01T00:00:00.000Z'").run();
+  await getOrm(env.DB).update(events).set({ recordedAt: '2000-01-01T00:00:00.000Z' });
   await pruneEvents(env); assert.equal(await count(env), 5);
   await pruneEvents(env); assert.equal(await count(env), 0);
 });
@@ -189,17 +195,17 @@ test('a row-cap audit setting never lets one account flood out another organizat
   const { env, owner, org } = await setup();
   const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
   await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 5 }, () => ({ type: 1600, organizationId: org.id })));
-  await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(10)).run();
+  await getOrm(env.DB).update(events).set({ recordedAt: daysAgo(10) });
   const outsider = await seedUser(env);
   await recordEvents(env, null, { userId: outsider.id }, Array.from({ length: 1005 }, () => ({ type: EventType.UserClientExportedVault, organizationId: null, userId: outsider.id })));
   await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: 1000 });
   await pruneEvents(env);
   assert.equal(await count(env), 1010, 'recent rows are kept whatever their volume');
-  await env.DB.prepare('UPDATE events SET recorded_at=? WHERE organization_id=?').bind(daysAgo(91), org.id).run();
+  await getOrm(env.DB).update(events).set({ recordedAt: daysAgo(91) }).where(eq(events.organizationId, org.id));
   await pruneEvents(env);
   assert.equal(await count(env), 1005, 'row-cap mode still expires events at the default retention age');
   await saveAuditLogSettings(env.DB, { retentionDays: null, maxEntries: null });
-  await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(4000)).run();
+  await getOrm(env.DB).update(events).set({ recordedAt: daysAgo(4000) });
   await pruneEvents(env);
   assert.equal(await count(env), 1005, 'disabled retention keeps every event');
 });
