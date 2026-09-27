@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, eq } from 'drizzle-orm';
+import { getOrm } from '../db/client';
+import { events } from '../db/schema';
 import { EventType } from '../services/events';
 import { MembershipType } from '../services/org-types';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
@@ -14,7 +17,7 @@ async function setup() {
   const env = await createTestEnv();
   const owner = await seedUser(env);
   const org = await createOwnedOrganization(env, owner, { name: 'Send audit', key: ORG_KEY });
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   const call = (method: string, path: string, body?: unknown, userId: string | undefined = owner.id) =>
     authedFetch(env, { method, path, body, userId, headers: { 'Device-Type': '8' } });
   const deletionDate = new Date(Date.now() + 86_400_000).toISOString();
@@ -47,7 +50,7 @@ test('Send create, edit and delete reach the personal log and every confirmed or
   const personal = await list(call, '/api/events');
   assert.equal(personal.filter(row => row.sendId === id).length, 4);
   assert.ok(personal.every(row => row.organizationId === null));
-  const stored = JSON.stringify((await env.DB.prepare('SELECT * FROM events').all()).results);
+  const stored = JSON.stringify(await getOrm(env.DB).select().from(events));
   assert.ok(!stored.includes(ENCRYPTED) && !stored.includes('correct horse'));
 });
 
@@ -56,9 +59,9 @@ test('an external Send access is attributed to nobody in the organization and th
   const created = await call('POST', '/api/sends', textSend);
   const { id, accessId } = await created.json() as { id: string; accessId: string };
   assert.equal((await call('POST', `/api/sends/access/${accessId}`, {}, undefined)).status, 200);
-  const rows = await env.DB.prepare('SELECT organization_id, acting_user_id, user_id FROM events WHERE type = ?').bind(EventType.SendAccessedText)
-    .all<{ organization_id: string | null; acting_user_id: string | null; user_id: string }>();
-  assert.deepEqual(rows.results.map(row => [row.organization_id, row.acting_user_id, row.user_id]).sort(),
+  const rows = await getOrm(env.DB).select({ organizationId: events.organizationId, actingUserId: events.actingUserId, userId: events.userId }).from(events)
+    .where(eq(events.type, EventType.SendAccessedText));
+  assert.deepEqual(rows.map(row => [row.organizationId, row.actingUserId, row.userId]).sort(),
     [[null, owner.id, owner.id], [org.id, null, owner.id]].sort());
 
   const { user: reader } = await seedMember(env, org.id, { type: MembershipType.Custom, permissions: { accessEventLogs: false } });
@@ -71,7 +74,7 @@ test('an external Send access is attributed to nobody in the organization and th
     .data.some(row => row.type === EventType.SendAccessedText));
   const outsiderSend = await call('POST', '/api/sends', textSend, outsider.id);
   assert.equal(outsiderSend.status, 200);
-  const count = await env.DB.prepare('SELECT count(*) AS n FROM events WHERE organization_id = ? AND type = ?').bind(org.id, EventType.SendCreatedText).first<number>('n');
+  const count = await getOrm(env.DB).$count(events, and(eq(events.organizationId, org.id), eq(events.type, EventType.SendCreatedText)));
   assert.equal(count, 1, "a non-member's Send never reaches the organization log");
 });
 
@@ -79,7 +82,7 @@ test('bulk Send deletion records every Send with one membership read and one ins
   const { env, org, call, textSend } = await setup();
   const ids: string[] = [];
   for (let created = 0; created < 3; created++) ids.push((await (await call('POST', '/api/sends', textSend)).json() as { id: string }).id);
-  await env.DB.prepare('DELETE FROM events').run();
+  await getOrm(env.DB).delete(events);
   const prepare = env.DB.prepare.bind(env.DB);
   const statements: string[] = [];
   t.mock.method(env.DB, 'prepare', (query: string) => { statements.push(query); return prepare(query); });
@@ -87,8 +90,8 @@ test('bulk Send deletion records every Send with one membership read and one ins
   t.mock.restoreAll();
   assert.equal(statements.filter(query => /from "organization_memberships"/i.test(query)).length, 1);
   assert.equal(statements.filter(query => /insert into "events"/i.test(query)).length, 1, 'six rows fit one statement under the parameter cap');
-  const rows = await env.DB.prepare('SELECT organization_id, resource_id FROM events WHERE type = ?').bind(EventType.SendDeletedText)
-    .all<{ organization_id: string | null; resource_id: string }>();
-  assert.deepEqual(rows.results.map(row => `${row.organization_id ?? 'personal'}:${row.resource_id}`).sort(),
+  const rows = await getOrm(env.DB).select({ organizationId: events.organizationId, resourceId: events.resourceId }).from(events)
+    .where(eq(events.type, EventType.SendDeletedText));
+  assert.deepEqual(rows.map(row => `${row.organizationId ?? 'personal'}:${row.resourceId}`).sort(),
     ids.flatMap(id => [`personal:${id}`, `${org.id}:${id}`]).sort());
 });
