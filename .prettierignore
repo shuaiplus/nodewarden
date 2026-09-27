@@ -1,0 +1,15 @@
+# Prettier also reads .gitignore, which already covers build output and local checkouts.
+# Generated files.
+migrations/
+src/db/baseline.ts
+package-lock.json
+skills-lock.json
+# Global equivalent-domain rules: one rule per line, as scripts/sync-global-domains.mjs writes them.
+src/static/global_domains.*.json
+# Connector pages are served byte-for-byte and their tests pin exact markup.
+public/
+# Prose and CI files keep their hand formatting.
+*.md
+.github/
+# Local agent worktrees, hidden from git by .git/info/exclude, which Prettier does not read.
+.kilo/
