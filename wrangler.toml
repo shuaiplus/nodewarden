@@ -59,4 +59,4 @@ new_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]
 
 [[migrations]]
 tag = "v4-drop-organization-directory"
-deleted_sqlite_classes = [ "OrganizationHub", "DirectorySyncActor" ]
+deleted_classes = [ "OrganizationHub", "DirectorySyncActor" ]
