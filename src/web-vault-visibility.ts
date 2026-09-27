@@ -1,45 +1,10 @@
+import { isBackendPath } from '../shared/backend-paths';
 import type { Env } from './types';
 
-const BACKEND_PATH_PREFIXES = [
-  '/api',
-  '/admin',
-  '/identity',
-  '/icons',
-  '/fill-assist',
-  '/notifications',
-  '/events',
-  '/.well-known',
-  // Compatibility aliases retained for older Bitwarden clients.
-  '/devices',
-  '/auth-requests',
-  '/webauthn',
-  '/scim',
-  '/v2',
-  '/connect',
-  '/sso',
-  '/oidc-signin',
-  '/licenses',
-  '/plans',
-  '/emergency-access',
-] as const;
-
-const BACKEND_EXACT_PATHS = new Set([
-  '/v1/assetlinks:check',
-  '/web-bootstrap',
-  '/config',
-  '/alive',
-  '/accounts/kdf',
-  '/settings/domains',
-]);
-
 export function isBackendRequestPath(pathname: string): boolean {
-  const path = pathname.toLowerCase();
-  if (BACKEND_EXACT_PATHS.has(path)) return true;
-
-  return BACKEND_PATH_PREFIXES.some((prefix) => (
-    path === prefix || path.startsWith(`${prefix}/`)
-  ));
+  return isBackendPath(pathname, ['/admin']);
 }
+
 
 export function isWebVaultHidden(env: Env): boolean {
   return String(env.HIDE_WEB_VAULT || '').trim() === '1';

@@ -1,40 +1,4 @@
-// Never add /admin to BACKEND_PREFIXES: portal cookies and forms require the Worker origin.
-const BACKEND_PREFIXES = [
-  '/api',
-  '/identity',
-  '/icons',
-  '/fill-assist',
-  '/notifications',
-  '/events',
-  '/.well-known',
-  '/devices',
-  '/auth-requests',
-  '/webauthn',
-  '/scim',
-  '/v2',
-  '/connect',
-  '/sso',
-  '/oidc-signin',
-  '/licenses',
-  '/plans',
-  '/emergency-access',
-];
-
-const BACKEND_EXACT = new Set([
-  '/v1/assetlinks:check',
-  '/web-bootstrap',
-  '/config',
-  '/alive',
-  '/accounts/kdf',
-  '/settings/domains',
-]);
-
-function isBackendPath(pathname) {
-  const path = pathname.toLowerCase();
-  if (BACKEND_EXACT.has(path)) return true;
-  return BACKEND_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
-}
-
+import { isBackendPath } from '../../shared/backend-paths.ts';
 export async function onRequest(context) {
   const url = new URL(context.request.url);
   const workerOrigin = String(context.env.WORKER_ORIGIN || '').trim().replace(/\/+$/, '');

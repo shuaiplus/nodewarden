@@ -3,6 +3,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isBackendPath } from '../shared/backend-paths.ts';
 
 const root = resolve(fileURLToPath(new URL('../official-web/dist', import.meta.url)));
 const workerOrigin = (process.env.WORKER_ORIGIN || 'http://127.0.0.1:8787').replace(/\/+$/, '');
@@ -11,19 +12,6 @@ const tlsCert = process.env.OFFICIAL_WEB_CERT || '';
 const tlsKey = process.env.OFFICIAL_WEB_KEY || '';
 const protocol = tlsCert && tlsKey ? 'https' : 'http';
 
-const BACKEND_PREFIXES = [
-  '/api', '/identity', '/icons', '/fill-assist', '/notifications', '/events', '/.well-known',
-  '/devices', '/auth-requests', '/webauthn', '/scim', '/v2', '/connect', '/sso', '/oidc-signin',
-  '/licenses', '/plans', '/emergency-access',
-];
-const BACKEND_EXACT = new Set([
-  '/v1/assetlinks:check', '/web-bootstrap', '/config', '/alive', '/accounts/kdf', '/settings/domains',
-]);
-
-function isBackend(pathname) {
-  const path = pathname.toLowerCase();
-  return BACKEND_EXACT.has(path) || BACKEND_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
-}
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -46,7 +34,7 @@ const server = (protocol === 'https' ? createHttpsServer : createHttpServer)(
   protocol === 'https' ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) } : undefined,
   async (req, res) => {
   const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
-  if (isBackend(url.pathname)) {
+  if (isBackendPath(url.pathname)) {
     const target = `${workerOrigin}${url.pathname}${url.search}`;
     const headers = new Headers();
     for (const [name, value] of Object.entries(req.headers)) {
