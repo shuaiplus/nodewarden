@@ -1,7 +1,8 @@
-import { DrizzleQueryError, getColumns, sql, type Table } from 'drizzle-orm';
+import { DrizzleQueryError, eq, getColumns, type Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 
 import { relations } from './relations';
+import { SINGLE_ROW, caseWhen, changes, json } from './sql';
 
 export type Orm = ReturnType<typeof drizzle<typeof relations, D1Database>>;
 
@@ -35,7 +36,7 @@ export function getOrm(d1: D1Database): Orm {
 // D1 batches have no conditional rollback. Appending this select after a guarded write aborts the whole
 // batch when that write matched no rows: json() of a non-JSON string raises, and D1 rolls the batch back.
 export function abortUnlessChanged(orm: Orm, reason: string) {
-  return orm.select({ abort: sql`CASE WHEN changes() = 0 THEN json(${reason}) END` }).from(sql`(SELECT 1)`);
+  return orm.select({ abort: caseWhen(eq(changes(), 0), json(reason)) }).from(SINGLE_ROW);
 }
 
 // A failed drizzle query's message lists every bound value (password hashes, keys, one-time codes), so

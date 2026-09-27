@@ -4,7 +4,7 @@
 // pre-Drizzle D1 schema, so every column passes its DB name explicitly rather
 // than relying on a casing helper. Renaming any of them is a breaking data
 // migration.
-import { sql } from 'drizzle-orm';
+import { isNotNull } from 'drizzle-orm';
 import {
   customType,
   foreignKey,
@@ -394,7 +394,7 @@ export const organizations = sqliteTable('organizations', {
   // Partial: many organizations may leave the SSO identifier unset.
   uniqueIndex('idx_organizations_identifier')
     .on(table.identifier)
-    .where(sql`${table.identifier} is not null`),
+    .where(isNotNull(table.identifier)),
 ]);
 
 export const organizationMemberships = sqliteTable('organization_memberships', {
@@ -418,7 +418,7 @@ export const organizationMemberships = sqliteTable('organization_memberships', {
   // Partial: invited-but-unaccepted rows have no user_id yet and must not collide.
   uniqueIndex('idx_org_memberships_user_org')
     .on(table.userId, table.orgId)
-    .where(sql`${table.userId} is not null`),
+    .where(isNotNull(table.userId)),
   index('idx_org_memberships_org_status').on(table.orgId, table.status),
   index('idx_org_memberships_external').on(table.orgId, table.externalId),
 ]);
