@@ -30,13 +30,6 @@ export async function spendEmailOtpIssueBudget(env: Env, target: EmailOtpTarget)
   return budget.allowed;
 }
 
-function createEmailOtp(): string {
-  const random = new Uint32Array(1);
-  // Accept an exact multiple of one million outcomes so every code is equally likely.
-  do { crypto.getRandomValues(random); } while (random[0] >= 4_294_000_000);
-  return String(random[0] % 1_000_000).padStart(6, '0');
-}
-
 export async function issueEmailOtp(
   env: Env,
   target: EmailOtpTarget,
@@ -45,7 +38,10 @@ export async function issueEmailOtp(
   if (!await spendEmailOtpIssueBudget(env, target)) {
     return { kind: 'throttled', retryAfterSeconds: 3600 - Math.floor(Date.now() / 1000) % 3600 };
   }
-  const code = createEmailOtp();
+  const random = new Uint32Array(1);
+  // Accept an exact multiple of one million outcomes so every code is equally likely.
+  do { crypto.getRandomValues(random); } while (random[0] >= 4_294_000_000);
+  const code = String(random[0] % 1_000_000).padStart(6, '0');
   const outcome = await send(code);
   if (outcome.kind !== 'sent') return outcome;
   const id = await emailOtpId(env, target);
