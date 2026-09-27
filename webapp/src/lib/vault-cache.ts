@@ -1,3 +1,4 @@
+import { createStore, del, get, promisifyRequest } from 'idb-keyval';
 import type { Cipher, Folder, Send } from './types';
 
 export interface VaultCoreSnapshot {
@@ -13,11 +14,7 @@ interface VaultCoreCacheRecord {
   snapshot: VaultCoreSnapshot;
 }
 
-const DB_NAME = 'nodewarden-web-cache';
-const DB_VERSION = 1;
-const VAULT_CORE_STORE = 'vault-core';
-
-let dbPromise: Promise<IDBDatabase | null> | null = null;
+const vaultCoreStore = createStore('nodewarden-web-cache', 'vault-core');
 
 function stripDecryptedCacheFields<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -41,63 +38,17 @@ function sanitizeSnapshotForCache(snapshot: VaultCoreSnapshot): VaultCoreSnapsho
   };
 }
 
-function supportsIndexedDb(): boolean {
-  return typeof indexedDB !== 'undefined';
-}
-
-function openDatabase(): Promise<IDBDatabase | null> {
-  if (!supportsIndexedDb()) return Promise.resolve(null);
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
-    try {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(VAULT_CORE_STORE)) {
-          db.createObjectStore(VAULT_CORE_STORE, { keyPath: 'cacheKey' });
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
-      request.onblocked = () => resolve(null);
-    } catch {
-      resolve(null);
-    }
-  });
-  return dbPromise;
-}
-
-function withStore<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => Promise<T>
-): Promise<T | null> {
-  return openDatabase().then((db) => {
-    if (!db) return null;
-    return new Promise<T | null>((resolve) => {
-      try {
-        const tx = db.transaction(VAULT_CORE_STORE, mode);
-        const store = tx.objectStore(VAULT_CORE_STORE);
-        void run(store).then(resolve).catch(() => resolve(null));
-        tx.onerror = () => resolve(null);
-        tx.onabort = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-  });
-}
-
+// Cache failures (no IndexedDB, quota, blocked storage) only cost a cold start, so every
+// operation degrades to a miss or a no-op instead of throwing.
 export async function loadCachedVaultCoreSnapshot(cacheKey: string): Promise<VaultCoreCacheRecord | null> {
   const normalized = String(cacheKey || '').trim();
   if (!normalized) return null;
-  return withStore('readonly', (store) => new Promise<VaultCoreCacheRecord | null>((resolve) => {
-    const request = store.get(normalized);
-    request.onsuccess = () => {
-      const record = request.result as VaultCoreCacheRecord | undefined;
-      resolve(record ? { ...record, snapshot: sanitizeSnapshotForCache(record.snapshot) } : null);
-    };
-    request.onerror = () => resolve(null);
-  }));
+  try {
+    const record = await get<VaultCoreCacheRecord>(normalized, vaultCoreStore);
+    return record ? { ...record, snapshot: sanitizeSnapshotForCache(record.snapshot) } : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function saveCachedVaultCoreSnapshot(
@@ -107,25 +58,30 @@ export async function saveCachedVaultCoreSnapshot(
 ): Promise<void> {
   const normalized = String(cacheKey || '').trim();
   if (!normalized) return;
-  await withStore('readwrite', (store) => new Promise<void>((resolve) => {
-    const record: VaultCoreCacheRecord = {
-      cacheKey: normalized,
-      revisionStamp,
-      savedAt: Date.now(),
-      snapshot: sanitizeSnapshotForCache(snapshot),
-    };
-    const request = store.put(record);
-    request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
-  }));
+  const record: VaultCoreCacheRecord = {
+    cacheKey: normalized,
+    revisionStamp,
+    savedAt: Date.now(),
+    snapshot: sanitizeSnapshotForCache(snapshot),
+  };
+  try {
+    // Stores created before idb-keyval use the in-line keyPath 'cacheKey' and reject an explicit
+    // key, while idb-keyval creates out-of-line stores that require one.
+    await vaultCoreStore('readwrite', (store) => {
+      store.put(record, store.keyPath === null ? normalized : undefined);
+      return promisifyRequest(store.transaction);
+    });
+  } catch {
+    // Best-effort cache write; see above.
+  }
 }
 
 export async function clearCachedVaultCoreSnapshot(cacheKey: string): Promise<void> {
   const normalized = String(cacheKey || '').trim();
   if (!normalized) return;
-  await withStore('readwrite', (store) => new Promise<void>((resolve) => {
-    const request = store.delete(normalized);
-    request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
-  }));
+  try {
+    await del(normalized, vaultCoreStore);
+  } catch {
+    // Best-effort cache delete; see above.
+  }
 }
