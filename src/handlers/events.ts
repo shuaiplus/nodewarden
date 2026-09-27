@@ -7,19 +7,25 @@ import { canAccessEventLogs, canViewCipher, hasFullCollectionAccess, isActiveMem
 import * as orgRepo from '../services/storage-org-repo';
 import { StorageService } from '../services/storage';
 import { EventType, listEventsResponse, storeEvents, type EventInput } from '../services/events';
+import { LIMITS } from '../config/limits';
 
 const CLIENT_CIPHER_TYPES = new Set([
   ...Array.from({ length: 8 }, (_, i) => 1107 + i),
   ...Array.from({ length: 16 }, (_, i) => 1117 + i),
 ]);
 const CLIENT_ORGANIZATION_TYPES = new Set([1602, 1522, 1618, 1619]);
+// Official TypeScript clients post their queue in batches of 100 (ApiService.EventUploadBatchSize), but
+// native mobile clients post it whole and retry forever on 400, so an offline backlog must still fit.
+// Upstream has no cap; this one only stops a single request from exceeding a full minute of batches.
+const CLIENT_EVENT_UPLOAD_BATCH = 100;
+const MAX_COLLECTED_EVENTS = CLIENT_EVENT_UPLOAD_BATCH * LIMITS.rateLimit.apiRequestsPerMinute;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 interface ClientEvent { type: number; date: string; cipherId: string | null; organizationId: string | null }
 
 async function collectEvents(request: Request, env: Env, user: User): Promise<Response> {
   let body: unknown;
   try { body = await request.json(); } catch { return errorResponse('Invalid events.', 400); }
-  if (!Array.isArray(body) || !body.length || body.length > 100) return errorResponse('Expected between 1 and 100 events.', 400);
+  if (!Array.isArray(body) || !body.length || body.length > MAX_COLLECTED_EVENTS) return errorResponse('Invalid events.', 400);
   const input: ClientEvent[] = [];
   for (const event of body) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) return errorResponse('Invalid events.', 400);

@@ -7,6 +7,7 @@ import { saveAuditLogSettings } from '../src/services/audit-events';
 import { EMPTY_PERMISSIONS } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
 import type { Env, User } from '../src/types';
+import { LIMITS } from '../src/config/limits';
 const { createOwnedOrganization } = await import('../src/handlers/organizations');
 const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
 
@@ -104,7 +105,11 @@ test('collector records authorized client actions, derives actor/scope and hides
   assert.equal(await count(env), 1, 'log readers cannot claim actions on inaccessible ciphers');
   assert.equal((await post(Array.from({ length: 100 }, () => ({ type: 1111, cipherId: id, date })))).status, 200);
   assert.equal(await count(env), 101);
-  for (const body of [[], Array.from({ length: 101 }, () => ({ type: 1107, cipherId: id, date })), [{ type: 1107, cipherId: id, date: 'bad' }]]) assert.equal((await post(body)).status, 400);
+  assert.equal((await post(Array.from({ length: 250 }, () => ({ type: 1111, cipherId: id, date })))).status, 200, 'a whole mobile backlog is accepted');
+  assert.equal(await count(env), 351);
+  const overCap = Array.from({ length: 100 * LIMITS.rateLimit.apiRequestsPerMinute + 1 }, () => ({ type: 1107, cipherId: id, date }));
+  for (const body of [[], overCap, [{ type: 1107, cipherId: id, date: 'bad' }]]) assert.equal((await post(body)).status, 400);
+  assert.equal(await count(env), 351);
 });
 
 test('event cleanup reuses audit retention and deletes at most 1000 rows using receipt time', async () => {
