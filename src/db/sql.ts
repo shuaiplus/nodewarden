@@ -10,6 +10,11 @@ export const SINGLE_ROW = sql`(SELECT 1)`;
 // A plain value as a selectable, aliasable expression: bound(now).as('updated_at').
 export const bound = <T>(value: T): SQL<T> => sql<T>`${value}`;
 
+// Plain values as the one-row source of an INSERT ... SELECT, each bound and aliased by its key:
+// insert(table).select(orm.select(boundRow(values)).from(SINGLE_ROW).where(guard)).
+export const boundRow = <T extends Record<string, unknown>>(values: T) =>
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, bound(value).as(key)])) as { [K in keyof T]: SQL.Aliased<T[K]> };
+
 // A column read as its stored D1 value, skipping drizzle's mode mapping (booleans, JSON, timestamps).
 export const unmapped = <T>(column: unknown): SQL<T> => sql<T>`${column}`;
 

@@ -1,8 +1,8 @@
-import { and, asc, count, eq, isNotNull, isNull, lt, ne, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 
 import { getOrm, userRowMatches } from '../db/client';
 import { users, webauthnChallenges, webauthnCredentials } from '../db/schema';
-import { SINGLE_ROW, bound, coalesce } from '../db/sql';
+import { SINGLE_ROW, boundRow, coalesce } from '../db/sql';
 import type { AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential } from '../types';
 import { normalizeTransports } from '../utils/account-passkeys';
 
@@ -58,10 +58,8 @@ export async function saveAccountPasskeyCredential(
   };
   const orm = getOrm(db);
   const insert = orm.insert(webauthnCredentials);
-  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) =>
-    [key, bound(value).as(webauthnCredentials[key as keyof typeof values].name)])) as { [K in keyof typeof values]: SQL.Aliased };
   // A two-factor key also needs the user to hold a recovery code at that stamp.
-  const write = securityStamp === undefined ? insert.values(values) : insert.select(orm.select(literals).from(SINGLE_ROW).where(
+  const write = securityStamp === undefined ? insert.values(values) : insert.select(orm.select(boundRow(values)).from(SINGLE_ROW).where(
     userRowMatches(orm, values.userId, eq(users.securityStamp, securityStamp),
       values.purpose === 'twoFactor' ? ne(coalesce(users.totpRecoveryCode, ''), '') : undefined),
   ));

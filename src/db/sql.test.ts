@@ -6,9 +6,15 @@ import { createTestEnv, seedUser } from '../test/support/env';
 import { getOrm } from './client';
 import { config, users } from './schema';
 import {
-  SINGLE_ROW, bound, caseWhen, castInteger, coalesce, excluded, jsonExtract, jsonRemove, jsonSet, jsonValues,
+  SINGLE_ROW, bound, boundRow, caseWhen, castInteger, coalesce, excluded, jsonExtract, jsonRemove, jsonSet, jsonValues,
   likeEscaped, lower, nullIf, plus, scalar, unmapped,
 } from './sql';
+
+test('boundRow selects plain values as one row keyed like the input', async () => {
+  const env = await createTestEnv();
+  const values = { text: 'value', count: 3, missing: null };
+  assert.deepEqual(await getOrm(env.DB).select(boundRow(values)).from(SINGLE_ROW).get(), values);
+});
 
 test('sql helpers evaluate on D1 exactly as the SQL they stand for', async () => {
   const env = await createTestEnv();

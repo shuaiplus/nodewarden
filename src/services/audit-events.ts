@@ -1,7 +1,7 @@
 import type { SQL } from 'drizzle-orm';
 import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
-import { SINGLE_ROW, bound } from '../db/sql';
+import { SINGLE_ROW, boundRow } from '../db/sql';
 import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import * as adminRepo from './storage-admin-repo';
@@ -179,17 +179,11 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
   }
 
   const orm = getOrm(db);
-  return orm.insert(auditLogs).select(orm.select({
-    id: bound(generateUUID()).as('id'),
-    actorUserId: bound(event.actorUserId ?? null).as('actor_user_id'),
-    action: bound(event.action).as('action'),
-    category: bound(event.category).as('category'),
-    level: bound(event.level || 'info').as('level'),
-    targetType: bound(event.targetType ?? null).as('target_type'),
-    targetId: bound(event.targetId ?? null).as('target_id'),
-    metadata: bound(metadataJson).as('metadata'),
-    createdAt: bound(new Date().toISOString()).as('created_at'),
-  }).from(SINGLE_ROW).where(guard));
+  return orm.insert(auditLogs).select(orm.select(boundRow({
+    id: generateUUID(), actorUserId: event.actorUserId ?? null, action: event.action, category: event.category,
+    level: event.level || 'info', targetType: event.targetType ?? null, targetId: event.targetId ?? null,
+    metadata: metadataJson, createdAt: new Date().toISOString(),
+  })).from(SINGLE_ROW).where(guard));
 }
 
 export async function writeAuditEvent(db: D1Database, event: AuditEventInput): Promise<void> {

@@ -1,8 +1,8 @@
-import { and, asc, count, eq, isNull, notExists, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, notExists } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { users } from '../db/schema';
-import { SINGLE_ROW, bound, likeEscaped } from '../db/sql';
+import { SINGLE_ROW, boundRow, likeEscaped } from '../db/sql';
 import type { User } from '../types';
 import { hasTwoFactorPasskey, twoFactorProviders } from './two-factor-providers';
 
@@ -121,10 +121,8 @@ export async function createUser(db: D1Database, user: User): Promise<void> {
 // create the first (administrator) account.
 export async function createFirstUser(db: D1Database, user: User): Promise<boolean> {
   const orm = getOrm(db);
-  const values = userValues(user);
-  const literals = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, bound(value).as(key)])) as { [K in keyof typeof values]: SQL.Aliased };
   const result = await orm.insert(users)
-    .select(orm.select(literals).from(SINGLE_ROW).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
+    .select(orm.select(boundRow(userValues(user))).from(SINGLE_ROW).where(notExists(orm.select({ id: users.id }).from(users).limit(1))))
     .run();
   return (result.meta.changes ?? 0) > 0;
 }
