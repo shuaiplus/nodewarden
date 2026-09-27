@@ -34,10 +34,6 @@ export async function findMatchingTotpCounter(
   return delta == null ? null : TOTP.counter(options) + delta;
 }
 
-export async function verifyTotpToken(secretRaw: string, tokenRaw: string, nowMs: number = Date.now()): Promise<boolean> {
-  return (await findMatchingTotpCounter(secretRaw, tokenRaw, nowMs)) != null;
-}
-
 export function isTotpEnabled(secretRaw: string | undefined | null): boolean {
   return Boolean(secretRaw && normalizeTotpSecret(secretRaw).length > 0);
 }
