@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { smSecretProjects, smSecrets, smServiceAccounts } from '../db/schema';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
 
@@ -31,7 +35,8 @@ test('machine sync returns nested readable secrets and observes revisions, delet
   const empty = await sync();
   assert.equal(empty.status, 200);
   assert.deepEqual(await empty.json(), { hasChanges: true, secrets: { data: [], object: 'list', continuationToken: null }, object: 'secretsSync' });
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', account.id).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smServiceAccounts).set({ updatedAt: '2020-01-01T00:00:00.000Z' }).where(eq(smServiceAccounts.id, account.id));
   assert.deepEqual(await (await sync('2021-01-01T00:00:00.000Z')).json(), { hasChanges: false, secrets: null, object: 'secretsSync' });
   assert.equal((await (await sync('2020-01-01T01:00:00+01:00')).json() as any).hasChanges, true);
   assert.equal((await grant([p.id])).status, 200);
@@ -50,12 +55,12 @@ test('machine sync returns nested readable secrets and observes revisions, delet
     assert.equal('read' in item, false);
     assert.equal('write' in item, false);
   }
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', account.id).run();
+  await orm.update(smServiceAccounts).set({ updatedAt: '2020-01-01T00:00:00.000Z' }).where(eq(smServiceAccounts.id, account.id));
   assert.equal((await authedFetch(env, { userId: owner.id, path: '/api/secrets/delete', method: 'POST', body: [first.id] })).status, 200);
   const afterDelete = await (await sync('2021-01-01T00:00:00.000Z')).json() as any;
   assert.equal(afterDelete.hasChanges, true);
   assert.deepEqual(new Set(afterDelete.secrets.data.map((item: any) => item.id)), new Set([second.id, direct.id]));
-  await env.DB.prepare('UPDATE sm_service_accounts SET updated_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', account.id).run();
+  await orm.update(smServiceAccounts).set({ updatedAt: '2020-01-01T00:00:00.000Z' }).where(eq(smServiceAccounts.id, account.id));
   assert.equal((await grant([])).status, 200);
   const revoked = await (await sync('2021-01-01T00:00:00.000Z')).json() as any;
   assert.equal(revoked.hasChanges, true);
@@ -86,10 +91,12 @@ test('machine sync returns all 150 granted secrets and project names without exc
   assert.equal((await grant([p.id])).status, 200);
   const ids = Array.from({ length: 150 }, () => crypto.randomUUID());
   const now = new Date().toISOString();
-  await env.DB.batch(ids.flatMap(id => [
-    env.DB.prepare('INSERT INTO sm_secrets (id, org_id, key, value, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, orgId, FIELDS.key, FIELDS.value, FIELDS.note, now, now),
-    env.DB.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(id, p.id),
-  ]));
+  const orm = getOrm(env.DB);
+  const inserts = ids.flatMap(id => [
+    orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: now, updatedAt: now }),
+    orm.insert(smSecretProjects).values({ secretId: id, projectId: p.id }),
+  ]);
+  await orm.batch(inserts as [typeof inserts[0], ...typeof inserts]);
   const response = await sync();
   assert.equal(response.status, 200);
   const body = await response.json() as any;
