@@ -1,8 +1,9 @@
-import { and, eq, isNotNull, isNull, ne, notExists, sql } from 'drizzle-orm';
+import { and, eq, exists, isNotNull, isNull, ne, not, notExists } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
-import { getOrm, type Orm } from '../db/client';
-import { attachments, ciphers, emergencyAccess, organizationMemberships, sends, session, users } from '../db/schema';
+import { getOrm, userRowMatches, type Orm } from '../db/client';
+import { attachments, ciphers, emergencyAccess, organizationMemberships, organizations, sends, session, users } from '../db/schema';
+import { scalar, unmapped } from '../db/sql';
 import type { Env } from '../types';
 import { AuthService } from './auth';
 import { normalizeImportedBackupSettings } from './backup-config';
@@ -30,23 +31,28 @@ function blockedOrganizations(orm: Orm, userId: string) {
   return orm.select({ orgId: owner.orgId }).from(owner)
     .where(and(
       eq(owner.userId, userId), eq(owner.status, MembershipStatus.Confirmed), eq(owner.type, MembershipType.Owner),
-      notExists(orm.select({ one: sql`1` }).from(successor).where(and(
+      notExists(orm.select({ id: successor.id }).from(successor).where(and(
         eq(successor.orgId, owner.orgId), ne(successor.userId, userId), confirmedSuccessor, eq(successor.type, MembershipType.Owner),
       ))),
     ))
     // The IS NOT NULL filter makes this a string; the typed wrapper tells the union so.
-    .union(orm.select({ orgId: sql<string>`${owned.organizationId}` }).from(owned)
+    .union(orm.select({ orgId: unmapped<string>(owned.organizationId) }).from(owned)
       .where(and(
         eq(owned.userId, userId), isNotNull(owned.organizationId),
-        notExists(orm.select({ one: sql`1` }).from(successor).where(and(
+        notExists(orm.select({ id: successor.id }).from(successor).where(and(
           eq(successor.orgId, owned.organizationId), ne(successor.userId, userId), confirmedSuccessor,
         ))),
       )));
 }
 
-function lastActiveAdmin(userId: string) {
-  return sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND role = 'admin' AND status = 'active')
-    AND NOT EXISTS (SELECT 1 FROM users WHERE id <> ${userId} AND role = 'admin' AND status = 'active')`;
+// Inside a statement over users, each subquery's own FROM users shadows the outer row, so these
+// conditions always read the subquery's rows.
+function lastActiveAdmin(orm: Orm, userId: string) {
+  const activeAdmin = [eq(users.role, 'admin'), eq(users.status, 'active')];
+  return and(
+    userRowMatches(orm, userId, ...activeAdmin),
+    notExists(orm.select({ id: users.id }).from(users).where(and(ne(users.id, userId), ...activeAdmin))),
+  )!;
 }
 
 export type SetUserStatusResult = { kind: 'updated' | 'unchanged' | 'not-found' | 'last-vault-admin' };
@@ -56,10 +62,10 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
   let changed: boolean;
   if (next === 'banned') {
     const securityStamp = crypto.randomUUID();
-    const updated = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND security_stamp = ${securityStamp})`;
+    const updated = userRowMatches(orm, userId, eq(users.securityStamp, securityStamp));
     const [update] = await orm.batch([
       orm.update(users).set({ status: 'banned', securityStamp, updatedAt: new Date().toISOString() })
-        .where(and(eq(users.id, userId), eq(users.status, 'active'), sql`NOT (${lastActiveAdmin(userId)})`)),
+        .where(and(eq(users.id, userId), eq(users.status, 'active'), not(lastActiveAdmin(orm, userId)))),
       orm.delete(session).where(and(eq(session.userId, userId), updated)),
       auditEventStatement(env.DB, audit, updated),
     ]);
@@ -86,8 +92,8 @@ export async function setUserStatus(env: Env, userId: string, next: 'active' | '
 
 async function userDeletionRefusal(db: D1Database, userId: string, securityStamp?: string): Promise<Exclude<DeleteUserAccountResult, { kind: 'deleted' }> | null> {
   const orm = getOrm(db);
-  const [user] = await orm.select({ lastAdmin: sql<number>`(${lastActiveAdmin(userId)})` })
-    .from(users).where(and(eq(users.id, userId), securityStamp === undefined ? sql`1` : eq(users.securityStamp, securityStamp)));
+  const [user] = await orm.select({ lastAdmin: scalar<number>(lastActiveAdmin(orm, userId)) })
+    .from(users).where(and(eq(users.id, userId), securityStamp === undefined ? undefined : eq(users.securityStamp, securityStamp)));
   if (!user) return { kind: 'not-found' };
   const orgs = await blockedOrganizations(orm, userId);
   if (orgs.length) return { kind: 'blocked-by-orgs', orgIds: orgs.map((org) => org.orgId) };
@@ -109,8 +115,10 @@ export async function deleteUserAccount(env: Env, userId: string, audit: AuditEv
   if (refusal) return refusal;
 
   const orm = getOrm(env.DB);
-  const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${userId} AND ${securityStamp === undefined ? sql`1` : eq(users.securityStamp, securityStamp)})
-    AND ${notExists(blockedOrganizations(orm, userId))} AND NOT (${lastActiveAdmin(userId)})`;
+  const guard = and(
+    userRowMatches(orm, userId, securityStamp === undefined ? undefined : eq(users.securityStamp, securityStamp)),
+    notExists(blockedOrganizations(orm, userId)), not(lastActiveAdmin(orm, userId)),
+  )!;
   // Read keys in the same transaction: a personal cipher shared before this batch must keep its blob.
   const [personalAttachments, fileSends, , , , , deletion] = await orm.batch([
     orm.select({ cipherId: attachments.cipherId, id: attachments.id }).from(attachments)
@@ -151,7 +159,7 @@ export async function deleteOrganizationAccount(env: Env, orgId: string, audit: 
       .innerJoin(ciphers, eq(attachments.cipherId, ciphers.id)).where(eq(ciphers.organizationId, orgId)),
     bumpOrgMemberRevisions(env.DB, orgId),
     deleteCiphersByOrganization(env.DB, orgId),
-    auditEventStatement(env.DB, audit, sql`EXISTS (SELECT 1 FROM organizations WHERE id = ${orgId})`),
+    auditEventStatement(env.DB, audit, exists(orm.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, orgId)))),
     deleteOrganization(env.DB, orgId),
   ]);
   await deleteBlobs(env, orgAttachments.map((attachment) => getAttachmentObjectKey(attachment.cipherId, attachment.id)));

@@ -146,6 +146,14 @@ test('deleting the last active vault admin is refused even if an inactive admin 
   assert.deepEqual(await deleteUserAccount(f.env, 'missing', audit), { kind: 'not-found' });
 });
 
+// Inside DELETE FROM users, the other-admin subquery must read its own users rows, not the row being deleted.
+test('an administrator is deleted while another active administrator remains', async () => {
+  const f = await setup();
+  await getOrm(f.env.DB).update(users).set({ role: 'admin' }).where(eq(users.id, f.target.id));
+  assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'deleted' });
+  assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
+});
+
 test('a concurrent successor revocation or admin deactivation makes every batch write a no-op', async () => {
   for (const change of ['successor', 'admin']) {
     const f = await setup();
@@ -346,4 +354,11 @@ test('an org deletion audit failure rolls back revisions, ciphers and the org be
   assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
   assert.equal(await revisionRepo.getRevisionDate(f.env.DB, f.target.id), PAST);
   await assertIntact(f);
+});
+
+test('a repeated org deletion writes no second audit event once the org is gone', async () => {
+  const f = await setup();
+  await deleteOrganizationAccount(f.env, f.org.id, audit);
+  await deleteOrganizationAccount(f.env, f.org.id, audit);
+  assert.equal(await getOrm(f.env.DB).$count(auditLogs), 1);
 });
