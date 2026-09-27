@@ -249,11 +249,6 @@ export async function getAccessToken(db: D1Database, id: string): Promise<SmAcce
   return row ? mapAccessToken(row) : null;
 }
 
-export async function revokeAccessToken(db: D1Database, id: string, _revokedAt?: string): Promise<void> {
-  const orm = getOrm(db);
-  await orm.batch([orm.delete(smAccessTokens).where(eq(smAccessTokens.id, id))]);
-}
-
 export async function loadSmGrants(db: D1Database, actor: SmActor, orgId: string): Promise<SmGrants> {
   if (actor.kind === 'admin') return grantsFromRows({ projects: [], secrets: [], serviceAccounts: [] });
   const orm = getOrm(db);
