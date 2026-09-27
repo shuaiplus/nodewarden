@@ -1,73 +1,23 @@
-const TOTP_STEP_SECONDS = 30;
+import { Secret, TOTP } from 'otpauth';
+
+const TOTP_PERIOD_SECONDS = 30;
 const TOTP_DIGITS = 6;
 const TOTP_WINDOW = 1; // allow previous/current/next step for small clock drift
+const TOTP_TOKEN_PATTERN = new RegExp(`^\\d{${TOTP_DIGITS}}$`);
 
-function normalizeBase32(input: string): string {
-  const raw = String(input || '').toUpperCase();
-  let out = '';
-  for (const char of raw) {
-    if (char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '-') continue;
-    out += char;
-  }
-  while (out.endsWith('=')) {
-    out = out.slice(0, -1);
-  }
-  return out;
+// Authenticator keys are shown grouped with spaces or dashes, in either case and sometimes padded.
+export function normalizeTotpSecret(input: string): string {
+  return input.toUpperCase().replace(/[ \t\r\n-]/g, '').replace(/=+$/, '');
 }
 
-function base32Decode(input: string): Uint8Array | null {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  const normalized = normalizeBase32(input);
-  if (!normalized) return null;
-
-  let bits = 0;
-  let value = 0;
-  const output: number[] = [];
-
-  for (const char of normalized) {
-    const idx = alphabet.indexOf(char);
-    if (idx === -1) return null;
-    value = (value << 5) | idx;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      output.push((value >> bits) & 0xff);
-    }
+function decodeTotpSecret(secretRaw: string): Secret | null {
+  try {
+    const secret = Secret.fromBase32(normalizeTotpSecret(secretRaw));
+    return secret.bytes.length > 0 ? secret : null;
+  } catch {
+    // A stored or submitted key outside the base32 alphabet can never match, same as a wrong code.
+    return null;
   }
-
-  return output.length > 0 ? new Uint8Array(output) : null;
-}
-
-async function hotp(secret: Uint8Array, counter: number): Promise<string> {
-  const counterBytes = new Uint8Array(8);
-  let c = counter;
-  for (let i = 7; i >= 0; i--) {
-    counterBytes[i] = c & 0xff;
-    c = Math.floor(c / 256);
-  }
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    secret,
-    { name: 'HMAC', hash: 'SHA-1' },
-    false,
-    ['sign']
-  );
-
-  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, counterBytes));
-  const offset = signature[signature.length - 1] & 0x0f;
-  const binary =
-    ((signature[offset] & 0x7f) << 24) |
-    ((signature[offset + 1] & 0xff) << 16) |
-    ((signature[offset + 2] & 0xff) << 8) |
-    (signature[offset + 3] & 0xff);
-
-  const otp = binary % (10 ** TOTP_DIGITS);
-  return otp.toString().padStart(TOTP_DIGITS, '0');
-}
-
-function normalizeToken(token: string): string {
-  return token.replace(/\s+/g, '');
 }
 
 export async function findMatchingTotpCounter(
@@ -75,27 +25,13 @@ export async function findMatchingTotpCounter(
   tokenRaw: string,
   nowMs: number = Date.now()
 ): Promise<number | null> {
-  const token = normalizeToken(tokenRaw);
-  if (!/^\d{6}$/.test(token)) return null;
-
-  const secret = base32Decode(secretRaw);
+  const token = tokenRaw.replace(/\s+/g, '');
+  const secret = TOTP_TOKEN_PATTERN.test(token) ? decodeTotpSecret(secretRaw) : null;
   if (!secret) return null;
-
-  const currentCounter = Math.floor(nowMs / 1000 / TOTP_STEP_SECONDS);
-  let matchedCounter: number | null = null;
-  for (let delta = -TOTP_WINDOW; delta <= TOTP_WINDOW; delta++) {
-    const candidateCounter = currentCounter + delta;
-    const expected = await hotp(secret, candidateCounter);
-    // Constant-time comparison: always check all windows, never short-circuit.
-    const a = new TextEncoder().encode(expected);
-    const b = new TextEncoder().encode(token);
-    let diff = a.length ^ b.length;
-    for (let i = 0; i < a.length && i < b.length; i++) {
-      diff |= a[i] ^ b[i];
-    }
-    if (diff === 0 && matchedCounter == null) matchedCounter = candidateCounter;
-  }
-  return matchedCounter;
+  const options = { period: TOTP_PERIOD_SECONDS, timestamp: nowMs };
+  const delta = TOTP.validate({ ...options, token, secret, digits: TOTP_DIGITS, window: TOTP_WINDOW });
+  // The replay guard stores absolute step counters, not the window-relative delta.
+  return delta == null ? null : TOTP.counter(options) + delta;
 }
 
 export async function verifyTotpToken(secretRaw: string, tokenRaw: string, nowMs: number = Date.now()): Promise<boolean> {
@@ -103,5 +39,5 @@ export async function verifyTotpToken(secretRaw: string, tokenRaw: string, nowMs
 }
 
 export function isTotpEnabled(secretRaw: string | undefined | null): boolean {
-  return Boolean(secretRaw && normalizeBase32(secretRaw).length > 0);
+  return Boolean(secretRaw && normalizeTotpSecret(secretRaw).length > 0);
 }

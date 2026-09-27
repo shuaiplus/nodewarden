@@ -18,7 +18,8 @@ import { errorResponse, jsonResponse, parseJsonBody, readString, unsupportedResp
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
-import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
+import { Secret } from 'otpauth';
+import { findMatchingTotpCounter, isTotpEnabled, normalizeTotpSecret } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
@@ -53,7 +54,6 @@ const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
 const TWO_FACTOR_PROVIDER_EMAIL = 1;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
-const TOTP_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 // CONTRACT:
 // users.master_password_hash is server-side login verification only. It does
@@ -97,29 +97,6 @@ function validateKdfParams(kdfType: number | undefined, kdfIterations: number | 
     }
   }
   return null;
-}
-
-function normalizeTotpSecret(input: string): string {
-  const raw = String(input || '').toUpperCase();
-  let out = '';
-  for (const char of raw) {
-    if (char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '-') continue;
-    out += char;
-  }
-  while (out.endsWith('=')) {
-    out = out.slice(0, -1);
-  }
-  return out;
-}
-
-function randomBase32Secret(length: number = 32): string {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  let out = '';
-  for (const byte of bytes) {
-    out += TOTP_BASE32_ALPHABET[byte % TOTP_BASE32_ALPHABET.length];
-  }
-  return out;
 }
 
 function normalizeRecoveryCodeInput(input: string): string {
@@ -1042,7 +1019,7 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
   const verified = await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  const key = normalizeTotpSecret(user.totpSecret || '') || randomBase32Secret();
+  const key = normalizeTotpSecret(user.totpSecret || '') || new Secret().base32;
   const userVerificationToken = await createTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_AUTHENTICATOR, key);
   return jsonResponse(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
 }
