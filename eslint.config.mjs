@@ -1,4 +1,5 @@
 import { defineConfig } from 'eslint/config';
+import prettierRecommended from 'eslint-plugin-prettier/recommended';
 import ts from 'typescript';
 import tseslint from 'typescript-eslint';
 
@@ -177,4 +178,7 @@ export default defineConfig([
     languageOptions: { parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: import.meta.dirname } },
     rules: { 'nodewarden/no-raw-sql': 'error' },
   },
+  // Formatting belongs to Prettier (.prettierrc.json): drift is a lint error, and the stylistic rules that
+  // would fight it are off.
+  prettierRecommended,
 ]);
