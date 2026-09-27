@@ -1,3 +1,4 @@
+import { convertIPv4MappedIPv6ToIPv4, convertIPv4ToBinary, convertIPv6ToBinary, isIPv4MappedIPv6 } from 'hono/utils/ipaddr';
 import { z } from 'zod';
 import type { Env, User } from '../types';
 import {
@@ -59,100 +60,30 @@ function normalizeHostnameForPolicy(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
 }
 
-function parseIpv4Address(hostname: string): number[] | null {
-  const parts = hostname.split('.');
-  if (parts.length !== 4) return null;
-  const octets = parts.map((part) => {
-    if (!/^\d{1,3}$/.test(part)) return -1;
-    const value = Number(part);
-    return Number.isInteger(value) && value >= 0 && value <= 255 ? value : -1;
-  });
-  return octets.every((value) => value >= 0) ? octets : null;
-}
+// Backup destinations must not reach private, loopback, link-local, carrier-grade NAT, benchmarking,
+// documentation, multicast or reserved space (SSRF). An IPv4-mapped IPv6 address is judged by its IPv4.
+const BLOCKED_IPV4 = ([['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 16], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]] as const)
+  .map(([network, prefix]) => [convertIPv4ToBinary(network), prefix] as const);
+const BLOCKED_IPV6 = ([['::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['2001:db8::', 32]] as const)
+  .map(([network, prefix]) => [convertIPv6ToBinary(network), prefix] as const);
+// URL parsing canonicalises IPv4 hosts to dotted quads; anything else with dots is a DNS name.
+const IPV4_LITERAL = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
-function isBlockedIpv4Address(octets: number[]): boolean {
-  const [a, b, c] = octets;
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && (b === 0 || b === 168)) ||
-    (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
-    (a === 203 && b === 0 && c === 113) ||
-    a >= 224
-  );
-}
+const inBlockedRange = (address: bigint, width: number, ranges: ReadonlyArray<readonly [bigint, number]>) =>
+  ranges.some(([network, prefix]) => address >> BigInt(width - prefix) === network >> BigInt(width - prefix));
 
-/**
- * Expand a hostname-form IPv6 literal to eight 4-digit hextets.
- * Needed so compressed forms like "::1" are not misclassified by a naive
- * "first non-empty hextet" check (which would read "1" and miss loopback).
- */
-function expandIpv6Address(hostname: string): string[] | null {
-  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/g, '');
-  if (!normalized.includes(':')) return null;
-  if (normalized.includes('.')) {
-    // IPv4-embedded forms are handled separately by the caller.
-    return null;
-  }
-  if ((normalized.match(/::/g) || []).length > 1) return null;
-
-  const sides = normalized.split('::');
-  const left = sides[0] ? sides[0].split(':').filter((part) => part.length > 0) : [];
-  const right = sides.length > 1 && sides[1] ? sides[1].split(':').filter((part) => part.length > 0) : [];
-  if (left.length + right.length > 8) return null;
-  if (sides.length === 1 && left.length !== 8) return null;
-
-  const missing = 8 - left.length - right.length;
-  if (sides.length > 1 && missing < 0) return null;
-  const middle = sides.length > 1 ? Array.from({ length: missing }, () => '0') : [];
-  const parts = [...left, ...middle, ...right];
-  if (parts.length !== 8) return null;
-
-  const hextets: string[] = [];
-  for (const part of parts) {
-    if (!/^[0-9a-f]{1,4}$/i.test(part)) return null;
-    hextets.push(part.padStart(4, '0'));
-  }
-  return hextets;
-}
-
-function isBlockedIpv6Address(hostname: string): boolean {
+function isBlockedIpAddress(hostname: string): boolean {
+  if (IPV4_LITERAL.test(hostname)) return inBlockedRange(convertIPv4ToBinary(hostname), 32, BLOCKED_IPV4);
   if (!hostname.includes(':')) return false;
-  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-
-  // IPv4-mapped dotted form: ::ffff:127.0.0.1
-  const mappedIpv4 = normalized.match(/::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
-  if (mappedIpv4) {
-    const octets = parseIpv4Address(mappedIpv4[1]);
-    return !octets || isBlockedIpv4Address(octets);
+  try {
+    const address = convertIPv6ToBinary(hostname);
+    return isIPv4MappedIPv6(address)
+      ? inBlockedRange(convertIPv4MappedIPv6ToIPv4(address), 32, BLOCKED_IPV4)
+      : inBlockedRange(address, 128, BLOCKED_IPV6);
+  } catch {
+    return true;
   }
-
-  // IPv4-mapped hex form produced by some URL parsers: ::ffff:7f00:1
-  const mappedHex = normalized.match(/::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-  if (mappedHex) {
-    const hi = Number.parseInt(mappedHex[1], 16);
-    const lo = Number.parseInt(mappedHex[2], 16);
-    if (!Number.isFinite(hi) || !Number.isFinite(lo)) return true;
-    const octets = [(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff];
-    return isBlockedIpv4Address(octets);
-  }
-
-  const hextets = expandIpv6Address(normalized);
-  if (!hextets) return true;
-  const firstHextet = Number.parseInt(hextets[0], 16);
-  if (!Number.isFinite(firstHextet)) return true;
-  // After expansion, loopback (::1) and unspecified (::) have first hextet 0.
-  return (
-    firstHextet === 0 ||
-    (firstHextet & 0xfe00) === 0xfc00 ||
-    (firstHextet & 0xffc0) === 0xfe80 ||
-    (firstHextet & 0xff00) === 0xff00 ||
-    hextets.join(':').startsWith('2001:0db8:')
-  );
 }
 
 function assertBackupEndpointHostAllowed(hostname: string, label: string): void {
@@ -183,11 +114,7 @@ function assertBackupEndpointHostAllowed(hostname: string, label: string): void 
   ) {
     throw new Error(`${label} host is not allowed`);
   }
-  const ipv4 = parseIpv4Address(normalized);
-  if (ipv4 && isBlockedIpv4Address(ipv4)) {
-    throw new Error(`${label} host is not allowed`);
-  }
-  if (isBlockedIpv6Address(normalized)) {
+  if (isBlockedIpAddress(normalized)) {
     throw new Error(`${label} host is not allowed`);
   }
 }

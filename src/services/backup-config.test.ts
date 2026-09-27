@@ -5,6 +5,7 @@ import {
   REDACTED_BACKUP_SECRET,
   type WebDavBackupDestination,
   getDefaultBackupSettings,
+  normalizeBackupEndpointUrl,
   normalizeBackupSettingsInput,
   parseBackupSettings,
   serializeBackupSettings,
@@ -51,5 +52,14 @@ test('a save keeps the stored secret behind a redacted value and rejects unsafe 
   for (const [destination, path, message] of cases) {
     const [issue] = normalizeBackupSettingsInput([destination], previous).error?.issues ?? [];
     assert.deepEqual([issue?.path.join('.'), issue?.message], [path, message]);
+  }
+});
+
+test('backup endpoints refuse private, reserved and mapped addresses but allow public hosts', () => {
+  for (const url of ['http://10.0.0.1', 'http://100.64.0.1', 'http://0x7f.1', 'http://198.51.100.7', 'http://[::1]', 'http://[::ffff:127.0.0.1]', 'http://[fd00::1]', 'http://[fe80::1]', 'http://[2001:db8::1]']) {
+    assert.throws(() => normalizeBackupEndpointUrl(url, 'WebDAV URL'), /WebDAV URL host is not allowed/, url);
+  }
+  for (const url of ['https://8.8.8.8', 'https://[::ffff:8.8.8.8]', 'https://[2606:4700::1111]', 'https://10.0.0.1.example.com']) {
+    assert.equal(normalizeBackupEndpointUrl(url, 'WebDAV URL'), new URL(url).toString().replace(/\/+$/, ''), url);
   }
 });
