@@ -89,7 +89,7 @@ import {
   handleDeleteAttachment,
 } from './handlers/attachments';
 import { deviceRoutes } from './router-devices';
-import { handleAdminRoute } from './router-admin';
+import { adminRoutes } from './router-admin';
 import { handleGetDomains, handleUpdateDomains } from './handlers/domains';
 import {
   handleCreateAccountPasskeyCredential,
@@ -312,8 +312,4 @@ authenticatedRoutes.on(['PUT', 'POST'], ['/api/settings/domains', '/settings/dom
 
 authenticatedRoutes.route('/', deviceRoutes);
 
-authenticatedRoutes.use(async (c, next) => {
-  const adminResponse = await handleAdminRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
-  if (adminResponse) return adminResponse;
-  await next();
-});
+authenticatedRoutes.route('/', adminRoutes);

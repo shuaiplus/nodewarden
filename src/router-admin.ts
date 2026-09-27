@@ -1,4 +1,5 @@
-import type { Env, User } from './types';
+import { Hono } from 'hono';
+import type { User } from './types';
 import {
   handleAdminListUsers,
   handleAdminCreateInvite,
@@ -14,80 +15,47 @@ import {
 } from './handlers/admin';
 import { handleAdminBackupRoute } from './router-admin-backup';
 import { errorResponse } from './utils/response';
-
-function isKnownAdminPath(path: string): boolean {
-  return (
-    path === '/api/admin/users' ||
-    path === '/api/admin/logs' ||
-    path === '/api/admin/logs/settings' ||
-    path === '/api/admin/invites' ||
-    path.startsWith('/api/admin/backup') ||
-    /^\/api\/admin\/invites\/[^/]+$/i.test(path) ||
-    /^\/api\/admin\/users\/[a-f0-9-]+(?:\/status)?$/i.test(path)
-  );
-}
+import type { AppEnv } from './router';
 
 function isActiveAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
 }
 
-export async function handleAdminRoute(
-  request: Request,
-  env: Env,
-  actorUser: User,
-  path: string,
-  method: string
-): Promise<Response | null> {
-  if (!isKnownAdminPath(path)) {
-    return null;
-  }
-  if (!isActiveAdmin(actorUser)) {
-    return errorResponse('Forbidden', 403);
-  }
+const adminUser = '/api/admin/users/:userId{[a-f0-9-]+}';
 
-  if (path === '/api/admin/users' && method === 'GET') {
-    return handleAdminListUsers(request, env, actorUser);
-  }
+export const adminRoutes = new Hono<AppEnv>();
 
-  if (path === '/api/admin/logs' && method === 'GET') {
-    return handleAdminListAuditLogs(request, env, actorUser);
-  }
+// Known admin paths answer 403 to non-admins whatever the method; unknown ones stay 404.
+adminRoutes.on('ALL', [
+  '/api/admin/users',
+  '/api/admin/logs',
+  '/api/admin/logs/settings',
+  '/api/admin/invites',
+  '/api/admin/backup',
+  '/api/admin/backup/*',
+  '/api/admin/invites/:inviteCode',
+  adminUser,
+  `${adminUser}/status`,
+], async (c, next) => {
+  if (!isActiveAdmin(c.get('currentUser'))) return errorResponse('Forbidden', 403);
+  await next();
+});
 
-  if (path === '/api/admin/logs' && method === 'DELETE') {
-    return handleAdminClearAuditLogs(request, env, actorUser);
-  }
+adminRoutes.get('/api/admin/users', (c) => handleAdminListUsers(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.get('/api/admin/logs', (c) => handleAdminListAuditLogs(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.delete('/api/admin/logs', (c) => handleAdminClearAuditLogs(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.get('/api/admin/logs/settings', (c) => handleAdminGetAuditLogSettings(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.on(['PUT', 'POST'], '/api/admin/logs/settings', (c) => handleAdminUpdateAuditLogSettings(c.req.raw, c.env, c.get('currentUser')));
 
-  if (path === '/api/admin/logs/settings') {
-    if (method === 'GET') return handleAdminGetAuditLogSettings(request, env, actorUser);
-    if (method === 'PUT' || method === 'POST') return handleAdminUpdateAuditLogSettings(request, env, actorUser);
-    return null;
-  }
-
-  const adminBackupResponse = await handleAdminBackupRoute(request, env, actorUser, path, method);
+adminRoutes.use(async (c, next) => {
+  const adminBackupResponse = await handleAdminBackupRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
   if (adminBackupResponse) return adminBackupResponse;
+  await next();
+});
 
-  if (path === '/api/admin/invites') {
-    if (method === 'GET') return handleAdminListInvites(request, env, actorUser);
-    if (method === 'POST') return handleAdminCreateInvite(request, env, actorUser);
-    if (method === 'DELETE') return handleAdminDeleteAllInvites(request, env, actorUser);
-    return null;
-  }
-
-  const adminInviteMatch = path.match(/^\/api\/admin\/invites\/([^/]+)$/i);
-  if (adminInviteMatch && method === 'DELETE') {
-    const inviteCode = decodeURIComponent(adminInviteMatch[1]);
-    return handleAdminDeleteInvite(request, env, actorUser, inviteCode);
-  }
-
-  const adminUserStatusMatch = path.match(/^\/api\/admin\/users\/([a-f0-9-]+)\/status$/i);
-  if (adminUserStatusMatch && (method === 'PUT' || method === 'POST')) {
-    return handleAdminSetUserStatus(request, env, actorUser, adminUserStatusMatch[1]);
-  }
-
-  const adminUserDeleteMatch = path.match(/^\/api\/admin\/users\/([a-f0-9-]+)$/i);
-  if (adminUserDeleteMatch && method === 'DELETE') {
-    return handleAdminDeleteUser(request, env, actorUser, adminUserDeleteMatch[1]);
-  }
-
-  return null;
-}
+adminRoutes.get('/api/admin/invites', (c) => handleAdminListInvites(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.post('/api/admin/invites', (c) => handleAdminCreateInvite(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.delete('/api/admin/invites', (c) => handleAdminDeleteAllInvites(c.req.raw, c.env, c.get('currentUser')));
+adminRoutes.delete('/api/admin/invites/:inviteCode', (c) => handleAdminDeleteInvite(c.req.raw, c.env, c.get('currentUser'), c.req.param('inviteCode')));
+adminRoutes.on(['PUT', 'POST'], `${adminUser}/status`, (c) => handleAdminSetUserStatus(c.req.raw, c.env, c.get('currentUser'), c.req.param('userId')));
+adminRoutes.delete(adminUser, (c) => handleAdminDeleteUser(c.req.raw, c.env, c.get('currentUser'), c.req.param('userId')));
