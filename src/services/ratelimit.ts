@@ -221,44 +221,6 @@ export class RateLimitService {
   }
 }
 
-function normalizeClientIpForRateLimit(rawIp: string): string | null {
-  const input = rawIp.trim();
-  // hono's parsers throw on anything that is not an address; that simply means no identity here.
-  try {
-    if (!input.includes(':')) return `ip4:${convertIPv4BinaryToString(convertIPv4ToBinary(input))}`;
-    const ipv6 = convertIPv6ToBinary(input.replace(/^\[(.*)\]$/, '$1').split('%')[0]);
-    // IPv4-mapped (::ffff:192.0.2.1) and IPv4-compatible (::192.0.2.1) addresses keep the IPv4 identity.
-    if (isIPv4MappedIPv6(ipv6) || ipv6 >> 32n === 0n) return `ip4:${convertIPv4BinaryToString(convertIPv4MappedIPv6ToIPv4(ipv6))}`;
-    // Collapse to /64 to reduce brute-force bypass via IPv6 address rotation.
-    return `ip6:${expandIPv6(convertIPv6BinaryToString(ipv6)).split(':').slice(0, 4).join(':')}`;
-  } catch {
-    return null;
-  }
-}
-
-function isLocalRequest(request: Request): boolean {
-  const isLoopbackHost = (host: string | null): boolean => {
-    if (!host) return false;
-    const normalized = host.split(':')[0].trim().toLowerCase();
-    return (
-      normalized === 'localhost' ||
-      normalized.endsWith('.localhost') ||
-      normalized === '127.0.0.1' ||
-      normalized === '0.0.0.0' ||
-      normalized === '::1' ||
-      normalized === '[::1]'
-    );
-  };
-
-  try {
-    if (isLoopbackHost(new URL(request.url).hostname)) return true;
-  } catch {
-    // Ignore malformed URL and fall back to Host header check.
-  }
-
-  return isLoopbackHost(request.headers.get('Host'));
-}
-
 export function getClientIdentifier(request: Request): string | null {
   // Strict fallback order:
   // 1) CF-Connecting-IP
@@ -273,14 +235,40 @@ export function getClientIdentifier(request: Request): string | null {
 
   for (const raw of candidates) {
     if (!raw) continue;
-    const normalized = normalizeClientIpForRateLimit(raw);
-    if (normalized) return normalized;
+    const input = raw.trim();
+    // hono's parsers throw on anything that is not an address; that candidate simply gives no identity.
+    try {
+      if (!input.includes(':')) return `ip4:${convertIPv4BinaryToString(convertIPv4ToBinary(input))}`;
+      const ipv6 = convertIPv6ToBinary(input.replace(/^\[(.*)\]$/, '$1').split('%')[0]);
+      // IPv4-mapped (::ffff:192.0.2.1) and IPv4-compatible (::192.0.2.1) addresses keep the IPv4 identity.
+      if (isIPv4MappedIPv6(ipv6) || ipv6 >> 32n === 0n) return `ip4:${convertIPv4BinaryToString(convertIPv4MappedIPv6ToIPv4(ipv6))}`;
+      // Collapse to /64 to reduce brute-force bypass via IPv6 address rotation.
+      return `ip6:${expandIPv6(convertIPv6BinaryToString(ipv6)).split(':').slice(0, 4).join(':')}`;
+    } catch {
+      continue;
+    }
   }
 
   // Local dev (wrangler dev / localhost): allow a deterministic loopback identifier.
-  if (isLocalRequest(request)) {
-    return 'ip4:127.0.0.1';
+  const loopbackIdentifier = 'ip4:127.0.0.1';
+  const isLoopbackHost = (host: string | null): boolean => {
+    if (!host) return false;
+    const normalized = host.split(':')[0].trim().toLowerCase();
+    return (
+      normalized === 'localhost' ||
+      normalized.endsWith('.localhost') ||
+      normalized === '127.0.0.1' ||
+      normalized === '0.0.0.0' ||
+      normalized === '::1' ||
+      normalized === '[::1]'
+    );
+  };
+
+  try {
+    if (isLoopbackHost(new URL(request.url).hostname)) return loopbackIdentifier;
+  } catch {
+    // Ignore malformed URL and fall back to Host header check.
   }
 
-  return null;
+  return isLoopbackHost(request.headers.get('Host')) ? loopbackIdentifier : null;
 }
