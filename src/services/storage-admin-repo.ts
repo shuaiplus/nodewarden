@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, inArray, isNull, like, lt, lte, ne, or, placeholder } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNull, like, lt, lte, ne, notInArray, or } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
@@ -134,14 +134,10 @@ export async function pruneAuditLogs(db: D1Database, beforeIso: string): Promise
   return Number(result.meta.changes ?? 0);
 }
 
-// SQLite accepts OFFSET only after a LIMIT, where -1 means unbounded. Drizzle omits negative literal
-// limits, so the -1 is bound through a placeholder.
 export async function pruneAuditLogsToMax(db: D1Database, maxEntries: number): Promise<number> {
-  const keep = Math.max(1, Math.floor(maxEntries));
   const orm = getOrm(db);
-  const overflow = orm.select({ id: auditLogs.id }).from(auditLogs).orderBy(desc(auditLogs.createdAt))
-    .limit(placeholder('unbounded')).offset(keep);
-  const result = await orm.delete(auditLogs).where(inArray(auditLogs.id, overflow)).run({ unbounded: -1 });
+  const newest = orm.select({ id: auditLogs.id }).from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(Math.max(1, Math.floor(maxEntries)));
+  const result = await orm.delete(auditLogs).where(notInArray(auditLogs.id, newest)).run();
   return Number(result.meta.changes ?? 0);
 }
 
