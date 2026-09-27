@@ -81,41 +81,6 @@ async function encryptAesGcm(plaintext: Uint8Array, key: CryptoKey): Promise<{ i
   return { iv, ciphertext };
 }
 
-async function decryptAesGcm(ciphertext: Uint8Array, iv: Uint8Array, key: CryptoKey): Promise<Uint8Array> {
-  return new Uint8Array(
-    await crypto.subtle.decrypt(
-      { name: AES_GCM_ALGORITHM, iv },
-      key,
-      ciphertext
-    )
-  );
-}
-
-async function importPortablePublicKey(publicKeyBase64: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    'spki',
-    decodeBase64(publicKeyBase64),
-    { name: PORTABLE_ALGORITHM, hash: PORTABLE_HASH },
-    false,
-    ['encrypt']
-  );
-}
-
-function getEligiblePortableUsers(users: Pick<User, 'id' | 'publicKey' | 'role' | 'status'>[]): Array<Pick<User, 'id' | 'publicKey'>> {
-  return users
-    .filter(
-      (user) =>
-        user.role === 'admin' &&
-        user.status === 'active' &&
-        typeof user.publicKey === 'string' &&
-        user.publicKey.trim().length > 0
-    )
-    .map((user) => ({
-      id: user.id,
-      publicKey: user.publicKey!,
-    }));
-}
-
 export function parseBackupSettingsEnvelope(raw: string | null): BackupSettingsEnvelopeV2 | null {
   if (!raw) return null;
   try {
@@ -170,7 +135,9 @@ export async function encryptBackupSettingsEnvelope(
   users: Pick<User, 'id' | 'publicKey' | 'role' | 'status'>[]
 ): Promise<string> {
   const encoder = new TextEncoder();
-  const eligibleUsers = getEligiblePortableUsers(users);
+  // Only active admins with a public key can unwrap the portable copy.
+  const eligibleUsers = users.filter((user) =>
+    user.role === 'admin' && user.status === 'active' && typeof user.publicKey === 'string' && user.publicKey.trim().length > 0);
 
   const runtimeKey = await deriveRuntimeKey(env.JWT_SECRET);
   const runtime = await encryptAesGcm(encoder.encode(plaintext), runtimeKey);
@@ -188,7 +155,13 @@ export async function encryptBackupSettingsEnvelope(
   const wraps: BackupSettingsPortableWrap[] = [];
   for (const user of eligibleUsers) {
     try {
-      const publicKey = await importPortablePublicKey(user.publicKey!);
+      const publicKey = await crypto.subtle.importKey(
+        'spki',
+        decodeBase64(user.publicKey!),
+        { name: PORTABLE_ALGORITHM, hash: PORTABLE_HASH },
+        false,
+        ['encrypt']
+      );
       const wrappedKey = await crypto.subtle.encrypt(
         { name: PORTABLE_ALGORITHM },
         publicKey,
@@ -226,10 +199,8 @@ export async function decryptBackupSettingsRuntime(raw: string, env: Env): Promi
     throw new Error('Backup settings envelope is invalid');
   }
   const runtimeKey = await deriveRuntimeKey(env.JWT_SECRET);
-  const plaintext = await decryptAesGcm(
-    decodeBase64(envelope.runtime.ciphertext),
-    decodeBase64(envelope.runtime.iv),
-    runtimeKey
-  );
+  const ciphertext = decodeBase64(envelope.runtime.ciphertext);
+  const iv = decodeBase64(envelope.runtime.iv);
+  const plaintext = await crypto.subtle.decrypt({ name: AES_GCM_ALGORITHM, iv }, runtimeKey, ciphertext);
   return new TextDecoder().decode(plaintext);
 }
