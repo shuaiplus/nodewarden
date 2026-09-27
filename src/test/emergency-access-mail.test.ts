@@ -248,3 +248,23 @@ test('EA reminders skip other statuses, missing notification dates and newly not
   }
   assert.equal(f.sent.length, 0);
 });
+
+test('EA reminder claims need the listed recovery start and notification date, and a NULL date never matches', async () => {
+  const f = await setup();
+  const started = new Date(Date.now() - 6 * DAY).toISOString();
+  const initiated = { ...await confirmed(f), status: Status.RecoveryInitiated, recoveryInitiatedAt: started, lastNotificationAt: started };
+  await emergencyRepo.saveEmergencyAccess(f.env.DB, initiated);
+  const now = new Date().toISOString();
+  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, { ...initiated, recoveryInitiatedAt: now }, now), false);
+  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, initiated, now), true);
+  const unnotified = { ...initiated, lastNotificationAt: null };
+  await emergencyRepo.saveEmergencyAccess(f.env.DB, unnotified);
+  assert.equal(await emergencyRepo.claimRecoveryNotification(f.env.DB, unnotified, now), false);
+});
+
+test('EA invite lookup ignores the ASCII case of a stored address, as SQL lower() folds it', async () => {
+  const f = await setup();
+  const record = { ...await confirmed(f), email: 'Grantee.ÄÖ@Example.TEST' };
+  await emergencyRepo.saveEmergencyAccess(f.env.DB, record);
+  assert.equal((await emergencyRepo.findInvite(f.env.DB, f.grantor.id, 'GRANTEE.ÄÖ@EXAMPLE.TEST'))?.id, record.id);
+});

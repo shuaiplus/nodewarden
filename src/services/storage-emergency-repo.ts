@@ -1,7 +1,8 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { emergencyAccess } from '../db/schema';
+import { bound, lower } from '../db/sql';
 
 export const EmergencyAccessType = {
   View: 0,
@@ -68,7 +69,7 @@ export async function findInvite(db: D1Database, grantorId: string, email: strin
     .from(emergencyAccess)
     .where(and(
       eq(emergencyAccess.grantorId, grantorId),
-      sql`lower(${emergencyAccess.email}) = lower(${email})`,
+      eq(lower(emergencyAccess.email), lower(email)),
     ))
     .limit(1);
   return row ?? null;
@@ -84,7 +85,7 @@ export async function listRecoveryReady(db: D1Database, nowIso: string): Promise
     .from(emergencyAccess)
     .where(and(
       eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
-      sql`${emergencyAccess.recoveryInitiatedAt} is not null`,
+      isNotNull(emergencyAccess.recoveryInitiatedAt),
     ));
   return rows.filter((record) => {
     if (!record.recoveryInitiatedAt) return false;
@@ -110,8 +111,9 @@ export async function claimRecoveryNotification(db: D1Database, record: Emergenc
   const rows = await getOrm(db).update(emergencyAccess).set({ lastNotificationAt: nowIso })
     .where(and(
       eq(emergencyAccess.id, record.id), eq(emergencyAccess.status, EmergencyAccessStatus.RecoveryInitiated),
-      sql`${emergencyAccess.lastNotificationAt} = ${record.lastNotificationAt}`,
-      sql`${emergencyAccess.recoveryInitiatedAt} = ${record.recoveryInitiatedAt}`,
+      // Compare-and-swap on the listed snapshot; a NULL date binds NULL and never matches.
+      eq(emergencyAccess.lastNotificationAt, bound(record.lastNotificationAt)),
+      eq(emergencyAccess.recoveryInitiatedAt, bound(record.recoveryInitiatedAt)),
       eq(emergencyAccess.waitTimeDays, record.waitTimeDays),
     )).returning({ id: emergencyAccess.id });
   return rows.length > 0;
