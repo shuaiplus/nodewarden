@@ -58,7 +58,7 @@ organizationRoutes.on('GET', ['/api/licenses/nodewarden-enterprise.json', '/lice
 organizationRoutes.on('POST', ['/api/organizations/licenses/self-hosted', '/organizations/licenses/self-hosted'], (c) => handleCreateSelfHostedOrganizationLicense(c.req.raw, c.env, c.get('currentUser')));
 const license = '/organizations/licenses/self-hosted/:orgId{[a-f0-9-]+}';
 organizationRoutes.on('POST', [`/api${license}/sync`, `${license}/sync`], (c) => handleSyncSelfHostedOrganizationLicense(c.env, c.get('currentUser'), c.req.param('orgId')));
-organizationRoutes.on('POST', [`/api${license}`, license], (c) => handleUpdateSelfHostedOrganizationLicense(c.req.raw, c.env, c.get('currentUser'), c.req.param('orgId')));
+organizationRoutes.on('POST', [`/api${license}`, license], (c) => handleUpdateSelfHostedOrganizationLicense(c.env, c.get('currentUser'), c.req.param('orgId')));
 
 const org = '/api/organizations/:orgId{[a-f0-9-]+}';
 organizationRoutes.get(org, (c) => handleGetOrganization(c.req.raw, c.env, c.get('userId'), c.req.param('orgId')));

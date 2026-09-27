@@ -63,7 +63,6 @@ export async function handleCreateSelfHostedOrganizationLicense(request: Request
 
 // The uploaded license changes nothing, since every organization runs as Enterprise, so its body is never read.
 export async function handleUpdateSelfHostedOrganizationLicense(
-  _request: Request,
   env: Env,
   user: User,
   orgId: string
