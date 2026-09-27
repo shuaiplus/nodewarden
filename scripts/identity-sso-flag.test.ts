@@ -108,3 +108,44 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
   assert.equal(capture.sent.length, 2);
   assert.match(capture.sent[1].subject, /Unsuccessful/);
 });
+
+test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_tokens but tolerates clock skew', async (t) => {
+  const env = await createTestEnv({ ...SSO_CONFIG, SSO_AUTHORITY: 'https://forged.idp.example.test', SSO_ONLY: '1' });
+  const user = await seedUser(env, { email: `forged-sso@${MAILABLE_DOMAIN}` });
+  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = { ...await crypto.subtle.exportKey('jwk', keys.publicKey), kid: 'forged-idp' };
+  const now = Math.floor(Date.now() / 1000);
+  const encode = (part: object) => Buffer.from(JSON.stringify(part)).toString('base64url');
+  const claims = (overrides: object = {}) => encode({
+    iss: env.SSO_AUTHORITY, aud: env.SSO_CLIENT_ID, sub: 'forged-user', email: user.email, email_verified: true, exp: now + 300, ...overrides,
+  });
+  const signEs256 = async (unsigned: string) => `${unsigned}.${Buffer.from(await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, new TextEncoder().encode(unsigned))).toString('base64url')}`;
+  const es256Header = encode({ alg: 'ES256', kid: 'forged-idp' });
+  const hmacKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(JSON.stringify(jwk)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const hmacUnsigned = `${encode({ alg: 'HS256', kid: 'forged-idp' })}.${claims()}`;
+  const tokens: Record<string, string> = {
+    unsigned: `${encode({ alg: 'none', kid: 'forged-idp' })}.${claims()}.`,
+    hmac: `${hmacUnsigned}.${Buffer.from(await crypto.subtle.sign('HMAC', hmacKey, new TextEncoder().encode(hmacUnsigned))).toString('base64url')}`,
+    tampered: `${(await signEs256(`${es256Header}.${claims()}`)).split('.').with(1, claims({ sub: 'someone-else' })).join('.')}`,
+    audience: await signEs256(`${es256Header}.${claims({ aud: 'another-client' })}`),
+    expired: await signEs256(`${es256Header}.${claims({ exp: now - 120 })}`),
+    skewed: await signEs256(`${es256Header}.${claims({ exp: now - 30, iat: now + 30 })}`),
+  };
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    if (request.url.endsWith('/.well-known/openid-configuration')) return Response.json({ token_endpoint: `${env.SSO_AUTHORITY}/token`, jwks_uri: `${env.SSO_AUTHORITY}/jwks` });
+    if (request.url === `${env.SSO_AUTHORITY}/jwks`) return Response.json({ keys: [jwk] });
+    return Response.json({ id_token: tokens[String((await request.formData()).get('code'))] });
+  });
+  const exchange = (code: string) => authedFetch(env, {
+    method: 'POST', path: TOKEN_PATH,
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, deviceIdentifier: 'forged-sso-device' }),
+  });
+  for (const code of ['unsigned', 'hmac', 'tampered', 'audience', 'expired']) {
+    const response = await exchange(code);
+    assert.equal(response.status, 400, code);
+    assert.equal((await response.json() as Record<string, unknown>).access_token, undefined, code);
+  }
+  assert.equal((await exchange('skewed')).status, 200);
+});
