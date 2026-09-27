@@ -454,39 +454,6 @@ function normalizeDestinationRecord(
   };
 }
 
-function parseLegacyBackupSettings(rawValue: Record<string, unknown>, fallbackTimezone: string): BackupSettings {
-  const legacyFrequency = asTrimmedString(rawValue.frequency).toLowerCase();
-  const intervalHours = legacyFrequency === 'weekly'
-    ? 24 * 7
-    : legacyFrequency === 'monthly'
-      ? 24 * 30
-      : BACKUP_DEFAULT_INTERVAL_HOURS;
-  const destinationTypeRaw = asTrimmedString(rawValue.destinationType);
-  const destinationType: BackupDestinationType =
-    destinationTypeRaw === 'e3' || destinationTypeRaw === 's3' || destinationTypeRaw === 'webdav'
-      ? getDestinationType(destinationTypeRaw)
-      : 'webdav';
-  const destination = {
-    id: createBackupRandomId(),
-    name: defaultDestinationName(destinationType, 1),
-    type: destinationType,
-    includeAttachments: false,
-    destination: normalizeDestination(destinationType, rawValue.destination),
-    schedule: {
-      enabled: !!rawValue.enabled,
-      intervalHours,
-      startTime: BACKUP_DEFAULT_START_TIME,
-      timezone: assertValidTimeZone(asTrimmedString(rawValue.timezone) || fallbackTimezone || BACKUP_DEFAULT_TIMEZONE),
-      retentionCount: 30,
-    },
-    runtime: normalizeRuntime(rawValue.runtime),
-  } satisfies BackupDestinationRecord;
-
-  return {
-    destinations: [destination],
-  };
-}
-
 function parseDestinations(
   rawDestinations: unknown,
   previousById: Map<string, BackupDestinationRecord>,
@@ -563,38 +530,13 @@ export function parseBackupSettings(raw: string | null, fallbackTimezone: string
   if (!raw) return getDefaultBackupSettings(fallbackTimezone);
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (Array.isArray(parsed.destinations)) {
-      const globalTimezone = assertValidTimeZone(asTrimmedString(parsed.timezone) || fallbackTimezone || BACKUP_DEFAULT_TIMEZONE);
-      const globalEnabled = !!parsed.enabled;
-      const activeDestinationIdRaw = asTrimmedString(parsed.activeDestinationId);
-      const globalFrequency = asTrimmedString(parsed.frequency).toLowerCase();
-      const globalIntervalHours = globalFrequency === 'weekly'
-        ? 24 * 7
-        : globalFrequency === 'monthly'
-          ? 24 * 30
-          : BACKUP_DEFAULT_INTERVAL_HOURS;
-      const previousById = new Map<string, BackupDestinationRecord>();
-      const normalizedEntries = (parsed.destinations as unknown[]).map((entry) => {
-        if (!isPlainObject(entry)) return entry;
-        if (isPlainObject(entry.schedule)) return entry;
-        const entryId = asTrimmedString(entry.id);
-        const scheduleEnabled = globalEnabled && (!activeDestinationIdRaw || entryId === activeDestinationIdRaw);
-        return {
-          ...entry,
-          schedule: {
-            enabled: scheduleEnabled,
-            intervalHours: globalIntervalHours,
-            startTime: BACKUP_DEFAULT_START_TIME,
-            timezone: globalTimezone,
-            retentionCount: 30,
-          },
-        };
-      });
-      return {
-        destinations: parseDestinations(normalizedEntries, previousById, fallbackTimezone),
-      };
+    // Rows written before per-destination schedules are not migrated: the defaults come back and
+    // the administrator re-saves the schedule once.
+    const destinations = Array.isArray(parsed.destinations) ? parsed.destinations : null;
+    if (!destinations?.every((entry) => isPlainObject(entry) && isPlainObject(entry.schedule))) {
+      return getDefaultBackupSettings(fallbackTimezone);
     }
-    return parseLegacyBackupSettings(parsed, fallbackTimezone);
+    return { destinations: parseDestinations(destinations, new Map(), fallbackTimezone) };
   } catch {
     return getDefaultBackupSettings(fallbackTimezone);
   }
