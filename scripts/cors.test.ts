@@ -40,6 +40,7 @@ test('other origins get a wildcard only on public paths and never credentials', 
     const config = await authedFetch(env, { path: '/api/config', headers });
     assert.equal(config.headers.get('Access-Control-Allow-Origin'), '*');
     assert.equal(config.headers.get('Access-Control-Allow-Credentials'), null);
+    assert.equal(config.headers.get('Vary'), 'Origin');
   }
   const preflight = await authedFetch(env, { method: 'OPTIONS', path: '/api/sync', headers: origin });
   assert.equal(preflight.status, 204);

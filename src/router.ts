@@ -124,7 +124,8 @@ const corsOptions = {
 };
 // Only reached for origins corsPolicy already approved.
 const credentialedCors = cors({ ...corsOptions, credentials: true, origin: (origin) => normalizeOrigin(origin) });
-const publicCors = cors({ ...corsOptions, origin: '*' });
+// A callback rather than '*' keeps hono's Vary: Origin, since credentialed origins get another answer here.
+const publicCors = cors({ ...corsOptions, origin: () => '*' });
 
 // hono's credentials flag is static, so corsPolicy picks the instance per request. WebSocket
 // upgrades skip both because their 101 response must reach the runtime untouched.
