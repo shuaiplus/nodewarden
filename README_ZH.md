@@ -34,17 +34,16 @@
 
 | 能力 | Bitwarden免费版 | NodeWarden | 说明 |
 |---|---|---|---|
-| 网页密码库 | ✅ | ✅ | **原创Web Vault界面** |
-| TOTP | ❌ | ✅ | 包括 `steam://` 支持 |
-| **PWA / 离线使用** | ❌ | ✅ | **可安装、离线使用、App快捷方式** |
+| 网页密码库 | ✅ | ✅ | Cloudflare Pages 上的官方 Bitwarden 网页版 |
+| TOTP | ❌ | ✅ | 所有官方客户端均可生成验证码 |
 | **Passkey 登录** | ✅ | ✅ | **支持WebAuthn/FIDO2无密码登录** |
 | API 密钥 | ✅ | ✅ | 供bitwarden cli使用，支持获取和轮换 |
 | 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
 | 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
 | 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
 | 附件 / Send| ✅ | ✅ | Cloudflare R2 或 KV |
-| 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
-| **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
+| 导入 / 导出 | ✅ | ✅ | 通过官方客户端 |
+| **云端备份** | ❌ | ✅ | **WebDAV / S3 定时增量备份，通过管理 API 配置** |
 | 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
 | 登录请求 | ✅ | ✅ | **多端免密登录审批、跨设备解锁请求** |
 | **多用户使用** | ✅ | ✅ | 支持邀请码注册 |
@@ -70,15 +69,13 @@
 1. Fork NodeWarden 仓库到自己的 GitHub 账号
 2. 进入 [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. 选择 Continue with GitHub 并选择你的仓库
-4. 构建命令填 `npm run build`，部署命令填 `npm run deploy`
+4. 构建命令留空，部署命令填 `npm run deploy`
 - 如果你打算用 KV 模式，把部署命令改成 `npm run deploy:kv`
 5. 等部署完成后，打开生成的 Workers 域名
 
 - Workers 默认域名在部分网络环境不可直连。如需自定义域名，到 [Workers 设置](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings)里添加。
 
 - 页面提示缺少 `JWT_SECRET` 时，到 Workers 设置里添加 Secret。正式环境至少使用 32 个字符以上的随机字符串，不要使用临时值或示例值。
-
-- 如需隐藏 Web Vault，在 Workers 的“设置 → 变量和机密”中添加文本变量 `HIDE_WEB_VAULT`，值设为 `1`。启用后，服务器上的前端页面和静态资源统一返回 `404 Not Found`，Bitwarden 客户端所需的登录、同步、附件、图标、通知等服务端接口仍可使用；已经安装或缓存的 PWA 可以继续使用本地前端。删除该变量（或将值改为非 `1`）即可恢复服务器上的 Web Vault。
 
 - 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 或 `wrangler.kv.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
 

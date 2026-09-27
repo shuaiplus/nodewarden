@@ -22,9 +22,7 @@
 ## Checks
 
 - [ ] `npx tsc -p tsconfig.json --noEmit`
-- [ ] `npx tsc -p webapp/tsconfig.json --noEmit`
-- [ ] `npm run i18n:validate`
-- [ ] `npm run build`
+- [ ] `npm test`
 
 ## Notes
 

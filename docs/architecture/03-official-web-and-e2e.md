@@ -4,7 +4,6 @@
 
 | Frontend | Path | Hosted as |
 |---|---|---|
-| NodeWarden Preact vault | `webapp/` | Worker assets (`npm run build` → `dist/`) |
 | Official Bitwarden OSS web | `official-web/` | Cloudflare Pages (`npm run build:official-web`) |
 
 The official vault (`ghcr.io/bitwarden/web` / `@bitwarden/web-vault` OSS self-host) always uses `window.location.origin` as its API base. Pages therefore proxies `/api`, `/identity`, `/icons`, `/notifications`, `/scim`, `/sso`, `/config`, `/alive` to the Worker (`official-web/functions/_middleware.js`). The proxied prefix list lives in `shared/backend-paths.ts`, shared with `scripts/serve-official-web.mjs` and the Worker web-vault visibility check.
@@ -18,7 +17,7 @@ Current official clients do **not** POST `/api/accounts/register`. They:
 1. `POST /identity/accounts/register/send-verification-email`
 2. The server returns an empty JSON string and sends a verification link. Official self-host web can continue to `POST /identity/accounts/register/finish`; the emailed finish-signup link carries the token when opened.
 
-NodeWarden never returns an inline registration JWT. Email is sent in the background with uniform responses; disabled or misconfigured email returns 503 for all addresses. Registration accepts both the new `masterPasswordAuthentication` / `masterPasswordUnlock` body and the older local-webapp body. Set `ALLOW_OPEN_REGISTRATION=1` to allow official-client signups after the first admin without a NodeWarden invite code.
+NodeWarden never returns an inline registration JWT. Email is sent in the background with uniform responses; disabled or misconfigured email returns 503 for all addresses. Registration accepts both the new `masterPasswordAuthentication` / `masterPasswordUnlock` body and the older flat body. Set `ALLOW_OPEN_REGISTRATION=1` to allow official-client signups after the first admin without a NodeWarden invite code.
 
 ## E2E
 

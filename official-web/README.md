@@ -2,13 +2,13 @@
 
 This directory is the Cloudflare Pages frontend for the Bitwarden self-host web
 vault (`@bitwarden/web-vault`), with a small NodeWarden organization-creation
-patch. The NodeWarden Preact app in `webapp/` stays on the Worker.
+patch. It is the only web vault; the Worker serves APIs, `/admin` and the connector pages.
 
 ```
 browser  →  Pages (official Angular vault)
                 │  /api /identity /icons /notifications …
                 ▼
-           Worker (NodeWarden APIs + optional local webapp)
+           Worker (NodeWarden APIs, /admin, connector pages)
 ```
 
 The official vault always uses `window.location.origin` as its API base. Pages
@@ -38,7 +38,7 @@ landing page opens the new organization's Secrets Manager.
 ## Local
 
 ```bash
-# Terminal 1 — Worker + local webapp
+# Terminal 1 — Worker
 JWT_SECRET=… npm run dev
 
 # Terminal 2 — official web on :8080, proxied to the Worker
@@ -76,6 +76,6 @@ npm run deploy:official-web
 ```
 
 Deployment runs from `official-web/`, uploads its `dist/` directory and includes
-`functions/_middleware.js`. The root `dist/` is the separate Worker webapp.
+`functions/_middleware.js`.
 Publish from the Pages production branch (`main` for this deployment), or pass
 `-- --branch main` to the npm command; other branches create preview deployments.

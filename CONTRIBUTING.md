@@ -2,9 +2,9 @@
 
 Thanks for taking the time to improve NodeWarden.
 
-NodeWarden is a Bitwarden-compatible server with a custom web vault, Cloudflare
-Workers/D1 storage, attachment storage, imports/exports, and scheduled backups.
-Small changes can affect official clients, backups, migrations, or locale files,
+NodeWarden is a Bitwarden-compatible server on Cloudflare Workers/D1 with
+attachment storage, imports, and scheduled backups; official Bitwarden clients are
+its only web and app clients. Small changes can affect those clients, backups or migrations,
 so please keep changes focused and check the related parts of the project.
 
 ## Before Opening an Issue
@@ -60,7 +60,6 @@ When adding persistent data, check:
 
 - `src/services/backup-archive.ts`
 - `src/services/backup-import.ts`
-- `webapp/src/lib/api/backup.ts`
 
 Do not export runtime lock rows such as `backup.runner.lock.v1`. Do not import
 retired sensitive fields such as `users.api_key`.
@@ -74,7 +73,7 @@ document a replacement design before changing it.
 ### Bitwarden Client Compatibility
 
 Official Bitwarden clients may send or expect fields that are not used directly
-by the web vault. Cipher and sync changes should preserve unknown client fields
+by the server. Cipher and sync changes should preserve unknown client fields
 unless they are known-invalid or server-owned.
 
 Official web signup must send Cloudflare Email and must not return a
@@ -103,32 +102,13 @@ Password hints are reminders, not recovery secrets. They must never contain the
 master password, recovery codes, API keys, or anything that directly unlocks the
 vault.
 
-### i18n
-
-Locale files are complete standalone bundles. When adding or changing user-facing
-text, keep every locale in sync and run the validation script.
-
-For new locales, update:
-
-- `webapp/src/lib/i18n.ts`
-- `webapp/src/lib/i18n/locales/*`
-- `scripts/i18n-utils.cjs`
-
 ## Recommended Checks
 
 For most backend or shared changes:
 
 ```sh
 npx tsc -p tsconfig.json --noEmit
-npm run build
-```
-
-For webapp text or locale changes:
-
-```sh
-npm run i18n:validate
-npx tsc -p webapp/tsconfig.json --noEmit
-npm run build
+npm test
 ```
 
 For documentation-only changes:

@@ -34,17 +34,16 @@
 
 | Feature | Bitwarden Free | NodeWarden | Notes |
 |---|---|---|---|
-| Web vault | ✅ | ✅ | Local Preact vault on the Worker **and** official Bitwarden web on Pages |
-| TOTP | ❌ | ✅ | Includes `steam://` support |
-| **PWA / offline** | ❌ | ✅ | **Installable, offline** |
+| Web vault | ✅ | ✅ | Official Bitwarden web on Cloudflare Pages |
+| TOTP | ❌ | ✅ | Authenticator codes in every official client |
 | **Passkey login** | ✅ | ✅ | **passwordless auth** |
 | API keys | ✅ | ✅ | CLI keys; create and rotate |
 | Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey |
 | 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
 | Real-time push sync | ✅ | ✅ | All device sync |
 | Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
-| Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
-| **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
+| Import / export | ✅ | ✅ | Through official clients |
+| **Cloud backups** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals, configured through the admin API** |
 | Device management | ✅ | ✅ | **Remove devices; trust controls** |
 | Login requests | ✅ | ✅ | **Cross-device login approval/unlock** |
 | **Multi-user** | ✅ | ✅ | Invite-code registration |
@@ -72,15 +71,13 @@
 1. Fork the NodeWarden repository to your GitHub account
 2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. Choose **Continue with GitHub** and select your fork
-4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
+4. Leave the **build command** empty and set the **deploy command** to `npm run deploy`
    - For KV mode, change the deploy command to `npm run deploy:kv`
 5. After deployment finishes, open the generated Workers URL
 
 - The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
 
 - If the site reports a missing `JWT_SECRET`, add it as a **Secret** in Workers settings. In production use a random string of at least 32 characters; do not use temporary or example values.
-
-- To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
 
 - In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
 
@@ -142,7 +139,7 @@ npm run deploy:kv
 npm run dev
 npm run dev:kv
 
-# Official Bitwarden web (Cloudflare Pages frontend; keeps webapp/)
+# Official Bitwarden web (Cloudflare Pages frontend)
 npm run build:official-web
 WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
 npm run deploy:official-web
@@ -168,8 +165,6 @@ The Pages web vault built by this repository creates organizations from a name, 
 ## License
 
 LGPL-3.0 License
-
-The `webapp/` build bundles the official Bitwarden SDK (`@bitwarden/sdk-internal`), which is GPL-3.0, so a distributed webapp bundle is subject to GPL-3.0 as a whole. The official web vault in `official-web/` is GPL-3.0 as well.
 
 ---
 
