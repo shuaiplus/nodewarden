@@ -82,11 +82,6 @@ export interface BackupImportExecutionResult {
   auditActorUserId: string | null;
 }
 
-async function queryRows(db: D1Database, query: string): Promise<SqlRow[]> {
-  const rows = await getOrm(db).all(query) as SqlRow[];
-  return rows.map((row) => ({ ...row }));
-}
-
 async function getTableCreateSql(db: D1Database, table: BackupTableName): Promise<string> {
   const row = await db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
