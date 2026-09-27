@@ -116,13 +116,24 @@ export default defineConfig([
       '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
       '@typescript-eslint/no-unused-expressions': 'error',
       'nodewarden/no-single-use-function': 'error',
+      // Hand-written SQL lives only in src/db/sql.ts as typed helpers; everything else composes drizzle.
+      'no-restricted-imports': ['error', {
+        paths: ['drizzle-orm', 'drizzle-orm/sql'].map((name) => ({
+          name,
+          importNames: ['sql'],
+          message: 'Build queries with drizzle operators or the typed helpers in src/db/sql.ts; sql templates are not allowed elsewhere.',
+        })),
+      }],
     },
   },
   {
-    files: ['src/**/*.ts'],
-    // Tests seed and inspect the database directly; the rule guards what ships in the Worker.
-    ignores: ['src/**/*.test.ts', 'src/test/**'],
-    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
+    files: ['src/db/sql.ts'],
+    rules: { 'no-restricted-imports': 'off' },
+  },
+  {
+    // Type-aware, over tests and tooling too: tsconfig.eslint.json adds what the Worker build excludes.
+    files: ['**/*.ts'],
+    languageOptions: { parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: import.meta.dirname } },
     rules: { 'nodewarden/no-raw-sql': 'error' },
   },
 ]);

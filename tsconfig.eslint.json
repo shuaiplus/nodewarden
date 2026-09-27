@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "node"] },
+  "include": ["src/**/*", "shared/**/*", "scripts/**/*.ts", "e2e/**/*.ts"],
+  "exclude": ["node_modules"]
+}
