@@ -327,8 +327,8 @@ export async function handleSmEvents(request: Request, env: Env, principal: Prin
   if (orgId) {
     if (row && row.orgId !== orgId) return errorResponse('Not found', 404);
     const member = await getMembershipByUserAndOrg(env.DB, principal.user.id, orgId);
-    if (!isActiveMember(member)) return errorResponse('Not found', 404);
-    if (!canAccessEventLogs(member)) return errorResponse('Access denied', 403);
+    // Upstream answers NotFound here too; official web treats 403 as a revoked token and logs out.
+    if (!isActiveMember(member) || !canAccessEventLogs(member)) return errorResponse('Not found', 404);
     if (kind === 'secrets') {
       if (!row || ('deletedAt' in row && row.deletedAt)) {
         if (member.type !== MembershipType.Owner && member.type !== MembershipType.Admin) return errorResponse('Not found', 404);

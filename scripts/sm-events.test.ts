@@ -38,13 +38,13 @@ test('SM event routes enforce audit permission, secret read access, tenant scope
   assert.deepEqual((await events(projectPath)).map(e => e.type), [2201]);
   assert.deepEqual((await events(secretPath)).map(e => e.type), [2101]);
   assert.deepEqual(new Set((await events(accountPath)).map(e => e.type)), new Set([2300, 2304]));
-  for (const path of [projectPath, secretPath, accountPath]) assert.equal((await request(path, 'GET', undefined, user.id)).status, 403);
+  for (const path of [projectPath, secretPath, accountPath]) assert.equal((await request(path, 'GET', undefined, user.id)).status, 404);
   assert.equal((await request(alternate, 'GET', undefined, user.id)).status, 404);
   const ownerMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, owner.id, orgId))!;
   const userMember = (await orgRepo.getMembershipByUserAndOrg(env.DB, user.id, orgId))!;
   assert.equal((await request(`/api/service-accounts/${account.id}/access-policies/people`, 'PUT', { userAccessPolicyRequests: [policy(ownerMember.id), policy(userMember.id)] })).status, 200);
   assert.ok((await events(alternate, user.id)).some(e => e.type === 2304));
-  assert.equal((await request(accountPath, 'GET', undefined, user.id)).status, 403);
+  assert.equal((await request(accountPath, 'GET', undefined, user.id)).status, 404);
   await orgRepo.saveMembership(env.DB, { ...userMember, type: MembershipType.Custom, permissions: { accessEventLogs: true } as any });
   assert.equal((await request(projectPath, 'GET', undefined, user.id)).status, 200);
   assert.equal((await request(accountPath, 'GET', undefined, user.id)).status, 200);
