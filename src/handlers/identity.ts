@@ -1,4 +1,5 @@
 import { EventType, recordUserEvent } from '../services/events';
+import { z } from 'zod';
 import { markEmailVerified } from '../services/vault-admin-role';
 import { redeemEmailOtp } from '../services/email-otp';
 import { consumeSsoContinuation, getSsoContinuation, saveSsoContinuation, ssoContinuationContext, type SsoContinuation } from '../services/sso-continuation';
@@ -8,7 +9,7 @@ import { Env, TokenResponse, User } from '../types';
 import { AuthService } from '../services/auth';
 import { twoFactorProviders, twoFactorClearStatements } from '../services/two-factor-providers';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
-import { deviceErrorResponse, errorResponse, identityErrorResponse, jsonResponse, parseJsonBody, prop, normalizeJsonKeys } from '../utils/response';
+import { deviceErrorResponse, identityErrorResponse, jsonResponse, normalizeJsonKeys, parseBody } from '../utils/response';
 import { getRefreshTokenSlidingTtlMs, LIMITS } from '../config/limits';
 import { parse, serialize } from 'hono/utils/cookie';
 import { sha256 } from 'hono/utils/crypto';
@@ -60,6 +61,50 @@ const WEB_REFRESH_COOKIE = 'nodewarden_web_refresh';
 const TWO_FACTOR_PROVIDER_RECOVERY_CODE_RESPONSE = '-1';
 const TWO_FACTOR_PROVIDER_RECOVERY_CODE_ANDROID_REQUEST = 100;
 
+// Official clients post the token form url-encoded, so every field is text; a JSON number reads as
+// its decimal text and a JSON null as absent.
+const formText = z.coerce.string().trim().nullish();
+const requiredText = (error: string) => z.string({ error }).min(1, { error });
+const requiredTrimmedText = (error: string) => z.string({ error }).trim().min(1, { error });
+const TokenFormSchema = z.looseObject({ client_id: formText, devicePushToken: formText, device_push_token: formText });
+type TokenForm = z.output<typeof TokenFormSchema>;
+const passwordFields = { authRequest: formText, twoFactorToken: formText, twoFactorProvider: formText, twoFactorRemember: formText, newDeviceOtp: formText };
+const EMAIL_AND_PASSWORD_REQUIRED = 'Email and password are required';
+const PASSKEY_REQUIRED = 'Passkey token and deviceResponse are required';
+const CLIENT_REQUIRED = 'Parameter error';
+
+// Each grant names the fields it cannot run without; their messages are the OAuth error descriptions
+// clients have always received.
+const TokenRequestSchema = z.discriminatedUnion('grant_type', [
+  TokenFormSchema.extend({
+    grant_type: z.literal('password'),
+    username: requiredText(EMAIL_AND_PASSWORD_REQUIRED).toLowerCase(),
+    password: requiredText(EMAIL_AND_PASSWORD_REQUIRED),
+    ...passwordFields,
+  }),
+  TokenFormSchema.extend({ grant_type: z.literal('authorization_code'), code: requiredTrimmedText('code is required'), code_verifier: z.string().optional().catch(undefined), ...passwordFields }),
+  TokenFormSchema.extend({ grant_type: z.literal('webauthn'), token: requiredTrimmedText(PASSKEY_REQUIRED), deviceResponse: z.unknown() }),
+  TokenFormSchema.extend({ grant_type: z.literal('client_credentials'), client_id: requiredText(CLIENT_REQUIRED), client_secret: requiredText(CLIENT_REQUIRED), scope: z.string().catch('') }),
+  TokenFormSchema.extend({
+    grant_type: z.literal('send_access'),
+    send_id: formText, sendId: formText, password: formText,
+    password_hash_b64: formText, passwordHashB64: formText, passwordHash: formText, password_hash: formText,
+  }),
+  TokenFormSchema.extend({ grant_type: z.literal('refresh_token'), refresh_token: formText }),
+], { error: (issue) => issue.code === 'invalid_union' ? 'Unsupported grant type' : 'Invalid request payload' });
+
+// A grant_type outside the union answers unsupported_grant_type; every other issue is invalid_request.
+function tokenRequestError({ issues: [issue] }: z.ZodError): Response {
+  return identityErrorResponse(issue.message, issue.code === 'invalid_union' ? 'unsupported_grant_type' : 'invalid_request', 400);
+}
+
+// Official clients post url-encoded forms; JSON bodies arrive with normalized keys.
+async function readTokenForm(request: Request): Promise<unknown> {
+  return (request.headers.get('content-type') || '').includes('application/x-www-form-urlencoded')
+    ? Object.fromEntries(await request.formData())
+    : normalizeJsonKeys(await request.json());
+}
+
 function identityJsonResponse(data: unknown, status: number = 200): Response {
   return jsonResponse(data, status, { 'Cache-Control': 'no-store', Pragma: 'no-cache' });
 }
@@ -80,9 +125,9 @@ async function resolveDeviceSession(db: D1Database, userId: string, deviceInfo: 
   return { identifier: deviceInfo.deviceIdentifier, sessionStamp, isNewDevice: !existingDevice };
 }
 
-function resolveRefreshClientType(request: Request, body: Record<string, string>): string {
+function resolveRefreshClientType(request: Request, body: TokenForm): string {
   if (shouldUseWebSession(request)) return 'web';
-  const clientId = String(body.client_id || '').trim().toLowerCase();
+  const clientId = (body.client_id ?? '').toLowerCase();
   if (clientId === 'mobile') return 'mobile';
   if (clientId === 'browser' || clientId === 'desktop' || clientId === 'cli') return clientId;
   return clientId || 'other';
@@ -95,7 +140,7 @@ async function persistLoginDevice(
   request: Request,
   user: User,
   deviceInfo: AuthRequestDeviceInfo,
-  body: Record<string, string>
+  body: TokenForm
 ): Promise<DeviceSession | null> {
   const candidate = await resolveDeviceSession(env.DB, user.id, deviceInfo);
   if (!candidate) return null;
@@ -120,20 +165,16 @@ function notifyNewDevice(env: Env, request: Request, user: User, type: number): 
   notifyMail(env, user.email, 'newDeviceLogin', { device: deviceTypeName(type), time: new Date().toISOString(), ip: getClientIdentifier(request) ?? 'Unknown' });
 }
 
-function readDevicePushToken(body: Record<string, string>): string {
-  return String(prop(body, ['devicePushToken', 'device_push_token']).value || '').trim();
-}
-
 async function persistIdentityDevicePushToken(
   env: Env,
   db: D1Database,
   userId: string,
   deviceSession: { identifier: string; sessionStamp: string } | null,
   deviceType: number,
-  body: Record<string, string>
+  body: TokenForm
 ): Promise<void> {
   if (!deviceSession) return;
-  const pushToken = readDevicePushToken(body);
+  const pushToken = body.devicePushToken || body.device_push_token;
   if (!pushToken) return;
 
   const device = await deviceRepo.getDevice(db, userId, deviceSession.identifier);
@@ -390,7 +431,7 @@ function tokenResponse(request: Request, user: User, accessToken: string, refres
 async function completeLogin(
   request: Request,
   env: Env,
-  login: { user: User; body: Record<string, string>; deviceInfo: AuthRequestDeviceInfo; deviceSession: DeviceSession | null; grantType: string },
+  login: { user: User; body: TokenForm; deviceInfo: AuthRequestDeviceInfo; deviceSession: DeviceSession | null; grantType: string },
   extras: TokenResponseExtras = {},
   audit = { action: 'auth.login.success', targetType: 'user', targetId: login.user.id }
 ): Promise<Response> {
@@ -442,31 +483,20 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   }
 
 
-  let body: Record<string, string>;
-  const contentType = request.headers.get('content-type') || '';
-  try {
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      body = Object.fromEntries(formData.entries()) as Record<string, string>;
-    } else {
-      body = normalizeJsonKeys(await request.json());
-    }
-  } catch {
-    return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
-  }
-
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return identityErrorResponse('Invalid request payload', 'invalid_request', 400);
-  let grantType = body.grant_type;
+  // An unreadable payload parses as null, which the schema answers as 'Invalid request payload'.
+  const parsed = TokenRequestSchema.safeParse(await readTokenForm(request).catch(() => null));
+  if (!parsed.success) return tokenRequestError(parsed.error);
+  let body = parsed.data;
   let viaSsoShim = false;
   let ssoContinuation: SsoContinuation | null = null;
   const clientIdentifier = getClientIdentifier(request);
-  if (!clientIdentifier && grantType !== 'refresh_token') {
+  if (!clientIdentifier && body.grant_type !== 'refresh_token') {
     await safeWriteAuditEvent(env, {
       action: 'auth.client_ip.missing',
       category: 'auth',
       level: 'error',
       targetType: 'tokenEndpoint',
-      metadata: { grantType, reason: 'client_ip_missing', ...auditRequestMetadata(request) },
+      metadata: { grantType: body.grant_type, reason: 'client_ip_missing', ...auditRequestMetadata(request) },
     });
     return identityErrorResponse(
       'Authentication is temporarily unavailable',
@@ -476,10 +506,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     );
   }
 
-  if (grantType === 'authorization_code' && isSsoEnabled(env)) {
-    const code = String(body.code || '').trim();
-    if (!code) return identityErrorResponse('code is required', 'invalid_request', 400);
-    const context = await ssoContinuationContext(env, request, body, code);
+  if (body.grant_type === 'authorization_code' && isSsoEnabled(env)) {
+    const { code } = body;
+    const context = await ssoContinuationContext(env, request, body as Record<string, string>, code);
     const continuation = await getSsoContinuation(env, context);
     if (continuation === null) return identityErrorResponse('SSO sign-in expired or was already completed', 'invalid_grant', 400);
     let user: User | null;
@@ -514,26 +543,18 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       ssoContinuation = await saveSsoContinuation(env, context, user);
       if (!ssoContinuation) return identityErrorResponse('SSO sign-in is already in progress', 'invalid_grant', 400);
     }
-    body.username = user.email;
-    body.password = user.masterPasswordHash;
+    // The verified SSO user continues as a password grant carrying the server-side hash.
+    const shimmed = TokenRequestSchema.safeParse({ ...body, grant_type: 'password', username: user.email, password: user.masterPasswordHash });
+    if (!shimmed.success) return tokenRequestError(shimmed.error);
+    body = shimmed.data;
     viaSsoShim = true;
-    grantType = 'password';
   }
+  const grantType = body.grant_type;
 
-  if (grantType === 'password') {
+  if (body.grant_type === 'password') {
     // Login with password
-    const email = body.username?.toLowerCase();
-    const passwordHash = body.password;
-    const authRequestId = body.authRequest;
-    const twoFactorToken = body.twoFactorToken;
-    const twoFactorProvider = body.twoFactorProvider;
-    const twoFactorRemember = body.twoFactorRemember;
+    const { username: email, password: passwordHash } = body;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
-
-    if (!email || !passwordHash) {
-      // Bitwarden clients expect OAuth-style error fields.
-      return identityErrorResponse('Email and password are required', 'invalid_request', 400);
-    }
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, email);
 
     // Check login lockout before user lookup to reduce user-enumeration signal
@@ -560,7 +581,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     let validatedAuthRequestId: string | null = null;
     let authRequestLoginKey: string | null = null;
     let valid = false;
-    const normalizedAuthRequestId = String(authRequestId || '').trim();
+    const normalizedAuthRequestId = body.authRequest ?? '';
     if (normalizedAuthRequestId) {
       const authRequest = await authRequestRepo.getAuthRequestByIdForUser(env.DB, normalizedAuthRequestId, user.id);
       valid = isAuthRequestLoginApproved(authRequest, user.id, passwordHash);
@@ -589,9 +610,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     const hasTwoFactorPasskey = await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor') > 0;
     const enabledProviders = twoFactorProviders(user, hasTwoFactorPasskey);
     if (enabledProviders.length > 0) {
-      const normalizedTwoFactorProvider = String(twoFactorProvider ?? '').trim();
-      const normalizedTwoFactorToken = String(twoFactorToken ?? '').trim();
-      let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(String(twoFactorRemember || '').trim());
+      const normalizedTwoFactorProvider = body.twoFactorProvider ?? '';
+      const normalizedTwoFactorToken = body.twoFactorToken ?? '';
+      let rememberRequested = ['1', 'true', 'True', 'TRUE', 'on', 'yes', 'Yes', 'YES'].includes(body.twoFactorRemember ?? '');
       const hasProvider = normalizedTwoFactorProvider.length > 0;
       const hasToken = normalizedTwoFactorToken.length > 0;
 
@@ -689,7 +710,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (mail.kind === 'enabled' && mail.newDeviceVerification && !viaSsoShim && !validatedAuthRequestId
       && enabledProviders.length === 0 && user.verifyDevices
       && Date.now() - Date.parse(user.createdAt) >= LIMITS.auth.newDeviceVerificationMinAccountAgeSeconds * 1000) {
-      const otp = String(body.newDeviceOtp ?? '').trim();
+      const otp = body.newDeviceOtp ?? '';
       if (otp) {
         if (!await redeemEmailOtp(env, { purpose: 'new-device', subject: user.id, binding: user.securityStamp }, otp)) return deviceErrorResponse('invalid_otp');
         await markEmailVerified(env, user.id);
@@ -730,9 +751,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType },
       { twoFactorToken: trustedTwoFactorTokenToReturn, key: authRequestLoginKey });
 
-  } else if (grantType === 'webauthn') {
-    const token = String(body.token || '').trim();
-    const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, token || 'missing-token');
+  } else if (body.grant_type === 'webauthn') {
+    const { token } = body;
+    const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, token);
     const locked = await loginLockoutResponse(rateLimit, loginIdentifier);
     if (locked) return locked;
 
@@ -744,9 +765,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         return identityErrorResponse('Invalid passkey response', 'invalid_request', 400);
       }
     }
-    if (!token || !deviceResponse) {
-      return identityErrorResponse('Passkey token and deviceResponse are required', 'invalid_request', 400);
-    }
+    if (!deviceResponse) return identityErrorResponse(PASSKEY_REQUIRED, 'invalid_request', 400);
 
     let asserted: Awaited<ReturnType<typeof assertAccountPasskeyCredential>>;
     try {
@@ -789,14 +808,11 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       { userVerificationToken, prfOption: buildAccountPasskeyTokenUserDecryptionOption(credential) },
       { action: 'auth.passkey.login.success', targetType: 'accountPasskey', targetId: credential.id });
 
-  } else if (grantType === 'client_credentials') {
+  } else if (body.grant_type === 'client_credentials') {
     // Login with client credentials
-    const clientId = body.client_id;
-    const clientSecret = body.client_secret;
-    const scope = body.scope;
+    const { client_id: clientId, client_secret: clientSecret, scope } = body;
     const deviceInfo = readAuthRequestDeviceInfo(body, request);
 
-    if (typeof clientId !== 'string' || !clientId || typeof clientSecret !== 'string' || !clientSecret) return identityErrorResponse('Parameter error', 'invalid_request', 400);
     if (scope === 'api.secrets' || isUUID(String(clientId))) {
       const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, clientId.toLowerCase());
       const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
@@ -849,7 +865,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
     return completeLogin(request, env, { user, body, deviceInfo, deviceSession, grantType });
 
-  } else if (grantType === 'send_access') {
+  } else if (body.grant_type === 'send_access') {
     const sendAccessLimit = await rateLimit.consumeBudget(`${clientIdentifier}:public`, LIMITS.rateLimit.publicRequestsPerMinute);
     if (!sendAccessLimit.allowed) {
       return identityErrorResponse(
@@ -859,7 +875,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const sendId = String(body.send_id || body.sendId || '').trim();
+    const sendId = body.send_id || body.sendId;
     if (!sendId) {
       return identityJsonResponse(
         {
@@ -875,10 +891,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       );
     }
 
-    const passwordHashB64 = String(
-      body.password_hash_b64 || body.passwordHashB64 || body.passwordHash || body.password_hash || ''
-    ).trim() || null;
-    const password = String(body.password || '').trim() || null;
+    const passwordHashB64 = body.password_hash_b64 || body.passwordHashB64 || body.passwordHash || body.password_hash || null;
+    const password = body.password || null;
 
     const result = await issueSendAccessToken(
       env,
@@ -899,8 +913,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       scope: 'api.send',
       unofficialServer: true,
     });
-  } else if (grantType === 'refresh_token') {
-    const refreshToken = String(body.refresh_token || '').trim() || (
+  } else if (body.grant_type === 'refresh_token') {
+    const refreshToken = body.refresh_token || (
       shouldUseWebSession(request)
         ? parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE]
         : null
@@ -1008,15 +1022,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
 
 // POST /identity/accounts/prelogin
 export async function handlePrelogin(request: Request, env: Env): Promise<Response> {
-
-  const body = await parseJsonBody<{ email?: string }>(request);
-
+  const body = await parseBody(request, z.object({ email: requiredText('Email is required').toLowerCase() }));
   if (body instanceof Response) return body;
-
-  const email = body.email?.toLowerCase();
-  if (!email) {
-    return errorResponse('Email is required', 400);
-  }
+  const { email } = body;
 
   const user = await userRepo.getUser(env.DB, email);
 
@@ -1035,20 +1043,14 @@ export async function handlePrelogin(request: Request, env: Env): Promise<Respon
 // Best-effort OAuth token revocation endpoint.
 // RFC 7009 allows returning 200 even if token is unknown.
 export async function handleRevocation(request: Request, env: Env): Promise<Response> {
-  let body: Record<string, string>;
-  const contentType = request.headers.get('content-type') || '';
+  let form: unknown;
   try {
-    if (contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      body = Object.fromEntries(formData.entries()) as Record<string, string>;
-    } else {
-      body = normalizeJsonKeys(await request.json());
-    }
+    form = await readTokenForm(request);
   } catch {
     return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } });
   }
 
-  const token = String(body.token || '').trim() || (
+  const token = z.object({ token: formText }).catch({}).parse(form).token || (
     shouldUseWebSession(request)
       ? (parse(request.headers.get('Cookie') ?? '', WEB_REFRESH_COOKIE)[WEB_REFRESH_COOKIE] || '')
       : ''
