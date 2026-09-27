@@ -38,7 +38,19 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
   const codeChallenge = url.searchParams.get('code_challenge');
   const clientId = url.searchParams.get('client_id') || 'web';
   const rawRedirect = url.searchParams.get('redirect_uri') || '';
-  const redirectUri = resolveClientRedirect(clientId, rawRedirect, url.origin);
+  let redirectUri: string | null;
+  if (clientId === 'web' || clientId === 'browser') redirectUri = `${url.origin}/sso-connector.html`;
+  else if (clientId === 'desktop' || clientId === 'mobile') redirectUri = 'bitwarden://sso-callback';
+  else if (clientId === 'cli' && /^http:\/\/localhost:\d{4}$/.test(rawRedirect)) redirectUri = rawRedirect;
+  else {
+    // A prefix test would accept https://host.evil.com for the origin https://host.ev,
+    // so redirect targets must parse and match the origin exactly.
+    try {
+      redirectUri = new URL(rawRedirect).origin === url.origin ? rawRedirect : null;
+    } catch {
+      redirectUri = null;
+    }
+  }
   if (!redirectUri) return errorResponse('Invalid redirect_uri', 400);
 
   const now = new Date().toISOString();
@@ -56,7 +68,8 @@ export async function handleSsoAuthorize(request: Request, env: Env): Promise<Re
   }
 
   const config = readEnvConfig(env);
-  const target = new URL(await discoverAuthorizationEndpoint(config.SSO_AUTHORITY));
+  const { authorization_endpoint: authorizationEndpoint } = await discoverOidcConfig(config.SSO_AUTHORITY);
+  const target = new URL(authorizationEndpoint || `${config.SSO_AUTHORITY}/authorize`);
   target.searchParams.set('response_type', 'code');
   target.searchParams.set('client_id', String(config.SSO_CLIENT_ID));
   target.searchParams.set('redirect_uri', `${url.origin}/identity/oidc-signin`);
@@ -106,7 +119,8 @@ export interface OidcIdentity {
 export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: string, codeVerifier?: string): Promise<OidcIdentity | null> {
   const config = readEnvConfig(env);
   const authority = config.SSO_AUTHORITY;
-  const tokenUrl = await discoverTokenEndpoint(authority);
+  const { token_endpoint: tokenEndpoint } = await discoverOidcConfig(authority);
+  const tokenUrl = tokenEndpoint || `${authority}/token`;
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
@@ -122,8 +136,34 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
   });
   if (!response.ok) return null;
   const payload = await response.json() as { id_token?: string; access_token?: string };
-  const claims = await verifyIdToken(env, authority, payload.id_token || '');
-  if (!claims) return null;
+  // The id_token must verify against the provider's JWKS; any failure yields no identity.
+  const idToken = payload.id_token || '';
+  const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
+  let claims: Record<string, unknown>;
+  try {
+    const { header } = decode(idToken);
+    const alg = ID_TOKEN_ALGORITHMS.find((allowed) => allowed === header.alg);
+    if (!alg) return null;
+    // OIDC lets a provider with one signing key omit kid, which hono's verifyWithJwks refuses, so the
+    // key is chosen here: the kid match, else the only key of the token's type.
+    const { keys = [] } = await (await fetch(jwksUri || `${authority}/.well-known/jwks.json`)).json() as { keys?: ProviderJwk[] };
+    const kty = alg.startsWith('ES') ? 'EC' : 'RSA';
+    const candidates = keys.filter((jwk) => jwk.kty === kty && (!jwk.alg || jwk.alg === alg) && (!jwk.use || jwk.use === 'sig'));
+    const key = candidates.find((candidate) => header.kid && candidate.kid === header.kid) ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (!key) return null;
+    // hono's time checks allow no clock skew, so the claim checks below own exp/nbf instead.
+    claims = await verify(idToken, key, { alg, exp: false, nbf: false, iat: false });
+    if (String(claims.iss || '').replace(/\/+$/, '') !== authority) return null;
+    const audiences = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
+    if (!audiences.includes(String(config.SSO_CLIENT_ID))) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    const { exp, nbf } = claims;
+    if (typeof exp !== 'number' || exp + ID_TOKEN_CLOCK_SKEW_SECONDS < now) return null;
+    if (typeof nbf === 'number' && nbf - ID_TOKEN_CLOCK_SKEW_SECONDS > now) return null;
+  } catch {
+    return null;
+  }
   const verifiedEmail = String(claims.email || '').trim().toLowerCase();
   const email = verifiedEmail || String(claims.preferred_username || '').trim().toLowerCase();
   const identifier = String(claims.sub || email);
@@ -136,23 +176,6 @@ export async function exchangeOidcCode(env: Env, code: string, redirectOrigin: s
     // fallback. Some providers emit it as the string "true" instead of a boolean.
     emailVerified: !!verifiedEmail && (claims.email_verified === true || claims.email_verified === 'true'),
   };
-}
-
-function resolveClientRedirect(clientId: string, raw: string, origin: string): string | null {
-  if (clientId === 'web' || clientId === 'browser') return `${origin}/sso-connector.html`;
-  if (clientId === 'desktop' || clientId === 'mobile') return 'bitwarden://sso-callback';
-  if (clientId === 'cli' && /^http:\/\/localhost:\d{4}$/.test(raw)) return raw;
-  return isSameOrigin(raw, origin) ? raw : null;
-}
-
-// A prefix test would accept https://host.evil.com for the origin https://host.ev,
-// so redirect targets must parse and match the origin exactly.
-function isSameOrigin(raw: string, origin: string): boolean {
-  try {
-    return new URL(raw).origin === origin;
-  } catch {
-    return false;
-  }
 }
 
 interface OidcDiscovery {
@@ -183,52 +206,4 @@ async function discoverOidcConfig(authority: string): Promise<OidcDiscovery> {
   }
 }
 
-async function discoverAuthorizationEndpoint(authority: string): Promise<string> {
-  const { authorization_endpoint: endpoint } = await discoverOidcConfig(authority);
-  return endpoint || `${authority}/authorize`;
-}
-
-async function discoverTokenEndpoint(authority: string): Promise<string> {
-  const { token_endpoint: endpoint } = await discoverOidcConfig(authority);
-  return endpoint || `${authority}/token`;
-}
-
 type ProviderJwk = JsonWebKey & { kid?: string; use?: string };
-
-// OIDC lets a provider with one signing key omit kid, which hono's verifyWithJwks refuses, so the
-// key is chosen here: the kid match, else the only key of the token's type.
-async function idTokenSigningKey(jwksUri: string, alg: string, kid: string | undefined): Promise<ProviderJwk | undefined> {
-  const { keys = [] } = await (await fetch(jwksUri)).json() as { keys?: ProviderJwk[] };
-  const kty = alg.startsWith('ES') ? 'EC' : 'RSA';
-  const candidates = keys.filter((key) => key.kty === kty && (!key.alg || key.alg === alg) && (!key.use || key.use === 'sig'));
-  return candidates.find((key) => kid && key.kid === kid) ?? (candidates.length === 1 ? candidates[0] : undefined);
-}
-
-/** Verifies an id_token against the provider's JWKS and returns its claims, or null. */
-async function verifyIdToken(env: Env, authority: string, token: string): Promise<Record<string, unknown> | null> {
-  const { jwks_uri: jwksUri } = await discoverOidcConfig(authority);
-  try {
-    const { header } = decode(token);
-    const alg = ID_TOKEN_ALGORITHMS.find((allowed) => allowed === header.alg);
-    if (!alg) return null;
-    const key = await idTokenSigningKey(jwksUri || `${authority}/.well-known/jwks.json`, alg, header.kid);
-    if (!key) return null;
-    // hono's time checks allow no clock skew, so hasValidIdTokenClaims owns exp/nbf instead.
-    const claims = await verify(token, key, { alg, exp: false, nbf: false, iat: false });
-    return hasValidIdTokenClaims(env, authority, claims) ? claims : null;
-  } catch {
-    return null;
-  }
-}
-
-function hasValidIdTokenClaims(env: Env, authority: string, claims: Record<string, unknown>): boolean {
-  if (String(claims.iss || '').replace(/\/+$/, '') !== authority) return false;
-  const audiences = Array.isArray(claims.aud) ? claims.aud.map(String) : [String(claims.aud || '')];
-  if (!audiences.includes(String(readEnvConfig(env).SSO_CLIENT_ID))) return false;
-
-  const now = Math.floor(Date.now() / 1000);
-  const { exp, nbf } = claims;
-  if (typeof exp !== 'number' || exp + ID_TOKEN_CLOCK_SKEW_SECONDS < now) return false;
-  if (typeof nbf === 'number' && nbf - ID_TOKEN_CLOCK_SKEW_SECONDS > now) return false;
-  return true;
-}
