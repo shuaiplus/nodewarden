@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getTableName, sql, type Table } from 'drizzle-orm';
+import { and, eq, getTableName, notLike, type Table } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
-import { ensureStorageSchema } from '../db/migrate';
+import { ensureStorageSchema, sqliteMaster } from '../db/migrate';
 import {
   orgGroups,
   organizationMemberships,
@@ -98,7 +98,7 @@ function expectedCounts(emptied: Table[]): Record<string, number> {
 
 // Every FK cascades, so no handler has to clean up policies. Every other seeded row stays, so a
 // deleted project's secret survives with no project, as upstream.
-const CASCADES: Array<{ parent: Table; id: keyof SeededIds; cascaded: Table[] }> = [
+const CASCADES = [
   { parent: organizationMemberships, id: 'membershipId', cascaded: [smProjectMembers, smSecretMembers, smServiceAccountMembers] },
   { parent: orgGroups, id: 'groupId', cascaded: [smProjectGroups, smSecretGroups, smServiceAccountGroups] },
   { parent: smProjects, id: 'projectId', cascaded: [smSecretProjects, smServiceAccountProjects, smProjectMembers, smProjectGroups] },
@@ -108,12 +108,12 @@ const CASCADES: Array<{ parent: Table; id: keyof SeededIds; cascaded: Table[] }>
     id: 'serviceAccountId',
     cascaded: [smAccessTokens, smServiceAccountProjects, smSecretServiceAccounts, smServiceAccountMembers, smServiceAccountGroups],
   },
-];
+] satisfies Array<{ parent: Table; id: keyof SeededIds; cascaded: Table[] }>;
 
 for (const { parent, id, cascaded } of CASCADES) {
   test(`deleting a row from ${getTableName(parent)} empties ${cascaded.map(getTableName).join(', ')} and nothing else`, async () => {
     const { env, ids } = await seedPolicies();
-    await getOrm(env.DB).run(sql`DELETE FROM ${parent} WHERE id = ${ids[id]}`);
+    await getOrm(env.DB).delete(parent).where(eq(parent.id, ids[id]));
     assert.deepEqual(await rowCounts(env), expectedCounts([parent, ...cascaded]));
   });
 }
@@ -126,6 +126,5 @@ test('the schema step replays over existing policies without losing a row and yi
   await ensureStorageSchema(env.DB);
   await ensureStorageSchema(env.DB);
   assert.deepEqual(await rowCounts(env), expectedCounts([]));
-  const tables = "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
-  assert.equal(await env.DB.prepare(tables).first('count'), TABLE_COUNT);
+  assert.equal(await getOrm(env.DB).$count(sqliteMaster, and(eq(sqliteMaster.type, 'table'), notLike(sqliteMaster.name, 'sqlite_%'))), TABLE_COUNT);
 });
