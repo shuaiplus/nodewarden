@@ -23,7 +23,7 @@ import {
   notifyUserVaultSync,
 } from '../durable/notifications-hub';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
@@ -31,6 +31,7 @@ import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events'
 import * as orgRepo from '../services/storage-org-repo';
 import {
   checkCollectionAssignment,
+  canReadOrganizationCiphers,
   deleteAuthorizedCipher,
   loadAccessibleCipher,
   planCipherCollectionChange,
@@ -881,6 +882,32 @@ export function cipherToResponse(
     data: typeof (passthrough as any).data === 'string' ? (passthrough as any).data : null,
     encryptedFor: (passthrough as any).encryptedFor ?? null,
   };
+}
+
+function organizationCipherResponse(request: Request, cipher: Cipher, attachments: Attachment[]) {
+  const { folderId, favorite, edit, viewPassword, permissions, ...response } = cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request));
+  return { ...response, organizationUseTotp: true, object: 'cipherMiniDetails' };
+}
+
+// includeMemberItems concerns organization-owned default collections upstream. NodeWarden has none;
+// neither value can include personal vault rows. Reports decrypt and analyze the response in the client.
+export async function handleGetOrganizationCiphers(request: Request, env: Env, userId: string): Promise<Response> {
+  const orgId = new URL(request.url).searchParams.get('organizationId');
+  if (!isUUID(orgId)) return errorResponse('OrganizationId must be a valid GUID.', 400);
+  const id = orgId.toLowerCase();
+  if (!await canReadOrganizationCiphers(env, userId, id, 'all')) return errorResponse('Not found', 404);
+  const ciphers = await orgRepo.listOrganizationCiphers(env.DB, id);
+  const attachments = await new StorageService(env.DB).getAttachmentsByCipherIds(ciphers.map(cipher => cipher.id));
+  return jsonResponse({ data: ciphers.map(cipher => organizationCipherResponse(request, cipher, attachments.get(cipher.id) || [])), object: 'list', continuationToken: null });
+}
+
+export async function handleGetCipherAdmin(request: Request, env: Env, userId: string, id: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const cipher = await storage.getCipher(id);
+  if (!cipher?.organizationId || !await canReadOrganizationCiphers(env, userId, cipher.organizationId, 'admin')) return errorResponse('Not found', 404);
+  const collectionIds = await orgRepo.listCipherCollectionIds(env.DB, id);
+  const orgCollections = new Set((await orgRepo.listCollectionsByOrg(env.DB, cipher.organizationId)).map(collection => collection.id));
+  return jsonResponse(organizationCipherResponse(request, { ...cipher, collectionIds: collectionIds.filter(collectionId => orgCollections.has(collectionId)) }, await storage.getAttachmentsByCipher(id)));
 }
 
 // GET /api/ciphers

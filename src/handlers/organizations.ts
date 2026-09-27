@@ -369,8 +369,11 @@ export async function handleListOrgCollectionDetails(env: Env, userId: string, o
   const collections = await orgRepo.listCollectionsByOrg(env.DB, orgId);
   const accessById = new Map((await orgRepo.listUserCollectionAccess(env.DB, userId, orgId)).map((item) => [item.collectionId, item]));
   const grants = await orgRepo.listCollectionAccessGrants(env.DB, orgId);
+  // The 9.0 member-access report maps grants in the client; AccessReports needs this bulk metadata
+  // even though upstream's old collection gate omits it. Single-resource and write gates stay separate.
+  const canReadReports = resolvePermissions(member).accessReports;
   const data = collections
-    .filter((collection) => canActOnCollection(member, accessById.get(collection.id) || null, 'readAllWithAccess'))
+    .filter((collection) => canReadReports || canActOnCollection(member, accessById.get(collection.id) || null, 'readAllWithAccess'))
     .map((collection) => collectionAccessDetailsJson(collection, member, accessById.get(collection.id) || null, grants.get(collection.id) || NO_ACCESS_GRANTS));
   return jsonResponse({ data, object: 'list', continuationToken: null });
 }
@@ -604,11 +607,13 @@ function memberMiniDetails(item: MembershipRecord, account: Pick<User, 'name' | 
   };
 }
 
-export async function handleListMembers(env: Env, userId: string, orgId: string): Promise<Response> {
+export async function handleListMembers(env: Env, userId: string, orgId: string, includeGroups = false): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
   if (member instanceof Response) return member;
+  const groupsByMember = includeGroups ? await orgRepo.listMembershipGroupIdsByOrg(env.DB, orgId) : null;
   const data = (await orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId)).map(({ item, account, hasTwoFactorPasskey }) => ({
     ...memberMiniDetails(item, account),
+    ...(groupsByMember ? { groups: groupsByMember.get(item.id) || [] } : {}),
     externalId: item.externalId,
     accessAll: item.accessAll,
     twoFactorEnabled: account ? twoFactorProviders(account, hasTwoFactorPasskey).length > 0 : false,

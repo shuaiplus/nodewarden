@@ -781,6 +781,7 @@ async function listOrgCipherCollectionIds(db: D1Database, orgId: string): Promis
     })
     .from(cipherCollections)
     .innerJoin(ciphers, eq(ciphers.id, cipherCollections.cipherId))
+    .innerJoin(collections, and(eq(collections.id, cipherCollections.collectionId), eq(collections.orgId, ciphers.organizationId)))
     .where(eq(ciphers.organizationId, orgId));
   const map = new Map<string, string[]>();
   for (const row of rows) {
@@ -1148,4 +1149,29 @@ export async function getOrganizationPortalStats(db: D1Database, orgId: string):
   ];
   const results = await db.batch<{ total: number }>(queries.map(([, query]) => db.prepare(query).bind(orgId)));
   return queries.map(([name], index) => [name, results[index].results[0]?.total ?? 0]);
+}
+
+// Administrative reports need the complete encrypted organization vault, independent of assignments.
+export async function listOrganizationCiphers(db: D1Database, orgId: string): Promise<Cipher[]> {
+  const rows = await getOrm(db).select().from(ciphers).where(eq(ciphers.organizationId, orgId)).orderBy(desc(ciphers.updatedAt));
+  const links = await listOrgCipherCollectionIds(db, orgId);
+  return rows.flatMap(row => {
+    const cipher = mapOrgCipherRow(row, row.userId, orgId, links.get(row.id) || []);
+    return cipher ? [cipher] : [];
+  });
+}
+
+export async function listMembershipGroupIdsByOrg(db: D1Database, orgId: string): Promise<Map<string, string[]>> {
+  const rows = await getOrm(db).select({ membershipId: orgGroupMembers.membershipId, groupId: orgGroupMembers.groupId })
+    .from(orgGroupMembers)
+    .innerJoin(organizationMemberships, eq(organizationMemberships.id, orgGroupMembers.membershipId))
+    .innerJoin(orgGroups, and(eq(orgGroups.id, orgGroupMembers.groupId), eq(orgGroups.orgId, organizationMemberships.orgId)))
+    .where(eq(organizationMemberships.orgId, orgId));
+  const result = new Map<string, string[]>();
+  for (const row of rows) {
+    const groups = result.get(row.membershipId) || [];
+    groups.push(row.groupId);
+    result.set(row.membershipId, groups);
+  }
+  return result;
 }

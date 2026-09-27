@@ -139,3 +139,13 @@ export async function deleteAuthorizedCipher(
   }
   await storage.deleteCipher(cipher.id, userId);
 }
+
+// Upstream separates report/export reads of the whole encrypted vault from single-item admin reads.
+export async function canReadOrganizationCiphers(env: Env, userId: string, orgId: string, scope: 'all' | 'admin'): Promise<boolean> {
+  const member = await orgRepo.getMembershipByUserAndOrg(env.DB, userId, orgId);
+  if (!isActiveMember(member)) return false;
+  const permissions = resolvePermissions(member);
+  return scope === 'admin'
+    ? permissions.editAnyCollection || permissions.deleteAnyCollection
+    : permissions.accessReports || permissions.accessImportExport || permissions.editAnyCollection;
+}
