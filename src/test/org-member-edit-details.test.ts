@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { events, userRevisions } from '../db/schema';
 import { hasFullCollectionAccess } from '../services/org-authz';
 import { EMPTY_PERMISSIONS, MembershipStatus, MembershipType, type OrgPermissions } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
@@ -57,6 +60,11 @@ async function expectRejected(response: Promise<Response>, status: number, messa
   const settled = await response;
   assert.equal(settled.status, status);
   assert.equal(await errorMessage(settled), message);
+}
+
+// The stored row itself: getRevisionDate inserts a missing row, which would hide its absence.
+function revisionRow(env: Env, userId: string) {
+  return getOrm(env.DB).select({ revisionDate: userRevisions.revisionDate }).from(userRevisions).where(eq(userRevisions.userId, userId)).get();
 }
 
 test('an Admin can neither grant Owner nor edit or demote an Owner, on PUT or invite', async () => {
@@ -237,7 +245,7 @@ test('bulk member actions report per-member errors, preserve other organizations
   ]);
   assert.deepEqual((await orgRepo.listMembershipsByOrg(env.DB, orgId)).map((row) => row.id), [self]);
   assert.equal((await orgRepo.getMembership(env.DB, foreign.memberId))?.status, MembershipStatus.Confirmed);
-  assert.ok(await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(member.user.id).first());
+  assert.ok(await revisionRow(env, member.user.id));
 });
 
 test('bulk member writes chunk 150 ids and roll back revisions with a failed later chunk', async (t) => {
@@ -246,15 +254,17 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   const orgId = await createOrg(env, owner);
   const ids: string[] = [];
   for (let i = 0; i < 150; i++) ids.push((await seedMember(env, orgId)).memberId);
-  const revisionBefore = await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first();
+  const revisionBefore = await revisionRow(env, owner.id);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the last member update inside the bulk revoke batch
   await env.DB.prepare(`CREATE TRIGGER fail_last_member BEFORE UPDATE ON organization_memberships
     WHEN NEW.id = '${ids[149]}' BEGIN SELECT RAISE(ABORT, 'test failure'); END`).run();
   const request = { method: 'PUT', path: `/api/organizations/${orgId}/users/revoke`, body: { ids }, userId: owner.id };
   const failed = await authedFetch(env, request);
   assert.equal(failed.status, 500);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS count FROM events WHERE organization_id = ?').bind(orgId).first('count'), 0);
+  assert.equal(await getOrm(env.DB).$count(events, eq(events.organizationId, orgId)), 0);
   assert.ok((await orgRepo.listMembershipsByOrg(env.DB, orgId)).every((member) => member.status === MembershipStatus.Confirmed));
-  assert.deepEqual(await env.DB.prepare('SELECT revision_date FROM user_revisions WHERE user_id = ?').bind(owner.id).first(), revisionBefore);
+  assert.deepEqual(await revisionRow(env, owner.id), revisionBefore);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no DROP TRIGGER; it removes the fault injected above
   await env.DB.exec('DROP TRIGGER fail_last_member');
   const batch = t.mock.method(env.DB, 'batch');
   const response = await authedFetch(env, request);
@@ -263,7 +273,7 @@ test('bulk member writes chunk 150 ids and roll back revisions with a failed lat
   assert.equal(result.data.length, 150);
   assert.ok(result.data.every((item) => item.error === ''));
   assert.equal(batch.mock.callCount(), 2); // Atomic membership writes, then chunked event records.
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS count FROM events WHERE organization_id = ? AND type = 1511').bind(orgId).first('count'), 150);
+  assert.equal(await getOrm(env.DB).$count(events, and(eq(events.organizationId, orgId), eq(events.type, 1511))), 150);
   assert.equal((await orgRepo.listMembershipsByOrg(env.DB, orgId)).filter((member) => member.status < 0).length, 150);
 });
 
