@@ -1,4 +1,4 @@
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, lte, or } from 'drizzle-orm';
 import {
   convertIPv4BinaryToString,
   convertIPv4MappedIPv6ToIPv4,
@@ -12,6 +12,7 @@ import {
 import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
 import { loginAttemptsIp, rateLimitBuckets } from '../db/schema';
+import { plus } from '../db/sql';
 import type { Env } from '../types';
 
 // Rate limiting service.
@@ -118,7 +119,7 @@ export class RateLimitService {
       .onConflictDoUpdate({
         target: loginAttemptsIp.ip,
         set: {
-          attempts: sql`${loginAttemptsIp.attempts} + 1`,
+          attempts: plus(loginAttemptsIp.attempts, 1),
           updatedAt: now,
         },
       });
@@ -182,11 +183,11 @@ export class RateLimitService {
     const update = await orm
       .update(rateLimitBuckets)
       .set({
-        count: sql`${rateLimitBuckets.count} + ${cost}`,
+        count: plus(rateLimitBuckets.count, cost),
         expiresAt: windowEndMs,
         updatedAt: nowMs,
       })
-      .where(and(eq(rateLimitBuckets.bucketKey, bucketKey), sql`${rateLimitBuckets.count} + ${cost} <= ${max}`))
+      .where(and(eq(rateLimitBuckets.bucketKey, bucketKey), lte(plus(rateLimitBuckets.count, cost), max)))
       .run();
 
     const allowed = Number(update.meta?.changes ?? 0) > 0;
