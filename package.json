@@ -11,6 +11,7 @@
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
     "domains:sync": "node scripts/sync-global-domains.mjs",
     "test": "tsx --test 'src/**/*.test.ts' 'src/**/*.test.mjs'",
+    "lint": "eslint src",
     "db:generate": "drizzle-kit generate && node scripts/embed-baseline.mjs",
     "db:embed": "node scripts/embed-baseline.mjs",
     "db:seed": "tsx scripts/seed.ts",
@@ -61,8 +62,10 @@
     "better-sqlite3": "13.0.3",
     "drizzle-kit": "1.0.0-rc.4",
     "drizzle-seed": "1.0.0-rc.4",
+    "eslint": "^10.11.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
     "wrangler": "^4.105.0"
   },
   "dependencies": {
