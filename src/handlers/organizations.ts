@@ -1159,8 +1159,8 @@ export async function handleGetPolicy(env: Env, userId: string, orgId: string, p
     : { organizationId: orgId, type: policyType, enabled: false, data: {}, object: 'policy' });
 }
 
-// Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; NodeWarden's webapp
-// still sends the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
+// Official clients send SavePolicyRequest {policy:{enabled,data},metadata}; older clients
+// still send the flat policy. Metadata only feeds upstream side effects we do not run. Upstream
 // marks Policy [Required], so a malformed envelope is rejected instead of saving a disabled policy.
 const policyState = z.object({
   enabled: z.boolean().catch(false),

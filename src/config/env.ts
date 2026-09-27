@@ -28,7 +28,6 @@ export const EnvConfig = z.object({
   JWT_SECRET: text.transform((secret) => secret.length >= LIMITS.auth.jwtSecretMinLength
     ? { kind: 'safe' as const, secret }
     : { kind: secret ? 'too_short' as const : 'missing' as const }),
-  HIDE_WEB_VAULT: enabledByOne,
   ALLOW_OPEN_REGISTRATION: enabledByOne,
   WEB_VAULT_ORIGINS: originList,
   WEBAUTHN_ALLOWED_ORIGINS: originList,

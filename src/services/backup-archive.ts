@@ -15,7 +15,7 @@ import {
 
 // CONTRACT:
 // This file defines the exported instance-backup archive shape. Keep it in lock
-// step with src/services/backup-import.ts and webapp/src/lib/api/backup.ts.
+// step with src/services/backup-import.ts.
 //
 // WHEN CHANGING THIS:
 // - Add persistent tables to BackupPayload, export SQL, manifest tableCounts,

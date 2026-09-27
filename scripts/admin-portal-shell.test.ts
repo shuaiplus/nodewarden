@@ -16,7 +16,6 @@ test('portal remains on the Worker origin and independent of vault/JWT configura
   assert.equal((await authedFetch(env, { path: '/api/config' })).status, 200);
   env.ADMIN_EMAILS = 'admin@x.io';
   env.JWT_SECRET = '';
-  env.HIDE_WEB_VAULT = '1';
   const login = await portalFetch(env, { path: '/admin/login' });
   assert.equal(login.status, 200);
   for (const [key, value] of Object.entries(PORTAL_HEADERS)) assert.equal(login.headers.get(key), value);

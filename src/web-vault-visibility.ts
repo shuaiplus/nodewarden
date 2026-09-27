@@ -1,14 +1,7 @@
 import { isBackendPath } from '../shared/backend-paths';
-import { readEnvConfig } from './config/env';
-import type { Env } from './types';
 
 export function isBackendRequestPath(pathname: string): boolean {
   return isBackendPath(pathname, ['/admin']);
-}
-
-
-export function isWebVaultHidden(env: Env): boolean {
-  return readEnvConfig(env).HIDE_WEB_VAULT;
 }
 
 export function webVaultNotFoundResponse(request: Request): Response {

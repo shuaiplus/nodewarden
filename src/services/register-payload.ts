@@ -22,7 +22,7 @@ export const MasterPasswordHint = z.string()
 const asymmetricKeys = section({ publicKey: text, encryptedPrivateKey: text, privateKey: text });
 
 // Official web RegisterFinish nests the hash, wrapped user key and KDF under masterPasswordAuthentication
-// and masterPasswordUnlock and the key pair under userAsymmetricKeys; the NodeWarden webapp posts them flat.
+// and masterPasswordUnlock and the key pair under userAsymmetricKeys; legacy /accounts/register clients post them flat.
 // The checks run in order, so the first failing one is the reported message.
 export const RegisterSchema = z.object({
   email: text,

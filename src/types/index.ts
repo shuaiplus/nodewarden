@@ -13,7 +13,6 @@ export interface Env {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
   // Set to "1" to return 404 for the Web Vault while keeping client APIs available.
-  HIDE_WEB_VAULT?: string;
   // Comma-separated official Bitwarden web origins (Cloudflare Pages) allowed for CORS and signup.
   WEB_VAULT_ORIGINS?: string;
   // Set to "1" to allow official-client signups after the first admin without invite codes.

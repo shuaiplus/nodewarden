@@ -46,21 +46,12 @@ import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
 import { createAuth } from './auth';
 import type { Env } from './types';
-import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
+import { isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
-import * as userRepo from './services/storage-user-repo';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
 import type { AppEnv } from './router';
 
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
-
-export interface WebBootstrapResponse {
-  defaultKdfIterations: number;
-  jwtUnsafeReason: JwtUnsafeReason;
-  jwtSecretMinLength: number;
-  registrationInviteRequired: boolean;
-  webAuthnAllowedOrigins: string[];
-}
 
 export function jwtSecretUnsafeReason(env: Env): JwtUnsafeReason {
   const { kind } = readEnvConfig(env).JWT_SECRET;
@@ -270,19 +261,6 @@ async function handleWebsiteIcon(host: string, fallbackMode: 'default' | 'not-fo
   return fallbackMode === 'not-found' ? handleMissingWebsiteIcon() : handleNwFavicon();
 }
 
-export async function buildWebBootstrapResponse(env: Env): Promise<WebBootstrapResponse> {
-  const jwtUnsafeReason = jwtSecretUnsafeReason(env);
-  const userCount = await userRepo.getUserCount(env.DB);
-
-  return {
-    defaultKdfIterations: LIMITS.auth.defaultKdfIterations,
-    jwtUnsafeReason,
-    jwtSecretMinLength: LIMITS.auth.jwtSecretMinLength,
-    registrationInviteRequired: userCount > 0,
-    webAuthnAllowedOrigins: getConfiguredWebAuthnAllowedOrigins(env),
-  };
-}
-
 export function tooManyRequests(retryAfterSeconds: number | undefined): Response {
   return new Response(
     JSON.stringify({
@@ -354,7 +332,6 @@ export const publicRoutes = new Hono<AppEnv>();
 
 publicRoutes.on('ALL', ['/api/auth', '/api/auth/*'], (c) => createAuth(c.env, c.req.raw).handler(c.req.raw));
 
-publicRoutes.on('GET', ['/api/web-bootstrap', '/web-bootstrap'], publicRead, async (c) => jsonResponse(await buildWebBootstrapResponse(c.env)));
 publicRoutes.get('/fill-assist/manifest.json', publicRead, () => handleFillAssistManifest());
 publicRoutes.on('GET', ['/v1/assetlinks:check', '/api/v1/assetlinks:check'], publicRead, () => handleDigitalAssetLinkCheck());
 publicRoutes.get('/fill-assist/:filename', publicRead, (c) => handleFillAssistForms(c.req.param('filename')));

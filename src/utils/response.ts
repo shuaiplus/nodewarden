@@ -98,7 +98,7 @@ export function jsonResponse(data: unknown, status: number = 200, headers: Recor
 
 // Error response helper. The top-level fields mirror upstream ErrorResponseModel,
 // which official clients read for non-identity calls; error/error_description and
-// ErrorModel stay for identity-style readers and the NodeWarden webapp.
+// ErrorModel stay for identity-style readers.
 export function errorResponse(
   message: string,
   status: number = 400,

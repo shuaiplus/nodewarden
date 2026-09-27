@@ -33,7 +33,7 @@ test('parses the official web RegisterFinish payload', () => {
   assert.equal(parsed.publicKey, 'pub');
 });
 
-test('parses the NodeWarden local webapp register payload', () => {
+test('parses the flat legacy register payload', () => {
   const parsed = RegisterSchema.parse({
     email: 'local@example.com',
     masterPasswordHash: 'hash',

@@ -1,4 +1,4 @@
-// Shared backup settings types used by both Worker and webapp code.
+// Backup settings types shared by the Worker's backup handlers and services.
 //
 // CONTRACT:
 // Keep this file serializable and provider-neutral. Runtime state is operational

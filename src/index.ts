@@ -11,11 +11,7 @@ import { app } from './router';
 import { applyCors, applySecurityHeaders, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
-import {
-  isBackendRequestPath,
-  isWebVaultHidden,
-  webVaultNotFoundResponse,
-} from './web-vault-visibility';
+import { isBackendRequestPath } from './web-vault-visibility';
 import { initializeDatabase } from './db/migrate';
 
 let dbInitialized = false;
@@ -89,11 +85,6 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const normalizedRequest = normalizeRequestUrl(request);
-    const requestPath = new URL(normalizedRequest.url).pathname;
-
-    if (isWebVaultHidden(env) && !isBackendRequestPath(requestPath)) {
-      return webVaultNotFoundResponse(normalizedRequest);
-    }
 
     const assetResponse = await maybeServeAsset(normalizedRequest, env);
     if (assetResponse) {
