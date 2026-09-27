@@ -25,37 +25,6 @@ function sqlTouchesTable(sql, table) {
   return new RegExp(`\\b(?:from|into|table)\\s+[\"']?${table}\\b`, 'i').test(sql);
 }
 
-function emptyBackupDb(extra = {}) {
-  return {
-    config: [],
-    users: [],
-    domain_settings: [],
-    user_revisions: [],
-    folders: [],
-    ciphers: [],
-    attachments: [],
-    webauthn_credentials: [],
-    ...extra,
-  };
-}
-
-function archiveBytes(db, tableCounts = {}) {
-  const encoder = new TextEncoder();
-  return zipSync({
-    'manifest.json': encoder.encode(JSON.stringify({
-      formatVersion: 1,
-      exportedAt: new Date(0).toISOString(),
-      appVersion: 'test',
-      storageKind: null,
-      tableCounts,
-      includes: { attachments: false },
-      blobSummary: { attachmentFiles: 0, totalBytes: 0, largestObjectBytes: 0 },
-      attachmentBlobs: [],
-    })),
-    'db.json': encoder.encode(JSON.stringify(db)),
-  }, { level: 0 });
-}
-
 function createD1Mock({ exportMode = false } = {}) {
   const preparedSql = [];
   const db = {
@@ -106,22 +75,43 @@ for (const table of forbiddenRuntimeTables) {
   assert(!exportMock.preparedSql.some((sql) => sqlTouchesTable(sql, table)), `Export queried forbidden runtime table: ${table}`);
 }
 
-const legacyDb = emptyBackupDb({
+const legacyDb = {
+  config: [],
+  users: [],
+  domain_settings: [],
+  user_revisions: [],
+  folders: [],
+  ciphers: [],
+  attachments: [],
+  webauthn_credentials: [],
   devices: [{ device_identifier: 'device-secret' }],
   refresh_tokens: [{ token: 'refresh-secret' }],
   auth_requests: [{ access_code: 'approval-secret' }],
   trusted_two_factor_device_tokens: [{ token: 'remember-secret' }],
   account_passkey_challenges: [{ challenge_hash: 'challenge-secret' }],
   used_attachment_download_tokens: [{ token_hash: 'download-secret' }],
-});
-const legacyArchive = archiveBytes(legacyDb, {
-  devices: 1,
-  refresh_tokens: 1,
-  auth_requests: 1,
-  trusted_two_factor_device_tokens: 1,
-  account_passkey_challenges: 1,
-  used_attachment_download_tokens: 1,
-});
+};
+const encoder = new TextEncoder();
+const legacyArchive = zipSync({
+  'manifest.json': encoder.encode(JSON.stringify({
+    formatVersion: 1,
+    exportedAt: new Date(0).toISOString(),
+    appVersion: 'test',
+    storageKind: null,
+    tableCounts: {
+      devices: 1,
+      refresh_tokens: 1,
+      auth_requests: 1,
+      trusted_two_factor_device_tokens: 1,
+      account_passkey_challenges: 1,
+      used_attachment_download_tokens: 1,
+    },
+    includes: { attachments: false },
+    blobSummary: { attachmentFiles: 0, totalBytes: 0, largestObjectBytes: 0 },
+    attachmentBlobs: [],
+  })),
+  'db.json': encoder.encode(JSON.stringify(legacyDb)),
+}, { level: 0 });
 const parsedLegacy = parseBackupArchive(legacyArchive);
 validateBackupPayloadContents(parsedLegacy.payload, parsedLegacy.files);
 for (const table of forbiddenRuntimeTables) {
