@@ -31,8 +31,22 @@ function mapSendRow(row: typeof sends.$inferSelect): Send {
   };
 }
 
-function sendValues(send: Send) {
-  return {
+export async function getSend(db: D1Database, id: string): Promise<Send | null> {
+  const [row] = await getOrm(db).select().from(sends).where(eq(sends.id, id)).limit(1);
+  return row ? mapSendRow(row) : null;
+}
+
+export async function getSendForUser(db: D1Database, id: string, userId: string): Promise<Send | null> {
+  const [row] = await getOrm(db)
+    .select()
+    .from(sends)
+    .where(and(eq(sends.id, id), eq(sends.userId, userId)))
+    .limit(1);
+  return row ? mapSendRow(row) : null;
+}
+
+export async function saveSend(db: D1Database, send: Send): Promise<void> {
+  const values = {
     id: send.id,
     userId: send.userId,
     type: Number(send.type) || 0,
@@ -54,24 +68,6 @@ function sendValues(send: Send) {
     expirationDate: send.expirationDate,
     deletionDate: send.deletionDate,
   };
-}
-
-export async function getSend(db: D1Database, id: string): Promise<Send | null> {
-  const [row] = await getOrm(db).select().from(sends).where(eq(sends.id, id)).limit(1);
-  return row ? mapSendRow(row) : null;
-}
-
-export async function getSendForUser(db: D1Database, id: string, userId: string): Promise<Send | null> {
-  const [row] = await getOrm(db)
-    .select()
-    .from(sends)
-    .where(and(eq(sends.id, id), eq(sends.userId, userId)))
-    .limit(1);
-  return row ? mapSendRow(row) : null;
-}
-
-export async function saveSend(db: D1Database, send: Send): Promise<void> {
-  const values = sendValues(send);
   await getOrm(db)
     .insert(sends)
     .values(values)
