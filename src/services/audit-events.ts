@@ -23,7 +23,7 @@ const MAX_METADATA_BYTES = 2048;
 const AUDIT_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const AUDIT_CLEANUP_PROBABILITY = 0.02;
 const AUDIT_LOG_SETTINGS_KEY = 'audit.logs.settings.v1';
-const DEFAULT_AUDIT_LOG_SETTINGS: AuditLogSettings = {
+export const DEFAULT_AUDIT_LOG_SETTINGS: AuditLogSettings = {
   retentionDays: 90,
   maxEntries: null,
 };

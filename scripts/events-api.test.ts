@@ -113,9 +113,26 @@ test('event cleanup reuses audit retention and deletes at most 1000 rows using r
   await env.DB.prepare("UPDATE events SET recorded_at='2000-01-01T00:00:00.000Z'").run();
   await pruneEvents(env); assert.equal(await count(env), 5);
   await pruneEvents(env); assert.equal(await count(env), 0);
-  await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 1005 }, () => ({ type: 1600, organizationId: org.id })));
-  await saveAuditLogSettings(new StorageService(env.DB), { retentionDays: null, maxEntries: 1000 });
-  await pruneEvents(env); assert.equal(await count(env), 1000);
+});
+
+test('a row-cap audit setting never lets one account flood out another organization history', async () => {
+  const { env, owner, org } = await setup();
+  const storage = new StorageService(env.DB);
+  const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+  await recordEvents(env, null, { userId: owner.id }, Array.from({ length: 5 }, () => ({ type: 1600, organizationId: org.id })));
+  await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(10)).run();
+  const outsider = await seedUser(env);
+  await recordEvents(env, null, { userId: outsider.id }, Array.from({ length: 1005 }, () => ({ type: EventType.UserClientExportedVault, organizationId: null, userId: outsider.id })));
+  await saveAuditLogSettings(storage, { retentionDays: null, maxEntries: 1000 });
+  await pruneEvents(env);
+  assert.equal(await count(env), 1010, 'recent rows are kept whatever their volume');
+  await env.DB.prepare('UPDATE events SET recorded_at=? WHERE organization_id=?').bind(daysAgo(91), org.id).run();
+  await pruneEvents(env);
+  assert.equal(await count(env), 1005, 'row-cap mode still expires events at the default retention age');
+  await saveAuditLogSettings(storage, { retentionDays: null, maxEntries: null });
+  await env.DB.prepare('UPDATE events SET recorded_at=?').bind(daysAgo(4000)).run();
+  await pruneEvents(env);
+  assert.equal(await count(env), 1005, 'disabled retention keeps every event');
 });
 
 test('committed server changes survive event-store failure, while client uploads remain retryable', async (t) => {
