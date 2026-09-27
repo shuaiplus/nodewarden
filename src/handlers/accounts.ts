@@ -167,19 +167,6 @@ export function masterPasswordUpdate(body: z.output<typeof MasterPasswordFields>
   return update;
 }
 
-function masterPasswordPolicyResponse(): Record<string, unknown> {
-  return {
-    minComplexity: 0,
-    minLength: 0,
-    requireUpper: false,
-    requireLower: false,
-    requireNumbers: false,
-    requireSpecial: false,
-    enforceOnLogin: false,
-    object: 'masterPasswordPolicy',
-  };
-}
-
 function keysResponse(user: User): Record<string, unknown> {
   const accountKeys = buildAccountKeys(user);
   return {
@@ -824,7 +811,9 @@ function twoFactorAuthenticatorResponse(
   };
 }
 
-function yubiKeyResponse(user: User): Record<string, unknown> {
+async function yubiKeySettingsResponse(env: Env, user: User): Promise<Record<string, unknown>> {
+  const credentials = await getYubicoCredentials(env.DB);
+  const canManageCredentials = user.role === 'admin' && user.status === 'active';
   const provider = {
     Enabled: isYubiKeyEnabled(user),
     Key1: user.yubikeyKey1,
@@ -834,19 +823,10 @@ function yubiKeyResponse(user: User): Record<string, unknown> {
     Key5: user.yubikeyKey5,
     Nfc: !!user.yubikeyNfc,
   };
-  return { ...provider, YubiKey: provider, Object: 'twoFactorYubiKey' };
-}
-
-// This obsolete two-factor surface stays disabled; /accounts/verify-devices owns the preference.
-function deviceVerificationSettingsResponse(): Record<string, unknown> {
-  return { isDeviceVerificationSectionEnabled: false, unknownDeviceVerificationEnabled: false, object: 'deviceVerificationSettings' };
-}
-
-async function yubiKeySettingsResponse(env: Env, user: User): Promise<Record<string, unknown>> {
-  const credentials = await getYubicoCredentials(env.DB);
-  const canManageCredentials = user.role === 'admin' && user.status === 'active';
   return {
-    ...yubiKeyResponse(user),
+    ...provider,
+    YubiKey: provider,
+    Object: 'twoFactorYubiKey',
     YubicoConfigured: !!credentials?.clientId,
     YubicoCanManage: canManageCredentials,
     ...(canManageCredentials
@@ -1018,7 +998,8 @@ export async function handleGetDeviceVerificationSettings(request: Request, env:
   void request;
   const user = await userRepo.getUserById(env.DB, userId);
   if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(deviceVerificationSettingsResponse());
+  // This obsolete two-factor surface stays disabled; /accounts/verify-devices owns the preference.
+  return jsonResponse({ isDeviceVerificationSectionEnabled: false, unknownDeviceVerificationEnabled: false, object: 'deviceVerificationSettings' });
 }
 
 // Obsolete upstream compatibility route; the real account preference is separate.
@@ -1426,7 +1407,16 @@ export async function handleVerifyPassword(request: Request, env: Env, userId: s
     return errorResponse('Invalid password', 400);
   }
 
-  return jsonResponse(masterPasswordPolicyResponse());
+  return jsonResponse({
+    minComplexity: 0,
+    minLength: 0,
+    requireUpper: false,
+    requireLower: false,
+    requireNumbers: false,
+    requireSpecial: false,
+    enforceOnLogin: false,
+    object: 'masterPasswordPolicy',
+  });
 }
 
 // POST /api/accounts/api-key
