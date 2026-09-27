@@ -2,7 +2,7 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { AlertTriangle, Archive, Clipboard, Download, Eye, EyeOff, ExternalLink, Folder, Paperclip, Pencil, RefreshCw, RotateCcw, ShieldCheck, ShieldAlert, Trash2, X } from 'lucide-preact';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
-import type { TotpCodeResult } from '@/lib/crypto';
+import type { TotpCodeResult } from '@/lib/totp';
 import { checkPasswordLeaked, type PasswordBreachResult } from '@/lib/password-security';
 import type { Cipher } from '@/lib/types';
 import { t } from '@/lib/i18n';

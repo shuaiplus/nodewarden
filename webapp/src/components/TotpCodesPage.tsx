@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Clipboard, Globe } from 'lucide-preact';
 import { copyTextToClipboard as copyTextWithFeedback } from '@/lib/clipboard';
-import { calcTotpNow, type TotpCodeResult } from '@/lib/crypto';
+import { calcTotpNow, type TotpCodeResult } from '@/lib/totp';
 import { t } from '@/lib/i18n';
 import type { Cipher } from '@/lib/types';
 import LoadingState from '@/components/LoadingState';

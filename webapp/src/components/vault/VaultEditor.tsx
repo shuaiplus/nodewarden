@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, CheckCheck, Download, Paperclip, Plus, QrCode, Refr
 import jsQR from 'jsqr';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
-import { normalizeTotpInput } from '@/lib/crypto';
+import { normalizeTotpInput } from '@/lib/totp';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';

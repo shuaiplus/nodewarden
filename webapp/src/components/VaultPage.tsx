@@ -31,7 +31,7 @@ import {
   type SidebarFilter,
   type VaultSortMode,
 } from '@/components/vault/vault-page-helpers';
-import { calcTotpNow, type TotpCodeResult } from '@/lib/crypto';
+import { calcTotpNow, type TotpCodeResult } from '@/lib/totp';
 import { computeSshFingerprint, generateDefaultSshKeyMaterial } from '@/lib/ssh';
 import { ChevronLeft } from 'lucide-preact';
 import type { Cipher, CustomFieldType, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
