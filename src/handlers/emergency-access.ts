@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Env, User } from '../types';
 import { AuthService } from '../services/auth';
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
@@ -5,11 +6,11 @@ import { generateUUID } from '../utils/uuid';
 import { createEmergencyAccessInviteToken, verifyEmergencyAccessInviteToken } from '../utils/jwt';
 import { LIMITS } from '../config/limits';
 import { RateLimitService } from '../services/ratelimit';
-import { configuredVaultOrigin, EMAIL_PATTERN, mailStatusCheck, readMailConfig, sendMail, type MailOutcome } from '../services/mail';
+import { configuredVaultOrigin, mailStatusCheck, readMailConfig, sendMail, type MailOutcome } from '../services/mail';
 import { runInBackground } from '../services/mail-notify';
 import { upsertCredentialAccount } from '../services/auth-accounts';
 import { cipherToResponse } from './ciphers';
-import { MasterPasswordFields, masterPasswordUpdate } from './accounts';
+import { emailAddress, MasterPasswordFields, masterPasswordUpdate } from './accounts';
 import * as emergencyRepo from '../services/storage-emergency-repo';
 import { EmergencyAccessStatus, EmergencyAccessType } from '../services/storage-emergency-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
@@ -17,10 +18,10 @@ import * as attachmentRepo from '../services/storage-attachment-repo';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as userRepo from '../services/storage-user-repo';
 
-function asNumber(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+// Type and wait time coerce like Number(); anything non-finite keeps the current or default value.
+const setting = z.coerce.number().optional().catch(undefined);
+const EmergencyAccessSettings = z.object({ type: setting, waitTimeDays: setting, keyEncrypted: z.string().optional().catch(undefined) });
+const text = z.string().catch('');
 
 function emergencyJson(record: emergencyRepo.EmergencyAccessRecord) {
   return {
@@ -128,9 +129,9 @@ export async function handleEmergencyAccessRoute(
     return jsonResponse({ data, object: 'list', continuationToken: null });
   }
   if (normalized === '/emergency-access/invite' && method === 'POST') {
-    const body = await request.json() as Record<string, unknown>;
-    const email = String(body.email || '').trim().toLowerCase();
-    if (email.length > 256 || !EMAIL_PATTERN.test(email)) return errorResponse('Email is not valid.', 400);
+    const body = await parseBody(request, EmergencyAccessSettings.extend({ email: emailAddress('Email is not valid.') }));
+    if (body instanceof Response) return body;
+    const { email } = body;
     if (email === user.email.toLowerCase()) return errorResponse('Cannot invite yourself', 400);
     const existing = await emergencyRepo.findInvite(env.DB, user.id, email);
     if (existing) return errorResponse('User already invited', 400);
@@ -142,9 +143,9 @@ export async function handleEmergencyAccessRoute(
       granteeId: grantee?.id || null,
       email,
       keyEncrypted: null,
-      type: asNumber(body.type, EmergencyAccessType.View),
+      type: body.type ?? EmergencyAccessType.View,
       status: grantee ? EmergencyAccessStatus.Accepted : EmergencyAccessStatus.Invited,
-      waitTimeDays: Math.max(0, asNumber(body.waitTimeDays, 7)),
+      waitTimeDays: Math.max(0, body.waitTimeDays ?? 7),
       recoveryInitiatedAt: null,
       lastNotificationAt: null,
       createdAt: now,
@@ -171,10 +172,11 @@ export async function handleEmergencyAccessRoute(
   }
   if ((method === 'PUT' || method === 'POST') && !action) {
     if (record.grantorId !== user.id) return errorResponse('Emergency access not valid', 404);
-    const body = await request.json() as Record<string, unknown>;
-    record.type = asNumber(body.type, record.type);
-    record.waitTimeDays = Math.max(0, asNumber(body.waitTimeDays, record.waitTimeDays));
-    if (typeof body.keyEncrypted === 'string') record.keyEncrypted = body.keyEncrypted;
+    const body = await parseBody(request, EmergencyAccessSettings);
+    if (body instanceof Response) return body;
+    record.type = body.type ?? record.type;
+    record.waitTimeDays = Math.max(0, body.waitTimeDays ?? record.waitTimeDays);
+    if (body.keyEncrypted !== undefined) record.keyEncrypted = body.keyEncrypted;
     record.updatedAt = new Date().toISOString();
     await emergencyRepo.saveEmergencyAccess(env.DB, record);
     return jsonResponse(emergencyJson(record));
@@ -212,13 +214,13 @@ export async function handleEmergencyAccessRoute(
     if (!record.email || record.email.toLowerCase() !== email) {
       return errorResponse('Emergency access not valid', 404);
     }
-    const body = await request.json() as Record<string, unknown>;
-    const token = String(body.token || '');
+    const body = await parseBody(request, z.object({ token: text }));
+    if (body instanceof Response) return body;
     const config = readMailConfig(env);
     const check = mailStatusCheck(config.kind === 'enabled' ? { kind: 'sent' } : config);
     if (!check.ok) return errorResponse(check.message, check.status, check.headers);
     if (config.kind === 'enabled' && configuredVaultOrigin(request, env)
-      && !await verifyEmergencyAccessInviteToken(token, env.JWT_SECRET, record.id, email)) {
+      && !await verifyEmergencyAccessInviteToken(body.token, env.JWT_SECRET, record.id, email)) {
       return errorResponse('Emergency access invitation is invalid or expired', 400);
     }
     record.granteeId = user.id;
@@ -232,8 +234,9 @@ export async function handleEmergencyAccessRoute(
     if (record.grantorId !== user.id || record.status !== EmergencyAccessStatus.Accepted) {
       return errorResponse('Emergency access not valid', 400);
     }
-    const body = await request.json() as Record<string, unknown>;
-    record.keyEncrypted = String(body.key || '');
+    const body = await parseBody(request, z.object({ key: text }));
+    if (body instanceof Response) return body;
+    record.keyEncrypted = body.key;
     record.status = EmergencyAccessStatus.Confirmed;
     record.email = null;
     record.updatedAt = new Date().toISOString();
