@@ -1,6 +1,8 @@
 import type { z } from 'zod';
+import { and, eq } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
 import { getOrm } from '../db/client';
+import { orgGroupMembers, orgGroups } from '../db/schema';
 import type { Principal } from '../services/auth';
 import type { Env } from '../types';
 import { MembershipStatus } from '../services/org-types';
@@ -14,9 +16,10 @@ import { EventType, recordEvents, type EventInput } from '../services/events';
 export async function peopleDirectory(env: Env, orgId: string, membershipId: string) {
   const [members, groups, ownGroups] = await Promise.all([
     orgRepo.listMembershipsWithAccountsByOrg(env.DB, orgId), orgRepo.listGroupsByOrg(env.DB, orgId),
-    env.DB.prepare('SELECT g.id FROM org_groups g JOIN org_group_members gm ON gm.group_id = g.id WHERE g.org_id = ? AND gm.membership_id = ?').bind(orgId, membershipId).all<{ id: string }>(),
+    getOrm(env.DB).select({ id: orgGroups.id }).from(orgGroups).innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, orgGroups.id))
+      .where(and(eq(orgGroups.orgId, orgId), eq(orgGroupMembers.membershipId, membershipId))),
   ]);
-  return { members, groups, ownGroups: new Set(ownGroups.results.map(row => row.id)) };
+  return { members, groups, ownGroups: new Set(ownGroups.map(row => row.id)) };
 }
 
 export async function handlePotentialPeople(env: Env, principal: Principal, orgId: string): Promise<Response> {
