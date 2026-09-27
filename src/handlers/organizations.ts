@@ -1013,61 +1013,14 @@ export async function handleEditMember(request: Request, env: Env, userId: strin
   return jsonResponse({});
 }
 
-export async function handleDeleteMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
-  if (actor instanceof Response) return actor;
-  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo.getMembership(env.DB, memberId);
-  if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, membership, 'remove');
-  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
-  if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
-    return errorResponse('Organization must have at least one confirmed owner.', 400);
-  }
-  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'remove');
-  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRemoved, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
-  return jsonResponse({});
-}
+type MemberAction = 'remove' | 'revoke' | 'restore';
 
-export async function handleRevokeMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
+// One membership transition for any number of ids: per-id role checks, the last-confirmed-owner
+// guard (an Owner can only be restored by another Owner), then one chunked batch and its events.
+async function applyMemberAction(request: Request, env: Env, userId: string, orgId: string, ids: string[], action: MemberAction): Promise<Array<{ id: string; error: string }> | Response> {
   const actor = await requireMember(env.DB, userId, orgId);
   if (actor instanceof Response) return actor;
   if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo.getMembership(env.DB, memberId);
-  if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, membership, 'revoke');
-  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
-  // Only an Owner can restore an Owner, so revoking the last confirmed one would leave nobody able to undo it.
-  if (membership.type === MembershipType.Owner && !(await hasOtherConfirmedOwner(env.DB, membership))) {
-    return errorResponse('Organization must have at least one confirmed owner.', 400);
-  }
-  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'revoke');
-  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRevoked, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
-  return jsonResponse({});
-}
-
-export async function handleRestoreMember(request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
-  if (actor instanceof Response) return actor;
-  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const membership = await orgRepo.getMembership(env.DB, memberId);
-  if (!membership || membership.orgId !== orgId) return errorResponse('Member not found', 404);
-  const removalCheck = memberRemovalCheck(actor, membership, 'restore');
-  if (!removalCheck.ok) return errorResponse(removalCheck.message, 400);
-  await orgRepo.applyMembershipAction(env.DB, orgId, [memberId], 'restore');
-  await recordEvents(env, request, { userId }, [{ type: EventType.OrganizationUserRestored, organizationId: orgId, resourceType: 'organizationUser', resourceId: membership.id, userId: membership.userId }]);
-  return jsonResponse({});
-}
-
-export async function handleBulkMemberAction(request: Request, env: Env, userId: string, orgId: string, action: 'remove' | 'revoke' | 'restore'): Promise<Response> {
-  const actor = await requireMember(env.DB, userId, orgId);
-  if (actor instanceof Response) return actor;
-  if (!canManageMembers(actor)) return errorResponse('Access denied', 403);
-  const body = await parseJsonBody(request);
-  if (body instanceof Response) return body;
-  const ids = readBulkIds(body);
-  if (ids instanceof Response) return ids;
-  if (!ids.every(isUUID)) return errorResponse('The Ids field must contain valid GUIDs.', 400);
   const members = await orgRepo.listMembershipsByOrg(env.DB, orgId);
   const byId = new Map(members.map((member) => [member.id, member]));
   const results = [...new Set(ids)].map((id) => {
@@ -1086,8 +1039,30 @@ export async function handleBulkMemberAction(request: Request, env: Env, userId:
   await orgRepo.applyMembershipAction(env.DB, orgId, successful.map(result => result.id), action);
   const type = { remove: EventType.OrganizationUserRemoved, revoke: EventType.OrganizationUserRevoked, restore: EventType.OrganizationUserRestored }[action];
   await recordEvents(env, request, { userId }, successful.map(({ id }) => ({ type, organizationId: orgId, resourceType: 'organizationUser', resourceId: id, userId: byId.get(id)!.userId })));
-  return bulkResultsResponse(results);
+  return results;
 }
+
+export async function handleBulkMemberAction(request: Request, env: Env, userId: string, orgId: string, action: MemberAction): Promise<Response> {
+  const body = await parseJsonBody(request);
+  if (body instanceof Response) return body;
+  const ids = readBulkIds(body);
+  if (ids instanceof Response) return ids;
+  if (!ids.every(isUUID)) return errorResponse('The Ids field must contain valid GUIDs.', 400);
+  const results = await applyMemberAction(request, env, userId, orgId, ids, action);
+  return results instanceof Response ? results : bulkResultsResponse(results);
+}
+
+async function handleMemberAction(request: Request, env: Env, userId: string, orgId: string, memberId: string, action: MemberAction): Promise<Response> {
+  const results = await applyMemberAction(request, env, userId, orgId, [memberId], action);
+  if (results instanceof Response) return results;
+  const [{ error }] = results;
+  if (error === 'Invalid user.') return errorResponse('Member not found', 404);
+  return error ? errorResponse(error, 400) : jsonResponse({});
+}
+
+export const handleDeleteMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'remove');
+export const handleRevokeMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'revoke');
+export const handleRestoreMember = (request: Request, env: Env, userId: string, orgId: string, memberId: string): Promise<Response> => handleMemberAction(request, env, userId, orgId, memberId, 'restore');
 
 export async function handleListGroups(env: Env, userId: string, orgId: string): Promise<Response> {
   const member = await requireMember(env.DB, userId, orgId);
