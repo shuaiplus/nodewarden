@@ -12,7 +12,7 @@ const tlsKey = process.env.OFFICIAL_WEB_KEY || '';
 const protocol = tlsCert && tlsKey ? 'https' : 'http';
 
 const BACKEND_PREFIXES = [
-  '/api', '/identity', '/icons', '/fill-assist', '/notifications', '/.well-known',
+  '/api', '/identity', '/icons', '/fill-assist', '/notifications', '/events', '/.well-known',
   '/devices', '/auth-requests', '/webauthn', '/scim', '/v2', '/connect', '/sso', '/oidc-signin',
   '/licenses', '/plans', '/emergency-access',
 ];

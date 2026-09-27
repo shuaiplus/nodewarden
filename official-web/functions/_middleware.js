@@ -5,6 +5,7 @@ const BACKEND_PREFIXES = [
   '/icons',
   '/fill-assist',
   '/notifications',
+  '/events',
   '/.well-known',
   '/devices',
   '/auth-requests',

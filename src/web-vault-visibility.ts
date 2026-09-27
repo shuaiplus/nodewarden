@@ -7,6 +7,7 @@ const BACKEND_PATH_PREFIXES = [
   '/icons',
   '/fill-assist',
   '/notifications',
+  '/events',
   '/.well-known',
   // Compatibility aliases retained for older Bitwarden clients.
   '/devices',

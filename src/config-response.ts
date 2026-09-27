@@ -20,6 +20,7 @@ export function buildConfigResponse(origin: string) {
       api: origin + '/api',
       identity: origin + '/identity',
       notifications: origin + '/notifications',
+      events: origin + '/events',
       icons: origin,
       sso: origin + '/identity',
       fillAssistRules: fillAssistBase,
