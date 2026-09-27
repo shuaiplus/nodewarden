@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
 import { unzipSync, zipSync } from 'fflate';
 
+import { getOrm } from '../db/client';
+import { auditLogs } from '../db/schema';
 import { buildBackupArchive } from '../services/backup-archive';
 import { importBackupArchiveBytes } from '../services/backup-import';
 import { BACKUP_SETTINGS_CONFIG_KEY, getDefaultBackupSettings, saveBackupSettings } from '../services/backup-config';
@@ -14,6 +17,7 @@ import * as configRepo from '../services/storage-config-repo';
 import * as userRepo from '../services/storage-user-repo';
 
 const ENCRYPTED = '2.dGVzdA==|dGVzdA==|dGVzdA==';
+const roleSyncAudits = (db: D1Database) => getOrm(db).$count(auditLogs, eq(auditLogs.action, 'admin.vault_role.sync'));
 
 test('enabling the first verified listed account synchronizes roles and revokes cached legacy admin access', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: 'listed@x.io' });
@@ -44,9 +48,9 @@ for (const config of ['disabled', 'invalid', 'absent', 'unverified', 'banned', '
     if (config === 'enabled') {
       await userRepo.saveUser(env.DB, { ...legacy, name: 'Stale role' });
       assert.equal((await userRepo.getUserById(env.DB, legacy.id))?.role, 'user');
-      const auditCount = await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n');
+      const auditCount = await roleSyncAudits(env.DB);
       await syncVaultAdminRoles(env);
-      assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n'), auditCount);
+      assert.equal(await roleSyncAudits(env.DB), auditCount);
     }
   });
 }
@@ -96,7 +100,7 @@ test('markEmailVerified grants a listed account once and stale saves cannot clea
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.emailVerified, true);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.role, 'admin');
   await markEmailVerified(env, user.id);
-  assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM audit_logs WHERE action='admin.vault_role.sync'").first('n'), 1);
+  assert.equal(await roleSyncAudits(env.DB), 1);
 });
 
 test('role changes re-wrap live backup settings for the derived administrator', async () => {
