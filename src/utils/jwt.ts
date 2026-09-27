@@ -1,74 +1,32 @@
+import { sign, verify } from 'hono/jwt';
 import type { Env, JWTPayload, User } from '../types';
 import type { TwoFactorProviderType } from '../services/two-factor-providers';
 import { sha256Base64Url } from './account-passkeys';
+import { bytesToBase64Url } from './passkey';
 import { LIMITS } from '../config/limits';
 
-const hmacKeyCache = new Map<string, Promise<CryptoKey>>();
-
-// Base64 URL encode
-function base64UrlEncode(data: Uint8Array): string {
-  const base64 = btoa(String.fromCharCode(...data));
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// Base64 URL decode
-function base64UrlDecode(str: string): Uint8Array {
-  str = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (str.length % 4) str += '=';
-  const binary = atob(str);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
+// A CryptoKey, not the raw string: hono sniffs string secrets for "PRIVATE"/"PUBLIC" and would
+// parse such a JWT_SECRET as a PEM key.
+function hmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 
 export async function hmacSha256Base64Url(secret: string, data: string): Promise<string> {
-  const signature = await crypto.subtle.sign('HMAC', await getHmacKey(secret), new TextEncoder().encode(data));
-  return base64UrlEncode(new Uint8Array(signature));
+  return bytesToBase64Url(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(data))));
 }
 
 export async function signHs256Jwt(payload: Record<string, unknown>, secret: string): Promise<string> {
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const encoder = new TextEncoder();
-  const headerB64 = base64UrlEncode(encoder.encode(JSON.stringify(header)));
-  const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
-  const data = `${headerB64}.${payloadB64}`;
-  const key = await getHmacKey(secret);
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
-  return `${data}.${base64UrlEncode(new Uint8Array(signature))}`;
+  return sign(payload, await hmacKey(secret), 'HS256');
 }
 
-// Signature and JSON only. Callers that must tell an expired token from a forged one check exp
-// themselves; everyone else uses verifyHs256Jwt.
-async function decodeSignedHs256Jwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const [headerB64, payloadB64, signatureB64] = parts;
-    const encoder = new TextEncoder();
-    const key = await getHmacKey(secret);
-    const valid = await crypto.subtle.verify(
-      'HMAC',
-      key,
-      base64UrlDecode(signatureB64),
-      encoder.encode(`${headerB64}.${payloadB64}`)
-    );
-    if (!valid) return null;
-    return JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function isExpired(payload: Record<string, unknown>): boolean {
-  return typeof payload.exp === 'number' && payload.exp < Math.floor(Date.now() / 1000);
-}
+// Every token we mint sets iat/nbf to its own "now"; checking them against another isolate's clock
+// could only reject fresh tokens on skew, so, as before, exp is the only time claim enforced.
+const HS256_VERIFY_OPTIONS = { alg: 'HS256', iat: false, nbf: false } as const;
 
 // The claim type is the caller's promise about what it signed; only our own secret can mint one.
+// hono throws on a bad signature, header or exp; callers only need valid or not.
 export async function verifyHs256Jwt<T extends object = Record<string, unknown>>(token: string, secret: string): Promise<T | null> {
-  const payload = await decodeSignedHs256Jwt(token, secret);
-  return payload && !isExpired(payload) ? payload as T : null;
+  return verify(token, await hmacKey(secret), HS256_VERIFY_OPTIONS).then((payload) => payload as T, () => null);
 }
 
 const TWO_FACTOR_USER_VERIFICATION_ISSUER = 'nodewarden|two_factor_uv';
@@ -194,9 +152,13 @@ export async function verifyOrgInviteToken(
   orgUserId: string,
   email: string | null
 ): Promise<OrgInviteTokenCheck> {
-  const payload = await decodeSignedHs256Jwt(token, secret);
-  // Upstream OrgUserInviteTokenable.ValidateOrgUserInvite reports expiry before the row binding.
-  if (payload?.iss === ORG_INVITE_ISSUER && isExpired(payload)) return { ok: false, message: 'Expired token.' };
+  // Signature only: hono checks exp before the signature, so its expiry error cannot tell an
+  // expired invite from a forged one. Upstream OrgUserInviteTokenable.ValidateOrgUserInvite
+  // reports expiry before the row binding.
+  const payload = await verify(token, await hmacKey(secret), { ...HS256_VERIFY_OPTIONS, exp: false }).catch(() => null);
+  if (payload?.iss === ORG_INVITE_ISSUER && typeof payload.exp === 'number' && payload.exp <= Math.floor(Date.now() / 1000)) {
+    return { ok: false, message: 'Expired token.' };
+  }
   const bound = !!payload && !!email
     && payload.iss === ORG_INVITE_ISSUER
     && payload.sub === orgUserId
@@ -222,22 +184,6 @@ export async function verifyEmergencyAccessInviteToken(token: string, secret: st
     && payload.exp > Math.floor(Date.now() / 1000);
 }
 
-function getHmacKey(secret: string): Promise<CryptoKey> {
-  const cacheKey = secret;
-  let cached = hmacKeyCache.get(cacheKey);
-  if (cached) return cached;
-
-  const encoder = new TextEncoder();
-  cached = crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign', 'verify']
-  );
-  hmacKeyCache.set(cacheKey, cached);
-  return cached;
-}
 
 // Access tokens carry the profile claims official clients read plus the flags mobile requires.
 export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' | 'premium' | 'email_verified' | 'amr'>, secret: string, expiresIn: number = LIMITS.auth.accessTokenTtlSeconds): Promise<string> {
@@ -261,7 +207,7 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
 export function createRefreshToken(): string {
   const bytes = new Uint8Array(LIMITS.auth.refreshTokenRandomBytes);
   crypto.getRandomValues(bytes);
-  return base64UrlEncode(bytes);
+  return bytesToBase64Url(bytes);
 }
 
 // Upload and download tokens for attachments and Send files live only as long as one transfer.
