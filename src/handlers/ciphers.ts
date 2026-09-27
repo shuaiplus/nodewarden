@@ -69,12 +69,6 @@ function normalizeOptionalId(value: unknown): string | null {
   return normalized ? normalized : null;
 }
 
-function normalizeResponseFolderId(folderId: unknown, validFolderIds?: ReadonlySet<string>): string | null {
-  const normalized = normalizeOptionalId(folderId);
-  if (!normalized) return null;
-  return validFolderIds && !validFolderIds.has(normalized) ? null : normalized;
-}
-
 // Stored permission flags default to allowed; anything but a boolean reads as the default.
 const storedFlag = z.boolean().catch(true);
 const StoredPermissions = z.object({ delete: storedFlag, restore: storedFlag })
@@ -139,7 +133,7 @@ const storedAsSent = <T>() => z.custom<T | null>().optional();
 const CipherData = z.looseObject({
   organizationId: z.unknown().transform(normalizeOptionalId).optional(),
   key: z.unknown()
-    .refine(shouldAcceptCipherKey, { error: 'Cipher key encryption is not supported by this server. Resync the client and try again.' })
+    .refine((value) => value == null || value === '' || isValidEncString(value), { error: 'Cipher key encryption is not supported by this server. Resync the client and try again.' })
     .optional(),
   favorite: z.boolean().nullish(),
   reprompt: z.number().nullish(),
@@ -212,14 +206,6 @@ function readCipherArchivedAt(source: CipherData, fallback: string | null): stri
   return source.archivedDate !== undefined ? source.archivedDate : fallback;
 }
 
-function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: string | null): boolean {
-  if (!clientRevisionDate) return false;
-  const existingTs = Date.parse(existingUpdatedAt);
-  const clientTs = Date.parse(clientRevisionDate);
-  if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
-  return existingTs - clientTs > 1000;
-}
-
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
   cipher.archivedDate = cipher.archivedAt ?? null;
   cipher.deletedDate = cipher.deletedAt ?? null;
@@ -267,10 +253,6 @@ function optionalEncStringWithin(value: unknown, maxLength: number): string | nu
   const normalized = optionalEncString(value);
   if (!normalized) return null;
   return normalized.length <= maxLength ? normalized : null;
-}
-
-function shouldAcceptCipherKey(value: unknown): boolean {
-  return value == null || value === '' || isValidEncString(value);
 }
 
 function sanitizeEncryptedObject<T extends object>(
@@ -607,17 +589,6 @@ function applyIncomingAttachmentMetadata(current: Attachment[], cipherData: Reco
   return changedAttachments;
 }
 
-async function syncIncomingAttachmentMetadata(
-  db: D1Database,
-  cipherId: string,
-  cipherData: Record<string, unknown>
-): Promise<void> {
-  if (!hasIncomingAttachmentMetadata(cipherData)) return;
-  for (const attachment of applyIncomingAttachmentMetadata(await attachmentRepo.getAttachmentsByCipher(db, cipherId), cipherData)) {
-    await attachmentRepo.saveAttachment(db, attachment);
-  }
-}
-
 export function applyCipherEmbeddedAttachmentMetadata(cipherData: Record<string, unknown>, attachments: Attachment[]): Attachment[] {
   const incoming = readIncomingAttachmentMetadata(cipherData);
   if (!incoming.length || !attachments.length) return attachments;
@@ -708,12 +679,14 @@ export function cipherToResponse(
   );
   const responseType = Number(cipher.type) || 1;
   const responseAttachments = applyCipherEmbeddedAttachmentMetadata(cipher, attachments);
+  // With validFolderIds, a folder the requester no longer has reads as no folder.
+  const responseFolderId = normalizeOptionalId(cipher.folderId);
 
   return {
     // Pass through ALL stored cipher fields (known + unknown)
     ...passthrough,
     // Server-computed / enforced fields (always override)
-    folderId: normalizeResponseFolderId(cipher.folderId, options.validFolderIds),
+    folderId: responseFolderId && options.validFolderIds && !options.validFolderIds.has(responseFolderId) ? null : responseFolderId,
     type: responseType,
     organizationId: normalizeOptionalId(passthrough.organizationId),
     organizationUseTotp: !!passthrough.organizationUseTotp,
@@ -898,7 +871,12 @@ type CipherMerge = { ok: true; cipher: Cipher } | { ok: false; message: string }
 // Full-update semantics shared by PUT /ciphers/{id} and the share endpoints: the client body
 // replaces the stored cipher, while unknown fields survive and server-owned ones stay put.
 function mergeFullCipherUpdate(existingCipher: Cipher, cipherData: CipherData, preserveRevisionDate: boolean): CipherMerge {
-  if (!hasIncomingAttachmentMetadata(cipherData) && isStaleCipherUpdate(existingCipher.updatedAt, cipherData.lastKnownRevisionDate ?? null)) {
+  // A client copy more than a second behind the stored revision is stale; an unparseable date never is.
+  if (
+    !hasIncomingAttachmentMetadata(cipherData)
+    && cipherData.lastKnownRevisionDate
+    && Date.parse(existingCipher.updatedAt) - Date.parse(cipherData.lastKnownRevisionDate) > 1000
+  ) {
     return { ok: false, message: 'The client copy of this cipher is out of date. Resync the client and try again.' };
   }
 
@@ -971,7 +949,12 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
 
   const previousState = cipher.organizationId
     ? cipherEventState(existingCipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id)) : null;
-  await syncIncomingAttachmentMetadata(env.DB, cipher.id, cipherData);
+  // Persist the attachment rows that the body's attachment metadata changed.
+  if (hasIncomingAttachmentMetadata(cipherData)) {
+    for (const attachment of applyIncomingAttachmentMetadata(await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id), cipherData)) {
+      await attachmentRepo.saveAttachment(env.DB, attachment);
+    }
+  }
   await cipherRepo.saveCipher(env.DB, cipher);
   const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
   const changed = previousState !== null && previousState !== cipherEventState(cipher, attachments);
