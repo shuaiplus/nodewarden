@@ -3,6 +3,9 @@ export class DurableObject<TEnv = unknown> {
   constructor(protected readonly ctx: DurableObjectState, protected readonly env: TEnv) {}
 }
 
+// The importable env; scripts/support/env.ts fills in the bindings src reads through it.
+export const env: Record<string, unknown> = {};
+
 const pending = new Set<Promise<unknown>>();
 
 export function waitUntil(task: Promise<unknown>): void {

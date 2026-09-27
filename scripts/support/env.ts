@@ -1,9 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 
 import { LIMITS } from '../../src/config/limits';
 import { AuthService } from '../../src/services/auth';
 import type { Env, User } from '../../src/types';
-import { waitUntil } from './cloudflare-workers';
+import { env as workersEnv, waitUntil } from './cloudflare-workers';
 import './workers-crypto';
 import { createSqliteD1 } from './d1-sqlite';
 import { initializeDatabase } from '../../src/db/migrate';
@@ -16,7 +17,7 @@ const TEST_CLIENT_IP = '203.0.113.10';
 const TEST_JWT_SECRET = 'nodewarden-test-jwt-secret-'.padEnd(LIMITS.auth.jwtSecretMinLength, '0');
 const PBKDF2_KDF_TYPE = 0;
 
-// Workers-only globals. The Cache API (sync responses, rate-limit counters) is a Map keyed by
+// Workers-only globals. The Cache API (sync responses) is a Map keyed by
 // cache name and URL that ignores Cache-Control, so a handler that forgets to bump the revision
 // date is served its stale entry. fetch is blocked so tests stay hermetic: the storage
 // bootstrap would otherwise register a real push installation with Bitwarden.
@@ -29,8 +30,23 @@ const namedCache = (cacheName: string) => ({
     cachedResponses.set(`${cacheName} ${new Request(request).url}`, response);
   },
 });
+// The [[ratelimits]] bindings wrangler.toml declares, counting every call per key in fixed windows of
+// their period. src reads them through the importable `cloudflare:workers` env.
+const rateLimitCounts = new Map<string, number>();
+const rateLimitBindings = Object.fromEntries([...readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8')
+  .matchAll(/name = "(\w+)"\s+namespace_id = "\d+"\s+simple = \{ limit = (\d+), period = (\d+) \}/g)]
+  .map(([, name, limit, period]): [string, RateLimit] => [name, {
+    async limit({ key }) {
+      const counter = `${name} ${key} ${Math.floor(Date.now() / 1000 / Number(period))}`;
+      const count = (rateLimitCounts.get(counter) ?? 0) + 1;
+      rateLimitCounts.set(counter, count);
+      return { success: count <= Number(limit) };
+    },
+  }]));
+Object.assign(workersEnv, rateLimitBindings);
+
 Object.assign(globalThis, {
-  caches: { default: namedCache('default'), open: async (cacheName: string) => namedCache(cacheName) },
+  caches: { default: namedCache('default') },
   async fetch(input: RequestInfo | URL): Promise<Response> {
     throw new Error(`Outbound fetch blocked in tests: ${new Request(input).url}`);
   },
@@ -59,10 +75,11 @@ const acceptingDurableObjectNamespace = {
   get: () => ({ fetch: async () => new Response(null, { status: 204 }) }),
 } as unknown as DurableObjectNamespace;
 
-// Every env is a fresh deployment: its own database and an empty edge cache, so rate-limit
+// Every env is a fresh deployment: its own database, an empty edge cache and fresh rate limiters, so rate-limit
 // budgets keyed by the shared test client IP never leak between tests.
 export async function createTestEnv(overrides: Partial<Env> = {}): Promise<Env> {
   cachedResponses.clear();
+  rateLimitCounts.clear();
   return {
     DB: await createSqliteD1(),
     JWT_SECRET: TEST_JWT_SECRET,

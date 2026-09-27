@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { LIMITS } from '../src/config/limits';
 import { getClientIdentifier } from '../src/services/ratelimit';
+import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const identify = (headers: Record<string, string>, url = 'https://vault.example.test/') => getClientIdentifier(new Request(url, { headers }));
 
@@ -23,4 +25,17 @@ test('header precedence skips invalid candidates and only localhost falls back t
   assert.equal(identify({ 'X-Forwarded-For': ' 192.0.2.1 , 198.51.100.1' }), 'ip4:192.0.2.1');
   assert.equal(identify({}, 'http://localhost:8787/'), 'ip4:127.0.0.1');
   assert.equal(identify({}), null);
+});
+
+test('the authenticated API budget is spent on its rate limiting binding, never in D1', async (t) => {
+  // Freeze the clock so every call falls in the same rate-limit window.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const profile = () => authedFetch(env, { path: '/api/accounts/profile', userId: user.id });
+  for (let call = 0; call < LIMITS.rateLimit.apiRequestsPerMinute; call++) assert.equal((await profile()).status, 200);
+  const limited = await profile();
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('Retry-After'), String(LIMITS.rateLimit.apiWindowSeconds));
+  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS buckets FROM rate_limit_buckets').first('buckets'), 0);
 });

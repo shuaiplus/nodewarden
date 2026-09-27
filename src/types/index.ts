@@ -43,6 +43,8 @@ export interface Env {
   R2_SECRET_ACCESS_KEY?: string;
   R2_BUCKET?: string;
   R2_JURISDICTION?: string;
+  // Workers Rate Limiting bindings for per-minute budgets, named by their limit (wrangler.toml [[ratelimits]]).
+  [perMinuteBudget: `RATE_LIMIT_${number}_PER_MINUTE`]: RateLimit | undefined;
 }
 
 export type UserRole = 'admin' | 'user';

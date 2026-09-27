@@ -12,10 +12,11 @@ import {
 import { LIMITS } from '../config/limits';
 import { getOrm } from '../db/client';
 import { loginAttemptsIp, rateLimitBuckets } from '../db/schema';
+import type { Env } from '../types';
 
 // Rate limiting service.
 // - Login attempts: D1-backed (low volume, security-critical, needs cross-colo persistence).
-// - API budgets: Cloudflare Cache API (high volume, auto-expires, zero D1 writes).
+// - API budgets: Workers Rate Limiting bindings (high volume, per location, zero D1 writes).
 // - Strict budgets: D1-backed fixed windows for low-volume anonymous sensitive endpoints.
 
 const CONFIG = {
@@ -145,44 +146,6 @@ export class RateLimitService {
     await getOrm(this.db).delete(loginAttemptsIp).where(eq(loginAttemptsIp.ip, key));
   }
 
-  // Cache API-backed fixed-window rate limiter.
-  // Uses Cloudflare edge cache instead of D1 — zero database writes, auto-expires via TTL.
-  // Per-colo isolation is acceptable (matches Cloudflare's own rate limiting behaviour).
-  private async consumeFixedWindowBudget(
-    identifier: string,
-    maxRequests: number,
-    windowSeconds: number,
-    cost = 1
-  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const windowStart = nowSec - (nowSec % windowSeconds);
-    const windowEnd = windowStart + windowSeconds;
-    const ttl = Math.max(1, windowEnd - nowSec);
-
-    const cache = await caches.open('rate-limit');
-    const cacheKey = new Request(`https://rl/${identifier}/${windowStart}`);
-
-    const cached = await cache.match(cacheKey);
-    let count = 0;
-    if (cached) {
-      count = parseInt(await cached.text(), 10) || 0;
-    }
-
-    if (count + cost > maxRequests) {
-      return { allowed: false, remaining: Math.max(0, maxRequests - count), retryAfterSeconds: ttl };
-    }
-
-    count += cost;
-    await cache.put(
-      cacheKey,
-      new Response(String(count), {
-        headers: { 'Cache-Control': `public, max-age=${ttl}` },
-      })
-    );
-
-    return { allowed: true, remaining: Math.max(0, maxRequests - count) };
-  }
-
   async consumeStrictBudget(
     identifier: string,
     maxRequests: number
@@ -239,25 +202,24 @@ export class RateLimitService {
     return { allowed: true, remaining: Math.max(0, max - count) };
   }
 
-  // General-purpose fixed-window budget.
-  // Callers supply an identifier (must be unique per rate-limit category) and the
-  // per-window maximum.  This single method replaces all previous specialised
-  // budget helpers (write / sync / knownDevice / publicSend).
-  // cost charges one call as several units, e.g. an upload that carries many client batches.
+  // General-purpose per-minute budget; callers supply an identifier unique per rate-limit category.
+  // It spends the Workers Rate Limiting binding named for its limit, which like the Cache API counters it
+  // replaces counts per location and costs no D1 writes. A limit without a binding, or a cost charged
+  // as several units at once (the binding cannot spend a batch all or nothing), uses the D1 window.
   async consumeBudget(
     identifier: string,
     maxRequests: number,
-    cost = 1
-  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
-    return this.consumeFixedWindowBudget(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS, cost);
-  }
-
-  async consumeBudgetWithWindow(
-    identifier: string,
-    maxRequests: number,
-    windowSeconds: number
-  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
-    return this.consumeFixedWindowBudget(identifier, maxRequests, windowSeconds);
+    cost?: number
+  ): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
+    // Loaded on use, not at module load, so the many modules importing this service stay loadable in
+    // Node tests that never spend a budget.
+    const { env } = await import('cloudflare:workers');
+    const binding = (env as Env)[`RATE_LIMIT_${maxRequests}_PER_MINUTE`];
+    if (!binding || cost !== undefined) {
+      return this.consumeStrictBudgetWithWindow(identifier, maxRequests, CONFIG.API_WINDOW_SECONDS, cost);
+    }
+    const { success } = await binding.limit({ key: identifier });
+    return success ? { allowed: true } : { allowed: false, retryAfterSeconds: CONFIG.API_WINDOW_SECONDS };
   }
 }
 
