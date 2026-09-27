@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { devices } from '../db/schema';
+import * as deviceRepo from '../services/storage-device-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 test('device registration validates its fields and a key update keeps the keys it leaves out', async () => {
@@ -23,4 +27,24 @@ test('device registration validates its fields and a key update keeps the keys i
   const device = await updated.json() as { encryptedUserKey: string | null; encryptedPublicKey: string | null };
   assert.equal(device.encryptedUserKey, null);
   assert.equal(device.encryptedPublicKey, '2.iv|data|mac');
+});
+
+test('re-registering a device keeps its session stamp and the keys it leaves out, filling only an empty stamp', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const stored = async () => {
+    const device = await deviceRepo.getDevice(env.DB, user.id, 'device-1');
+    return { sessionStamp: device?.sessionStamp, keys: [device?.encryptedUserKey, device?.encryptedPublicKey, device?.encryptedPrivateKey] };
+  };
+  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-1', { encryptedUserKey: '4.user', encryptedPublicKey: '2.public', encryptedPrivateKey: '2.private' });
+  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, 'stamp-2');
+  assert.deepEqual(await stored(), { sessionStamp: 'stamp-1', keys: ['4.user', '2.public', '2.private'] });
+  await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, undefined, { encryptedUserKey: '4.rotated' });
+  assert.deepEqual(await stored(), { sessionStamp: 'stamp-1', keys: ['4.rotated', '2.public', '2.private'] });
+
+  for (const [emptied, next] of [[null, 'stamp-3'], ['', 'stamp-4']] as const) {
+    await getOrm(env.DB).update(devices).set({ sessionStamp: emptied }).where(eq(devices.deviceIdentifier, 'device-1'));
+    await deviceRepo.upsertDevice(env.DB, user.id, 'device-1', 'Phone', 0, next);
+    assert.equal((await stored()).sessionStamp, next);
+  }
 });

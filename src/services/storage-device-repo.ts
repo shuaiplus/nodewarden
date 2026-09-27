@@ -1,7 +1,8 @@
-import { and, count, desc, eq, gte, inArray, isNotNull, lt, max, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, ne, or } from 'drizzle-orm';
 
 import { getOrm } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
+import { caseWhen, coalesce, excluded } from '../db/sql';
 import type { Device, TrustedDeviceTokenSummary } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { hashedTokenKey } from './storage-session-repo';
@@ -60,11 +61,11 @@ export async function upsertDevice(
       set: {
         name: effectiveName,
         type,
-        sessionStamp: sql`CASE WHEN ${devices.sessionStamp} IS NULL OR ${devices.sessionStamp} = ${''} THEN excluded.session_stamp ELSE ${devices.sessionStamp} END`,
-        encryptedUserKey: sql`coalesce(excluded.encrypted_user_key, ${devices.encryptedUserKey})`,
-        encryptedPublicKey: sql`coalesce(excluded.encrypted_public_key, ${devices.encryptedPublicKey})`,
-        encryptedPrivateKey: sql`coalesce(excluded.encrypted_private_key, ${devices.encryptedPrivateKey})`,
-        pushUuid: sql`coalesce(${devices.pushUuid}, excluded.push_uuid)`,
+        sessionStamp: caseWhen(or(isNull(devices.sessionStamp), eq(devices.sessionStamp, '')), excluded(devices.sessionStamp), devices.sessionStamp),
+        encryptedUserKey: coalesce(excluded(devices.encryptedUserKey), devices.encryptedUserKey),
+        encryptedPublicKey: coalesce(excluded(devices.encryptedPublicKey), devices.encryptedPublicKey),
+        encryptedPrivateKey: coalesce(excluded(devices.encryptedPrivateKey), devices.encryptedPrivateKey),
+        pushUuid: coalesce(devices.pushUuid, excluded(devices.pushUuid)),
         lastSeenAt: now,
         updatedAt: now,
       },
@@ -178,7 +179,7 @@ export async function getDevicesByUserId(db: D1Database, userId: string): Promis
     .select()
     .from(devices)
     .where(eq(devices.userId, userId))
-    .orderBy(sql`coalesce(${devices.lastSeenAt}, ${devices.createdAt}) desc`, desc(devices.updatedAt));
+    .orderBy(desc(coalesce(devices.lastSeenAt, devices.createdAt)), desc(devices.updatedAt));
   return rows.map(mapDeviceRow);
 }
 
@@ -226,7 +227,7 @@ export async function userHasPushDevice(db: D1Database, userId: string): Promise
     .where(and(
       eq(devices.userId, userId),
       isNotNull(devices.pushToken),
-      sql`${devices.pushToken} <> ${''}`,
+      ne(devices.pushToken, ''),
     ))
     .limit(1);
   return !!row;
@@ -258,7 +259,7 @@ export async function getTrustedDeviceTokenSummariesByUserId(db: D1Database, use
     .from(trustedTwoFactorDeviceTokens)
     .where(eq(trustedTwoFactorDeviceTokens.userId, userId))
     .groupBy(trustedTwoFactorDeviceTokens.deviceIdentifier)
-    .orderBy(desc(sql`max(${trustedTwoFactorDeviceTokens.expiresAt})`));
+    .orderBy(desc(max(trustedTwoFactorDeviceTokens.expiresAt)));
 
   return rows.map((row) => ({
     deviceIdentifier: row.deviceIdentifier,
