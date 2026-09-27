@@ -184,10 +184,10 @@ export function normalizeJsonKeys<T>(value: T): T {
 
 // Parses a JSON body with normalized keys, or answers 400. Scalars read as an empty object; arrays
 // pass through for the routes that take a bare list.
-export async function parseJsonBody<T extends object = Record<string, unknown>>(request: Request, message = 'Invalid JSON'): Promise<T | Response> {
+async function parseJsonBody(request: Request, message = 'Invalid JSON'): Promise<object | Response> {
   try {
     const body: unknown = normalizeJsonKeys(await request.json());
-    return (body && typeof body === 'object' ? body : {}) as T;
+    return body && typeof body === 'object' ? body : {};
   } catch {
     return errorResponse(message, 400);
   }
@@ -210,17 +210,4 @@ export async function parseBody<S extends z.ZodType>(request: Request, schema: S
   if (body instanceof Response) return body;
   const result = schema.safeParse(body);
   return result.success ? result.data : errorResponse(result.error.issues[0].message, 400, {}, bodyIssues(result.error));
-}
-
-// Reads the first present key from a normalized body, telling absent apart from null.
-export function prop<T = unknown>(source: unknown, keys: string | string[]): { present: boolean; value: T | undefined } {
-  if (!source || typeof source !== 'object') return { present: false, value: undefined };
-  const record = source as Record<string, unknown>;
-  const key = (Array.isArray(keys) ? keys : [keys]).find((candidate) => Object.prototype.hasOwnProperty.call(record, candidate));
-  return key === undefined ? { present: false, value: undefined } : { present: true, value: record[key] as T };
-}
-
-export function readString(source: unknown, keys: string | string[]): string {
-  const { value } = prop(source, keys);
-  return typeof value === 'string' ? value : '';
 }
