@@ -96,24 +96,22 @@ export async function recordUserEvent(env: Env, request: Request | null, userId:
 
 export type SendEventAction = 'created' | 'edited' | 'deleted' | 'accessed';
 
-function sendEventType(send: Pick<Send, 'type' | 'authType' | 'passwordHash'>, action: SendEventAction): number {
-  const text = send.type === SendType.Text;
-  if (action === 'edited') return text ? EventType.SendEditedText : EventType.SendEditedFile;
-  if (action === 'deleted') return text ? EventType.SendDeletedText : EventType.SendDeletedFile;
-  if (action === 'accessed') return text ? EventType.SendAccessedText : EventType.SendAccessedFile;
-  // A legacy password body sets a hash without authType, so the hash decides password protection.
-  if (send.passwordHash) return text ? EventType.SendCreatedTextWithPasswordProtection : EventType.SendCreatedFileWithPasswordProtection;
-  if (send.authType === SendAuthType.Email) return text ? EventType.SendCreatedTextWithEmailVerification : EventType.SendCreatedFileWithEmailVerification;
-  return text ? EventType.SendCreatedText : EventType.SendCreatedFile;
-}
-
 // ponytail: every accessor is recorded as External; attribute confirmed members once Send email
 // verification identifies who opened the Send.
 type SendEventSubject = Pick<Send, 'id' | 'userId' | 'type' | 'authType' | 'passwordHash'>;
 
 export async function recordSendEvents(env: Env, request: Request | null, ownerId: string, sends: SendEventSubject[], action: SendEventAction): Promise<void> {
-  await recordAccountEvents(env, request, ownerId, sends.map(send => ({ type: sendEventType(send, action), resourceType: 'send', resourceId: send.id })),
-    action === 'accessed' ? null : undefined);
+  await recordAccountEvents(env, request, ownerId, sends.map(send => {
+    const text = send.type === SendType.Text;
+    const type = action === 'edited' ? (text ? EventType.SendEditedText : EventType.SendEditedFile)
+      : action === 'deleted' ? (text ? EventType.SendDeletedText : EventType.SendDeletedFile)
+      : action === 'accessed' ? (text ? EventType.SendAccessedText : EventType.SendAccessedFile)
+      // A legacy password body sets a hash without authType, so the hash decides password protection.
+      : send.passwordHash ? (text ? EventType.SendCreatedTextWithPasswordProtection : EventType.SendCreatedFileWithPasswordProtection)
+      : send.authType === SendAuthType.Email ? (text ? EventType.SendCreatedTextWithEmailVerification : EventType.SendCreatedFileWithEmailVerification)
+      : text ? EventType.SendCreatedText : EventType.SendCreatedFile;
+    return { type, resourceType: 'send', resourceId: send.id };
+  }), action === 'accessed' ? null : undefined);
 }
 
 export async function recordSendEvent(env: Env, request: Request | null, send: SendEventSubject, action: SendEventAction): Promise<void> {
@@ -134,30 +132,9 @@ const RESOURCE_FIELDS = {
   organizationUser: 'organizationUserId', secret: 'secretId', project: 'projectId', send: 'sendId',
 } as const;
 
-function eventResponse(row: typeof events.$inferSelect) {
-  const references: Record<string, string | null> = {
-    cipherId: null, collectionId: null, groupId: null, policyId: null, organizationUserId: null,
-    secretId: null, projectId: null, sendId: null,
-  };
-  if (row.resourceType && row.resourceType in RESOURCE_FIELDS) references[RESOURCE_FIELDS[row.resourceType as EventResourceType]] = row.resourceId;
-  return {
-    object: 'event', type: row.type, date: row.date, organizationId: row.organizationId,
-    actingUserId: row.actingUserId, userId: row.userId, serviceAccountId: row.serviceAccountId,
-    grantedServiceAccountId: row.grantedServiceAccountId, deviceType: row.deviceType,
-    ipAddress: row.ipAddress, systemUser: row.systemUser,
-    providerId: null, providerUserId: null, providerOrganizationId: null, installationId: null, domainName: null,
-    ...references,
-  };
-}
-
-// The official client concatenates continuationToken without URL encoding; use base64url.
-function cursor(date: string, id: string): string {
-  return bytesToBase64Url(new TextEncoder().encode(JSON.stringify([date, id])));
-}
-
 const queryDate = z.string().transform(date => Date.parse(date)).pipe(z.number({ error: 'Invalid date range.' })).optional();
 const DateRange = z.object({ start: queryDate, end: queryDate });
-// A cursor is the last row's canonical ISO date and id, exactly as cursor() wrote them.
+// A cursor is the last row's canonical ISO date and id, exactly as listEventsResponse writes them.
 const Cursor = z.tuple([z.iso.datetime({ precision: 3 }), z.string().regex(/^[a-f0-9-]{36}$/i)]);
 
 export async function listEventsResponse(request: Request, env: Env, filter: EventFilter): Promise<Response> {
@@ -188,7 +165,26 @@ export async function listEventsResponse(request: Request, env: Env, filter: Eve
   const rows = await getOrm(env.DB).select().from(events).where(and(...conditions)).orderBy(desc(events.date), desc(events.id)).limit(51);
   const data = rows.slice(0, 50);
   const last = data.at(-1);
-  return jsonResponse({ object: 'list', data: data.map(eventResponse), continuationToken: rows.length > 50 && last ? cursor(last.date, last.id) : null });
+  return jsonResponse({
+    object: 'list',
+    data: data.map((row) => {
+      const references: Record<string, string | null> = {
+        cipherId: null, collectionId: null, groupId: null, policyId: null, organizationUserId: null,
+        secretId: null, projectId: null, sendId: null,
+      };
+      if (row.resourceType && row.resourceType in RESOURCE_FIELDS) references[RESOURCE_FIELDS[row.resourceType as EventResourceType]] = row.resourceId;
+      return {
+        object: 'event', type: row.type, date: row.date, organizationId: row.organizationId,
+        actingUserId: row.actingUserId, userId: row.userId, serviceAccountId: row.serviceAccountId,
+        grantedServiceAccountId: row.grantedServiceAccountId, deviceType: row.deviceType,
+        ipAddress: row.ipAddress, systemUser: row.systemUser,
+        providerId: null, providerUserId: null, providerOrganizationId: null, installationId: null, domainName: null,
+        ...references,
+      };
+    }),
+    // The official client concatenates continuationToken without URL encoding; use base64url.
+    continuationToken: rows.length > 50 && last ? bytesToBase64Url(new TextEncoder().encode(JSON.stringify([last.date, last.id]))) : null,
+  });
 }
 
 const EVENT_PRUNE_BATCH_ROWS = 1000;
