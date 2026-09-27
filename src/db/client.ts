@@ -1,4 +1,4 @@
-import { getColumns, type Table } from 'drizzle-orm';
+import { getColumns, sql, type Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 
 import { relations } from './relations';
@@ -30,4 +30,10 @@ export function getOrm(d1: D1Database): Orm {
   const orm = drizzle(d1, { relations });
   ormByBinding.set(d1, orm);
   return orm;
+}
+
+// D1 batches have no conditional rollback. Appending this select after a guarded write aborts the whole
+// batch when that write matched no rows: json() of a non-JSON string raises, and D1 rolls the batch back.
+export function abortUnlessChanged(orm: Orm, reason: string) {
+  return orm.select({ abort: sql`CASE WHEN changes() = 0 THEN json(${reason}) END` }).from(sql`(SELECT 1)`);
 }
