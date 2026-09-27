@@ -83,6 +83,7 @@
     "better-auth": "^1.6.27",
     "drizzle-orm": "1.0.0-rc.4",
     "fflate": "^0.8.3",
+    "hono": "^4.13.9",
     "jsqr": "1.4.0",
     "lucide-preact": "^1.22.0",
     "preact": "^10.29.3",
