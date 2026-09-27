@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
+import { eq } from 'drizzle-orm';
 
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
+import { users } from '../db/schema';
 import { MembershipStatus } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
@@ -544,7 +547,7 @@ test('invite skips addresses already in the org by invited or account email and 
   const orgId = await createOrg(env, owner);
   await invite(env, owner, orgId, [pending]);
   const renamedOwner = { ...owner, email: `${crypto.randomUUID()}@${MAILABLE_DOMAIN}` };
-  await env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(renamedOwner.email, owner.id).run();
+  await getOrm(env.DB).update(users).set({ email: renamedOwner.email }).where(eq(users.id, owner.id));
   const revisionBeforeReinvite = await revisionDate(env, owner);
 
   await invite(env, owner, orgId, [pending.toUpperCase(), owner.email, renamedOwner.email]);
