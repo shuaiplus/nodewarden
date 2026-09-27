@@ -14,7 +14,7 @@ import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCo
 import { upsertCredentialAccount, credentialAccountStatement } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent, auditEventStatement } from '../services/audit-events';
-import { errorResponse, jsonResponse, parseJsonBody, readString, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody, parseJsonBody, readString, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
 import { isStoredApiKeyHash, randomStringAlphanum } from '../utils/api-key';
@@ -24,7 +24,7 @@ import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
 import { createRegisterVerifyToken, verifyRegisterVerifyToken, createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationToken, verifySsoEmail2faSessionToken, createDeleteRecoverToken, verifyDeleteRecoverToken } from '../utils/jwt';
-import { isOpenRegistrationEnabled, parseRegisterPayload } from '../services/register-payload';
+import { isOpenRegistrationEnabled, RegisterSchema } from '../services/register-payload';
 import {
   mailStatusCheck,
   type MailOutcome,
@@ -68,35 +68,6 @@ function looksLikeEncString(value: string): boolean {
   const parts = payload.split('|');
   // Bitwarden encrypted payloads should have at least IV + ciphertext.
   return parts.length >= 2;
-}
-
-/**
- * Validate KDF parameters according to Bitwarden minimum requirements.
- * Returns an error message if invalid, or null if OK.
- */
-function validateKdfParams(kdfType: number | undefined, kdfIterations: number | undefined, kdfMemory?: number | undefined, kdfParallelism?: number | undefined): string | null {
-  const type = kdfType ?? 0;
-  if (type !== 0 && type !== 1) {
-    return 'KDF type must be PBKDF2-SHA256 or Argon2id';
-  }
-  if (type === 0) {
-    // PBKDF2-SHA256: minimum 100 000 iterations
-    if (typeof kdfIterations === 'number' && kdfIterations < 100_000) {
-      return 'PBKDF2 iterations must be at least 100000';
-    }
-  } else if (type === 1) {
-    // Argon2id: iterations >= 2, memory >= 16 MiB, parallelism >= 1
-    if (typeof kdfIterations === 'number' && kdfIterations < 2) {
-      return 'Argon2id iterations must be at least 2';
-    }
-    if (typeof kdfMemory === 'number' && kdfMemory < 16) {
-      return 'Argon2id memory must be at least 16 MiB';
-    }
-    if (typeof kdfParallelism === 'number' && kdfParallelism < 1) {
-      return 'Argon2id parallelism must be at least 1';
-    }
-  }
-  return null;
 }
 
 function normalizeRecoveryCodeInput(input: string): string {
@@ -287,20 +258,9 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     return errorResponse(message, 400);
   }
 
-  const rawBody = await parseJsonBody(request);
-  if (rawBody instanceof Response) return rawBody;
-
-  const parsed = parseRegisterPayload(rawBody);
-  if (typeof parsed === 'string') return errorResponse(parsed, 400);
-
-  const email = parsed.email;
-  const name = parsed.name || email;
-  const masterPasswordHash = parsed.masterPasswordHash;
-  const key = parsed.key;
-  const privateKey = parsed.privateKey;
-  const publicKey = parsed.publicKey;
-  const inviteCode = parsed.inviteCode;
-  const masterPasswordHint = normalizeMasterPasswordHint(parsed.masterPasswordHint);
+  const parsed = await parseBody(request, RegisterSchema);
+  if (parsed instanceof Response) return parsed;
+  const { email, name, masterPasswordHash, key, privateKey, publicKey, inviteCode, masterPasswordHint } = parsed;
 
   if (parsed.emailVerificationToken) {
     const claims = await verifyRegisterVerifyToken(parsed.emailVerificationToken, env.JWT_SECRET);
@@ -314,12 +274,6 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   if (!looksLikeEncString(privateKey)) {
     return errorResponse('encryptedPrivateKey is not a valid encrypted string', 400);
   }
-  if (masterPasswordHint && masterPasswordHint.length > 120) {
-    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
-  }
-
-  const kdfErr = validateKdfParams(parsed.kdf, parsed.kdfIterations, parsed.kdfMemory, parsed.kdfParallelism);
-  if (kdfErr) return errorResponse(kdfErr, 400);
 
   const now = new Date().toISOString();
   const auth = new AuthService(env);
@@ -329,7 +283,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     id: generateUUID(),
     email,
     emailVerified: !!parsed.emailVerificationToken,
-    name: name || email,
+    name,
     masterPasswordHint,
     masterPasswordHash: serverHash,
     key,
