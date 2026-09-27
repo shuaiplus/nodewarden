@@ -30,4 +30,6 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 
 - Email codes go only through `src/services/email-otp.ts`: purpose/binding-scoped, hashed at rest, single-use, budgeted and five-minute expiry.
 
+- Bitwarden event history is `events` via `recordEvents`/`recordUserEvent`/`recordSendEvent` in `src/services/events.ts`, called with the request after the committed write and only on real transitions; never store names, values or ciphertext. Reads go through `listEventsResponse` with an explicit authorized scope (`accessEventLogs` for organizations) and refuse with 404, never 403. Prune by receipt age only, never a shared row cap. `audit_logs` stays the separate administrator log.
+
 - Email changes must atomically update the normalized email, verified flag, server hash, client-rewrapped key and credential mirror, rotate the stamp and revoke sessions. Better Auth `user.changeEmail` and `user.deleteUser` stay disabled; they bypass vault key and deletion invariants.

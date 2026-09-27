@@ -29,7 +29,9 @@ Official web 2026.9.0 (`ghcr.io/bitwarden/web:latest`) ships `window.bitwardenAu
 NodeWarden therefore runs:
 
 - `npm run test:e2e` — API + official-web smoke against the Worker
-- `npm run test:e2e:official` — official identity register + official Angular vault load through the Pages proxy
+- `npm run test:e2e:official` — official identity register + official Angular vault load through the Pages proxy, organization creation without a license, and the Admin Console reporting journey
+
+`e2e/official-org-reporting.spec.ts` opts in with `E2E_OFFICIAL_REPORT_FIXTURE`, a JSON file naming a disposable HTTPS `localhost` Pages origin, a synthetic account and the ids of one encrypted weak-password login, one group and one Secrets Manager project created through the API. It asserts web 2026.9.0, then checks the weak-password report over `GET /api/ciphers/organization-details`, remediates the item through `PUT /api/ciphers/{id}/admin` with a re-encrypted password (the dialog stays open in view mode; closing it refreshes the report), reloads and unlocks to prove the ciphertext persisted, reads the member access report, and finally checks the event log for the typed item and project events plus an empty date range. Nothing in it mocks API responses or sends plaintext vault data.
 
 ```bash
 npm run dev
