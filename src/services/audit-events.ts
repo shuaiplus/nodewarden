@@ -1,6 +1,7 @@
-import { sql, type SQL } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
+import { SINGLE_ROW, bound } from '../db/sql';
 import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
 import * as adminRepo from './storage-admin-repo';
@@ -158,7 +159,7 @@ export async function applyAuditLogRetention(db: D1Database, settings?: AuditLog
   }
 }
 
-export function auditEventStatement(db: D1Database, event: AuditEventInput, guard: SQL = sql`1`) {
+export function auditEventStatement(db: D1Database, event: AuditEventInput, guard?: SQL) {
   // Only allow-listed, non-sensitive scalar metadata is stored; an array keeps just its length.
   const metadata: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event.metadata || {})) {
@@ -177,12 +178,18 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
     metadataJson = JSON.stringify({ truncated: true });
   }
 
-  return getOrm(db).insert(auditLogs).select(sql`
-    SELECT ${generateUUID()}, ${event.actorUserId ?? null}, ${event.action}, ${event.category},
-      ${event.level || 'info'}, ${event.targetType ?? null}, ${event.targetId ?? null},
-      ${metadataJson}, ${new Date().toISOString()}
-    WHERE ${guard}
-  `);
+  const orm = getOrm(db);
+  return orm.insert(auditLogs).select(orm.select({
+    id: bound(generateUUID()).as('id'),
+    actorUserId: bound(event.actorUserId ?? null).as('actor_user_id'),
+    action: bound(event.action).as('action'),
+    category: bound(event.category).as('category'),
+    level: bound(event.level || 'info').as('level'),
+    targetType: bound(event.targetType ?? null).as('target_type'),
+    targetId: bound(event.targetId ?? null).as('target_id'),
+    metadata: bound(metadataJson).as('metadata'),
+    createdAt: bound(new Date().toISOString()).as('created_at'),
+  }).from(SINGLE_ROW).where(guard));
 }
 
 export async function writeAuditEvent(db: D1Database, event: AuditEventInput): Promise<void> {
