@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AuthService } from '../src/services/auth';
 import { hashPassword } from '../src/services/auth-password';
-import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { ensureTwoFactorRecoveryCode } from '../src/services/two-factor-providers';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, portalFetch, seedUser, signInToAdminPortal } from './support/env';
 import type { Env, User } from '../src/types';
@@ -38,7 +37,6 @@ for (const login of [false, true]) {
         current.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, current.securityStamp);
         current.totpSecret = TOTP;
         await userRepo.saveUser(env.DB, current, ['totpSecret']);
-        await upsertTwoFactorSecret(env.DB, user.id, TOTP, current.totpRecoveryCode!, current.securityStamp);
         await env.DB.prepare("INSERT INTO webauthn_credentials (id,user_id,purpose,name,public_key,credential_id,created_at,updated_at) VALUES (?,?, 'twoFactor','current','cHVibGlj',?,?,?)")
           .bind('current-key', user.id, 'current-key', current.createdAt, current.updatedAt).run();
         await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'current-remember', user.id, 'current-device', Date.now() + 60000);
@@ -51,7 +49,6 @@ for (const login of [false, true]) {
     assert.equal(interrupted, true);
     const after = (await userRepo.getUserById(env.DB, user.id))!;
     for (const field of ['securityStamp', 'totpSecret', 'totpRecoveryCode'] as const) assert.equal(after[field], current![field], field);
-    assert.equal(await env.DB.prepare('SELECT secret FROM two_factor WHERE user_id=?').bind(user.id).first('secret'), TOTP);
     assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 1);
     assert.equal(await deviceRepo.getTrustedTwoFactorDeviceTokenUserId(env.DB, 'current-remember', 'current-device'), user.id);
     assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'current-session'), user.id);

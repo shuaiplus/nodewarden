@@ -11,7 +11,6 @@ const forbiddenRuntimeTables = [
   'refresh_tokens',
   'session',
   'account',
-  'two_factor',
   'auth_requests',
   'trusted_two_factor_device_tokens',
   'account_passkey_challenges',

@@ -3,10 +3,9 @@ import { sso } from '@better-auth/sso';
 import { eq } from 'drizzle-orm';
 import { betterAuth } from 'better-auth/minimal';
 import { bearer } from 'better-auth/plugins/bearer';
-import { twoFactor } from 'better-auth/plugins/two-factor';
 
 import { getOrm } from './db/client';
-import { account, session, twoFactor as twoFactorTable, users, verification } from './db/schema';
+import { account, session, users, verification } from './db/schema';
 import { hashPassword, verifyBetterAuthPassword } from './services/auth-password';
 import type { Env } from './types';
 
@@ -15,7 +14,6 @@ const AUTH_TABLES = {
   session,
   account,
   verification,
-  twoFactor: twoFactorTable,
 };
 
 export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, request?: Request) {
@@ -76,11 +74,7 @@ export function createAuth(env?: Pick<Env, 'DB' | 'JWT_SECRET' | 'CACHE_KV'>, re
         status: { type: 'string', required: false, input: false },
       },
     },
-    plugins: [
-      bearer(),
-      twoFactor({ issuer: 'NodeWarden' }),
-      sso(),
-    ],
+    plugins: [bearer(), sso()],
     trustedOrigins: [origin],
     advanced: {
       ipAddress: {

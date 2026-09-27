@@ -36,7 +36,6 @@ export function twoFactorClearStatements(
       yubikey_key5 = NULL, yubikey_nfc = 0, security_stamp = ?, updated_at = ? WHERE id = ?${verifiedSnapshot}`)
       .bind(recoveryCode, securityStamp, new Date().toISOString(), userId, ...(expected ? [expected.securityStamp, expected.totpRecoveryCode] : [])),
     db.prepare(`DELETE FROM webauthn_credentials WHERE user_id = ? AND purpose = 'twoFactor' AND ${cleared}`).bind(userId, userId, securityStamp),
-    db.prepare(`DELETE FROM two_factor WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
     db.prepare(`DELETE FROM trusted_two_factor_device_tokens WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
     db.prepare(`DELETE FROM session WHERE user_id = ? AND ${cleared}`).bind(userId, userId, securityStamp),
   ];

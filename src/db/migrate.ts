@@ -72,7 +72,7 @@ export async function ensureStorageSchema(db: D1Database): Promise<void> {
 const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/db/schema.ts changes or a migration is added (data-only --custom ones too).
 // Existing D1 installs rerun ensureStorageSchema() only when this differs from config.schema.version.
-export const STORAGE_SCHEMA_VERSION = '2026-09-27-event-history';
+export const STORAGE_SCHEMA_VERSION = '2026-09-27-drop-two-factor';
 const REQUIRED_SCHEMA_TABLES = [
   'events',
   'webauthn_credentials',

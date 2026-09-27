@@ -3,7 +3,6 @@ import test from 'node:test';
 import { createHmac } from 'node:crypto';
 
 import { LIMITS } from '../src/config/limits';
-import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
 import type { Env, User } from '../src/types';
 import { sha256Base64Url } from '../src/utils/account-passkeys';
@@ -27,7 +26,6 @@ async function getProvider(env: Env, user: User, provider: string): Promise<Reco
 test('official authenticator DELETE verifies its key-bound token and clears the Better Auth secret', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP, yubikeyKey1: PUBLIC_ID });
-  await upsertTwoFactorSecret(env.DB, user.id, TOTP, 'RECOVERY');
   const settings = await getProvider(env, user, 'authenticator');
   assert.deepEqual(settings.Authenticator, { Enabled: true, Key: TOTP });
   const request = (key: string) => authedFetch(env, {
@@ -41,7 +39,6 @@ test('official authenticator DELETE verifies its key-bound token and clears the 
   const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.yubikeyKey1, PUBLIC_ID);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM two_factor WHERE user_id = ?').bind(user.id).first('n'), 0);
   // RFC 6238 test secret (base32 above) makes a real enrollment OTP for the current step.
   const counter = Buffer.alloc(8);
   counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));

@@ -1,0 +1,1 @@
+DROP TABLE `two_factor`;

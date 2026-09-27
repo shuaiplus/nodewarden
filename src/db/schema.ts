@@ -119,15 +119,6 @@ export const verification = sqliteTable('verification', {
   index('idx_verification_identifier').on(table.identifier),
 ]);
 
-export const twoFactor = sqliteTable('two_factor', {
-  id: text('id').primaryKey(),
-  secret: text('secret').notNull(),
-  backupCodes: text('backup_codes').notNull(),
-  userId: text('user_id').notNull().unique(),
-}, (table) => [
-  foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
-]);
-
 export const domainSettings = sqliteTable('domain_settings', {
   userId: text('user_id').primaryKey(),
   equivalentDomains: text('equivalent_domains').notNull().default('[]'),

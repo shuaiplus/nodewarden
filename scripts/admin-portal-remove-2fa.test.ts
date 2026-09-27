@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AuthService } from '../src/services/auth';
-import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
 import type { Env, User } from '../src/types';
 import { authedFetch, captureEmail, createTestEnv, drainWaitUntil, MAILABLE_DOMAIN, portalFetch, seedUser, signInToAdminPortal } from './support/env';
@@ -30,7 +29,6 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   const user = await seedUser(env, { email: `factor@${MAILABLE_DOMAIN}`, masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP, totpRecoveryCode: 'RECOVERY', twoFactorEmail: `factor-2fa@${MAILABLE_DOMAIN}`, yubikeyKey1: '', yubikeyKey2: 'cccccccccccc' });
   const loginPasskey = await passkey(env, user, 'login');
   await passkey(env, user, 'twoFactor');
-  await upsertTwoFactorSecret(env.DB, user.id, TOTP, 'RECOVERY');
   await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'old-remember', user.id, 'device', Date.now() + 60000);
   await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
   const oldJwt = await new AuthService(env).generateAccessToken(user);
@@ -45,7 +43,7 @@ test('portal reset clears every factor and revocation token atomically, keeps lo
   assert.equal(updated.twoFactorEmail, null);
   assert.equal(updated.yubikeyKey2, null);
   assert.notEqual(updated.securityStamp, user.securityStamp);
-  for (const table of ['two_factor', 'trusted_two_factor_device_tokens', 'session']) {
+  for (const table of ['trusted_two_factor_device_tokens', 'session']) {
     assert.equal(await env.DB.prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id=?`).bind(user.id).first('n'), 0);
   }
   assert.deepEqual((await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map(key => key.id), [loginPasskey]);

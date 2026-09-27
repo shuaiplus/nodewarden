@@ -11,7 +11,7 @@ import { deleteUserAccount } from '../services/account-deletion';
 import { notifyUserLogout } from '../durable/notifications-hub';
 import { issueEmailOtp, redeemEmailOtp, spendEmailOtpIssueBudget } from '../services/email-otp';
 import { twoFactorProviders, twoFactorClearStatements, ensureTwoFactorRecoveryCode } from '../services/two-factor-providers';
-import { deleteTwoFactorSecret, upsertCredentialAccount, credentialAccountStatement, upsertTwoFactorSecret } from '../services/auth-accounts';
+import { upsertCredentialAccount, credentialAccountStatement } from '../services/auth-accounts';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent, auditEventStatement } from '../services/audit-events';
 import { errorResponse, jsonResponse, parseJsonBody, readString, unsupportedResponse, normalizeJsonKeys } from '../utils/response';
@@ -1216,7 +1216,6 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
   user.updatedAt = new Date().toISOString();
   if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-  if (!await upsertTwoFactorSecret(env.DB, user.id, key, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
   await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
   AuthService.invalidateUserCache(user.id);
   if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
@@ -1437,7 +1436,6 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   user.updatedAt = new Date().toISOString();
   if (!await userRepo.saveUser(env.DB, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? ['totpSecret']
     : type === TWO_FACTOR_PROVIDER_YUBIKEY ? ['yubikeyKey1', 'yubikeyKey2', 'yubikeyKey3', 'yubikeyKey4', 'yubikeyKey5', 'yubikeyNfc'] : [])) return errorResponse('User verification failed.', 400);
-  if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) await deleteTwoFactorSecret(env.DB, user.id);
   if (type === TWO_FACTOR_PROVIDER_EMAIL) {
     const updated = await env.DB.prepare('UPDATE users SET two_factor_email = NULL WHERE id = ? AND security_stamp = ? RETURNING id').bind(user.id, user.securityStamp).first();
     if (!updated) return errorResponse('User verification failed.', 400);
@@ -1510,7 +1508,6 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
     user.updatedAt = new Date().toISOString();
     if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    if (!await upsertTwoFactorSecret(env.DB, user.id, normalizedSecret, user.totpRecoveryCode, user.securityStamp)) return errorResponse('User verification failed.', 400);
     await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
     AuthService.invalidateUserCache(user.id);
     if (factorChanged) await recordUserEvent(env, request, user.id, EventType.UserUpdated2fa);
@@ -1537,7 +1534,6 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     user.totpSecret = null;
     user.updatedAt = new Date().toISOString();
     if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await deleteTwoFactorSecret(env.DB, user.id);
     await sessionRepo.deleteRefreshTokensByUserId(env.DB, user.id);
     AuthService.invalidateUserCache(user.id);
     if (wasEnabled) await recordUserEvent(env, request, user.id, EventType.UserDisabled2fa);

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { upsertTwoFactorSecret } from '../src/services/auth-accounts';
 import { hashPassword } from '../src/services/auth-password';
 import { MembershipStatus, MembershipType } from '../src/services/org-types';
 import * as orgRepo from '../src/services/storage-org-repo';
@@ -90,7 +89,6 @@ for (const loginRecovery of [false, true]) {
     });
     const loginPasskey = await seedPasskey(env, user, 'login');
     await seedPasskey(env, user, 'twoFactor');
-    await upsertTwoFactorSecret(env.DB, user.id, TOTP, RECOVERY);
     await sessionRepo.saveRefreshToken(env.DB, 'old-session', user.id);
     await deviceRepo.saveTrustedTwoFactorDeviceToken(env.DB, 'remember-before-recovery', user.id, 'device', Date.now() + 60000);
     const response = await authedFetch(env, {
@@ -105,7 +103,7 @@ for (const loginRecovery of [false, true]) {
     assert.equal(updated.yubikeyKey1, null);
     assert.notEqual(updated.totpRecoveryCode, RECOVERY);
     assert.notEqual(updated.securityStamp, user.securityStamp);
-    for (const table of ['two_factor', 'trusted_two_factor_device_tokens']) {
+    for (const table of ['trusted_two_factor_device_tokens']) {
       assert.equal(await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).bind(user.id).first('n'), 0);
     }
     assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'old-session'), null);
@@ -125,20 +123,16 @@ for (const loginRecovery of [false, true]) {
 test('a failed clear batch leaves credentials and security stamp intact', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { totpSecret: TOTP });
-  await upsertTwoFactorSecret(env.DB, user.id, TOTP, RECOVERY);
   await assert.rejects(env.DB.batch([
     ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
     env.DB.prepare('SELECT * FROM missing_table'),
   ]));
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
-  assert.equal(await env.DB.prepare('SELECT secret FROM two_factor WHERE user_id = ?').bind(user.id).first('secret'), TOTP);
 });
 
 test('disabling the authenticator also deletes its Better Auth secret', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), totpSecret: TOTP });
-  await upsertTwoFactorSecret(env.DB, user.id, TOTP, RECOVERY);
   const response = await authedFetch(env, { method: 'POST', path: '/api/two-factor/disable', userId: user.id, body: { type: 0, masterPasswordHash: PASSWORD } });
   assert.equal(response.status, 200);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM two_factor WHERE user_id = ?').bind(user.id).first('n'), 0);
 });
