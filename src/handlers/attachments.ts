@@ -4,7 +4,7 @@ import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifica
 import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { buildDirectUploadUrl, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
-import { sanitizeDownloadContentType } from '../utils/content-type';
+import { contentDispositionAttachment, sanitizeDownloadContentType } from '../utils/content-type';
 import {
   createAttachmentUploadToken,
   createFileDownloadToken,
@@ -59,14 +59,6 @@ async function afterAttachmentChange(
     notifyUserCipherUpdate(env, cipherNotifyPayload(cipher, revisionInfo.revisionDate, request));
   }
   return revisionInfo;
-}
-
-function contentDispositionAttachment(fileName: string | null | undefined): string {
-  const fallback = 'attachment';
-  const value = String(fileName || fallback)
-    .replace(/[\r\n"]/g, '_')
-    .trim() || fallback;
-  return `attachment; filename="${value}"`;
 }
 
 // Format file size to human readable
@@ -362,7 +354,7 @@ export async function handlePublicDownloadAttachment(
     headers: {
       'Content-Type': sanitizeDownloadContentType(object.contentType),
       'Content-Length': String(object.size),
-      'Content-Disposition': contentDispositionAttachment(attachment.fileName),
+      'Content-Disposition': contentDispositionAttachment(attachment.fileName, 'attachment'),
       'Cache-Control': 'private, no-cache',
       'X-Content-Type-Options': 'nosniff',
     },

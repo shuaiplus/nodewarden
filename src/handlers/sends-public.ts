@@ -2,7 +2,7 @@ import { Env, Send, SendType } from '../types';
 import { recordSendEvent } from '../services/events';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { sanitizeDownloadContentType } from '../utils/content-type';
+import { contentDispositionAttachment, sanitizeDownloadContentType } from '../utils/content-type';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { notifyUserSendUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import {
@@ -36,14 +36,6 @@ import {
 import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sendRepo from '../services/storage-send-repo';
-
-function contentDispositionAttachment(fileName: string | null | undefined): string {
-  const fallback = 'send-file';
-  const value = String(fileName || fallback)
-    .replace(/[\r\n"]/g, '_')
-    .trim() || fallback;
-  return `attachment; filename="${value}"`;
-}
 
 // Reads the optional JSON body and checks the Send password inside the per-client attempt limit,
 // so a guessed password costs the guesser lockouts rather than the owner's Send. Resolves to the
@@ -212,7 +204,7 @@ export async function handleDownloadSendFile(
     headers: {
       'Content-Type': sanitizeDownloadContentType(object.contentType),
       'Content-Length': String(object.size),
-      'Content-Disposition': contentDispositionAttachment(fileName),
+      'Content-Disposition': contentDispositionAttachment(fileName, 'send-file'),
       'Cache-Control': 'private, no-cache',
       'X-Content-Type-Options': 'nosniff',
     },
