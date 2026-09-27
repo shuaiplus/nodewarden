@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq } from 'drizzle-orm';
+
 import { LIMITS } from '../config/limits';
+import { getOrm } from '../db/client';
 import { ensureStorageSchema } from '../db/migrate';
+import { smAccessTokens } from '../db/schema';
 import { hashApiKey } from '../utils/api-key';
 import { verifyHs256Jwt } from '../utils/jwt';
 import { authedFetch, createTestEnv } from './support/env';
@@ -34,8 +38,8 @@ test('machine token issuance and identity exchange match upstream fields, signed
   assert.equal(token.object, 'accessTokenCreation');
   assert.equal(token.expireAt, null);
   assert.equal(token.revisionDate, token.creationDate);
-  const stored = await env.DB.prepare('SELECT client_secret_hash, encrypted_payload, "key", wrapped_org_key FROM sm_access_tokens WHERE id = ?').bind(token.id).first();
-  assert.deepEqual(stored, { client_secret_hash: await hashApiKey(token.clientSecret), encrypted_payload: TOKEN_FIELDS.encryptedPayload, key: TOKEN_FIELDS.key, wrapped_org_key: null });
+  const stored = await getOrm(env.DB).select({ clientSecretHash: smAccessTokens.clientSecretHash, encryptedPayload: smAccessTokens.encryptedPayload, key: smAccessTokens.key, wrappedOrgKey: smAccessTokens.wrappedOrgKey }).from(smAccessTokens).where(eq(smAccessTokens.id, token.id)).get();
+  assert.deepEqual(stored, { clientSecretHash: await hashApiKey(token.clientSecret), encryptedPayload: TOKEN_FIELDS.encryptedPayload, key: TOKEN_FIELDS.key, wrappedOrgKey: null });
   const list = await authedFetch(env, { path: tokenPath, userId: owner.id });
   assert.equal(list.status, 200);
   assert.deepEqual(await list.json(), { data: [{ id: token.id, name: token.name, scopes: ['api.secrets'], expireAt: null, creationDate: token.creationDate, revisionDate: token.creationDate, object: 'accessToken' }], object: 'list', continuationToken: null });
@@ -86,11 +90,12 @@ test('machine token input and failed exchanges return the expected request or cl
     assert.equal(response.status, 400);
     assert.equal((await response.json() as any).error, 'invalid_client');
   }
-  await env.DB.prepare('UPDATE sm_access_tokens SET expire_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', token.id).run();
+  const orm = getOrm(env.DB);
+  await orm.update(smAccessTokens).set({ expireAt: '2020-01-01T00:00:00.000Z' }).where(eq(smAccessTokens.id, token.id));
   let response = await smLogin(env, token.id, token.clientSecret);
   assert.equal(response.status, 400);
   assert.equal((await response.json() as any).error, 'invalid_client');
-  await env.DB.prepare('DELETE FROM sm_access_tokens WHERE id = ?').bind(token.id).run();
+  await orm.delete(smAccessTokens).where(eq(smAccessTokens.id, token.id));
   response = await smLogin(env, token.id, token.clientSecret);
   assert.equal(response.status, 400);
   assert.equal((await response.json() as any).error, 'invalid_client');
@@ -109,11 +114,12 @@ test('failed machine credentials lock out only their source IP', async () => {
 test('schema replay purges legacy tokens and preserves every encrypted-payload token', async () => {
   const { env, account, token } = await setup();
   const legacyId = crypto.randomUUID();
-  await env.DB.prepare('INSERT INTO sm_access_tokens (id, service_account_id, name, client_secret_hash, created_at) VALUES (?, ?, ?, ?, ?)').bind(legacyId, account.id, ENCRYPTED_FIELD, await hashApiKey('old-secret'), token.creationDate).run();
+  const orm = getOrm(env.DB);
+  await orm.insert(smAccessTokens).values({ id: legacyId, serviceAccountId: account.id, name: ENCRYPTED_FIELD, clientSecretHash: await hashApiKey('old-secret'), createdAt: token.creationDate });
   for (let replay = 0; replay < 2; replay++) {
     await ensureStorageSchema(env.DB);
-    assert.equal(await env.DB.prepare('SELECT id FROM sm_access_tokens WHERE id = ?').bind(legacyId).first(), null);
-    assert.deepEqual(await env.DB.prepare('SELECT encrypted_payload, "key" FROM sm_access_tokens WHERE id = ?').bind(token.id).first(), { encrypted_payload: TOKEN_FIELDS.encryptedPayload, key: TOKEN_FIELDS.key });
+    assert.equal(await orm.select().from(smAccessTokens).where(eq(smAccessTokens.id, legacyId)).get(), undefined);
+    assert.deepEqual(await orm.select({ encryptedPayload: smAccessTokens.encryptedPayload, key: smAccessTokens.key }).from(smAccessTokens).where(eq(smAccessTokens.id, token.id)).get(), { encryptedPayload: TOKEN_FIELDS.encryptedPayload, key: TOKEN_FIELDS.key });
   }
   assert.equal((await smLogin(env, token.id, token.clientSecret)).status, 200);
 });
