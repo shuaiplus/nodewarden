@@ -38,7 +38,6 @@ import {
   planCipherCollectionChange,
   type CollectionChangeMode,
 } from './cipher-access';
-import { readNullableFullUpdateField } from './cipher-full-update';
 import * as attachmentRepo from '../services/storage-attachment-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
 import * as folderRepo from '../services/storage-folder-repo';
@@ -1099,8 +1098,8 @@ function mergeFullCipherUpdate(existingCipher: Cipher, cipherData: any, preserve
 
   // Nullable fields use replacement semantics on this full-update endpoint.
   // Some clients omit cleared values, so merge fallback must not resurrect them.
-  cipher.notes = readNullableFullUpdateField<string>(cipherData, ['notes', 'Notes']);
-  cipher.fields = readNullableFullUpdateField<Cipher['fields']>(cipherData, ['fields', 'Fields']);
+  cipher.notes = cipherData.notes ?? null;
+  cipher.fields = cipherData.fields ?? null;
   normalizeCipherForStorage(cipher);
   const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
   return compatibilityError ? { ok: false, message: compatibilityError } : { ok: true, cipher };
