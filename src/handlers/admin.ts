@@ -120,8 +120,8 @@ export async function handleAdminListAuditLogs(
   }
 
   const url = new URL(request.url);
-  const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
-  const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+  const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50) || 50));
+  const offset = Math.max(0, Number(url.searchParams.get('offset') || 0) || 0);
   const category = String(url.searchParams.get('category') || '').trim() || null;
   const level = String(url.searchParams.get('level') || '').trim() || null;
   const q = String(url.searchParams.get('q') || '').trim().toLowerCase() || null;
