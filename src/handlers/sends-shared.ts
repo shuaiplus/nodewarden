@@ -1,6 +1,7 @@
 import { decodeBase64Url } from 'hono/utils/encode';
+import { z } from 'zod';
 import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
-import { errorResponse, jsonResponse, prop } from '../utils/response';
+import { errorResponse, jsonResponse } from '../utils/response';
 import { LIMITS } from '../config/limits';
 import { bytesToBase64Url } from '../utils/passkey';
 import * as sendRepo from '../services/storage-send-repo';
@@ -388,6 +389,21 @@ export function sendPasswordLockedOAuthResponse(retryAfterSeconds: number): Resp
   );
 }
 
+const optionalString = z.string().optional().catch(undefined);
+
+// The access body is optional, so anything unreadable counts as no password. Clients spell the
+// client-side password hash four ways; the first one sent wins.
+const SendAccessBody = z.object({
+  password: optionalString,
+  password_hash_b64: optionalString,
+  passwordHashB64: optionalString,
+  passwordHash: optionalString,
+  password_hash: optionalString,
+}).catch({}).transform(({ password, ...hash }) => ({
+  password,
+  passwordHashB64: hash.password_hash_b64 ?? hash.passwordHashB64 ?? hash.passwordHash ?? hash.password_hash,
+}));
+
 export async function validatePublicSendAccess(send: Send, body: unknown): Promise<PublicSendAccessValidationResult> {
   if (hasEmailAuth(send)) {
     return {
@@ -399,22 +415,16 @@ export async function validatePublicSendAccess(send: Send, body: unknown): Promi
 
   if (!send.passwordHash) return { ok: true };
 
-  const passwordRaw = prop(body, 'password');
-  const passwordHashB64Raw = prop(body, ['password_hash_b64', 'passwordHashB64', 'passwordHash', 'password_hash']);
+  const { password, passwordHashB64 } = SendAccessBody.parse(body);
 
   let validPassword = false;
   if (send.passwordSalt && send.passwordIterations) {
-    if (typeof passwordRaw.value !== 'string') {
+    if (password === undefined) {
       return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
     }
-    validPassword = await verifySendPassword(send, passwordRaw.value);
+    validPassword = await verifySendPassword(send, password);
   } else {
-    const candidate =
-      typeof passwordHashB64Raw.value === 'string'
-        ? passwordHashB64Raw.value
-        : typeof passwordRaw.value === 'string'
-          ? passwordRaw.value
-          : '';
+    const candidate = passwordHashB64 ?? password;
     if (!candidate) return { ok: false, response: errorResponse('Password not provided', 401), reason: 'password_missing' };
     validPassword = verifySendPasswordHashB64(send, candidate);
   }

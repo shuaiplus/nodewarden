@@ -50,12 +50,7 @@ function contentDispositionAttachment(fileName: string | null | undefined): stri
 // so a guessed password costs the guesser lockouts rather than the owner's Send. Resolves to the
 // rejection to answer with, or null once the caller may proceed.
 async function authorizeSendByPassword(request: Request, env: Env, send: Send): Promise<Response | null> {
-  let body: unknown = {};
-  try {
-    body = await request.json();
-  } catch {
-    body = {};
-  }
+  const body: unknown = await request.json().catch(() => ({}));
 
   const clientIdentifier = send.passwordHash ? getClientIdentifier(request) : null;
   if (send.passwordHash && !clientIdentifier) return errorResponse('Client IP is required', 403);
