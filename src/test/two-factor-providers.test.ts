@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { integer, sqliteTable } from 'drizzle-orm/sqlite-core';
 
 import { getOrm } from '../db/client';
+import { session, trustedTwoFactorDeviceTokens, webauthnCredentials } from '../db/schema';
 import { hashPassword } from '../services/auth-password';
 import { twoFactorClearStatements } from '../services/two-factor-providers';
 import type { Env, User } from '../types';
@@ -21,9 +23,7 @@ const RECOVERY = 'ABCD EFGH IJKL MNOP QRST UVWX YZ23 4567';
 
 async function seedPasskey(env: Env, user: User, purpose: 'login' | 'twoFactor') {
   const id = crypto.randomUUID();
-  await env.DB.prepare(`INSERT INTO webauthn_credentials
-    (id, user_id, purpose, name, public_key, credential_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, user.id, purpose, purpose, 'cHVibGlj', id, user.createdAt, user.updatedAt).run();
+  await getOrm(env.DB).insert(webauthnCredentials).values({ id, userId: user.id, purpose, name: purpose, publicKey: 'cHVibGlj', credentialId: id, createdAt: user.createdAt, updatedAt: user.updatedAt });
   return id;
 }
 
@@ -96,11 +96,9 @@ for (const loginRecovery of [false, true]) {
     assert.equal(updated.yubikeyKey1, null);
     assert.notEqual(updated.totpRecoveryCode, RECOVERY);
     assert.notEqual(updated.securityStamp, user.securityStamp);
-    for (const table of ['trusted_two_factor_device_tokens']) {
-      assert.equal(await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`).bind(user.id).first('n'), 0);
-    }
+    assert.equal(await getOrm(env.DB).$count(trustedTwoFactorDeviceTokens, eq(trustedTwoFactorDeviceTokens.userId, user.id)), 0);
     assert.equal(await sessionRepo.getRefreshTokenUserId(env.DB, 'old-session'), null);
-    assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM session WHERE user_id = ?').bind(user.id).first('n'), loginRecovery ? 1 : 0);
+    assert.equal(await getOrm(env.DB).$count(session, eq(session.userId, user.id)), loginRecovery ? 1 : 0);
     assert.deepEqual((await passkeyRepo.listAccountPasskeyCredentialsByUserId(env.DB, user.id)).map(key => key.id), [loginPasskey]);
     // Enrolling a new factor must not revive a remember token issued before recovery.
     await userRepo.saveUser(env.DB, { ...updated, totpSecret: TOTP }, ['totpSecret']);
@@ -119,7 +117,8 @@ test('a failed clear batch leaves credentials and security stamp intact', async 
   const orm = getOrm(env.DB);
   await assert.rejects(orm.batch([
     ...twoFactorClearStatements(env.DB, user.id, { recoveryCode: null, securityStamp: crypto.randomUUID() }),
-    orm.select({ one: sql`1` }).from(sql`missing_table`),
+    // No migration creates this table, so the batch fails after the clear statements.
+    orm.select().from(sqliteTable('missing_table', { one: integer('one') })),
   ]), /no such table: missing_table/);
   assert.equal((await userRepo.getUserById(env.DB, user.id))?.securityStamp, user.securityStamp);
 });

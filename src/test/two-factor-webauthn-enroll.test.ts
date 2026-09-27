@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
+import { eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { webauthnCredentials } from '../db/schema';
 import { AuthService } from '../services/auth';
 import type { Env, User } from '../types';
 import { authedFetch, createTestEnv, interceptStatement, seedUser, portalFetch, signInToAdminPortal } from './support/env';
@@ -146,17 +149,17 @@ test('official web enrolls a WebAuthn two-step-login key with a PascalCase Attes
   assert.equal(lastKey.status, 400);
 
   const { env, user, userVerificationToken } = enrollment;
-  await env.DB.prepare(`INSERT INTO webauthn_credentials
-    (id, user_id, purpose, name, public_key, credential_id, created_at, updated_at)
-    VALUES (?, ?, 'login', 'Login key', 'cHVibGlj', ?, ?, ?)`)
-    .bind('login-key', user.id, 'login-credential', user.createdAt, user.updatedAt).run();
+  await getOrm(env.DB).insert(webauthnCredentials).values({
+    id: 'login-key', userId: user.id, purpose: 'login', name: 'Login key', publicKey: 'cHVibGlj', credentialId: 'login-credential', createdAt: user.createdAt, updatedAt: user.updatedAt,
+  });
   const disabled = await authedFetch(env, {
     method: 'DELETE', path: '/api/two-factor/webauthn/all', userId: user.id, body: { userVerificationToken },
   });
   assert.equal(disabled.status, 204);
   assert.equal(await disabled.text(), '');
-  const remaining = await env.DB.prepare('SELECT id, purpose FROM webauthn_credentials WHERE user_id = ?').bind(user.id).all();
-  assert.deepEqual(remaining.results, [{ id: 'login-key', purpose: 'login' }]);
+  const remaining = await getOrm(env.DB).select({ id: webauthnCredentials.id, purpose: webauthnCredentials.purpose }).from(webauthnCredentials)
+    .where(eq(webauthnCredentials.userId, user.id));
+  assert.deepEqual(remaining, [{ id: 'login-key', purpose: 'login' }]);
 });
 
 test('a WebAuthn enrollment without an attestation object in either casing is rejected', async () => {

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { and, gte, lt } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { authRequests, verification } from '../db/schema';
 import { createSsoEmail2faSessionToken, signHs256Jwt } from '../utils/jwt';
 import { hashPassword } from '../services/auth-password';
 import { buildBackupArchive } from '../services/backup-archive';
@@ -53,7 +56,7 @@ test('email setup requires user verification and rejects other providers, malfor
     const response = await authedFetch(env, { method: 'POST', path: '/api/two-factor/send-email', userId: user.id, body: { email, userVerificationToken } });
     assert.equal(response.status, status);
   }
-  assert.equal(await env.DB.prepare("SELECT count(*) AS n FROM verification WHERE identifier >= 'otp:' AND identifier < 'otp;'").first('n'), 0);
+  assert.equal(await getOrm(env.DB).$count(verification, and(gte(verification.identifier, 'otp:'), lt(verification.identifier, 'otp;'))), 0);
 });
 
 test('setup codes bind the address, enable Email consistently, survive stale saves and are single-use', async () => {
@@ -211,10 +214,10 @@ test('an approved auth request may send a code only while unconsumed, and invali
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD), twoFactorEmail: FACTOR_EMAIL });
   const id = crypto.randomUUID();
   const accessCode = 'approved-device-access';
-  await env.DB.prepare(`INSERT INTO auth_requests
-    (id,user_id,type,request_device_identifier,request_device_type,access_code,public_key,key,approved,creation_date,response_date)
-    VALUES (?,?,0,'approved-device',9,?,'public-key','2.key|key|key',1,?,?)`)
-    .bind(id, user.id, accessCode, user.createdAt, user.createdAt).run();
+  await getOrm(env.DB).insert(authRequests).values({
+    id, userId: user.id, type: 0, requestDeviceIdentifier: 'approved-device', requestDeviceType: 9, accessCode, publicKey: 'public-key',
+    key: '2.key|key|key', approved: 1, creationDate: user.createdAt, responseDate: user.createdAt,
+  });
   const body = { email: user.email, authRequestId: id, authRequestAccessCode: accessCode, ssoEmail2FaSessionToken: await createSsoEmail2faSessionToken(env, user), masterPasswordHash: PASSWORD };
   assert.equal((await sendLoginCode(env, { ...body, authRequestAccessCode: 'wrong' })).status, 400);
   assert.equal(mail.sent.length, 0);
