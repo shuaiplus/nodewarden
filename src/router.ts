@@ -1,13 +1,21 @@
+import { Hono } from 'hono';
 import { handleSmMachineRoute, handleSmRoute } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
 import { handleAdminPortal } from './handlers/admin-portal';
-import { Env } from './types';
-import { AuthService } from './services/auth';
+import type { Env, User } from './types';
+import { AuthService, type Principal } from './services/auth';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
 import { handleCors, errorResponse } from './utils/response';
 import { LIMITS } from './config/limits';
 import { handleAuthenticatedRoute } from './router-authenticated';
 import { handlePublicRoute } from './router-public';
+
+// Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
+// are only set for user principals.
+export type AppEnv = {
+  Bindings: Env;
+  Variables: { principal: Principal; userId: string; currentUser: User };
+};
 
 export function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
   const secret = (env.JWT_SECRET || '').trim();
@@ -103,127 +111,128 @@ async function enforceRequestBodyLimit(
   });
 }
 
-export async function handleRequest(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  const method = request.method;
-  const clientId = getClientIdentifier(request);
-
-  async function enforcePublicRateLimit(
-    category: string = 'public',
-    maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute
-  ): Promise<Response | null> {
-    if (!clientId) {
-      return new Response(
-        JSON.stringify({
-          error: 'Forbidden',
-          error_description: 'Client IP is required',
-        }),
-        {
-          status: 403,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      );
+function tooManyRequests(retryAfterSeconds: number | undefined): Response {
+  return new Response(
+    JSON.stringify({
+      error: 'Too many requests',
+      error_description: `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`,
+    }),
+    {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': String(retryAfterSeconds || 60),
+        'X-RateLimit-Remaining': '0',
+      },
     }
+  );
+}
 
-    const rateLimit = new RateLimitService(env.DB);
-    const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
-    const check = shouldUseStrictBudget
-      ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)
-      : await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
-    if (check.allowed) return null;
-
+async function enforcePublicRateLimit(
+  request: Request,
+  env: Env,
+  category: string = 'public',
+  maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute
+): Promise<Response | null> {
+  const clientId = getClientIdentifier(request);
+  if (!clientId) {
     return new Response(
       JSON.stringify({
-        error: 'Too many requests',
-        error_description: `Rate limit exceeded. Try again in ${check.retryAfterSeconds} seconds.`,
+        error: 'Forbidden',
+        error_description: 'Client IP is required',
       }),
       {
-        status: 429,
-        headers: {
-          'Content-Type': 'application/json',
-          'Retry-After': String(check.retryAfterSeconds || 60),
-          'X-RateLimit-Remaining': '0',
-        },
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
       }
     );
   }
 
-  if (method === 'OPTIONS' && !isAdminPortalPath(path)) {
-    return handleCors(request, env);
-  }
-
-  try {
-    const bodyLimitResult = await enforceRequestBodyLimit(request, path, method);
-    if (bodyLimitResult instanceof Response) {
-      return bodyLimitResult;
-    }
-    request = bodyLimitResult;
-    if (isAdminPortalPath(path)) return handleAdminPortal(request, env);
-
-    const secretIssue = jwtSecretUnsafeReason(env);
-    if (secretIssue && !canServeWithUnsafeJwtSecret(path, method)) {
-      return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
-    }
-
-    const publicResponse = await handlePublicRoute(request, env, path, method, enforcePublicRateLimit);
-    if (publicResponse) return publicResponse;
-
-    const auth = new AuthService(env);
-    const authHeader = request.headers.get('Authorization');
-    const verified = await auth.verifyPrincipal(authHeader);
-    if (!verified) {
-      return errorResponse('Unauthorized', 401);
-    }
-    if (verified.kind === 'serviceAccount') {
-      const rateLimit = await new RateLimitService(env.DB).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
-      if (!rateLimit.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(rateLimit.retryAfterSeconds || 60) });
-      return await handleSmMachineRoute(request, env, verified, path, method);
-    }
-    const { payload, user: currentUser } = verified;
-
-    const actingDeviceId = String(payload.did || '').trim();
-    if (actingDeviceId) {
-      const nextHeaders = new Headers(request.headers);
-      nextHeaders.set('X-NodeWarden-Acting-Device-Id', actingDeviceId);
-      request = new Request(request, { headers: nextHeaders });
-    }
-
-    const userId = payload.sub;
-    if (currentUser.status !== 'active') {
-      return errorResponse('Account is disabled', 403);
-    }
-
-    if (!isImportBypassRequest(request, path, method)) {
-      const rateLimit = new RateLimitService(env.DB);
-      const rateLimitCheck = await rateLimit.consumeBudget(`${userId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
-      if (!rateLimitCheck.allowed) {
-        return new Response(
-          JSON.stringify({
-            error: 'Too many requests',
-            error_description: `Rate limit exceeded. Try again in ${rateLimitCheck.retryAfterSeconds} seconds.`,
-          }),
-          {
-            status: 429,
-            headers: {
-              'Content-Type': 'application/json',
-              'Retry-After': String(rateLimitCheck.retryAfterSeconds || 60),
-              'X-RateLimit-Remaining': '0',
-            },
-          }
-        );
-      }
-    }
-
-    const smResponse = await handleSmRoute(request, env, verified, path, method);
-    if (smResponse) return smResponse;
-
-    const authenticatedResponse = await handleAuthenticatedRoute(request, env, userId, currentUser, path, method);
-    if (authenticatedResponse) return authenticatedResponse;
-
-    return errorResponse('Not found', 404);
-  } catch (error) {
-    console.error('Request error:', error);
-    return errorResponse('Internal server error', 500);
-  }
+  const rateLimit = new RateLimitService(env.DB);
+  const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
+  const check = shouldUseStrictBudget
+    ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)
+    : await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
+  return check.allowed ? null : tooManyRequests(check.retryAfterSeconds);
 }
+
+// Routes match the raw pathname, exactly as index.ts normalised it; Hono's default path getter
+// would percent-decode it before matching.
+export const app = new Hono<AppEnv>({ getPath: (request) => new URL(request.url).pathname });
+
+app.use(async (c, next) => {
+  if (c.req.method === 'OPTIONS' && !isAdminPortalPath(c.req.path)) return handleCors(c.req.raw, c.env);
+  await next();
+});
+
+app.use(async (c, next) => {
+  const limited = await enforceRequestBodyLimit(c.req.raw, c.req.path, c.req.method);
+  if (limited instanceof Response) return limited;
+  c.req.raw = limited;
+  await next();
+});
+
+app.on('ALL', ['/admin', '/admin/*'], (c) => handleAdminPortal(c.req.raw, c.env));
+
+app.use(async (c, next) => {
+  if (jwtSecretUnsafeReason(c.env) && !canServeWithUnsafeJwtSecret(c.req.path, c.req.method)) {
+    return errorResponse('Server configuration error: JWT_SECRET is not set or too weak', 500);
+  }
+  await next();
+});
+
+app.use(async (c, next) => {
+  const publicResponse = await handlePublicRoute(c.req.raw, c.env, c.req.path, c.req.method, (category, maxRequests) => enforcePublicRateLimit(c.req.raw, c.env, category, maxRequests));
+  if (publicResponse) return publicResponse;
+  await next();
+});
+
+app.use(async (c, next) => {
+  const verified = await new AuthService(c.env).verifyPrincipal(c.req.raw.headers.get('Authorization'));
+  if (!verified) return errorResponse('Unauthorized', 401);
+  c.set('principal', verified);
+
+  if (verified.kind === 'serviceAccount') {
+    const budget = await new RateLimitService(c.env.DB).consumeBudget(`sa:${verified.serviceAccountId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+    if (!budget.allowed) return errorResponse('Too many requests', 429, { 'Retry-After': String(budget.retryAfterSeconds || 60) });
+    return handleSmMachineRoute(c.req.raw, c.env, verified, c.req.path, c.req.method);
+  }
+
+  const { payload, user } = verified;
+  const actingDeviceId = String(payload.did || '').trim();
+  if (actingDeviceId) {
+    const nextHeaders = new Headers(c.req.raw.headers);
+    nextHeaders.set('X-NodeWarden-Acting-Device-Id', actingDeviceId);
+    c.req.raw = new Request(c.req.raw, { headers: nextHeaders });
+  }
+
+  if (user.status !== 'active') return errorResponse('Account is disabled', 403);
+
+  if (!isImportBypassRequest(c.req.raw, c.req.path, c.req.method)) {
+    const budget = await new RateLimitService(c.env.DB).consumeBudget(`${payload.sub}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
+    if (!budget.allowed) return tooManyRequests(budget.retryAfterSeconds);
+  }
+
+  c.set('userId', payload.sub);
+  c.set('currentUser', user);
+  await next();
+});
+
+app.use(async (c, next) => {
+  const smResponse = await handleSmRoute(c.req.raw, c.env, c.get('principal'), c.req.path, c.req.method);
+  if (smResponse) return smResponse;
+  await next();
+});
+
+app.use(async (c, next) => {
+  const authenticatedResponse = await handleAuthenticatedRoute(c.req.raw, c.env, c.get('userId'), c.get('currentUser'), c.req.path, c.req.method);
+  if (authenticatedResponse) return authenticatedResponse;
+  await next();
+});
+
+app.notFound(() => errorResponse('Not found', 404));
+
+app.onError((error) => {
+  console.error('Request error:', error);
+  return errorResponse('Internal server error', 500);
+});

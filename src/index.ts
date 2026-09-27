@@ -7,7 +7,7 @@ import { NotificationsHub } from './durable/notifications-hub';
 import { BackupTransferRunner } from './durable/backup-transfer-runner';
 import type { PlatformEvent } from './services/queue-publisher';
 import * as orgRepo from './services/storage-org-repo';
-import { handleRequest } from './router';
+import { app } from './router';
 import { applyCors, jsonResponse } from './utils/response';
 import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
@@ -88,7 +88,6 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    void ctx;
     const normalizedRequest = normalizeRequestUrl(request);
     const requestPath = new URL(normalizedRequest.url).pathname;
 
@@ -119,7 +118,7 @@ export default {
       return applyCors(normalizedRequest, resp, env);
     }
 
-    const resp = await handleRequest(normalizedRequest, env);
+    const resp = await app.fetch(normalizedRequest, env, ctx);
     return applyCors(normalizedRequest, resp, env);
   },
 
