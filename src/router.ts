@@ -11,6 +11,7 @@ import { normalizeOrigin } from './utils/origins';
 import { LIMITS } from './config/limits';
 import { authenticatedRoutes } from './router-authenticated';
 import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
+import { withoutQueryParams } from './db/client';
 
 // Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
 // are only set for user principals; the guard before the authenticated routes keeps machine
@@ -199,6 +200,6 @@ app.route('/', authenticatedRoutes);
 app.notFound(() => errorResponse('Not found', 404));
 
 app.onError((error) => {
-  console.error('Request error:', error);
+  console.error('Request error:', withoutQueryParams(error));
   return errorResponse('Internal server error', 500);
 });

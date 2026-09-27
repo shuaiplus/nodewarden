@@ -22,6 +22,7 @@ import {
 } from '../handlers/backup';
 import { isSafeBackupAttachmentBlobName, verifyBackupArchiveFileNameChecksum } from '../services/backup-archive';
 import { zipSync } from 'fflate';
+import { withoutQueryParams } from '../db/client';
 
 const BACKUP_JOB_STATE_KEY = 'backup.job.state.v1';
 const BACKUP_JOB_LEASE_MS = 10 * 60 * 1000;
@@ -155,7 +156,7 @@ export class BackupTransferRunner extends DurableObject<Env> {
           // One failing destination must not stop the others; executeConfiguredBackup has already
           // recorded the error in that destination's runtime state for the admin page.
           await executeConfiguredBackup(this.env, this.env.DB, null, 'scheduled', destination.id, () => this.touchJob(token))
-            .catch((error: unknown) => console.error('Scheduled backup failed', destination.id, error));
+            .catch((error: unknown) => console.error('Scheduled backup failed', destination.id, withoutQueryParams(error)));
         }
       }
     } finally {

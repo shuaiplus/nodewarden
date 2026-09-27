@@ -36,6 +36,7 @@ import { createTwoFactorUserVerificationToken, verifyTwoFactorUserVerificationTo
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as sessionRepo from '../services/storage-session-repo';
 import * as userRepo from '../services/storage-user-repo';
+import { withoutQueryParams } from '../db/client';
 
 const MAX_ACCOUNT_PASSKEYS = 5;
 const MAX_TWO_FACTOR_PASSKEYS = 5;
@@ -75,11 +76,12 @@ async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRe
 }
 
 function logAccountPasskeyHandlerError(stage: string, error: unknown, details: Record<string, unknown> = {}): void {
-  const err = error instanceof Error ? error : null;
+  const redacted = withoutQueryParams(error);
+  const err = redacted instanceof Error ? redacted : null;
   console.error('Account passkey handler failed', {
     stage,
     name: err?.name || typeof error,
-    message: err?.message || String(error),
+    message: err?.message || String(redacted),
     stack: err?.stack,
     ...details,
   });

@@ -13,6 +13,7 @@ import { runScheduledBackupIfDue } from './handlers/backup';
 import { approveExpiredEmergencyAccess, remindPendingEmergencyAccess } from './handlers/emergency-access';
 import { isBackendRequestPath } from './web-vault-visibility';
 import { initializeDatabase } from './db/migrate';
+import { withoutQueryParams } from './db/client';
 
 let dbInitialized = false;
 let dbInitError: string | null = null;
@@ -71,7 +72,7 @@ async function ensureDatabaseInitialized(env: Env): Promise<void> {
       dbInitError = null;
     })()
       .catch((error: unknown) => {
-        console.error('Failed to initialize database:', error);
+        console.error('Failed to initialize database:', withoutQueryParams(error));
         dbInitError = error instanceof Error ? error.message : 'Unknown database initialization error';
       })
       .finally(() => {
@@ -123,16 +124,16 @@ export default {
       pruneEvents(env).catch(() => console.error('Event cleanup failed')),
       purgeExpiredEmailOtps(env).catch(() => console.error('Email code cleanup failed')),
       runScheduledBackupIfDue(env).catch((error) => {
-        console.error('Scheduled backup failed:', error);
+        console.error('Scheduled backup failed:', withoutQueryParams(error));
       }),
       purgeSecretsTrash(env.DB).catch((error) => {
-        console.error('Secrets Manager trash purge failed:', error);
+        console.error('Secrets Manager trash purge failed:', withoutQueryParams(error));
       }),
       approveExpiredEmergencyAccess(env).catch((error) => {
-        console.error('Emergency access timeout job failed:', error);
+        console.error('Emergency access timeout job failed:', withoutQueryParams(error));
       }),
       remindPendingEmergencyAccess(env).catch((error) => {
-        console.error('Emergency access reminder job failed:', error);
+        console.error('Emergency access reminder job failed:', withoutQueryParams(error));
       }),
     ]));
   },
@@ -147,7 +148,7 @@ export default {
         }
         message.ack();
       } catch (error) {
-        console.error('Queue event failed:', error);
+        console.error('Queue event failed:', withoutQueryParams(error));
         message.retry({ delaySeconds: 30 });
       }
     }

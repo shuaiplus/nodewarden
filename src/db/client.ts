@@ -1,4 +1,4 @@
-import { getColumns, sql, type Table } from 'drizzle-orm';
+import { DrizzleQueryError, getColumns, sql, type Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 
 import { relations } from './relations';
@@ -36,4 +36,10 @@ export function getOrm(d1: D1Database): Orm {
 // batch when that write matched no rows: json() of a non-JSON string raises, and D1 rolls the batch back.
 export function abortUnlessChanged(orm: Orm, reason: string) {
   return orm.select({ abort: sql`CASE WHEN changes() = 0 THEN json(${reason}) END` }).from(sql`(SELECT 1)`);
+}
+
+// A failed drizzle query's message lists every bound value (password hashes, keys, one-time codes), so
+// anything logged keeps the statement text and the driver's own error only.
+export function withoutQueryParams(error: unknown): unknown {
+  return error instanceof DrizzleQueryError ? new Error(`Failed query: ${error.query}`, { cause: error.cause }) : error;
 }

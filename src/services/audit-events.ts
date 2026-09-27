@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { getOrm } from '../db/client';
+import { getOrm, withoutQueryParams } from '../db/client';
 import { auditLogs } from '../db/schema';
 import type { Env } from '../types';
 import { generateUUID } from '../utils/uuid';
@@ -202,7 +202,7 @@ export async function writeAuditEvent(db: D1Database, event: AuditEventInput): P
     await auditEventStatement(db, event);
     await maybePruneAuditLogs(db);
   } catch (error) {
-    console.error('audit log write failed', error);
+    console.error('audit log write failed', withoutQueryParams(error));
   }
 }
 
