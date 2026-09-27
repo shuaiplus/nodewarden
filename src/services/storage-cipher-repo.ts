@@ -101,14 +101,7 @@ export async function getCipherForUser(db: D1Database, id: string, userId: strin
 // The upsert as an unexecuted statement, so callers can batch it with related writes.
 export function cipherUpsert(db: D1Database, cipher: Cipher) {
   const folderId = normalizeOptionalId(cipher.folderId);
-  const payload: Record<string, unknown> = {
-    ...cipher,
-    folderId,
-  };
-  for (const key of CIPHER_SCALAR_DATA_KEYS) {
-    delete payload[key];
-  }
-  const data = JSON.stringify(payload);
+  const data = JSON.stringify(Object.fromEntries(Object.entries(cipher).filter(([key]) => !CIPHER_SCALAR_DATA_KEYS.has(key))));
   const organizationId = normalizeOptionalId(cipher.organizationId ?? null);
   const values = {
     id: cipher.id,
