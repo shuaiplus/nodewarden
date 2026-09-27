@@ -1,16 +1,11 @@
 import { User, UserDecryptionOptions, WebAuthnPrfDecryptionOption } from '../types';
 
-function normalizeOptionalPublicKey(value: unknown): string {
-  if (value == null) return '';
-  return String(value);
-}
-
 export function buildAccountKeys(user: Pick<User, 'privateKey' | 'publicKey'>): Record<string, unknown> | null {
   if (!user.privateKey) {
     return null;
   }
 
-  const publicKey = normalizeOptionalPublicKey(user.publicKey);
+  const publicKey = user.publicKey == null ? '' : String(user.publicKey);
 
   return {
     publicKeyEncryptionKeyPair: {
