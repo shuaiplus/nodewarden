@@ -4,11 +4,11 @@ import { isAdminPortalPath } from './web-vault-visibility';
 import { handleAdminPortal } from './handlers/admin-portal';
 import type { Env, User } from './types';
 import { AuthService, type Principal } from './services/auth';
-import { RateLimitService, getClientIdentifier } from './services/ratelimit';
+import { RateLimitService } from './services/ratelimit';
 import { handleCors, errorResponse } from './utils/response';
 import { LIMITS } from './config/limits';
 import { handleAuthenticatedRoute } from './router-authenticated';
-import { handlePublicRoute } from './router-public';
+import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
 
 // Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
 // are only set for user principals.
@@ -16,13 +16,6 @@ export type AppEnv = {
   Bindings: Env;
   Variables: { principal: Principal; userId: string; currentUser: User };
 };
-
-export function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret) return 'missing';
-  if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
-  return null;
-}
 
 function canServeWithUnsafeJwtSecret(path: string, method: string): boolean {
   if (method === 'OPTIONS') return true;
@@ -111,51 +104,6 @@ async function enforceRequestBodyLimit(
   });
 }
 
-function tooManyRequests(retryAfterSeconds: number | undefined): Response {
-  return new Response(
-    JSON.stringify({
-      error: 'Too many requests',
-      error_description: `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`,
-    }),
-    {
-      status: 429,
-      headers: {
-        'Content-Type': 'application/json',
-        'Retry-After': String(retryAfterSeconds || 60),
-        'X-RateLimit-Remaining': '0',
-      },
-    }
-  );
-}
-
-async function enforcePublicRateLimit(
-  request: Request,
-  env: Env,
-  category: string = 'public',
-  maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute
-): Promise<Response | null> {
-  const clientId = getClientIdentifier(request);
-  if (!clientId) {
-    return new Response(
-      JSON.stringify({
-        error: 'Forbidden',
-        error_description: 'Client IP is required',
-      }),
-      {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
-  }
-
-  const rateLimit = new RateLimitService(env.DB);
-  const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
-  const check = shouldUseStrictBudget
-    ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)
-    : await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
-  return check.allowed ? null : tooManyRequests(check.retryAfterSeconds);
-}
-
 // Routes match the raw pathname, exactly as index.ts normalised it; Hono's default path getter
 // would percent-decode it before matching.
 export const app = new Hono<AppEnv>({ getPath: (request) => new URL(request.url).pathname });
@@ -181,11 +129,7 @@ app.use(async (c, next) => {
   await next();
 });
 
-app.use(async (c, next) => {
-  const publicResponse = await handlePublicRoute(c.req.raw, c.env, c.req.path, c.req.method, (category, maxRequests) => enforcePublicRateLimit(c.req.raw, c.env, category, maxRequests));
-  if (publicResponse) return publicResponse;
-  await next();
-});
+app.route('/', publicRoutes);
 
 app.use(async (c, next) => {
   const verified = await new AuthService(c.env).verifyPrincipal(c.req.raw.headers.get('Authorization'));

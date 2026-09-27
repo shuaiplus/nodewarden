@@ -1,3 +1,4 @@
+import { Hono, type MiddlewareHandler } from 'hono';
 import { LIMITS } from './config/limits';
 import {
   handleAccessSend,
@@ -46,9 +47,9 @@ import type { Env } from './types';
 import { getConfiguredWebAuthnAllowedOrigins, isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
 import * as userRepo from './services/storage-user-repo';
-import { jwtSecretUnsafeReason } from './router';
+import { RateLimitService, getClientIdentifier } from './services/ratelimit';
+import type { AppEnv } from './router';
 
-type PublicRateLimiter = (category?: string, maxRequests?: number) => Promise<Response | null>;
 type JwtUnsafeReason = 'missing' | 'too_short' | null;
 
 export interface WebBootstrapResponse {
@@ -59,12 +60,19 @@ export interface WebBootstrapResponse {
   webAuthnAllowedOrigins: string[];
 }
 
-function isSameOriginWriteRequest(request: Request, env?: Env): boolean {
+export function jwtSecretUnsafeReason(env: Env): JwtUnsafeReason {
+  const secret = (env.JWT_SECRET || '').trim();
+  if (!secret) return 'missing';
+  if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
+  return null;
+}
+
+function isSameOriginWriteRequest(request: Request, env: Env): boolean {
   const targetOrigin = new URL(request.url).origin;
   const originHeader = request.headers.get('Origin');
   if (originHeader) {
     if (originHeader === targetOrigin) return true;
-    return !!env && isConfiguredWebVaultOrigin(env, originHeader);
+    return isConfiguredWebVaultOrigin(env, originHeader);
   }
 
   const referer = request.headers.get('Referer');
@@ -72,7 +80,7 @@ function isSameOriginWriteRequest(request: Request, env?: Env): boolean {
     try {
       const refererOrigin = new URL(referer).origin;
       if (refererOrigin === targetOrigin) return true;
-      return !!env && isConfiguredWebVaultOrigin(env, refererOrigin);
+      return isConfiguredWebVaultOrigin(env, refererOrigin);
     } catch {
       return false;
     }
@@ -280,296 +288,159 @@ export async function buildWebBootstrapResponse(env: Env): Promise<WebBootstrapR
   };
 }
 
-export async function handlePublicRoute(
+export function tooManyRequests(retryAfterSeconds: number | undefined): Response {
+  return new Response(
+    JSON.stringify({
+      error: 'Too many requests',
+      error_description: `Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`,
+    }),
+    {
+      status: 429,
+      headers: {
+        'Content-Type': 'application/json',
+        'Retry-After': String(retryAfterSeconds || 60),
+        'X-RateLimit-Remaining': '0',
+      },
+    }
+  );
+}
+
+async function enforcePublicRateLimit(
   request: Request,
   env: Env,
-  path: string,
-  method: string,
-  enforcePublicRateLimit: PublicRateLimiter
+  category: string = 'public',
+  maxRequests: number = LIMITS.rateLimit.publicRequestsPerMinute
 ): Promise<Response | null> {
-  if (path === '/api/auth' || path.startsWith('/api/auth/')) {
-    return createAuth(env, request).handler(request);
-  }
-
-  if ((path === '/api/web-bootstrap' || path === '/web-bootstrap') && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    return jsonResponse(await buildWebBootstrapResponse(env));
-  }
-
-  if (path === '/fill-assist/manifest.json' && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleFillAssistManifest();
-  }
-
-  if ((path === '/v1/assetlinks:check' || path === '/api/v1/assetlinks:check') && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleDigitalAssetLinkCheck();
-  }
-
-  const fillAssistFormsMatch = path.match(/^\/fill-assist\/([^/]+)$/i);
-  if (fillAssistFormsMatch && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleFillAssistForms(fillAssistFormsMatch[1]);
-  }
-
-  const iconMatch = path.match(/^\/icons\/([^/]+)\/icon\.png$/i);
-  if (iconMatch && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute);
-    if (blocked) return blocked;
-    const fallbackMode = new URL(request.url).searchParams.get('fallback') === '404' ? 'not-found' : 'default';
-    return handleWebsiteIcon(iconMatch[1], fallbackMode);
-  }
-
-  const publicAttachmentMatch = path.match(/^\/api\/attachments\/([a-f0-9-]+)\/([a-f0-9-]+)$/i);
-  if (publicAttachmentMatch && method === 'GET') {
-    return handlePublicDownloadAttachment(request, env, publicAttachmentMatch[1], publicAttachmentMatch[2]);
-  }
-
-  const publicAttachmentUploadMatch = path.match(/^\/api\/ciphers\/([a-f0-9-]+)\/attachment\/([a-f0-9-]+)$/i);
-  if (publicAttachmentUploadMatch && (method === 'POST' || method === 'PUT') && new URL(request.url).searchParams.has('token')) {
-    return handlePublicUploadAttachment(request, env, publicAttachmentUploadMatch[1], publicAttachmentUploadMatch[2]);
-  }
-
-  const publicSendUploadMatch = path.match(/^\/api\/sends\/([^/]+)\/file\/([^/]+)\/?$/i);
-  if (publicSendUploadMatch && (method === 'POST' || method === 'PUT') && new URL(request.url).searchParams.has('token')) {
-    return handlePublicUploadSendFile(request, env, publicSendUploadMatch[1], publicSendUploadMatch[2]);
-  }
-
-  const sendAccessMatch = path.match(/^\/api\/sends\/access\/([^/]+)$/i);
-  if (sendAccessMatch && method === 'POST') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return blocked;
-    return handleAccessSend(request, env, sendAccessMatch[1]);
-  }
-
-  if (path === '/api/sends/access' && method === 'POST') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return blocked;
-    return handleAccessSendV2(request, env);
-  }
-
-  const sendAccessFileV2Match = path.match(/^\/api\/sends\/access\/file\/([^/]+)\/?$/i);
-  if (sendAccessFileV2Match && method === 'POST') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return blocked;
-    return handleAccessSendFileV2(request, env, sendAccessFileV2Match[1]);
-  }
-
-  const sendAccessFileMatch = path.match(/^\/api\/sends\/([^/]+)\/access\/file\/([^/]+)\/?$/i);
-  if (sendAccessFileMatch && method === 'POST') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return blocked;
-    return handleAccessSendFile(request, env, sendAccessFileMatch[1], sendAccessFileMatch[2]);
-  }
-
-  const sendDownloadMatch = path.match(/^\/api\/sends\/([^/]+)\/([^/]+)\/?$/i);
-  if (sendDownloadMatch && method === 'GET') {
-    return handleDownloadSendFile(request, env, sendDownloadMatch[1], sendDownloadMatch[2]);
-  }
-
-  if ((path === '/api/auth-requests' || path === '/api/auth-requests/' || path === '/auth-requests' || path === '/auth-requests/') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleCreateAuthRequest(request, env);
-  }
-
-  const authRequestResponseMatch = path.match(/^\/(?:api\/)?auth-requests\/([a-f0-9-]+)\/response$/i);
-  if (authRequestResponseMatch && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleGetAuthRequestResponse(request, env, authRequestResponseMatch[1]);
-  }
-
-  if (path === '/identity/connect/token' && method === 'POST') {
-    return handleToken(request, env);
-  }
-
-  if ((path === '/identity/sso/prevalidate' || path === '/sso/prevalidate') && method === 'GET') {
-    return handleSsoPrevalidate(env);
-  }
-  if ((path === '/identity/connect/authorize' || path === '/connect/authorize') && method === 'GET') {
-    return handleSsoAuthorize(request, env);
-  }
-  if ((path === '/identity/oidc-signin' || path === '/oidc-signin') && method === 'GET') {
-    return handleOidcSignin(request, env);
-  }
-
-  const scim = await handleScimRoute(request, env, path);
-  if (scim) return scim;
-
-
-
-  if (path === '/api/devices/knowndevice' && method === 'GET') {
-    const blocked = await enforcePublicRateLimit();
-    if (blocked) return jsonResponse(false);
-    return handleKnownDevice(request, env);
-  }
-
-  const clearDeviceTokenMatch = path.match(/^\/api\/devices\/identifier\/([^/]+)\/clear-token$/i);
-  if (clearDeviceTokenMatch && (method === 'PUT' || method === 'POST')) {
-    return new Response(null, { status: 200 });
-  }
-
-  if ((path === '/identity/connect/revocation' || path === '/identity/connect/revoke') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleRevocation(request, env);
-  }
-
-  if (path === '/identity/accounts/prelogin' && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handlePrelogin(request, env);
-  }
-
-  if (path === '/identity/accounts/prelogin/password' && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handlePrelogin(request, env);
-  }
-
-  if (path === '/identity/accounts/webauthn/assertion-options' && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleGetAccountPasskeyAssertionOptions(request, env);
-  }
-
-  if ((path === '/identity/accounts/recover-2fa' || path === '/api/accounts/recover-2fa') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleRecoverTwoFactor(request, env);
-  }
-
-  if ((path === '/api/two-factor/send-email-login' || path === '/two-factor/send-email-login') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleSendTwoFactorEmailLogin(request, env);
-  }
-
-  if ((path === '/api/accounts/resend-new-device-otp' || path === '/accounts/resend-new-device-otp') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleResendNewDeviceOtp(request, env);
-  }
-
-  if ((path === '/api/accounts/delete-recover' || path === '/accounts/delete-recover') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleDeleteRecover(request, env);
-  }
-  if ((path === '/api/accounts/delete-recover-token' || path === '/accounts/delete-recover-token') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleDeleteRecoverToken(request, env);
-  }
-
-  const publicMailBackedPaths = new Set([
-    '/api/accounts/register/verification-email-clicked',
-    '/accounts/register/verification-email-clicked',
-    '/identity/accounts/register/verification-email-clicked',
-    '/api/accounts/verify-email-token',
-    '/accounts/verify-email-token',
-  ]);
-  if (publicMailBackedPaths.has(path) && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return unsupportedResponse('Email delivery is not supported by this server.');
-  }
-
-  if (path === '/api/accounts/password-hint' && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request, env)) {
-      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+  const clientId = getClientIdentifier(request);
+  if (!clientId) {
+    return new Response(
+      JSON.stringify({
+        error: 'Forbidden',
+        error_description: 'Client IP is required',
+      }),
+      {
         status: 403,
         headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return handleGetPasswordHint(request, env);
+      }
+    );
   }
 
-  if ((path === '/alive' || path === '/api/alive') && method === 'GET') {
-    return new Response('OK', {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  const rateLimit = new RateLimitService(env.DB);
+  const shouldUseStrictBudget = category === 'public-sensitive' || category === 'register';
+  const check = shouldUseStrictBudget
+    ? await rateLimit.consumeStrictBudget(`${clientId}:${category}`, maxRequests)
+    : await rateLimit.consumeBudget(`${clientId}:${category}`, maxRequests);
+  return check.allowed ? null : tooManyRequests(check.retryAfterSeconds);
+}
+
+const publicRateLimit = (category?: string, maxRequests?: number): MiddlewareHandler<AppEnv> => async (c, next) => {
+  const blocked = await enforcePublicRateLimit(c.req.raw, c.env, category, maxRequests);
+  if (blocked) return blocked;
+  await next();
+};
+
+const publicRead = publicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
+const publicSensitive = publicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
+const register = publicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
+
+const requireSameOriginWrite: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!isSameOriginWriteRequest(c.req.raw, c.env)) {
+    return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
     });
   }
+  await next();
+};
 
-  if ((path === '/config' || path === '/api/config') && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    const origin = requestPublicOrigin(request);
-    return jsonResponse(buildConfigResponse(origin), 200, { 'Cache-Control': 'no-store' });
-  }
+const hasUploadToken = (request: Request): boolean => new URL(request.url).searchParams.has('token');
 
-  if (path === '/api/version' && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-read', LIMITS.rateLimit.publicReadRequestsPerMinute);
-    if (blocked) return blocked;
-    return jsonResponse(LIMITS.compatibility.bitwardenServerVersion);
-  }
+export const publicRoutes = new Hono<AppEnv>();
 
-  const registerSendVerificationPaths = new Set([
-    '/api/accounts/register/send-verification-email',
-    '/accounts/register/send-verification-email',
-    '/identity/accounts/register/send-verification-email',
-  ]);
-  if (registerSendVerificationPaths.has(path) && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
-    if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request, env)) {
-      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return handleRegisterSendVerificationEmail(request, env);
-  }
+publicRoutes.on('ALL', ['/api/auth', '/api/auth/*'], (c) => createAuth(c.env, c.req.raw).handler(c.req.raw));
 
-  const registerFinishPaths = new Set([
-    '/api/accounts/register/finish',
-    '/accounts/register/finish',
-    '/identity/accounts/register/finish',
-  ]);
-  if (registerFinishPaths.has(path) && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
-    if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request, env)) {
-      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return handleRegisterFinish(request, env);
-  }
+publicRoutes.on('GET', ['/api/web-bootstrap', '/web-bootstrap'], publicRead, async (c) => jsonResponse(await buildWebBootstrapResponse(c.env)));
+publicRoutes.get('/fill-assist/manifest.json', publicRead, () => handleFillAssistManifest());
+publicRoutes.on('GET', ['/v1/assetlinks:check', '/api/v1/assetlinks:check'], publicRead, () => handleDigitalAssetLinkCheck());
+publicRoutes.get('/fill-assist/:filename', publicRead, (c) => handleFillAssistForms(c.req.param('filename')));
+publicRoutes.get('/icons/:host/icon.png', publicRateLimit('public-icon', LIMITS.rateLimit.publicIconRequestsPerMinute), (c) => {
+  const fallbackMode = c.req.query('fallback') === '404' ? 'not-found' : 'default';
+  return handleWebsiteIcon(c.req.param('host'), fallbackMode);
+});
 
-  if ((path === '/api/accounts/register' || path === '/identity/accounts/register') && method === 'POST') {
-    const blocked = await enforcePublicRateLimit('register', LIMITS.rateLimit.registerRequestsPerMinute);
-    if (blocked) return blocked;
-    if (!isSameOriginWriteRequest(request, env)) {
-      return new Response(JSON.stringify({ error: 'Forbidden origin' }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return handleRegister(request, env);
-  }
+publicRoutes.get('/api/attachments/:cipherId{[a-f0-9-]+}/:attachmentId{[a-f0-9-]+}', (c) => handlePublicDownloadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId')));
+// Token-bearing uploads are anonymous; without a token the same paths fall through to the
+// authenticated upload routes.
+publicRoutes.on(['POST', 'PUT'], '/api/ciphers/:cipherId{[a-f0-9-]+}/attachment/:attachmentId{[a-f0-9-]+}', async (c, next) => {
+  if (!hasUploadToken(c.req.raw)) return next();
+  return handlePublicUploadAttachment(c.req.raw, c.env, c.req.param('cipherId'), c.req.param('attachmentId'));
+});
+publicRoutes.on(['POST', 'PUT'], '/api/sends/:sendId/file/:fileId', async (c, next) => {
+  if (!hasUploadToken(c.req.raw)) return next();
+  return handlePublicUploadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId'));
+});
 
-  if (path === '/notifications/hub/negotiate' && method === 'POST') {
-    return handleNotificationsNegotiate(request, env);
-  }
+publicRoutes.post('/api/sends/access/:accessId', publicRateLimit(), (c) => handleAccessSend(c.req.raw, c.env, c.req.param('accessId')));
+publicRoutes.post('/api/sends/access', publicRateLimit(), (c) => handleAccessSendV2(c.req.raw, c.env));
+publicRoutes.post('/api/sends/access/file/:fileId', publicRateLimit(), (c) => handleAccessSendFileV2(c.req.raw, c.env, c.req.param('fileId')));
+publicRoutes.post('/api/sends/:sendId/access/file/:fileId', publicRateLimit(), (c) => handleAccessSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')));
+publicRoutes.get('/api/sends/:sendId/:fileId', (c) => handleDownloadSendFile(c.req.raw, c.env, c.req.param('sendId'), c.req.param('fileId')));
 
-  if (path === '/notifications/hub' && method === 'GET') {
-    return handleNotificationsHub(request, env);
-  }
+publicRoutes.on('POST', ['/api/auth-requests', '/auth-requests'], publicSensitive, (c) => handleCreateAuthRequest(c.req.raw, c.env));
+publicRoutes.on('GET', ['/api/auth-requests/:id{[a-f0-9-]+}/response', '/auth-requests/:id{[a-f0-9-]+}/response'], publicSensitive, (c) => handleGetAuthRequestResponse(c.req.raw, c.env, c.req.param('id')));
 
-  if (path === '/notifications/anonymous-hub' && method === 'GET') {
-    const blocked = await enforcePublicRateLimit('public-sensitive', LIMITS.rateLimit.sensitivePublicRequestsPerMinute);
-    if (blocked) return blocked;
-    return handleAnonymousNotificationsHub(request, env);
-  }
-  return null;
-}
+publicRoutes.post('/identity/connect/token', (c) => handleToken(c.req.raw, c.env));
+publicRoutes.on('GET', ['/identity/sso/prevalidate', '/sso/prevalidate'], (c) => handleSsoPrevalidate(c.env));
+publicRoutes.on('GET', ['/identity/connect/authorize', '/connect/authorize'], (c) => handleSsoAuthorize(c.req.raw, c.env));
+publicRoutes.on('GET', ['/identity/oidc-signin', '/oidc-signin'], (c) => handleOidcSignin(c.req.raw, c.env));
+
+publicRoutes.use(async (c, next) => {
+  const scim = await handleScimRoute(c.req.raw, c.env, c.req.path);
+  if (scim) return scim;
+  await next();
+});
+
+publicRoutes.get('/api/devices/knowndevice', async (c) => (await enforcePublicRateLimit(c.req.raw, c.env)) ? jsonResponse(false) : handleKnownDevice(c.req.raw, c.env));
+publicRoutes.on(['PUT', 'POST'], '/api/devices/identifier/:deviceId/clear-token', () => new Response(null, { status: 200 }));
+
+publicRoutes.on('POST', ['/identity/connect/revocation', '/identity/connect/revoke'], publicSensitive, (c) => handleRevocation(c.req.raw, c.env));
+publicRoutes.on('POST', ['/identity/accounts/prelogin', '/identity/accounts/prelogin/password'], publicSensitive, (c) => handlePrelogin(c.req.raw, c.env));
+publicRoutes.get('/identity/accounts/webauthn/assertion-options', publicSensitive, (c) => handleGetAccountPasskeyAssertionOptions(c.req.raw, c.env));
+publicRoutes.on('POST', ['/identity/accounts/recover-2fa', '/api/accounts/recover-2fa'], publicSensitive, (c) => handleRecoverTwoFactor(c.req.raw, c.env));
+publicRoutes.on('POST', ['/api/two-factor/send-email-login', '/two-factor/send-email-login'], publicSensitive, (c) => handleSendTwoFactorEmailLogin(c.req.raw, c.env));
+publicRoutes.on('POST', ['/api/accounts/resend-new-device-otp', '/accounts/resend-new-device-otp'], publicSensitive, (c) => handleResendNewDeviceOtp(c.req.raw, c.env));
+publicRoutes.on('POST', ['/api/accounts/delete-recover', '/accounts/delete-recover'], publicSensitive, (c) => handleDeleteRecover(c.req.raw, c.env));
+publicRoutes.on('POST', ['/api/accounts/delete-recover-token', '/accounts/delete-recover-token'], publicSensitive, (c) => handleDeleteRecoverToken(c.req.raw, c.env));
+
+publicRoutes.on('POST', [
+  '/api/accounts/register/verification-email-clicked',
+  '/accounts/register/verification-email-clicked',
+  '/identity/accounts/register/verification-email-clicked',
+  '/api/accounts/verify-email-token',
+  '/accounts/verify-email-token',
+], publicSensitive, () => unsupportedResponse('Email delivery is not supported by this server.'));
+
+publicRoutes.post('/api/accounts/password-hint', publicSensitive, requireSameOriginWrite, (c) => handleGetPasswordHint(c.req.raw, c.env));
+
+publicRoutes.on('GET', ['/alive', '/api/alive'], () => new Response('OK', {
+  status: 200,
+  headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+}));
+publicRoutes.on('GET', ['/config', '/api/config'], publicRead, (c) => jsonResponse(buildConfigResponse(requestPublicOrigin(c.req.raw)), 200, { 'Cache-Control': 'no-store' }));
+publicRoutes.get('/api/version', publicRead, () => jsonResponse(LIMITS.compatibility.bitwardenServerVersion));
+
+publicRoutes.on('POST', [
+  '/api/accounts/register/send-verification-email',
+  '/accounts/register/send-verification-email',
+  '/identity/accounts/register/send-verification-email',
+], register, requireSameOriginWrite, (c) => handleRegisterSendVerificationEmail(c.req.raw, c.env));
+publicRoutes.on('POST', [
+  '/api/accounts/register/finish',
+  '/accounts/register/finish',
+  '/identity/accounts/register/finish',
+], register, requireSameOriginWrite, (c) => handleRegisterFinish(c.req.raw, c.env));
+publicRoutes.on('POST', ['/api/accounts/register', '/identity/accounts/register'], register, requireSameOriginWrite, (c) => handleRegister(c.req.raw, c.env));
+
+publicRoutes.post('/notifications/hub/negotiate', (c) => handleNotificationsNegotiate(c.req.raw, c.env));
+publicRoutes.get('/notifications/hub', (c) => handleNotificationsHub(c.req.raw, c.env));
+publicRoutes.get('/notifications/anonymous-hub', publicSensitive, (c) => handleAnonymousNotificationsHub(c.req.raw, c.env));
