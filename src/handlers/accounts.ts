@@ -956,18 +956,6 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   return new Response(null, { status: 200 });
 }
 
-// GET /api/accounts/totp
-export async function handleGetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
-  void request;
-  const user = await userRepo.getUserById(env.DB, userId);
-  if (!user) return errorResponse('User not found', 404);
-
-  return jsonResponse({
-    enabled: !!user.totpSecret,
-    object: 'twoFactor',
-  });
-}
-
 function twoFactorProviderResponse(type: number, enabled: boolean): Record<string, unknown> {
   return {
     Enabled: enabled,
@@ -1438,71 +1426,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   return routeType === undefined ? jsonResponse(twoFactorProviderResponse(type, false)) : new Response(null, { status: 204 });
 }
 
-// PUT /api/accounts/totp
-// enable: { enabled: true, secret: "...", token: "123456", masterPasswordHash?: "...", userVerificationToken?: "..." }
-// disable: { enabled: false, masterPasswordHash: "..." }
-export async function handleSetTotpStatus(request: Request, env: Env, userId: string): Promise<Response> {
-  const auth = new AuthService(env);
-  const user = await userRepo.getUserById(env.DB, userId);
-  if (!user) return errorResponse('User not found', 404);
-
-  const body = await parseJsonBody<{ enabled?: boolean; secret?: string; token?: string; masterPasswordHash?: string; userVerificationToken?: string; }>(request);
-
-  if (body instanceof Response) return body;
-
-  if (body.enabled === true) {
-    const normalizedSecret = normalizeTotpSecret(body.secret || '');
-    const masterPasswordHash = readString(body, 'masterPasswordHash');
-    const userVerificationToken = readString(body, 'userVerificationToken');
-    if (!isTotpEnabled(normalizedSecret)) {
-      return errorResponse('Invalid TOTP secret', 400);
-    }
-    if (!body.token) {
-      return errorResponse('TOTP token is required', 400);
-    }
-    let verifiedUser = false;
-    if (userVerificationToken) {
-      verifiedUser = await verifyTwoFactorUserVerificationToken(env, user, TWO_FACTOR_PROVIDER_AUTHENTICATOR, userVerificationToken, normalizedSecret);
-    }
-    if (!verifiedUser && masterPasswordHash) {
-      verifiedUser = await auth.verifyPassword(masterPasswordHash, user.masterPasswordHash, user.email);
-    }
-    if (!verifiedUser) {
-      return errorResponse('User verification failed.', 400);
-    }
-    const matchedCounter = await findMatchingTotpCounter(normalizedSecret, body.token);
-    if (matchedCounter == null || !await totpReplayRepo.consumeTotpLoginCounter(env.DB, user.id, matchedCounter)) {
-      return errorResponse('Invalid TOTP token', 400);
-    }
-    const factorChanged = user.totpSecret !== normalizedSecret;
-    user.totpSecret = normalizedSecret;
-    user.totpRecoveryCode = await ensureTwoFactorRecoveryCode(env.DB, user.id, user.securityStamp);
-    if (!user.totpRecoveryCode) return errorResponse('User verification failed.', 400);
-    user.updatedAt = new Date().toISOString();
-    if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await finalizeTwoFactorChange(request, env, user, 'account.totp.enable', factorChanged ? EventType.UserUpdated2fa : null);
-    return jsonResponse({ enabled: true, recoveryCode: user.totpRecoveryCode, object: 'twoFactor' });
-  }
-
-  if (body.enabled === false) {
-    if (!body.masterPasswordHash) {
-      return errorResponse('masterPasswordHash is required to disable TOTP', 400);
-    }
-    const valid = await auth.verifyPassword(body.masterPasswordHash, user.masterPasswordHash, user.email);
-    if (!valid) return errorResponse('Invalid password', 400);
-
-    const wasEnabled = !!user.totpSecret;
-    user.totpSecret = null;
-    user.updatedAt = new Date().toISOString();
-    if (!await userRepo.saveUser(env.DB, user, ['totpSecret'])) return errorResponse('User verification failed.', 400);
-    await finalizeTwoFactorChange(request, env, user, 'account.totp.disable', wasEnabled ? EventType.UserDisabled2fa : null);
-    return jsonResponse({ enabled: false, object: 'twoFactor' });
-  }
-
-  return errorResponse('enabled must be true or false', 400);
-}
-
-// POST /api/accounts/totp/recovery-code
+// POST /api/two-factor/get-recover
 export async function handleGetTotpRecoveryCode(request: Request, env: Env, userId: string): Promise<Response> {
   const auth = new AuthService(env);
   const user = await userRepo.getUserById(env.DB, userId);

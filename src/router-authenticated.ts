@@ -15,8 +15,6 @@ import {
   handleEmailToken,
   handleChangeEmail,
   handleSetVerifyDevices,
-  handleGetTotpStatus,
-  handleSetTotpStatus,
   handleGetTotpRecoveryCode,
   handleGetTwoFactorProviders,
   handleGetTwoFactorEmail,
@@ -173,9 +171,7 @@ authenticatedRoutes.all('/api/accounts/keys', methodNotAllowed);
 
 authenticatedRoutes.get('/api/users/:userId{[a-f0-9-]+}/public-key', (c) => handleGetUserPublicKey(c.env, c.req.param('userId')));
 
-authenticatedRoutes.get('/api/accounts/totp', (c) => handleGetTotpStatus(c.req.raw, c.env, c.get('userId')));
-authenticatedRoutes.on(['PUT', 'POST'], '/api/accounts/totp', (c) => handleSetTotpStatus(c.req.raw, c.env, c.get('userId')));
-authenticatedRoutes.on('POST', ['/api/accounts/totp/recovery-code', '/api/two-factor/get-recover'], (c) => handleGetTotpRecoveryCode(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/two-factor/get-recover', (c) => handleGetTotpRecoveryCode(c.req.raw, c.env, c.get('userId')));
 
 authenticatedRoutes.get('/api/two-factor', (c) => handleGetTwoFactorProviders(c.req.raw, c.env, c.get('userId')));
 authenticatedRoutes.all('/api/two-factor', methodNotAllowed);
