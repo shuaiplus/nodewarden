@@ -91,9 +91,10 @@ const noSingleUseFunction = {
             const definition = variable.defs.find(functionBody);
             if (!definition || isExported(definition) || exportedNames.has(variable.name)) continue;
             const body = functionBody(definition);
-            // A recursive call is not a second caller.
-            const callers = variable.references.filter(({ identifier: { range: [start, end] } }) => start < body.range[0] || end > body.range[1]);
-            if (callers.length === 1) context.report({ node: definition.name, messageId: 'singleUse', data: { name: variable.name } });
+            const insideBody = ({ identifier: { range: [start, end] } }) => start >= body.range[0] && end <= body.range[1];
+            // A recursive function needs its name to call itself, so it cannot be inlined.
+            if (variable.references.some(insideBody)) continue;
+            if (variable.references.length === 1) context.report({ node: definition.name, messageId: 'singleUse', data: { name: variable.name } });
           }
         }
       },
