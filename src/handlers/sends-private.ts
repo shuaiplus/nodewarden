@@ -1,6 +1,7 @@
+import { z } from 'zod';
 import { Env, Send, SendAuthType, SendType } from '../types';
 import { recordSendEvent, recordSendEvents } from '../services/events';
-import { errorResponse, jsonResponse, parseJsonBody, prop } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { buildDirectUploadUrl, getSafeJwtSecret, parseDirectUploadPayload } from '../utils/direct-upload';
 import { generateUUID } from '../utils/uuid';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
@@ -22,24 +23,81 @@ import {
 } from '../durable/notifications-hub';
 import {
   formatSize,
-  normalizeEmails,
   parseDate,
-  parseFileLength,
-  parseMaxAccessCount,
-  parseSendAuthType,
-  parseSendType,
   parseStoredSendData,
-  sanitizeSendData,
   sendFileIdMatches,
   sendToResponse,
   setSendPassword,
-  validateDeletionDate,
+  toInteger,
 } from './sends-shared';
 import { writeDataAudit } from '../services/audit-events';
 import * as revisionRepo from '../services/storage-revision-repo';
 import * as sendRepo from '../services/storage-send-repo';
 
 const SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE = 'Send email verification is not supported by this server.';
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const nonBlank = (error: string) => z.string({ error }).regex(/\S/, { error });
+const sendDate = (error: string) => z.string({ error }).transform(parseDate).pipe(z.date({ error }));
+const sendType = z.preprocess(toInteger, z.enum(SendType, { error: 'Invalid Send type' }));
+const sendName = nonBlank('Name is required').trim();
+const sendKey = nonBlank('Key is required');
+const deletionDate = sendDate('Invalid deletionDate')
+  .refine((date) => date.getTime() <= Date.now() + LIMITS.send.maxDeletionDays * DAY_MS, {
+    error: 'You cannot have a Send with a deletion date that far into the future. Adjust the Deletion Date to a value less than 31 days from now and try again.',
+  })
+  .transform((date) => date.toISOString());
+// The text or file object is stored as sent so new client fields round-trip; only the server's own
+// response echo is dropped.
+const sendData = z.looseObject({}, { error: 'Send data not provided' }).transform(({ response, ...data }) => data);
+const emailsError = 'Invalid emails';
+
+// Every field an edit may carry; absent fields stay untouched. Official clients send the unused
+// content object as null.
+const SendEdit = z.object({
+  type: sendType.optional(),
+  name: sendName.optional(),
+  key: sendKey.optional(),
+  deletionDate: deletionDate.optional(),
+  text: sendData.nullable().optional(),
+  maxAccessCount: z.preprocess(
+    (raw) => (raw === '' ? null : toInteger(raw)),
+    z.int({ error: 'Invalid maxAccessCount' }).min(0, { error: 'Invalid maxAccessCount' }).nullable()
+  ).optional(),
+  expirationDate: z.preprocess(
+    (raw) => (raw === '' ? null : raw),
+    sendDate('Invalid expirationDate').transform((date) => date.toISOString()).nullable()
+  ).optional(),
+  authType: z.preprocess(toInteger, z.enum(SendAuthType, { error: 'Invalid authType' })).optional(),
+  emails: z.union(
+    [z.string().min(1, { error: emailsError }), z.array(z.string()).min(1, { error: emailsError })],
+    { error: emailsError }
+  ).nullable().optional(),
+  notes: z.string().nullable().catch(null).optional(),
+  disabled: z.boolean({ error: 'Invalid disabled' }).optional(),
+  hideEmail: z.boolean({ error: 'Invalid hideEmail' }).nullable().optional(),
+  password: z.string().optional().catch(undefined),
+});
+
+const newSendFields = { name: sendName, key: sendKey, deletionDate };
+
+const TextSendCreate = SendEdit.extend({
+  type: sendType.refine((type) => type === SendType.Text, { error: 'File sends should use /api/sends/file/v2' }),
+  ...newSendFields,
+  text: sendData,
+});
+
+const FileSendCreate = SendEdit.extend({
+  type: z.preprocess(toInteger, z.literal(SendType.File, { error: 'Send content is not a file' })),
+  ...newSendFields,
+  fileLength: z.preprocess(
+    toInteger,
+    z.int({ error: 'Invalid send length' }).min(0, { error: "Send size can't be negative" })
+  ),
+  file: sendData,
+});
+
+const SendIds = z.object({ ids: z.array(z.string(), { error: 'ids array is required' }) });
 
 async function processSendFileUpload(
   request: Request,
@@ -128,79 +186,43 @@ export async function handleGetSend(request: Request, env: Env, userId: string, 
   return jsonResponse(sendToResponse(send));
 }
 
-// Text and file Sends share every field but the content key; the file handler passes the upload
+// Text and file Sends share every field but the content object; the file handler adds the upload
 // metadata it owns so the stored blob names the object the client is about to upload.
 async function parseNewSend(
-  body: Record<string, unknown>,
+  body: z.output<typeof TextSendCreate> | z.output<typeof FileSendCreate>,
   userId: string,
-  content: 'text' | 'file',
-  dataOverrides: Record<string, unknown> = {}
+  type: SendType,
+  data: Record<string, unknown>
 ): Promise<Send | Response> {
-  const nameRaw = prop(body, 'name');
-  const keyRaw = prop(body, 'key');
-  if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) return errorResponse('Name is required', 400);
-  if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) return errorResponse('Key is required', 400);
+  if (body.authType === SendAuthType.Email || body.emails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
 
-  const deletionDate = parseDate(prop(body, 'deletionDate').value);
-  if (!deletionDate) return errorResponse('Invalid deletionDate', 400);
-  const deletionValidation = validateDeletionDate(deletionDate);
-  if (deletionValidation) return deletionValidation;
-
-  const sendData = sanitizeSendData(prop(body, content).value);
-  if (!sendData) return errorResponse('Send data not provided', 400);
-
-  const maxAccess = parseMaxAccessCount(prop(body, 'maxAccessCount').value);
-  if (!maxAccess.ok) return maxAccess.response;
-
-  const expirationRaw = prop(body, 'expirationDate');
-  const expirationDate = expirationRaw.value === null || expirationRaw.value === undefined
-    ? null
-    : parseDate(expirationRaw.value);
-  if (expirationRaw.value !== null && expirationRaw.value !== undefined && !expirationDate) {
-    return errorResponse('Invalid expirationDate', 400);
-  }
-
-  const authTypeRaw = prop(body, 'authType');
-  const requestedAuthType = parseSendAuthType(authTypeRaw.value);
-  if (authTypeRaw.present && requestedAuthType === null) return errorResponse('Invalid authType', 400);
-  if (requestedAuthType === SendAuthType.Email) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-
-  const emailsRaw = prop(body, 'emails');
-  const normalizedEmails = normalizeEmails(emailsRaw.value);
-  if (emailsRaw.present && emailsRaw.value !== null && normalizedEmails === null) return errorResponse('Invalid emails', 400);
-  if (normalizedEmails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-
-  const disabledRaw = prop(body, 'disabled');
-  const hideEmailRaw = prop(body, 'hideEmail');
-  const notesRaw = prop(body, 'notes');
   const now = new Date().toISOString();
   const send: Send = {
     id: generateUUID(),
     userId,
-    type: content === 'text' ? SendType.Text : SendType.File,
-    name: nameRaw.value.trim(),
-    notes: typeof notesRaw.value === 'string' ? notesRaw.value : null,
-    data: JSON.stringify({ ...sendData, ...dataOverrides }),
-    key: keyRaw.value,
+    type,
+    name: body.name,
+    notes: body.notes ?? null,
+    data: JSON.stringify(data),
+    key: body.key,
     passwordHash: null,
     passwordSalt: null,
     passwordIterations: null,
-    authType: requestedAuthType ?? SendAuthType.None,
+    authType: body.authType ?? SendAuthType.None,
     // Email verification was refused above, so no address list survives creation.
     emails: null,
-    maxAccessCount: maxAccess.value,
+    maxAccessCount: body.maxAccessCount ?? null,
     accessCount: 0,
-    disabled: typeof disabledRaw.value === 'boolean' ? disabledRaw.value : false,
-    hideEmail: typeof hideEmailRaw.value === 'boolean' ? hideEmailRaw.value : null,
+    disabled: body.disabled ?? false,
+    hideEmail: body.hideEmail ?? null,
     createdAt: now,
     updatedAt: now,
-    expirationDate: expirationDate ? expirationDate.toISOString() : null,
-    deletionDate: deletionDate.toISOString(),
+    expirationDate: body.expirationDate ?? null,
+    deletionDate: body.deletionDate,
   };
 
-  const passwordRaw = prop(body, 'password');
-  if (typeof passwordRaw.value === 'string' && passwordRaw.value.length > 0) {
-    await setSendPassword(send, passwordRaw.value);
+  if (body.password) {
+    await setSendPassword(send, body.password);
   } else if (send.authType === SendAuthType.Password) {
     return errorResponse('Password is required for password auth', 400);
   }
@@ -236,14 +258,10 @@ async function sendFileUploadResponse(request: Request, env: Env, send: Send, fi
 }
 
 export async function handleCreateSend(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, TextSendCreate);
   if (body instanceof Response) return body;
 
-  const sendType = parseSendType(prop(body, 'type').value);
-  if (sendType === null) return errorResponse('Invalid Send type', 400);
-  if (sendType === SendType.File) return errorResponse('File sends should use /api/sends/file/v2', 400);
-
-  const send = await parseNewSend(body, userId, 'text');
+  const send = await parseNewSend(body, userId, SendType.Text, body.text);
   if (send instanceof Response) return send;
   await saveSendAndNotify(request, env, send, 'created');
   return jsonResponse(sendToResponse(send));
@@ -251,16 +269,17 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
 
 export async function handleCreateFileSendV2(request: Request, env: Env, userId: string): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
-  const body = await parseJsonBody(request);
+  const body = await parseBody(request, FileSendCreate);
   if (body instanceof Response) return body;
-
-  if (parseSendType(prop(body, 'type').value) !== SendType.File) return errorResponse('Send content is not a file', 400);
-  const fileLength = parseFileLength(prop(body, 'fileLength').value);
-  if (!fileLength.ok) return fileLength.response;
-  if (fileLength.value > maxFileSize) return errorResponse('Send storage limit exceeded with this file', 400);
+  if (body.fileLength > maxFileSize) return errorResponse('Send storage limit exceeded with this file', 400);
 
   const fileId = generateUUID();
-  const send = await parseNewSend(body, userId, 'file', { id: fileId, size: fileLength.value, sizeName: formatSize(fileLength.value) });
+  const send = await parseNewSend(body, userId, SendType.File, {
+    ...body.file,
+    id: fileId,
+    size: body.fileLength,
+    sizeName: formatSize(body.fileLength),
+  });
   if (send instanceof Response) return send;
   await saveSendAndNotify(request, env, send, 'created');
   return sendFileUploadResponse(request, env, send, fileId);
@@ -339,133 +358,19 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
     return errorResponse('Send not found', 404);
   }
 
-  const body = await parseJsonBody(request);
-
+  const body = await parseBody(request, SendEdit);
   if (body instanceof Response) return body;
+  if (body.type !== undefined && body.type !== send.type) return errorResponse("Sends can't change type", 400);
+  if (body.authType === SendAuthType.Email || body.emails) return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
+  if (send.type === SendType.Text && body.text === null) return errorResponse('Send data not provided', 400);
 
-  const typeRaw = prop(body, 'type');
-  if (typeRaw.present) {
-    const incomingType = parseSendType(typeRaw.value);
-    if (incomingType === null) {
-      return errorResponse('Invalid Send type', 400);
-    }
-    if (incomingType !== send.type) {
-      return errorResponse("Sends can't change type", 400);
-    }
-  }
-
-  const deletionRaw = prop(body, 'deletionDate');
-  if (deletionRaw.present) {
-    const deletionDate = parseDate(deletionRaw.value);
-    if (!deletionDate) return errorResponse('Invalid deletionDate', 400);
-    const deletionValidation = validateDeletionDate(deletionDate);
-    if (deletionValidation) return deletionValidation;
-    send.deletionDate = deletionDate.toISOString();
-  }
-
-  const expirationRaw = prop(body, 'expirationDate');
-  if (expirationRaw.present) {
-    if (expirationRaw.value === null || expirationRaw.value === '') {
-      send.expirationDate = null;
-    } else {
-      const expiration = parseDate(expirationRaw.value);
-      if (!expiration) return errorResponse('Invalid expirationDate', 400);
-      send.expirationDate = expiration.toISOString();
-    }
-  }
-
-  const nameRaw = prop(body, 'name');
-  if (nameRaw.present) {
-    if (typeof nameRaw.value !== 'string' || !nameRaw.value.trim()) {
-      return errorResponse('Name is required', 400);
-    }
-    send.name = nameRaw.value.trim();
-  }
-
-  const keyRaw = prop(body, 'key');
-  if (keyRaw.present) {
-    if (typeof keyRaw.value !== 'string' || !keyRaw.value.trim()) {
-      return errorResponse('Key is required', 400);
-    }
-    send.key = keyRaw.value;
-  }
-
-  const notesRaw = prop(body, 'notes');
-  if (notesRaw.present) {
-    send.notes = typeof notesRaw.value === 'string' ? notesRaw.value : null;
-  }
-
-  const disabledRaw = prop(body, 'disabled');
-  if (disabledRaw.present) {
-    if (typeof disabledRaw.value !== 'boolean') {
-      return errorResponse('Invalid disabled', 400);
-    }
-    send.disabled = disabledRaw.value;
-  }
-
-  const hideEmailRaw = prop(body, 'hideEmail');
-  if (hideEmailRaw.present) {
-    if (hideEmailRaw.value === null) {
-      send.hideEmail = null;
-    } else if (typeof hideEmailRaw.value === 'boolean') {
-      send.hideEmail = hideEmailRaw.value;
-    } else {
-      return errorResponse('Invalid hideEmail', 400);
-    }
-  }
-
-  const maxAccessRaw = prop(body, 'maxAccessCount');
-  if (maxAccessRaw.present) {
-    const parsedMax = parseMaxAccessCount(maxAccessRaw.value);
-    if (!parsedMax.ok) return parsedMax.response;
-    send.maxAccessCount = parsedMax.value;
-  }
-
-  if (send.type === SendType.Text) {
-    const textRaw = prop(body, 'text');
-    if (textRaw.present) {
-      const textData = sanitizeSendData(textRaw.value);
-      if (!textData) {
-        return errorResponse('Send data not provided', 400);
-      }
-      send.data = JSON.stringify(textData);
-    }
-  }
-
-  const authTypeRaw = prop(body, 'authType');
-  if (authTypeRaw.present) {
-    const parsedAuthType = parseSendAuthType(authTypeRaw.value);
-    if (parsedAuthType === null) {
-      return errorResponse('Invalid authType', 400);
-    }
-    if (parsedAuthType === SendAuthType.Email) {
-      return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-    }
-    send.authType = parsedAuthType;
-    send.emails = null;
-  }
-
-  const emailsRaw = prop(body, 'emails');
-  if (emailsRaw.present) {
-    const normalizedEmails = normalizeEmails(emailsRaw.value);
-    if (emailsRaw.value !== null && normalizedEmails === null) {
-      return errorResponse('Invalid emails', 400);
-    }
-    if (normalizedEmails) {
-      return errorResponse(SEND_EMAIL_AUTH_UNSUPPORTED_MESSAGE, 501);
-    }
-    send.emails = normalizedEmails;
-    if (send.emails) {
-      send.authType = SendAuthType.Email;
-    } else if (Number(send.authType) === SendAuthType.Email) {
-      send.authType = SendAuthType.None;
-    }
-  }
-
-  const passwordRaw = prop(body, 'password');
-  if (passwordRaw.present && typeof passwordRaw.value === 'string') {
-    await setSendPassword(send, passwordRaw.value);
-  }
+  const { type, text, emails, password, ...edits } = body;
+  Object.assign(send, edits satisfies Partial<Send>);
+  // A new auth type replaces any address list; clearing the list drops email auth with it.
+  if (edits.authType !== undefined || emails === null) send.emails = null;
+  if (emails === null && Number(send.authType) === SendAuthType.Email) send.authType = SendAuthType.None;
+  if (send.type === SendType.Text && text) send.data = JSON.stringify(text);
+  if (password !== undefined) await setSendPassword(send, password);
 
   if (send.authType === SendAuthType.Password && !send.passwordHash) {
     return errorResponse('Password is required for password auth', 400);
@@ -500,14 +405,8 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
 }
 
 export async function handleBulkDeleteSends(request: Request, env: Env, userId: string): Promise<Response> {
-
-  const body = await parseJsonBody<{ ids?: string[] }>(request);
-
+  const body = await parseBody(request, SendIds);
   if (body instanceof Response) return body;
-
-  if (!body.ids || !Array.isArray(body.ids)) {
-    return errorResponse('ids array is required', 400);
-  }
 
   const sends = await sendRepo.getSendsByIds(env.DB, body.ids, userId);
   for (const send of sends) {

@@ -53,12 +53,8 @@ export function fromAccessId(accessId: string): string | null {
   return bytesToUuid(bytes);
 }
 
-function isLikelyUuid(value: string): boolean {
-  return /^[a-f0-9-]{36}$/i.test(value);
-}
-
 export async function resolveSendFromIdOrAccessId(db: D1Database, idOrAccessId: string): Promise<Send | null> {
-  if (isLikelyUuid(idOrAccessId)) {
+  if (z.guid().safeParse(idOrAccessId).success) {
     const send = await sendRepo.getSend(db, idOrAccessId);
     if (send) return send;
   }
@@ -75,9 +71,9 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function parseDate(raw: unknown): Date | null {
-  if (typeof raw !== 'string' || !raw.trim()) return null;
+export function parseDate(raw: string): Date | null {
   let value = raw.trim();
+  if (!value) return null;
   if (!/[zZ]$/.test(value) && !/[+\-]\d{2}:?\d{2}$/.test(value)) {
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
       value += 'Z';
@@ -88,20 +84,6 @@ export function parseDate(raw: unknown): Date | null {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return date;
-}
-
-export function parseInteger(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === '') return null;
-  const value = typeof raw === 'string' ? Number(raw) : raw;
-  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) return null;
-  return value;
-}
-
-export function sanitizeSendData(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const data = { ...(raw as Record<string, unknown>) };
-  delete data.response;
-  return data;
 }
 
 // Clients send integers as JSON numbers or numeric strings; a blank string stays invalid.
@@ -229,65 +211,6 @@ export function verifySendPasswordHashB64(send: Send, passwordHashB64: string): 
   const provided = base64UrlDecode(passwordHashB64);
   if (!expected || !provided) return false;
   return expected.length === provided.length && crypto.subtle.timingSafeEqual(expected, provided);
-}
-
-export function validateDeletionDate(date: Date): Response | null {
-  const maxMs = Date.now() + LIMITS.send.maxDeletionDays * 24 * 60 * 60 * 1000;
-  if (date.getTime() > maxMs) {
-    return errorResponse(
-      'You cannot have a Send with a deletion date that far into the future. Adjust the Deletion Date to a value less than 31 days from now and try again.',
-      400
-    );
-  }
-  return null;
-}
-
-export function parseMaxAccessCount(value: unknown): { ok: true; value: number | null } | { ok: false; response: Response } {
-  const parsed = parseInteger(value);
-  if (value === undefined || value === null || value === '') {
-    return { ok: true, value: null };
-  }
-  if (parsed === null || parsed < 0) {
-    return { ok: false, response: errorResponse('Invalid maxAccessCount', 400) };
-  }
-  return { ok: true, value: parsed };
-}
-
-export function parseFileLength(value: unknown): { ok: true; value: number } | { ok: false; response: Response } {
-  const parsed = parseInteger(value);
-  if (parsed === null) {
-    return { ok: false, response: errorResponse('Invalid send length', 400) };
-  }
-  if (parsed < 0) {
-    return { ok: false, response: errorResponse("Send size can't be negative", 400) };
-  }
-  return { ok: true, value: parsed };
-}
-
-export function parseSendType(value: unknown): SendType | null {
-  const type = parseInteger(value);
-  if (type === SendType.Text || type === SendType.File) return type;
-  return null;
-}
-
-export function parseSendAuthType(value: unknown): SendAuthType | null {
-  if (value === undefined || value === null || value === '') return null;
-  const parsed = parseInteger(value);
-  if (parsed === SendAuthType.Email || parsed === SendAuthType.Password || parsed === SendAuthType.None) {
-    return parsed;
-  }
-  return null;
-}
-
-export function normalizeEmails(value: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) {
-    const strings = value.filter((v) => typeof v === 'string').map((v) => String(v));
-    if (strings.length === 0) return null;
-    return strings.join(',');
-  }
-  return null;
 }
 
 export function hasEmailAuth(send: Send): boolean {
