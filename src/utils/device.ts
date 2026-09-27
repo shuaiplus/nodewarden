@@ -1,3 +1,5 @@
+import type { Cipher } from '../types';
+
 const DEFAULT_DEVICE_NAME = 'Unknown device';
 const DEFAULT_DEVICE_TYPE = 14;
 
@@ -76,6 +78,20 @@ export function readActingDeviceIdentifier(request: Request): string | null {
   return normalizeDeviceIdentifier(request.headers.get('X-NodeWarden-Acting-Device-Id'));
 }
 
+// The cipher create/update/delete signals carry the same payload: the row, its organization and
+// collections, and the acting device so that device's own connection skips the echo.
+export function cipherNotifyPayload(cipher: Cipher, revisionDate: string, request: Request) {
+  return {
+    userId: cipher.userId,
+    cipherId: cipher.id,
+    revisionDate,
+    organizationId: String(cipher.organizationId ?? '').trim() || null,
+    collectionIds: Array.isArray(cipher.collectionIds)
+      ? cipher.collectionIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+      : null,
+    contextId: readActingDeviceIdentifier(request),
+  };
+}
 
 export function deviceTypeName(type: number): string {
   const names: Record<number, string> = {

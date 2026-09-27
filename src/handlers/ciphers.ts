@@ -26,7 +26,7 @@ import { errorResponse, jsonResponse, parseJsonBody, prop } from '../utils/respo
 import { generateUUID, isUUID } from '../utils/uuid';
 import { deleteAllAttachmentsForCipher, deleteAllAttachmentsForCiphers } from './attachments';
 import { parsePagination, encodeContinuationToken } from '../utils/pagination';
-import { readActingDeviceIdentifier } from '../utils/device';
+import { cipherNotifyPayload, readActingDeviceIdentifier } from '../utils/device';
 import { writeDataAudit } from '../services/audit-events';
 import { EventType, recordEvents } from '../services/events';
 import * as orgRepo from '../services/storage-org-repo';
@@ -90,67 +90,44 @@ function buildCipherPermissions(passthrough: Record<string, unknown>): { delete:
   };
 }
 
-function notifyVaultSyncForRequest(
+// Every cipher write ends the same way: bump the owner's revision, signal their devices with the
+// matching cipher event, and record the organization event when upstream logs one for the write.
+async function afterCipherMutation(
   request: Request,
   env: Env,
   userId: string,
-  revisionDate: string
-): void {
+  cipher: Cipher,
+  notify: typeof notifyUserCipherUpdate,
+  eventType?: number
+): Promise<void> {
+  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notify(env, cipherNotifyPayload(cipher, revisionDate, request));
+  if (eventType !== undefined) await recordCipherEvents(env, request, userId, eventType, [cipher]);
 }
 
-function notifyCipherCreateForRequest(
+// Bulk archive, unarchive, soft-delete, restore and purge share everything after the id list: the
+// repo write, the sync signals for the owner's devices, the optional audit row and the response.
+async function finishBulkCipherState(
   request: Request,
   env: Env,
-  cipher: Cipher,
-  revisionDate: string
-): void {
-  notifyUserCipherCreate(env, {
-    userId: cipher.userId,
-    cipherId: cipher.id,
-    revisionDate,
-    organizationId: normalizeOptionalId((cipher as any).organizationId ?? null),
-    collectionIds: Array.isArray((cipher as any).collectionIds)
-      ? (cipher as any).collectionIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
-      : null,
-    contextId: readActingDeviceIdentifier(request),
-  });
+  userId: string,
+  ids: string[],
+  bulk: (db: D1Database, ids: string[], userId: string) => Promise<string | null>,
+  audit: { action: string; metadata: Record<string, unknown> } | null,
+  respond: () => Response | Promise<Response>
+): Promise<Response> {
+  const revisionDate = await bulk(env.DB, ids, userId);
+  if (revisionDate) {
+    notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+    if (audit) await writeDataAudit(env.DB, request, userId, 'cipher', audit.action, audit.metadata);
+  }
+  return respond();
 }
 
-function notifyCipherUpdateForRequest(
-  request: Request,
-  env: Env,
-  cipher: Cipher,
-  revisionDate: string
-): void {
-  notifyUserCipherUpdate(env, {
-    userId: cipher.userId,
-    cipherId: cipher.id,
-    revisionDate,
-    organizationId: normalizeOptionalId((cipher as any).organizationId ?? null),
-    collectionIds: Array.isArray((cipher as any).collectionIds)
-      ? (cipher as any).collectionIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
-      : null,
-    contextId: readActingDeviceIdentifier(request),
-  });
-}
-
-function notifyCipherDeleteForRequest(
-  request: Request,
-  env: Env,
-  cipher: Cipher,
-  revisionDate: string
-): void {
-  notifyUserCipherDelete(env, {
-    userId: cipher.userId,
-    cipherId: cipher.id,
-    revisionDate,
-    organizationId: normalizeOptionalId((cipher as any).organizationId ?? null),
-    collectionIds: Array.isArray((cipher as any).collectionIds)
-      ? (cipher as any).collectionIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
-      : null,
-    contextId: readActingDeviceIdentifier(request),
-  });
+function cipherJsonResponse(request: Request, cipher: Cipher, attachments: Attachment[] = []): Response {
+  return jsonResponse(cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request)));
 }
 
 function getAliasedProp(source: any, aliases: string[]): { present: boolean; value: any } {
@@ -958,11 +935,7 @@ export async function handleGetCipher(request: Request, env: Env, userId: string
   const cipher = await loadAccessibleCipher(env, env.DB, userId, id, 'read');
   if (!cipher) return errorResponse('Cipher not found', 404);
 
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
-  const responseOptions = cipherResponseOptionsForRequest(request);
-  return jsonResponse(
-    cipherToResponse(cipher, attachments, responseOptions)
-  );
+  return cipherJsonResponse(request, cipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id));
 }
 
 async function verifyFolderOwnership(db: D1Database, folderId: string | null | undefined, userId: string): Promise<boolean> {
@@ -1050,17 +1023,10 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
     await orgRepo.replaceCipherCollections(env.DB, cipher.id, incomingCollectionIds);
     (cipher as { collectionIds?: string[] }).collectionIds = incomingCollectionIds;
   }
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   if (organizationId) await orgRepo.bumpOrgMemberRevisions(env.DB, organizationId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherCreateForRequest(request, env, cipher, revisionDate);
-  const responseOptions = cipherResponseOptionsForRequest(request);
-  await recordCipherEvents(env, request, userId, EventType.CipherCreated, [cipher]);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherCreate, EventType.CipherCreated);
 
-  return jsonResponse(
-    cipherToResponse(cipher, [], responseOptions),
-    200
-  );
+  return cipherJsonResponse(request, cipher);
 }
 
 type CipherMerge = { ok: true; cipher: Cipher } | { ok: false; message: string };
@@ -1176,18 +1142,13 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     ? cipherEventState(existingCipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id)) : null;
   await syncIncomingAttachmentMetadata(env.DB, cipher.id, cipherData);
   await cipherRepo.saveCipher(env.DB, cipher);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
   const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
-  if (previousState !== null && previousState !== cipherEventState(cipher, attachments)) {
-    await recordCipherEvents(env, request, userId, EventType.CipherUpdated, [cipher]);
-  }
-  const responseOptions = cipherResponseOptionsForRequest(request);
+  const changed = previousState !== null && previousState !== cipherEventState(cipher, attachments);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate, changed ? EventType.CipherUpdated : undefined);
 
-  return jsonResponse(
-    asAdmin ? { ...organizationCipherResponse(request, cipher, attachments), object: 'cipherMini' } : cipherToResponse(cipher, attachments, responseOptions)
-  );
+  return asAdmin
+    ? jsonResponse({ ...organizationCipherResponse(request, cipher, attachments), object: 'cipherMini' })
+    : cipherJsonResponse(request, cipher, attachments);
 }
 
 // Upstream CipherShareRequestModel / CipherBulkShareRequestModel validation message.
@@ -1228,7 +1189,7 @@ async function shareOwnedCiphers(
   await recordCipherEvents(env, request, userId, EventType.CipherShared, sharedCiphers);
   const revisionDate = await revisionRepo.updateRevisionDate(db, userId);
   await orgRepo.bumpOrgMemberRevisions(env.DB, organizationId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
   return { ok: true, ciphers: sharedCiphers.map((cipher) => ({ ...cipher, collectionIds })), revisionDate };
 }
 
@@ -1258,9 +1219,8 @@ export async function handleShareCipher(request: Request, env: Env, userId: stri
   const shared = await shareOwnedCiphers(request, env, env.DB, userId, organizationId, [{ existing, cipherData }], collectionIds);
   if (!shared.ok) return errorResponse(shared.message, shared.status);
   const [cipher] = shared.ciphers;
-  notifyCipherUpdateForRequest(request, env, cipher, shared.revisionDate);
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
-  return jsonResponse(cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request)));
+  notifyUserCipherUpdate(env, cipherNotifyPayload(cipher, shared.revisionDate, request));
+  return cipherJsonResponse(request, cipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id));
 }
 
 // PUT/POST /api/ciphers/share
@@ -1330,14 +1290,10 @@ export async function handleUpdateCipherCollections(
   const change = await planCipherCollectionChange(env, env.DB, userId, id, requested, mode);
   if (!change.ok) return errorResponse(change.message, change.status);
   await orgRepo.updateCipherCollections(env.DB, change.cipher.id, change.plan);
-  if (change.plan.insert.length || change.plan.remove.length) {
-    await recordCipherEvents(env, request, userId, EventType.CipherUpdatedCollections, [change.cipher]);
-  }
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
   await orgRepo.bumpOrgMemberRevisions(env.DB, change.organizationId);
   const cipher = { ...change.cipher, collectionIds: await orgRepo.listCipherCollectionIds(env.DB, change.cipher.id) };
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
+  const changed = change.plan.insert.length > 0 || change.plan.remove.length > 0;
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate, changed ? EventType.CipherUpdatedCollections : undefined);
 
   const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
   const responseOptions = cipherResponseOptionsForRequest(request);
@@ -1364,19 +1320,14 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
   cipher.updatedAt = cipher.deletedAt;
   syncCipherComputedAliases(cipher);
   await cipherRepo.saveCipher(env.DB, cipher);
-  if (!wasDeleted) await recordCipherEvents(env, request, userId, EventType.CipherSoftDeleted, [cipher]);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherDelete, wasDeleted ? undefined : EventType.CipherSoftDeleted);
   await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.soft', {
     id: cipher.id,
     type: cipher.type,
     folderId: cipher.folderId ?? null,
   });
 
-  return asAdmin ? new Response(null, { status: 200 }) : jsonResponse(
-    cipherToResponse(cipher, [], cipherResponseOptionsForRequest(request))
-  );
+  return asAdmin ? new Response(null, { status: 200 }) : cipherJsonResponse(request, cipher);
 }
 
 // DELETE /api/ciphers/:id (compat mode)
@@ -1391,10 +1342,7 @@ export async function handleDeleteCipherCompat(request: Request, env: Env, userI
   if (cipher.deletedAt) {
     await deleteAllAttachmentsForCipher(env, id);
     await deleteAuthorizedCipher(env.DB, cipher, userId);
-    await recordCipherEvents(env, request, userId, EventType.CipherDeleted, [cipher]);
-    const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
+    await afterCipherMutation(request, env, userId, cipher, notifyUserCipherDelete, EventType.CipherDeleted);
     await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent', {
       id,
       type: cipher.type,
@@ -1416,10 +1364,7 @@ export async function handlePermanentDeleteCipher(request: Request, env: Env, us
   await deleteAllAttachmentsForCipher(env, id);
 
   await deleteAuthorizedCipher(env.DB, cipher, userId);
-  await recordCipherEvents(env, request, userId, EventType.CipherDeleted, [cipher]);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherDeleteForRequest(request, env, cipher, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherDelete, EventType.CipherDeleted);
   await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent', {
     id,
     type: cipher.type,
@@ -1439,14 +1384,9 @@ export async function handleRestoreCipher(request: Request, env: Env, userId: st
   cipher.updatedAt = new Date().toISOString();
   syncCipherComputedAliases(cipher);
   await cipherRepo.saveCipher(env.DB, cipher);
-  if (wasDeleted) await recordCipherEvents(env, request, userId, EventType.CipherRestored, [cipher]);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate, wasDeleted ? EventType.CipherRestored : undefined);
 
-  return jsonResponse(
-    cipherToResponse(cipher, [], cipherResponseOptionsForRequest(request))
-  );
+  return cipherJsonResponse(request, cipher);
 }
 
 // PUT /api/ciphers/:id/partial - Update only favorite/folderId
@@ -1473,13 +1413,9 @@ export async function handlePartialUpdateCipher(request: Request, env: Env, user
   syncCipherComputedAliases(cipher);
 
   await cipherRepo.saveCipher(env.DB, cipher);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate);
 
-  return jsonResponse(
-    cipherToResponse(cipher, [], cipherResponseOptionsForRequest(request))
-  );
+  return cipherJsonResponse(request, cipher);
 }
 
 // POST/PUT /api/ciphers/move - Bulk move to folder
@@ -1500,9 +1436,7 @@ export async function handleBulkMoveCiphers(request: Request, env: Env, userId: 
   }
 
   const revisionDate = await cipherRepo.bulkMoveCiphers(env.DB, body.ids, folderId, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  }
+  if (revisionDate) notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
 
   return new Response(null, { status: 204 });
 }
@@ -1542,14 +1476,9 @@ export async function handleArchiveCipher(request: Request, env: Env, userId: st
   cipher.updatedAt = cipher.archivedAt;
   normalizeCipherForStorage(cipher);
   await cipherRepo.saveCipher(env.DB, cipher);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyCipherUpdateForRequest(request, env, cipher, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate);
 
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
-  return jsonResponse(
-    cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request))
-  );
+  return cipherJsonResponse(request, cipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id));
 }
 
 // PUT/POST /api/ciphers/:id/unarchive
@@ -1561,98 +1490,47 @@ export async function handleUnarchiveCipher(request: Request, env: Env, userId: 
   cipher.updatedAt = new Date().toISOString();
   normalizeCipherForStorage(cipher);
   await cipherRepo.saveCipher(env.DB, cipher);
-  const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  await afterCipherMutation(request, env, userId, cipher, notifyUserCipherUpdate);
 
-  const attachments = await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id);
-  return jsonResponse(
-    cipherToResponse(cipher, attachments, cipherResponseOptionsForRequest(request))
-  );
+  return cipherJsonResponse(request, cipher, await attachmentRepo.getAttachmentsByCipher(env.DB, cipher.id));
 }
 
 // PUT/POST /api/ciphers/archive
 export async function handleBulkArchiveCiphers(request: Request, env: Env, userId: string): Promise<Response> {
-
   const body = await parseJsonBody<{ ids?: unknown }>(request);
-
   if (body instanceof Response) return body;
-
   const ids = parseCipherIdList(body);
-  if (!ids) {
-    return errorResponse('ids array is required', 400);
-  }
-
-  const revisionDate = await cipherRepo.bulkArchiveCiphers(env.DB, ids, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  }
-
-  return buildCipherListResponse(request, env.DB, userId, ids);
+  if (!ids) return errorResponse('ids array is required', 400);
+  return finishBulkCipherState(request, env, userId, ids, cipherRepo.bulkArchiveCiphers, null,
+    () => buildCipherListResponse(request, env.DB, userId, ids));
 }
 
 // PUT/POST /api/ciphers/unarchive
 export async function handleBulkUnarchiveCiphers(request: Request, env: Env, userId: string): Promise<Response> {
-
   const body = await parseJsonBody<{ ids?: unknown }>(request);
-
   if (body instanceof Response) return body;
-
   const ids = parseCipherIdList(body);
-  if (!ids) {
-    return errorResponse('ids array is required', 400);
-  }
-
-  const revisionDate = await cipherRepo.bulkUnarchiveCiphers(env.DB, ids, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  }
-
-  return buildCipherListResponse(request, env.DB, userId, ids);
+  if (!ids) return errorResponse('ids array is required', 400);
+  return finishBulkCipherState(request, env, userId, ids, cipherRepo.bulkUnarchiveCiphers, null,
+    () => buildCipherListResponse(request, env.DB, userId, ids));
 }
 
 // POST /api/ciphers/delete - Bulk soft delete
 export async function handleBulkDeleteCiphers(request: Request, env: Env, userId: string): Promise<Response> {
-
   const body = await parseJsonBody<{ ids?: string[] }>(request);
-
   if (body instanceof Response) return body;
-
-  if (!body.ids || !Array.isArray(body.ids)) {
-    return errorResponse('ids array is required', 400);
-  }
-
-  const revisionDate = await cipherRepo.bulkSoftDeleteCiphers(env.DB, body.ids, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-    await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.soft.bulk', {
-      count: body.ids.length,
-    });
-  }
-
-  return new Response(null, { status: 204 });
+  if (!Array.isArray(body.ids)) return errorResponse('ids array is required', 400);
+  return finishBulkCipherState(request, env, userId, body.ids, cipherRepo.bulkSoftDeleteCiphers,
+    { action: 'cipher.delete.soft.bulk', metadata: { count: body.ids.length } }, () => new Response(null, { status: 204 }));
 }
 
 // POST /api/ciphers/restore - Bulk restore
 export async function handleBulkRestoreCiphers(request: Request, env: Env, userId: string): Promise<Response> {
-
   const body = await parseJsonBody<{ ids?: string[] }>(request);
-
   if (body instanceof Response) return body;
-
-  if (!body.ids || !Array.isArray(body.ids)) {
-    return errorResponse('ids array is required', 400);
-  }
-
-  const revisionDate = await cipherRepo.bulkRestoreCiphers(env.DB, body.ids, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-  }
-
-  return new Response(null, { status: 204 });
+  if (!Array.isArray(body.ids)) return errorResponse('ids array is required', 400);
+  return finishBulkCipherState(request, env, userId, body.ids, cipherRepo.bulkRestoreCiphers, null,
+    () => new Response(null, { status: 204 }));
 }
 
 // POST /api/ciphers/delete-permanent - Bulk permanent delete
@@ -1678,16 +1556,7 @@ export async function handleBulkPermanentDeleteCiphers(request: Request, env: En
   }
 
   await deleteAllAttachmentsForCiphers(env, ownedIds);
-
-  const revisionDate = await cipherRepo.bulkDeleteCiphers(env.DB, ownedIds, userId);
-  if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
-    notifyUserCiphersSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-    await writeDataAudit(env.DB, request, userId, 'cipher', 'cipher.delete.permanent.bulk', {
-      count: ownedIds.length,
-      requestedCount: ids.length,
-    });
-  }
-
-  return new Response(null, { status: 204 });
+  return finishBulkCipherState(request, env, userId, ownedIds, cipherRepo.bulkDeleteCiphers,
+    { action: 'cipher.delete.permanent.bulk', metadata: { count: ownedIds.length, requestedCount: ids.length } },
+    () => new Response(null, { status: 204 }));
 }

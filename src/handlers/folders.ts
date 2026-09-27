@@ -13,15 +13,6 @@ import { writeDataAudit } from '../services/audit-events';
 import * as folderRepo from '../services/storage-folder-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 
-function notifyVaultSyncForRequest(
-  request: Request,
-  env: Env,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-}
-
 // Convert internal folder to API response format
 function folderToResponse(folder: Folder): FolderResponse {
   return {
@@ -89,13 +80,8 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
 
   await folderRepo.saveFolder(env.DB, folder);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyUserFolderCreate(env, {
-    userId,
-    folderId: folder.id,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserFolderCreate(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
 
   return jsonResponse(folderToResponse(folder), 200);
 }
@@ -119,13 +105,8 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
 
   await folderRepo.saveFolder(env.DB, folder);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyUserFolderUpdate(env, {
-    userId,
-    folderId: folder.id,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserFolderUpdate(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
 
   return jsonResponse(folderToResponse(folder));
 }
@@ -141,13 +122,8 @@ export async function handleDeleteFolder(request: Request, env: Env, userId: str
   await folderRepo.clearFolderFromCiphers(env.DB, userId, id);
   await folderRepo.deleteFolder(env.DB, id, userId);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
-  notifyVaultSyncForRequest(request, env, userId, revisionDate);
-  notifyUserFolderDelete(env, {
-    userId,
-    folderId: id,
-    revisionDate,
-    contextId: readActingDeviceIdentifier(request),
-  });
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserFolderDelete(env, { userId, folderId: id, revisionDate, contextId: readActingDeviceIdentifier(request) });
   await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete', {
     id,
   });
@@ -175,14 +151,9 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
   ).filter((folder): folder is Folder => !!folder);
   const revisionDate = await folderRepo.bulkDeleteFolders(env.DB, ids, userId);
   if (revisionDate) {
-    notifyVaultSyncForRequest(request, env, userId, revisionDate);
+    notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
     for (const folder of folders) {
-      notifyUserFolderDelete(env, {
-        userId,
-        folderId: folder.id,
-        revisionDate,
-        contextId: readActingDeviceIdentifier(request),
-      });
+      notifyUserFolderDelete(env, { userId, folderId: folder.id, revisionDate, contextId: readActingDeviceIdentifier(request) });
     }
     await writeDataAudit(env.DB, request, userId, 'folder', 'folder.delete.bulk', {
       count: ids.length,

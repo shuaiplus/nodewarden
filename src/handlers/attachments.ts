@@ -12,7 +12,7 @@ import {
 } from '../utils/jwt';
 import { applyCipherEmbeddedAttachmentMetadata, cipherToResponse, recordCipherEvents } from './ciphers';
 import { LIMITS } from '../config/limits';
-import { readActingDeviceIdentifier } from '../utils/device';
+import { cipherNotifyPayload, readActingDeviceIdentifier } from '../utils/device';
 import {
   deleteBlobObject,
   getAttachmentObjectKey,
@@ -28,37 +28,20 @@ import * as attachmentRepo from '../services/storage-attachment-repo';
 import * as attachmentTokenRepo from '../services/storage-attachment-token-repo';
 import * as cipherRepo from '../services/storage-cipher-repo';
 
-function notifyVaultSyncForRequest(
-  request: Request,
-  env: Env,
-  userId: string,
-  revisionDate: string
-): void {
-  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
-}
-
-function normalizeOptionalId(value: unknown): string | null {
-  if (value == null) return null;
-  const normalized = String(value).trim();
-  return normalized ? normalized : null;
-}
-
-function notifyCipherUpdateForRequest(
+// An attachment change is a change to its cipher: the cipher's owner gets a new revision and their
+// devices the cipher update signal. Returns null when the cipher row is gone.
+async function afterAttachmentChange(
   request: Request,
   env: Env,
   cipher: Cipher,
-  revisionDate: string
-): void {
-  notifyUserCipherUpdate(env, {
-    userId: cipher.userId,
-    cipherId: cipher.id,
-    revisionDate,
-    organizationId: normalizeOptionalId((cipher as any).organizationId ?? null),
-    collectionIds: Array.isArray((cipher as any).collectionIds)
-      ? (cipher as any).collectionIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
-      : null,
-    contextId: readActingDeviceIdentifier(request),
-  });
+  cipherId: string
+): Promise<{ userId: string; revisionDate: string } | null> {
+  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
+  if (revisionInfo) {
+    notifyUserVaultSync(env, revisionInfo.userId, revisionInfo.revisionDate, readActingDeviceIdentifier(request));
+    notifyUserCipherUpdate(env, cipherNotifyPayload(cipher, revisionInfo.revisionDate, request));
+  }
+  return revisionInfo;
 }
 
 function contentDispositionAttachment(fileName: string | null | undefined): string {
@@ -134,11 +117,7 @@ async function processAttachmentUpload(
     await attachmentRepo.saveAttachment(env.DB, attachment);
   }
 
-  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
-  if (revisionInfo) {
-    notifyVaultSyncForRequest(request, env, revisionInfo.userId, revisionInfo.revisionDate);
-    notifyCipherUpdateForRequest(request, env, cipher, revisionInfo.revisionDate);
-  }
+  await afterAttachmentChange(request, env, cipher, cipherId);
 
   return new Response(null, { status: 201 });
 }
@@ -186,12 +165,7 @@ export async function handleCreateAttachment(
     await attachmentRepo.addAttachmentToCipherForUser(env.DB, cipherId, attachmentId, userId);
   }
 
-  // Update cipher revision date
-  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
-  if (revisionInfo) {
-    notifyVaultSyncForRequest(request, env, revisionInfo.userId, revisionInfo.revisionDate);
-    notifyCipherUpdateForRequest(request, env, cipher, revisionInfo.revisionDate);
-  }
+  await afterAttachmentChange(request, env, cipher, cipherId);
 
   // Get updated cipher for response
   const updatedCipher = cipher.organizationId
@@ -349,11 +323,7 @@ export async function handleUpdateAttachmentMetadata(
   }
 
   await attachmentRepo.saveAttachment(env.DB, attachment);
-  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
-  if (revisionInfo) {
-    notifyVaultSyncForRequest(request, env, revisionInfo.userId, revisionInfo.revisionDate);
-    notifyCipherUpdateForRequest(request, env, cipher, revisionInfo.revisionDate);
-  }
+  await afterAttachmentChange(request, env, cipher, cipherId);
 
   return jsonResponse({
     object: 'attachment',
@@ -450,11 +420,8 @@ export async function handleDeleteAttachment(
     await attachmentRepo.deleteAttachmentForUser(env.DB, attachmentId, userId);
   }
 
-  // Update cipher revision date
-  const revisionInfo = await attachmentRepo.updateCipherRevisionDate(env.DB, cipherId);
+  const revisionInfo = await afterAttachmentChange(request, env, cipher, cipherId);
   if (revisionInfo) {
-    notifyVaultSyncForRequest(request, env, revisionInfo.userId, revisionInfo.revisionDate);
-    notifyCipherUpdateForRequest(request, env, cipher, revisionInfo.revisionDate);
     await writeDataAudit(env.DB, request, revisionInfo.userId, 'attachment', 'attachment.delete', {
       id: attachmentId,
       cipherId,
