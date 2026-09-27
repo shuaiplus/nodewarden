@@ -1,5 +1,5 @@
+import { Hono } from 'hono';
 import { handleEventRoute } from './handlers/events';
-import type { Env, User } from './types';
 import { errorResponse, jsonResponse, unsupportedResponse } from './utils/response';
 import {
   handleGetProfile,
@@ -114,432 +114,214 @@ import { handleOrganizationRoute } from './router-org';
 import { handleEmergencyAccessRoute } from './handlers/emergency-access';
 import { handleAccountLicenseUpload } from './handlers/licenses';
 import { handleListAllCollections } from './handlers/organizations';
+import type { AppEnv } from './router';
 
-export async function handleAuthenticatedRoute(
-  request: Request,
-  env: Env,
-  userId: string,
-  currentUser: User,
-  path: string,
-  method: string
-): Promise<Response | null> {
-  const eventResponse = await handleEventRoute(request, env, currentUser, path, method);
+const methodNotAllowed = () => errorResponse('Method not allowed', 405);
+const emptyList = () => jsonResponse({ data: [], object: 'list', continuationToken: null });
+
+// Two-factor providers are disabled by provider type: 0 authenticator, 1 email, 3 YubiKey, 7 WebAuthn.
+const TWO_FACTOR_AUTHENTICATOR = 0;
+const TWO_FACTOR_EMAIL = 1;
+const TWO_FACTOR_YUBIKEY = 3;
+const TWO_FACTOR_WEBAUTHN = 7;
+
+export const authenticatedRoutes = new Hono<AppEnv>();
+
+authenticatedRoutes.use(async (c, next) => {
+  const eventResponse = await handleEventRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
   if (eventResponse) return eventResponse;
-  if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
-    const blockedAccountPaths = new Set([
-      '/api/accounts/set-password',
-      '/api/accounts/delete-account',
-      '/api/accounts/delete-vault',
-    ]);
-    if (blockedAccountPaths.has(path)) {
-      return errorResponse('Not implemented', 501);
-    }
-  }
+  await next();
+});
 
-  if (((path === '/api/accounts' || path === '/accounts') && method === 'DELETE')
-    || (path === '/api/accounts/delete' && method === 'POST')) {
-    return handleDeleteAccount(request, env, userId);
-  }
+authenticatedRoutes.on(['POST', 'PUT', 'DELETE'], [
+  '/api/accounts/set-password',
+  '/api/accounts/delete-account',
+  '/api/accounts/delete-vault',
+], () => errorResponse('Not implemented', 501));
 
-  if ((path === '/api/accounts/kdf' || path === '/accounts/kdf') && (method === 'POST' || method === 'PUT')) {
-    return unsupportedResponse('KDF changes are not supported by this server.');
-  }
+authenticatedRoutes.on('DELETE', ['/api/accounts', '/accounts'], (c) => handleDeleteAccount(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/accounts/delete', (c) => handleDeleteAccount(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['POST', 'PUT'], ['/api/accounts/kdf', '/accounts/kdf'], () => unsupportedResponse('KDF changes are not supported by this server.'));
+authenticatedRoutes.on('POST', ['/api/accounts/email-token', '/accounts/email-token'], (c) => handleEmailToken(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/accounts/email', '/accounts/email'], (c) => handleChangeEmail(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['POST', 'PUT'], [
+  '/api/accounts/verify-email',
+  '/accounts/verify-email',
+  '/api/accounts/verify-email-token',
+  '/accounts/verify-email-token',
+  '/api/accounts/request-otp',
+  '/accounts/request-otp',
+  '/api/accounts/verify-otp',
+  '/accounts/verify-otp',
+], () => unsupportedResponse('Email delivery is not supported by this server.'));
 
-  if ((path === '/api/accounts/email-token' || path === '/accounts/email-token') && method === 'POST') {
-    return handleEmailToken(request, env, userId);
-  }
-  if ((path === '/api/accounts/email' || path === '/accounts/email') && method === 'POST') {
-    return handleChangeEmail(request, env, userId);
-  }
+authenticatedRoutes.on('POST', ['/api/two-factor/get-email', '/two-factor/get-email'], (c) => handleGetTwoFactorEmail(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/two-factor/send-email', '/two-factor/send-email'], (c) => handleSendTwoFactorEmail(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], ['/api/two-factor/email', '/two-factor/email'], (c) => handlePutTwoFactorEmail(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('DELETE', ['/api/two-factor/email', '/two-factor/email'], (c) => handleDisableTwoFactorProvider(c.req.raw, c.env, c.get('userId'), TWO_FACTOR_EMAIL));
+authenticatedRoutes.on('ALL', ['/api/two-factor/email', '/two-factor/email'], methodNotAllowed);
 
-  const mailBackedAccountPaths = new Set([
-    '/api/accounts/verify-email',
-    '/accounts/verify-email',
-    '/api/accounts/verify-email-token',
-    '/accounts/verify-email-token',
-    '/api/accounts/request-otp',
-    '/accounts/request-otp',
-    '/api/accounts/verify-otp',
-    '/accounts/verify-otp',
-  ]);
-  if (mailBackedAccountPaths.has(path) && (method === 'POST' || method === 'PUT')) {
-    return unsupportedResponse('Email delivery is not supported by this server.');
-  }
+authenticatedRoutes.get('/api/accounts/profile', (c) => handleGetProfile(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.put('/api/accounts/profile', (c) => handleUpdateProfile(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.all('/api/accounts/profile', methodNotAllowed);
 
-  if ((path === '/api/two-factor/get-email' || path === '/two-factor/get-email') && method === 'POST') {
-    return handleGetTwoFactorEmail(request, env, userId);
-  }
-  if ((path === '/api/two-factor/send-email' || path === '/two-factor/send-email') && method === 'POST') {
-    return handleSendTwoFactorEmail(request, env, userId);
-  }
-  if (path === '/api/two-factor/email' || path === '/two-factor/email') {
-    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorEmail(request, env, userId);
-    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 1);
-    return errorResponse('Method not allowed', 405);
-  }
+authenticatedRoutes.on(['POST', 'PUT'], ['/api/accounts/password', '/api/accounts/change-password'], (c) => handleChangePassword(c.req.raw, c.env, c.get('userId')));
 
-  if (path === '/api/accounts/profile') {
-    if (method === 'GET') return handleGetProfile(request, env, userId);
-    if (method === 'PUT') return handleUpdateProfile(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
+authenticatedRoutes.get('/api/accounts/keys', (c) => handleGetKeys(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/accounts/keys', (c) => handleSetKeys(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.all('/api/accounts/keys', methodNotAllowed);
 
-  if ((path === '/api/accounts/password' || path === '/api/accounts/change-password') && (method === 'POST' || method === 'PUT')) {
-    return handleChangePassword(request, env, userId);
-  }
+authenticatedRoutes.get('/api/users/:userId{[a-f0-9-]+}/public-key', (c) => handleGetUserPublicKey(c.env, c.req.param('userId')));
 
-  if (path === '/api/accounts/keys') {
-    if (method === 'GET') return handleGetKeys(request, env, userId);
-    if (method === 'POST') return handleSetKeys(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
+authenticatedRoutes.get('/api/accounts/totp', (c) => handleGetTotpStatus(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/accounts/totp', (c) => handleSetTotpStatus(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/accounts/totp/recovery-code', '/api/two-factor/get-recover'], (c) => handleGetTotpRecoveryCode(c.req.raw, c.env, c.get('userId')));
 
-  const userPublicKeyMatch = path.match(/^\/api\/users\/([a-f0-9-]+)\/public-key$/i);
-  if (userPublicKeyMatch && method === 'GET') {
-    return handleGetUserPublicKey(env, userPublicKeyMatch[1]);
-  }
+authenticatedRoutes.get('/api/two-factor', (c) => handleGetTwoFactorProviders(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.all('/api/two-factor', methodNotAllowed);
+authenticatedRoutes.post('/api/two-factor/get-authenticator', (c) => handleGetTwoFactorAuthenticator(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/two-factor/get-yubikey', '/api/two-factor/get-yubi-key'], (c) => handleGetTwoFactorYubiKey(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['GET', 'POST'], '/api/two-factor/get-device-verification-settings', (c) => handleGetDeviceVerificationSettings(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/two-factor/device-verification-settings', (c) => handlePutDeviceVerificationSettings(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.all('/api/two-factor/device-verification-settings', methodNotAllowed);
+authenticatedRoutes.post('/api/two-factor/get-webauthn', (c) => handleGetTwoFactorWebAuthn(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
+authenticatedRoutes.post('/api/two-factor/get-webauthn-challenge', (c) => handleGetTwoFactorWebAuthnChallenge(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
 
-  if (path === '/api/accounts/totp') {
-    if (method === 'GET') return handleGetTotpStatus(request, env, userId);
-    if (method === 'PUT' || method === 'POST') return handleSetTotpStatus(request, env, userId);
-    return null;
-  }
+authenticatedRoutes.on(['PUT', 'POST'], '/api/two-factor/authenticator', (c) => handlePutTwoFactorAuthenticator(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.delete('/api/two-factor/authenticator', (c) => handleDisableTwoFactorProvider(c.req.raw, c.env, c.get('userId'), TWO_FACTOR_AUTHENTICATOR));
+authenticatedRoutes.all('/api/two-factor/authenticator', methodNotAllowed);
 
-  if ((path === '/api/accounts/totp/recovery-code' || path === '/api/two-factor/get-recover') && method === 'POST') {
-    return handleGetTotpRecoveryCode(request, env, userId);
-  }
+authenticatedRoutes.on(['PUT', 'POST'], ['/api/two-factor/yubikey', '/api/two-factor/yubi-key'], (c) => handlePutTwoFactorYubiKey(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('DELETE', ['/api/two-factor/yubikey', '/api/two-factor/yubi-key'], (c) => handleDisableTwoFactorProvider(c.req.raw, c.env, c.get('userId'), TWO_FACTOR_YUBIKEY));
+authenticatedRoutes.on('ALL', ['/api/two-factor/yubikey', '/api/two-factor/yubi-key'], methodNotAllowed);
 
-  if (path === '/api/two-factor') {
-    if (method === 'GET') return handleGetTwoFactorProviders(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
+authenticatedRoutes.delete('/api/two-factor/webauthn/all', (c) => handleDisableTwoFactorProvider(c.req.raw, c.env, c.get('userId'), TWO_FACTOR_WEBAUTHN));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/two-factor/webauthn', (c) => handlePutTwoFactorWebAuthn(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
+authenticatedRoutes.delete('/api/two-factor/webauthn', (c) => handleDeleteTwoFactorWebAuthn(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
+authenticatedRoutes.all('/api/two-factor/webauthn', methodNotAllowed);
 
-  if (path === '/api/two-factor/get-authenticator' && method === 'POST') {
-    return handleGetTwoFactorAuthenticator(request, env, userId);
-  }
+authenticatedRoutes.on(['PUT', 'POST'], ['/api/two-factor/yubikey/config', '/api/two-factor/yubi-key/config'], (c) => handlePutTwoFactorYubiKeyConfig(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/two-factor/yubikey/bootstrap', '/api/two-factor/yubi-key/bootstrap'], (c) => handleBootstrapTwoFactorYubiKeyConfig(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/two-factor/disable', (c) => handleDisableTwoFactorProvider(c.req.raw, c.env, c.get('userId')));
 
-  if ((path === '/api/two-factor/get-yubikey' || path === '/api/two-factor/get-yubi-key') && method === 'POST') {
-    return handleGetTwoFactorYubiKey(request, env, userId);
-  }
+authenticatedRoutes.get('/api/accounts/revision-date', (c) => handleGetRevisionDate(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/accounts/key-management/user-key-id', (c) => handleSetUserKeyId(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/accounts/verify-password', (c) => handleVerifyPassword(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], ['/api/accounts/verify-devices', '/accounts/verify-devices'], (c) => handleSetVerifyDevices(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/accounts/api-key', '/api/accounts/api_key'], (c) => handleGetApiKey(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/accounts/rotate-api-key', '/api/accounts/rotate_api_key'], (c) => handleRotateApiKey(c.req.raw, c.env, c.get('userId')));
 
-  if (path === '/api/two-factor/get-device-verification-settings' && (method === 'GET' || method === 'POST')) {
-    return handleGetDeviceVerificationSettings(request, env, userId);
-  }
+authenticatedRoutes.on('GET', ['/api/webauthn', '/webauthn'], (c) => handleGetAccountPasskeyCredentials(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/webauthn', '/webauthn'], (c) => handleCreateAccountPasskeyCredential(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('PUT', ['/api/webauthn', '/webauthn'], (c) => handleUpdateAccountPasskeyEncryption(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('ALL', ['/api/webauthn', '/webauthn'], methodNotAllowed);
+authenticatedRoutes.on('POST', ['/api/webauthn/attestation-options', '/webauthn/attestation-options'], (c) => handleGetAccountPasskeyAttestationOptions(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
+authenticatedRoutes.on('POST', ['/api/webauthn/assertion-options', '/webauthn/assertion-options'], (c) => handleGetAccountPasskeyUpdateAssertionOptions(c.req.raw, c.env, c.get('userId'), c.get('currentUser')));
+authenticatedRoutes.on('POST', ['/api/webauthn/:credentialId/delete', '/webauthn/:credentialId/delete'], (c) => handleDeleteAccountPasskeyCredential(c.req.raw, c.env, c.get('userId'), c.req.param('credentialId'), c.get('currentUser')));
 
-  if (path === '/api/two-factor/device-verification-settings') {
-    if (method === 'PUT' || method === 'POST') return handlePutDeviceVerificationSettings(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
+authenticatedRoutes.get('/api/sync', (c) => handleSync(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.get('/api/collections', (c) => handleListAllCollections(c.env, c.get('userId')));
 
-  if (path === '/api/two-factor/get-webauthn' && method === 'POST') {
-    return handleGetTwoFactorWebAuthn(request, env, userId, currentUser);
-  }
-
-  if (path === '/api/two-factor/get-webauthn-challenge' && method === 'POST') {
-    return handleGetTwoFactorWebAuthnChallenge(request, env, userId, currentUser);
-  }
-
-  if (path === '/api/two-factor/authenticator') {
-    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorAuthenticator(request, env, userId);
-    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 0);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if ((path === '/api/two-factor/yubikey' || path === '/api/two-factor/yubi-key')) {
-    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorYubiKey(request, env, userId);
-    if (method === 'DELETE') return handleDisableTwoFactorProvider(request, env, userId, 3);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if (path === '/api/two-factor/webauthn/all' && method === 'DELETE') {
-    return handleDisableTwoFactorProvider(request, env, userId, 7);
-  }
-
-  if (path === '/api/two-factor/webauthn') {
-    if (method === 'PUT' || method === 'POST') return handlePutTwoFactorWebAuthn(request, env, userId, currentUser);
-    if (method === 'DELETE') return handleDeleteTwoFactorWebAuthn(request, env, userId, currentUser);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if ((path === '/api/two-factor/yubikey/config' || path === '/api/two-factor/yubi-key/config') && (method === 'PUT' || method === 'POST')) {
-    return handlePutTwoFactorYubiKeyConfig(request, env, userId);
-  }
-
-  if ((path === '/api/two-factor/yubikey/bootstrap' || path === '/api/two-factor/yubi-key/bootstrap') && method === 'POST') {
-    return handleBootstrapTwoFactorYubiKeyConfig(request, env, userId);
-  }
-
-  if (path === '/api/two-factor/disable' && (method === 'PUT' || method === 'POST')) {
-    return handleDisableTwoFactorProvider(request, env, userId);
-  }
-
-  if (path === '/api/accounts/revision-date' && method === 'GET') {
-    return handleGetRevisionDate(request, env, userId);
-  }
-
-  if (path === '/api/accounts/key-management/user-key-id' && method === 'POST') {
-    return handleSetUserKeyId(request, env, userId);
-  }
-
-  if (path === '/api/accounts/verify-password' && method === 'POST') {
-    return handleVerifyPassword(request, env, userId);
-  }
-
-  if ((path === '/api/accounts/verify-devices' || path === '/accounts/verify-devices') && (method === 'PUT' || method === 'POST')) {
-    return handleSetVerifyDevices(request, env, userId);
-  }
-
-  if ((path === '/api/accounts/api-key' || path === '/api/accounts/api_key') && method === 'POST') {
-    return handleGetApiKey(request, env, userId);
-  }
-
-  if ((path === '/api/accounts/rotate-api-key' || path === '/api/accounts/rotate_api_key') && method === 'POST') {
-    return handleRotateApiKey(request, env, userId);
-  }
-
-  if (path === '/api/webauthn' || path === '/webauthn') {
-    if (method === 'GET') return handleGetAccountPasskeyCredentials(request, env, userId);
-    if (method === 'POST') return handleCreateAccountPasskeyCredential(request, env, userId);
-    if (method === 'PUT') return handleUpdateAccountPasskeyEncryption(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if ((path === '/api/webauthn/attestation-options' || path === '/webauthn/attestation-options') && method === 'POST') {
-    return handleGetAccountPasskeyAttestationOptions(request, env, userId, currentUser);
-  }
-
-  if ((path === '/api/webauthn/assertion-options' || path === '/webauthn/assertion-options') && method === 'POST') {
-    return handleGetAccountPasskeyUpdateAssertionOptions(request, env, userId, currentUser);
-  }
-
-  const accountPasskeyDeleteMatch =
-    path.match(/^\/api\/webauthn\/([^/]+)\/delete$/i) ||
-    path.match(/^\/webauthn\/([^/]+)\/delete$/i);
-  if (accountPasskeyDeleteMatch && method === 'POST') {
-    return handleDeleteAccountPasskeyCredential(request, env, userId, accountPasskeyDeleteMatch[1], currentUser);
-  }
-
-  if (path === '/api/sync' && method === 'GET') {
-    return handleSync(request, env, userId);
-  }
-
-  if (path === '/api/collections' && method === 'GET') {
-    return handleListAllCollections(env, userId);
-  }
-
-  const orgRoute = await handleOrganizationRoute(request, env, userId, currentUser, path, method);
+authenticatedRoutes.use(async (c, next) => {
+  const orgRoute = await handleOrganizationRoute(c.req.raw, c.env, c.get('userId'), c.get('currentUser'), c.req.path, c.req.method);
   if (orgRoute) return orgRoute;
+  await next();
+});
 
-  if ((path === '/api/accounts/license' || path === '/accounts/license') && method === 'POST') {
-    return handleAccountLicenseUpload();
-  }
+authenticatedRoutes.on('POST', ['/api/accounts/license', '/accounts/license'], () => handleAccountLicenseUpload());
 
-  const emergency = await handleEmergencyAccessRoute(request, env, currentUser, path, method);
+authenticatedRoutes.use(async (c, next) => {
+  const emergency = await handleEmergencyAccessRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
   if (emergency) return emergency;
+  await next();
+});
 
-  if (path.startsWith('/notifications/')) {
-    return errorResponse('Not found', 404);
-  }
+authenticatedRoutes.get('/api/ciphers/organization-details', (c) => handleGetOrganizationCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('GET', ['/api/ciphers', '/api/ciphers/create'], (c) => handleGetCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('POST', ['/api/ciphers', '/api/ciphers/create'], (c) => handleCreateCipher(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/ciphers/import', (c) => handleCiphersImport(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/ciphers/delete', (c) => handleBulkDeleteCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/ciphers/delete-permanent', (c) => handleBulkPermanentDeleteCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/ciphers/restore', (c) => handleBulkRestoreCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/ciphers/archive', (c) => handleBulkArchiveCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/ciphers/unarchive', (c) => handleBulkUnarchiveCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['POST', 'PUT'], '/api/ciphers/move', (c) => handleBulkMoveCiphers(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/ciphers/share', (c) => handleBulkShareCiphers(c.req.raw, c.env, c.get('userId')));
 
-  if (path === '/api/ciphers/organization-details' && method === 'GET') return handleGetOrganizationCiphers(request, env, userId);
-  if (path === '/api/ciphers' || path === '/api/ciphers/create') {
-    if (method === 'GET') return handleGetCiphers(request, env, userId);
-    if (method === 'POST') return handleCreateCipher(request, env, userId);
-    return null;
-  }
+const cipher = '/api/ciphers/:cipherId{[a-f0-9-]+}';
+authenticatedRoutes.get(cipher, (c) => handleGetCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], cipher, (c) => handleUpdateCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.delete(cipher, (c) => handleDeleteCipherCompat(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.put(`${cipher}/delete`, (c) => handleDeleteCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.delete(`${cipher}/delete`, (c) => handlePermanentDeleteCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.put(`${cipher}/restore`, (c) => handleRestoreCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/archive`, (c) => handleArchiveCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/unarchive`, (c) => handleUnarchiveCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/partial`, (c) => handlePartialUpdateCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/share`, (c) => handleShareCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/collections_v2`, (c) => handleUpdateCipherCollections(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), 'member'));
+authenticatedRoutes.on(['PUT', 'POST'], `${cipher}/collections-admin`, (c) => handleUpdateCipherCollections(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), 'admin'));
+authenticatedRoutes.get(`${cipher}/admin`, (c) => handleGetCipherAdmin(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.put(`${cipher}/admin`, (c) => handleUpdateCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), true));
+authenticatedRoutes.delete(`${cipher}/admin`, (c) => handlePermanentDeleteCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), true));
+authenticatedRoutes.put(`${cipher}/delete-admin`, (c) => handleDeleteCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), true));
+authenticatedRoutes.get(`${cipher}/details`, (c) => handleGetCipher(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
+authenticatedRoutes.on('POST', [`${cipher}/attachment/v2`, `${cipher}/attachment`], (c) => handleCreateAttachment(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId')));
 
-  if (path === '/api/ciphers/import' && method === 'POST') {
-    return handleCiphersImport(request, env, userId);
-  }
+const attachment = `${cipher}/attachment/:attachmentId{[a-f0-9-]+}`;
+authenticatedRoutes.on(['POST', 'PUT'], attachment, (c) => handleUploadAttachment(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), c.req.param('attachmentId')));
+authenticatedRoutes.get(attachment, (c) => handleGetAttachment(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), c.req.param('attachmentId')));
+authenticatedRoutes.delete(attachment, (c) => handleDeleteAttachment(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), c.req.param('attachmentId')));
+authenticatedRoutes.on(['POST', 'PUT'], `${attachment}/metadata`, (c) => handleUpdateAttachmentMetadata(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), c.req.param('attachmentId')));
+authenticatedRoutes.post(`${attachment}/delete`, (c) => handleDeleteAttachment(c.req.raw, c.env, c.get('userId'), c.req.param('cipherId'), c.req.param('attachmentId')));
 
-  if (path === '/api/ciphers/delete' && method === 'POST') {
-    return handleBulkDeleteCiphers(request, env, userId);
-  }
+authenticatedRoutes.get('/api/folders', (c) => handleGetFolders(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/folders', (c) => handleCreateFolder(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/folders/delete', (c) => handleBulkDeleteFolders(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.get('/api/folders/:folderId{[a-f0-9-]+}', (c) => handleGetFolder(c.req.raw, c.env, c.get('userId'), c.req.param('folderId')));
+authenticatedRoutes.put('/api/folders/:folderId{[a-f0-9-]+}', (c) => handleUpdateFolder(c.req.raw, c.env, c.get('userId'), c.req.param('folderId')));
+authenticatedRoutes.delete('/api/folders/:folderId{[a-f0-9-]+}', (c) => handleDeleteFolder(c.req.raw, c.env, c.get('userId'), c.req.param('folderId')));
 
-  if (path === '/api/ciphers/delete-permanent' && method === 'POST') {
-    return handleBulkPermanentDeleteCiphers(request, env, userId);
-  }
+authenticatedRoutes.on('GET', ['/api/auth-requests', '/auth-requests'], (c) => handleListAuthRequests(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('ALL', ['/api/auth-requests', '/auth-requests'], methodNotAllowed);
+authenticatedRoutes.on('GET', ['/api/auth-requests/pending', '/auth-requests/pending'], (c) => handleListPendingAuthRequests(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.on('ALL', ['/api/auth-requests/pending', '/auth-requests/pending'], methodNotAllowed);
+authenticatedRoutes.on('POST', ['/api/auth-requests/admin-request', '/auth-requests/admin-request'], (c) => handleCreateAdminAuthRequest(c.req.raw, c.env, c.get('userId'), c.get('currentUser').email));
+authenticatedRoutes.on('ALL', ['/api/auth-requests/admin-request', '/auth-requests/admin-request'], methodNotAllowed);
+const authRequest = ['/api/auth-requests/:id{[a-f0-9-]+}', '/auth-requests/:id{[a-f0-9-]+}'] as const;
+authenticatedRoutes.on('GET', [...authRequest], (c) => handleGetAuthRequest(c.req.raw, c.env, c.get('userId'), c.req.param('id')));
+authenticatedRoutes.on('PUT', [...authRequest], (c) => handleUpdateAuthRequest(c.req.raw, c.env, c.get('userId'), c.req.param('id')));
+authenticatedRoutes.on('ALL', [...authRequest], methodNotAllowed);
 
-  if (path === '/api/ciphers/restore' && method === 'POST') {
-    return handleBulkRestoreCiphers(request, env, userId);
-  }
+// Collection, organization and policy lists the clients poll but this server answers empty.
+authenticatedRoutes.get('/api/collections/*', emptyList);
+authenticatedRoutes.on('GET', ['/api/organizations', '/api/organizations/*'], emptyList);
 
-  if (path === '/api/ciphers/archive' && (method === 'PUT' || method === 'POST')) {
-    return handleBulkArchiveCiphers(request, env, userId);
-  }
+authenticatedRoutes.get('/api/sends', (c) => handleGetSends(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/sends', (c) => handleCreateSend(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/sends/file/v2', (c) => handleCreateFileSendV2(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.post('/api/sends/delete', (c) => handleBulkDeleteSends(c.req.raw, c.env, c.get('userId')));
+authenticatedRoutes.get('/api/sends/:sendId', (c) => handleGetSend(c.req.raw, c.env, c.get('userId'), c.req.param('sendId')));
+authenticatedRoutes.put('/api/sends/:sendId', (c) => handleUpdateSend(c.req.raw, c.env, c.get('userId'), c.req.param('sendId')));
+authenticatedRoutes.delete('/api/sends/:sendId', (c) => handleDeleteSend(c.req.raw, c.env, c.get('userId'), c.req.param('sendId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/sends/:sendId/remove-password', (c) => handleRemoveSendPassword(c.req.raw, c.env, c.get('userId'), c.req.param('sendId')));
+authenticatedRoutes.on(['PUT', 'POST'], '/api/sends/:sendId/remove-auth', (c) => handleRemoveSendAuth(c.req.raw, c.env, c.get('userId'), c.req.param('sendId')));
+authenticatedRoutes.get('/api/sends/:sendId/file/:fileId', (c) => handleGetSendFileUpload(c.req.raw, c.env, c.get('userId'), c.req.param('sendId'), c.req.param('fileId')));
+authenticatedRoutes.on(['POST', 'PUT'], '/api/sends/:sendId/file/:fileId', (c) => handleUploadSendFile(c.req.raw, c.env, c.get('userId'), c.req.param('sendId'), c.req.param('fileId')));
 
-  if (path === '/api/ciphers/unarchive' && (method === 'PUT' || method === 'POST')) {
-    return handleBulkUnarchiveCiphers(request, env, userId);
-  }
+authenticatedRoutes.on('GET', ['/api/policies', '/api/policies/*'], emptyList);
 
-  if (path === '/api/ciphers/move' && (method === 'POST' || method === 'PUT')) {
-    return handleBulkMoveCiphers(request, env, userId);
-  }
+authenticatedRoutes.on('GET', ['/api/settings/domains', '/settings/domains'], (c) => handleGetDomains(c.env, c.get('userId')));
+authenticatedRoutes.on(['PUT', 'POST'], ['/api/settings/domains', '/settings/domains'], (c) => handleUpdateDomains(c.req.raw, c.env, c.get('userId')));
 
-  if (path === '/api/ciphers/share' && (method === 'PUT' || method === 'POST')) {
-    return handleBulkShareCiphers(request, env, userId);
-  }
+authenticatedRoutes.use(async (c, next) => {
+  const deviceResponse = await handleAuthenticatedDeviceRoute(c.req.raw, c.env, c.get('userId'), c.req.path, c.req.method);
+  if (deviceResponse) return deviceResponse;
+  await next();
+});
 
-  const cipherMatch = path.match(/^\/api\/ciphers\/([a-f0-9-]+)(\/.*)?$/i);
-  if (cipherMatch) {
-    const cipherId = cipherMatch[1];
-    const subPath = cipherMatch[2] || '';
-
-    if (subPath === '' || subPath === '/') {
-      if (method === 'GET') return handleGetCipher(request, env, userId, cipherId);
-      if (method === 'PUT' || method === 'POST') return handleUpdateCipher(request, env, userId, cipherId);
-      if (method === 'DELETE') return handleDeleteCipherCompat(request, env, userId, cipherId);
-    }
-
-    if (subPath === '/delete' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
-    if (subPath === '/delete' && method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId);
-    if (subPath === '/restore' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
-    if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
-    if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);
-    if (subPath === '/partial' && (method === 'PUT' || method === 'POST')) return handlePartialUpdateCipher(request, env, userId, cipherId);
-    if (subPath === '/share' && (method === 'PUT' || method === 'POST')) return handleShareCipher(request, env, userId, cipherId);
-    if (subPath === '/collections_v2' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'member');
-    if (subPath === '/collections-admin' && (method === 'PUT' || method === 'POST')) return handleUpdateCipherCollections(request, env, userId, cipherId, 'admin');
-    if (subPath === '/admin' && method === 'GET') return handleGetCipherAdmin(request, env, userId, cipherId);
-    if (subPath === '/admin' && method === 'PUT') return handleUpdateCipher(request, env, userId, cipherId, true);
-    if (subPath === '/admin' && method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId, true);
-    if (subPath === '/delete-admin' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId, true);
-    if (subPath === '/details' && method === 'GET') return handleGetCipher(request, env, userId, cipherId);
-    if (subPath === '/attachment/v2' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
-    if (subPath === '/attachment' && method === 'POST') return handleCreateAttachment(request, env, userId, cipherId);
-
-    const attachmentMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)$/i);
-    if (attachmentMatch) {
-      const attachmentId = attachmentMatch[1];
-      if (method === 'POST' || method === 'PUT') return handleUploadAttachment(request, env, userId, cipherId, attachmentId);
-      if (method === 'GET') return handleGetAttachment(request, env, userId, cipherId, attachmentId);
-      if (method === 'DELETE') return handleDeleteAttachment(request, env, userId, cipherId, attachmentId);
-    }
-
-    const attachmentMetadataMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/metadata$/i);
-    if (attachmentMetadataMatch && (method === 'POST' || method === 'PUT')) {
-      return handleUpdateAttachmentMetadata(request, env, userId, cipherId, attachmentMetadataMatch[1]);
-    }
-
-    const attachmentDeleteMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/delete$/i);
-    if (attachmentDeleteMatch && method === 'POST') {
-      return handleDeleteAttachment(request, env, userId, cipherId, attachmentDeleteMatch[1]);
-    }
-  }
-
-  if (path === '/api/folders') {
-    if (method === 'GET') return handleGetFolders(request, env, userId);
-    if (method === 'POST') return handleCreateFolder(request, env, userId);
-    return null;
-  }
-
-  if (path === '/api/folders/delete' && method === 'POST') {
-    return handleBulkDeleteFolders(request, env, userId);
-  }
-
-  const folderMatch = path.match(/^\/api\/folders\/([a-f0-9-]+)$/i);
-  if (folderMatch) {
-    const folderId = folderMatch[1];
-    if (method === 'GET') return handleGetFolder(request, env, userId, folderId);
-    if (method === 'PUT') return handleUpdateFolder(request, env, userId, folderId);
-    if (method === 'DELETE') return handleDeleteFolder(request, env, userId, folderId);
-  }
-
-  if (path === '/api/auth-requests' || path === '/api/auth-requests/' || path === '/auth-requests' || path === '/auth-requests/') {
-    if (method === 'GET') return handleListAuthRequests(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if (path === '/api/auth-requests/pending' || path === '/auth-requests/pending') {
-    if (method === 'GET') return handleListPendingAuthRequests(request, env, userId);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if (path === '/api/auth-requests/admin-request' || path === '/auth-requests/admin-request') {
-    if (method === 'POST') return handleCreateAdminAuthRequest(request, env, userId, currentUser.email);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  const authRequestMatch = path.match(/^\/(?:api\/)?auth-requests\/([a-f0-9-]+)$/i);
-  if (authRequestMatch) {
-    if (method === 'GET') return handleGetAuthRequest(request, env, userId, authRequestMatch[1]);
-    if (method === 'PUT') return handleUpdateAuthRequest(request, env, userId, authRequestMatch[1]);
-    return errorResponse('Method not allowed', 405);
-  }
-
-  if (path === '/api/collections' || path.startsWith('/api/collections/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
-  }
-
-  if (path === '/api/organizations' || path.startsWith('/api/organizations/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
-  }
-
-  if (path === '/api/sends') {
-    if (method === 'GET') return handleGetSends(request, env, userId);
-    if (method === 'POST') return handleCreateSend(request, env, userId);
-    return null;
-  }
-
-  if (path === '/api/sends/file/v2' && method === 'POST') {
-    return handleCreateFileSendV2(request, env, userId);
-  }
-
-  if (path === '/api/sends/delete' && method === 'POST') {
-    return handleBulkDeleteSends(request, env, userId);
-  }
-
-  const sendMatch = path.match(/^\/api\/sends\/([^/]+)(\/.*)?$/i);
-  if (sendMatch) {
-    const sendId = sendMatch[1];
-    const subPath = sendMatch[2] || '';
-
-    if (subPath === '' || subPath === '/') {
-      if (method === 'GET') return handleGetSend(request, env, userId, sendId);
-      if (method === 'PUT') return handleUpdateSend(request, env, userId, sendId);
-      if (method === 'DELETE') return handleDeleteSend(request, env, userId, sendId);
-    }
-
-    if (subPath === '/remove-password' && (method === 'PUT' || method === 'POST')) {
-      return handleRemoveSendPassword(request, env, userId, sendId);
-    }
-
-    if (subPath === '/remove-auth' && (method === 'PUT' || method === 'POST')) {
-      return handleRemoveSendAuth(request, env, userId, sendId);
-    }
-
-    const sendFileUploadMatch = subPath.match(/^\/file\/([^/]+)\/?$/i);
-    if (sendFileUploadMatch) {
-      const fileId = sendFileUploadMatch[1];
-      if (method === 'GET') return handleGetSendFileUpload(request, env, userId, sendId, fileId);
-      if (method === 'POST' || method === 'PUT') return handleUploadSendFile(request, env, userId, sendId, fileId);
-    }
-  }
-
-  if (path === '/api/policies' || path.startsWith('/api/policies/')) {
-    if (method === 'GET') {
-      return jsonResponse({ data: [], object: 'list', continuationToken: null });
-    }
-    return null;
-  }
-
-  if (path === '/api/settings/domains' || path === '/settings/domains') {
-    if (method === 'GET') return handleGetDomains(env, userId);
-    if (method === 'PUT' || method === 'POST') return handleUpdateDomains(request, env, userId);
-    return null;
-  }
-
-  const authenticatedDeviceResponse = await handleAuthenticatedDeviceRoute(request, env, userId, path, method);
-  if (authenticatedDeviceResponse) return authenticatedDeviceResponse;
-
-  const adminResponse = await handleAdminRoute(request, env, currentUser, path, method);
+authenticatedRoutes.use(async (c, next) => {
+  const adminResponse = await handleAdminRoute(c.req.raw, c.env, c.get('currentUser'), c.req.path, c.req.method);
   if (adminResponse) return adminResponse;
-
-  return null;
-}
+  await next();
+});

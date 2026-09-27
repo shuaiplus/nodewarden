@@ -7,7 +7,7 @@ import { AuthService, type Principal } from './services/auth';
 import { RateLimitService } from './services/ratelimit';
 import { handleCors, errorResponse } from './utils/response';
 import { LIMITS } from './config/limits';
-import { handleAuthenticatedRoute } from './router-authenticated';
+import { authenticatedRoutes } from './router-authenticated';
 import { jwtSecretUnsafeReason, publicRoutes, tooManyRequests } from './router-public';
 
 // Per-request state the gates below derive for the route handlers. `userId` and `currentUser`
@@ -179,11 +179,7 @@ app.use(async (c, next) => {
   await next();
 });
 
-app.use(async (c, next) => {
-  const authenticatedResponse = await handleAuthenticatedRoute(c.req.raw, c.env, c.get('userId'), c.get('currentUser'), c.req.path, c.req.method);
-  if (authenticatedResponse) return authenticatedResponse;
-  await next();
-});
+app.route('/', authenticatedRoutes);
 
 app.notFound(() => errorResponse('Not found', 404));
 
