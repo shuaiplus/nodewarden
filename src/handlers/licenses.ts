@@ -1,61 +1,37 @@
+import { z } from 'zod';
 import type { Env, User } from '../types';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { organizationResponse } from '../utils/org-response';
 import { buildNodeWardenEnterpriseLicense, parseOrganizationLicense } from '../services/enterprise-license';
 import { createOwnedOrganization } from './organizations';
 import * as orgRepo from '../services/storage-org-repo';
 import { canDeleteOrganization, isActiveMember } from '../services/org-authz';
+import { jsonText } from '../services/org-types';
 
-async function readLicenseFromRequest(request: Request): Promise<unknown> {
+// A JSON body is the license itself unless it nests one under license.
+const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
+
+async function readOrgLicenseForm(request: Request): Promise<{ license: unknown; key: string; collectionName: string } | Response> {
   const contentType = String(request.headers.get('Content-Type') || '');
   if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
     const form = await request.formData();
-    const license = form.get('license') ?? form.get('License');
-    if (typeof license === 'string' && license.trim()) {
-      try { return JSON.parse(license); } catch { return { name: license }; }
-    }
-    if (license && typeof license === 'object' && 'text' in license) {
-      const text = await (license as Blob).text();
-      if (!text.trim()) return {};
-      try { return JSON.parse(text); } catch { return { name: 'Organization' }; }
-    }
+    // The Workers FormData types omit the File entries a multipart upload carries.
+    const licenseField = (form.get('license') ?? form.get('License')) as Blob | string | null;
+    const text = typeof licenseField === 'string' ? licenseField : await licenseField?.text() ?? '';
+    // Text that is not JSON is the organization's name when posted as a field, and 'Organization' when uploaded as a file.
+    const unparsed = { name: typeof licenseField === 'string' ? text : 'Organization' };
     return {
-      key: String(form.get('key') || form.get('Key') || ''),
-      collectionName: String(form.get('collectionName') || form.get('CollectionName') || ''),
-    };
-  }
-  try {
-    return await request.json();
-  } catch {
-    return {};
-  }
-}
-
-async function readOrgLicenseForm(request: Request): Promise<{ license: unknown; key: string; collectionName: string }> {
-  const contentType = String(request.headers.get('Content-Type') || '');
-  if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
-    const form = await request.formData();
-    const licenseField = form.get('license') ?? form.get('License');
-    let license: unknown = {};
-    if (typeof licenseField === 'string' && licenseField.trim()) {
-      try { license = JSON.parse(licenseField); } catch { license = { name: licenseField }; }
-    } else if (licenseField && typeof licenseField === 'object' && 'text' in licenseField) {
-      const text = await (licenseField as Blob).text();
-      if (text.trim()) {
-        try { license = JSON.parse(text); } catch { license = { name: 'Organization' }; }
-      }
-    }
-    return {
-      license,
+      license: text.trim() ? jsonText.catch(unparsed).parse(text) : {},
       key: String(form.get('key') || form.get('Key') || ''),
       collectionName: String(form.get('collectionName') || form.get('CollectionName') || 'Default Collection'),
     };
   }
-  const body = await request.json() as Record<string, unknown>;
+  const body = await parseBody(request, LicenseJsonRequest);
+  if (body instanceof Response) return body;
   return {
     license: body.license || body,
-    key: String(body.key || ''),
-    collectionName: String(body.collectionName || 'Default Collection'),
+    key: body.key || '',
+    collectionName: body.collectionName || 'Default Collection',
   };
 }
 
@@ -73,6 +49,7 @@ export function enterpriseLicenseFileResponse(user: User): Response {
 
 export async function handleCreateSelfHostedOrganizationLicense(request: Request, env: Env, user: User): Promise<Response> {
   const form = await readOrgLicenseForm(request);
+  if (form instanceof Response) return form;
   if (!form.key) return errorResponse('Organization key is required', 400);
   const parsed = parseOrganizationLicense(form.license, user.name || 'Organization');
   const org = await createOwnedOrganization(env, user, {
@@ -84,8 +61,9 @@ export async function handleCreateSelfHostedOrganizationLicense(request: Request
   return jsonResponse(organizationResponse(org));
 }
 
+// The uploaded license changes nothing, since every organization runs as Enterprise, so its body is never read.
 export async function handleUpdateSelfHostedOrganizationLicense(
-  request: Request,
+  _request: Request,
   env: Env,
   user: User,
   orgId: string
@@ -94,7 +72,6 @@ export async function handleUpdateSelfHostedOrganizationLicense(
   if (!isActiveMember(member) || !canDeleteOrganization(member)) {
     return errorResponse('Organization not found', 404);
   }
-  await readLicenseFromRequest(request);
   const org = await orgRepo.getOrganization(env.DB, orgId);
   if (!org) return errorResponse('Organization not found', 404);
   return jsonResponse(organizationResponse(org));

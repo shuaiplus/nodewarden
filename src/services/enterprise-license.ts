@@ -1,11 +1,16 @@
+import { z } from 'zod';
+import { normalizeJsonKeys } from '../utils/response';
+
 export const ENTERPRISE_PLAN_TYPE = 20;
 export const ENTERPRISE_PRODUCT_TIER = 3;
 
-export interface ParsedOrganizationLicense {
-  name: string;
-  billingEmail: string | null;
-  planType: number;
-}
+// Official license files are PascalCase and dummy ones may be empty or not an object at all, so each
+// field falls back on its own rather than rejecting the upload.
+const OrganizationLicense = z.preprocess(normalizeJsonKeys, z.object({
+  name: z.string().trim().catch(''),
+  billingEmail: z.string().trim().toLowerCase().includes('@').nullable().catch(null),
+  planType: z.coerce.number().positive().catch(ENTERPRISE_PLAN_TYPE),
+}).catch({ name: '', billingEmail: null, planType: ENTERPRISE_PLAN_TYPE }));
 
 export function buildNodeWardenEnterpriseLicense(options?: {
   name?: string;
@@ -50,21 +55,9 @@ export function buildNodeWardenEnterpriseLicense(options?: {
   };
 }
 
-export function parseOrganizationLicense(raw: unknown, fallbackName: string): ParsedOrganizationLicense {
-  const record = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
-    : {};
-  const name = String(record.name || record.Name || fallbackName || 'Organization').trim() || 'Organization';
-  const billingEmailRaw = record.billingEmail ?? record.BillingEmail;
-  const billingEmail = typeof billingEmailRaw === 'string' && billingEmailRaw.includes('@')
-    ? billingEmailRaw.trim().toLowerCase()
-    : null;
-  const planType = Number(record.planType ?? record.PlanType);
-  return {
-    name,
-    billingEmail,
-    planType: Number.isFinite(planType) && planType > 0 ? planType : ENTERPRISE_PLAN_TYPE,
-  };
+export function parseOrganizationLicense(raw: unknown, fallbackName: string) {
+  const license = OrganizationLicense.parse(raw);
+  return { ...license, name: license.name || fallbackName.trim() || 'Organization' };
 }
 
 export function enterprisePlansResponse() {
