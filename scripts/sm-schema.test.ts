@@ -118,9 +118,14 @@ for (const { parent, id, cascaded } of CASCADES) {
   });
 }
 
-test('the schema step replays over existing policies without losing a row', async () => {
+// Tables the embedded baseline creates, so a schema change has to be re-embedded and counted here.
+const TABLE_COUNT = 52;
+
+test('the schema step replays over existing policies without losing a row and yields the current table set', async () => {
   const { env } = await seedPolicies();
   await ensureStorageSchema(env.DB);
   await ensureStorageSchema(env.DB);
   assert.deepEqual(await rowCounts(env), expectedCounts([]));
+  const tables = "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
+  assert.equal(await env.DB.prepare(tables).first('count'), TABLE_COUNT);
 });
