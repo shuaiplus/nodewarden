@@ -1,108 +1,63 @@
+import { z } from 'zod';
 import { LIMITS } from '../config/limits';
 import { getOrm, type Orm } from '../db/client';
 import { ciphers as cipherTable, folders as folderTable } from '../db/schema';
 import { notifyUserVaultSync } from '../durable/notifications-hub';
-import { Env, Cipher, Folder, CipherType } from '../types';
+import type { Env, Cipher, CipherBankAccount, CipherDriversLicense, CipherPassport, Folder, PasswordHistory } from '../types';
 import { readActingDeviceIdentifier } from '../utils/device';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
 import * as folderRepo from '../services/storage-folder-repo';
 import * as revisionRepo from '../services/storage-revision-repo';
 
-// Bitwarden client import request format
-interface CiphersImportRequest {
-  ciphers: Array<{
-    id?: string | null;
-    type: number;
-    name?: string | null;
-    notes?: string | null;
-    favorite?: boolean;
-    reprompt?: number;
-    sshKey?: any | null;
-    bankAccount?: any | null;
-    driversLicense?: any | null;
-    passport?: any | null;
-    key?: string | null;
-    login?: {
-      uris?: Array<{ uri: string | null; uriChecksum?: string | null; match?: number | null }> | null;
-      username?: string | null;
-      password?: string | null;
-      totp?: string | null;
-      autofillOnPageLoad?: boolean | null;
-      uri?: string | null;
-      passwordRevisionDate?: string | null;
-      [key: string]: any;
-    } | null;
-    card?: {
-      cardholderName?: string | null;
-      brand?: string | null;
-      number?: string | null;
-      expMonth?: string | null;
-      expYear?: string | null;
-      code?: string | null;
-    } | null;
-    identity?: {
-      title?: string | null;
-      firstName?: string | null;
-      middleName?: string | null;
-      lastName?: string | null;
-      address1?: string | null;
-      address2?: string | null;
-      address3?: string | null;
-      city?: string | null;
-      state?: string | null;
-      postalCode?: string | null;
-      country?: string | null;
-      company?: string | null;
-      email?: string | null;
-      phone?: string | null;
-      ssn?: string | null;
-      username?: string | null;
-      passportNumber?: string | null;
-      licenseNumber?: string | null;
-    } | null;
-    secureNote?: { type: number } | null;
-    fields?: Array<{
-      name?: string | null;
-      value?: string | null;
-      type: number;
-      linkedId?: number | null;
-    }> | null;
-    passwordHistory?: Array<{
-      password: string;
-      lastUsedDate: string;
-    }> | null;
-    [key: string]: any;
-  }>;
-  folders: Array<{
-    name: string;
-  }>;
-  folderRelationships: Array<{
-    key: number;   // cipher index
-    value: number; // folder index
-  }>;
-}
+const orNull = <T extends z.ZodType>(schema: T) => schema.nullish().transform((value) => value ?? null);
+const list = <T extends z.ZodType>(item: T) => z.array(item).nullish().transform((items) => items ?? []);
+const encString = orNull(z.string());
+const optionalId = z.string().nullish().transform((id) => id?.trim() || null);
+// Shapes the cipher endpoints own; validateCipherEncryptedFieldsForCompatibility checks their fields.
+const clientObject = <T>() => orNull(z.custom<T>((value) => typeof value === 'object'));
 
-function bindNull(v: any): any {
-  return v === undefined ? null : v;
-}
-
-function readAliasedImportProp<T = unknown>(source: any, aliases: string[]): T | undefined {
-  if (!source || typeof source !== 'object') return undefined;
-  for (const key of aliases) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      return source[key] as T;
-    }
-  }
-  return undefined;
-}
-
-function normalizeOptionalId(value: unknown): string | null {
-  if (value == null) return null;
-  const normalized = String(value).trim();
-  return normalized ? normalized : null;
-}
+// Bitwarden's ImportCiphersRequestModel. parseBody folds PascalCase keys to camelCase; cipher entries
+// keep unknown keys so new client fields persist, and absent fields default as the create endpoint's.
+const CiphersImportBody = z.object({
+  ciphers: list(z.looseObject({
+    id: optionalId,
+    type: z.number(),
+    folderId: optionalId,
+    name: z.string().nullish().transform((name) => name ?? 'Untitled'),
+    notes: encString,
+    favorite: z.boolean().nullish().transform((favorite) => favorite ?? false),
+    reprompt: z.number().nullish().transform((reprompt) => reprompt ?? 0),
+    key: encString,
+    login: orNull(z.looseObject({
+      username: encString,
+      password: encString,
+      uris: orNull(z.array(z.looseObject({ uri: encString, uriChecksum: encString, match: orNull(z.number()) }))),
+      totp: encString,
+      autofillOnPageLoad: orNull(z.boolean()),
+      uri: encString,
+      passwordRevisionDate: encString,
+    })),
+    card: orNull(z.looseObject({
+      cardholderName: encString, brand: encString, number: encString, expMonth: encString, expYear: encString, code: encString,
+    })),
+    identity: orNull(z.looseObject({
+      title: encString, firstName: encString, middleName: encString, lastName: encString,
+      address1: encString, address2: encString, address3: encString, city: encString, state: encString, postalCode: encString, country: encString,
+      company: encString, email: encString, phone: encString, ssn: encString, username: encString, passportNumber: encString, licenseNumber: encString,
+    })),
+    secureNote: orNull(z.looseObject({ type: z.number() })),
+    sshKey: z.unknown().optional(),
+    bankAccount: clientObject<CipherBankAccount>(),
+    driversLicense: clientObject<CipherDriversLicense>(),
+    passport: clientObject<CipherPassport>(),
+    fields: orNull(z.array(z.looseObject({ name: encString, value: encString, type: z.number(), linkedId: orNull(z.number()) }))),
+    passwordHistory: clientObject<PasswordHistory[]>(),
+  })),
+  folders: list(z.object({ name: z.string().nullish() })),
+  folderRelationships: list(z.object({ key: z.number(), value: z.number() })),
+});
 
 async function runOrmBatch(
   orm: Orm,
@@ -121,16 +76,9 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const url = new URL(request.url);
   const returnCipherMap = url.searchParams.get('returnCipherMap') === '1';
 
-  let importData: CiphersImportRequest;
-  try {
-    importData = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const folders = Array.isArray(importData.folders) ? importData.folders : [];
-  const ciphers = Array.isArray(importData.ciphers) ? importData.ciphers : [];
-  const folderRelationships = Array.isArray(importData.folderRelationships) ? importData.folderRelationships : [];
+  const body = await parseBody(request, CiphersImportBody);
+  if (body instanceof Response) return body;
+  const { folders, ciphers, folderRelationships } = body;
 
   if (folders.length + ciphers.length > LIMITS.performance.importItemLimit) {
     return errorResponse(`Import exceeds maximum of ${LIMITS.performance.importItemLimit} items`, 400);
@@ -144,14 +92,13 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const folderRows: Folder[] = [];
   
   for (let i = 0; i < folders.length; i++) {
-    const importedFolder = folders[i] && typeof folders[i] === 'object' ? folders[i] : null;
     const folderId = generateUUID();
     folderIdMap.set(i, folderId);
 
     const folder: Folder = {
       id: folderId,
       userId: userId,
-      name: typeof importedFolder?.name === 'string' && importedFolder.name ? importedFolder.name : 'Folder',
+      name: folders[i].name || 'Folder',
       createdAt: now,
       updatedAt: now,
     };
@@ -176,7 +123,6 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   // Build cipher index -> folder id mapping from relationships
   const cipherFolderMap = new Map<number, string>();
   for (const rel of folderRelationships) {
-    if (!rel || typeof rel !== 'object') continue;
     const folderId = folderIdMap.get(rel.value);
     if (folderId) {
       cipherFolderMap.set(rel.key, folderId);
@@ -188,106 +134,27 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const cipherRows: Cipher[] = [];
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
-    const c = ciphers[i] && typeof ciphers[i] === 'object' ? ciphers[i] : {} as CiphersImportRequest['ciphers'][number];
-    const importedFolderId = normalizeOptionalId(readAliasedImportProp<string | null>(c, ['folderId', 'FolderId']));
-    const folderId = cipherFolderMap.get(i) || (importedFolderId && existingFolderIds.has(importedFolderId) ? importedFolderId : null);
-    const sourceIdRaw = String(c?.id ?? '').trim();
-    const sourceId = sourceIdRaw || null;
-    const login = readAliasedImportProp<any | null>(c, ['login', 'Login']);
-    const card = readAliasedImportProp<any | null>(c, ['card', 'Card']);
-    const identity = readAliasedImportProp<any | null>(c, ['identity', 'Identity']);
-    const secureNote = readAliasedImportProp<any | null>(c, ['secureNote', 'SecureNote']);
-    const sshKey = readAliasedImportProp<any | null>(c, ['sshKey', 'SshKey']);
-    const bankAccount = readAliasedImportProp<any | null>(c, ['bankAccount', 'BankAccount']);
-    const driversLicense = readAliasedImportProp<any | null>(c, ['driversLicense', 'DriversLicense']);
-    const passport = readAliasedImportProp<any | null>(c, ['passport', 'Passport']);
-    const fields = readAliasedImportProp<any[] | null>(c, ['fields', 'Fields']);
-    const passwordHistory = readAliasedImportProp<any[] | null>(c, ['passwordHistory', 'PasswordHistory']);
-    const key = readAliasedImportProp<string | null>(c, ['key', 'Key']);
-
+    const c = ciphers[i];
+    const folderId = cipherFolderMap.get(i) || (c.folderId && existingFolderIds.has(c.folderId) ? c.folderId : null);
     const cipher: Cipher = {
       ...c,
       id: generateUUID(),
       userId: userId,
-      type: c.type as CipherType,
       folderId: folderId,
-      name: c.name ?? 'Untitled',
-      notes: c.notes ?? null,
-      favorite: c.favorite ?? false,
-      login: login ? {
-        ...login,
-        username: login.username ?? null,
-        password: login.password ?? null,
-        uris: login.uris?.map((u: any) => ({
-          ...u,
-          uri: u.uri ?? null,
-          uriChecksum: u.uriChecksum ?? null,
-          match: u.match ?? null,
-        })) || null,
-        totp: login.totp ?? null,
-        autofillOnPageLoad: login.autofillOnPageLoad ?? null,
-        fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
-        uri: login.uri ?? null,
-        passwordRevisionDate: login.passwordRevisionDate ?? null,
-      } : null,
-      card: card ? {
-        ...card,
-        cardholderName: card.cardholderName ?? null,
-        brand: card.brand ?? null,
-        number: card.number ?? null,
-        expMonth: card.expMonth ?? null,
-        expYear: card.expYear ?? null,
-        code: card.code ?? null,
-      } : null,
-      identity: identity ? {
-        ...identity,
-        title: identity.title ?? null,
-        firstName: identity.firstName ?? null,
-        middleName: identity.middleName ?? null,
-        lastName: identity.lastName ?? null,
-        address1: identity.address1 ?? null,
-        address2: identity.address2 ?? null,
-        address3: identity.address3 ?? null,
-        city: identity.city ?? null,
-        state: identity.state ?? null,
-        postalCode: identity.postalCode ?? null,
-        country: identity.country ?? null,
-        company: identity.company ?? null,
-        email: identity.email ?? null,
-        phone: identity.phone ?? null,
-        ssn: identity.ssn ?? null,
-        username: identity.username ?? null,
-        passportNumber: identity.passportNumber ?? null,
-        licenseNumber: identity.licenseNumber ?? null,
-      } : null,
-      secureNote: secureNote ?? null,
-      fields: fields?.map((f: any) => ({
-        ...f,
-        name: f.name ?? null,
-        value: f.value ?? null,
-        type: f.type,
-        linkedId: f.linkedId ?? null,
-      })) || null,
-      passwordHistory: passwordHistory ?? null,
-      reprompt: c.reprompt ?? 0,
-      sshKey: normalizeCipherSshKeyForCompatibility(sshKey ?? null),
-      bankAccount: bankAccount ?? null,
-      driversLicense: driversLicense ?? null,
-      passport: passport ?? null,
-      key: key ?? null,
+      login: normalizeCipherLoginForStorage(c.login),
+      sshKey: normalizeCipherSshKeyForCompatibility(c.sshKey ?? null),
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
       deletedAt: null,
     };
-    cipher.login = normalizeCipherLoginForStorage(cipher.login);
     const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
     if (compatibilityError) {
       return errorResponse(`Cipher ${i + 1}: ${compatibilityError}`, 400);
     }
 
     cipherRows.push(cipher);
-    cipherMapRows.push({ index: i, sourceId, id: cipher.id });
+    cipherMapRows.push({ index: i, sourceId: c.id, id: cipher.id });
   }
 
   if (cipherRows.length > 0) {
@@ -298,17 +165,17 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
         userId: cipher.userId,
         organizationId: null,
         type: Number(cipher.type) || 1,
-        folderId: bindNull(cipher.folderId),
-        name: bindNull(cipher.name),
-        notes: bindNull(cipher.notes),
+        folderId: cipher.folderId,
+        name: cipher.name,
+        notes: cipher.notes,
         favorite: cipher.favorite ? 1 : 0,
         data: JSON.stringify(cipher),
-        reprompt: bindNull(cipher.reprompt ?? 0),
-        key: bindNull(cipher.key),
+        reprompt: cipher.reprompt,
+        key: cipher.key,
         createdAt: cipher.createdAt,
         updatedAt: cipher.updatedAt,
-        archivedAt: bindNull(cipher.archivedAt),
-        deletedAt: bindNull(cipher.deletedAt),
+        archivedAt: cipher.archivedAt,
+        deletedAt: cipher.deletedAt,
       };
       return orm.insert(cipherTable).values(values).onConflictDoUpdate({
         target: cipherTable.id,
