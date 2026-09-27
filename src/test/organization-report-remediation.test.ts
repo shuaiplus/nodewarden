@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { getOrm } from '../db/client';
+import { cipherCollections } from '../db/schema';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
@@ -133,7 +135,7 @@ test('legacy foreign collection links stay excluded from admin edit responses', 
   const foreign = await seedSmOrg(env);
   const foreignCollection = (await orgRepo.listCollectionsByOrg(env.DB, foreign.orgId))[0];
   const cipher = await create();
-  await env.DB.prepare('INSERT INTO cipher_collections (cipher_id, collection_id) VALUES (?, ?)').bind(cipher.id, foreignCollection.id).run();
+  await getOrm(env.DB).insert(cipherCollections).values({ cipherId: cipher.id, collectionId: foreignCollection.id });
   const updated = await request(owner.id, cipher.id, 'PUT', 'admin', updateBody(cipher.revisionDate));
   assert.equal(updated.status, 200);
   assert.deepEqual((await updated.json() as any).collectionIds, [collection.id]);

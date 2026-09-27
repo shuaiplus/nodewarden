@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getOrm } from '../db/client';
+import { chunkRows, columnCount, getOrm } from '../db/client';
+import { cipherCollections, orgGroupMembers, orgGroups } from '../db/schema';
 import { cipherUpsert } from '../services/storage-cipher-repo';
 import { MembershipStatus, MembershipType } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
@@ -46,8 +47,12 @@ test('organization report list returns every encrypted org cipher and collection
   ciphers[1].deletedAt = ciphers[1].updatedAt;
   ciphers[2].archivedAt = ciphers[2].updatedAt;
   await getOrm(env.DB).batch([cipherUpsert(env.DB, outside), ...ciphers.map(cipher => cipherUpsert(env.DB, cipher))]);
-  await env.DB.batch(ciphers.slice(1).map(cipher => env.DB.prepare('INSERT INTO cipher_collections (cipher_id, collection_id) VALUES (?, ?)').bind(cipher.id, collection.id)));
-  await env.DB.prepare('INSERT INTO cipher_collections (cipher_id, collection_id) VALUES (?, ?)').bind(target.id, foreignCollection.id).run();
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(cipherCollections).values({ cipherId: target.id, collectionId: foreignCollection.id }),
+    ...chunkRows(ciphers.slice(1), columnCount(cipherCollections))
+      .map(chunk => orm.insert(cipherCollections).values(chunk.map(cipher => ({ cipherId: cipher.id, collectionId: collection.id })))),
+  ]);
   for (const query of ['', '&includeMemberItems=true', '&includeMemberItems=false']) {
     const response = await request(owner.id, `/api/ciphers/organization-details?organizationId=${orgId}${query}`);
     assert.equal(response.status, 200);
@@ -122,9 +127,10 @@ test('member list includes only same-org group IDs on includeGroups=true and omi
   const foreign = await seedSmOrg(env);
   const groupIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
   const now = new Date().toISOString();
-  await env.DB.batch([
-    ...groupIds.map((id, index) => env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(id, index === 2 ? foreign.orgId : orgId, ENCRYPTED_FIELD, now, now)),
-    ...groupIds.map(id => env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(id, member.id)),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(orgGroups).values(groupIds.map((id, index) => ({ id, orgId: index === 2 ? foreign.orgId : orgId, name: ENCRYPTED_FIELD, accessAll: 0, createdAt: now, updatedAt: now }))),
+    orm.insert(orgGroupMembers).values(groupIds.map(groupId => ({ groupId, membershipId: member.id }))),
   ]);
   const path = `/api/organizations/${orgId}/users`;
   const plain = await request(owner.id, path);
