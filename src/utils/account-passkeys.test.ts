@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { normalizeRegistrationResponse } from './account-passkeys';
+import { normalizeAuthenticationResponse, normalizeRegistrationResponse, normalizeTransports } from './account-passkeys';
 import { normalizeJsonKeys } from './response';
 
 // Mirrors the deviceResponse built by putTwoFactorWebAuthn in the official web vault
@@ -35,4 +35,18 @@ test('rejects a registration body without an attestation object in either casing
     normalizeRegistrationResponse(normalizeJsonKeys({ ...officialTwoFactorDeviceResponse, response: { clientDataJson, transports } })),
     null
   );
+});
+
+test('reads padded base64 assertions as base64url, requires client data and keeps only WebAuthn transports', () => {
+  const assertion = { id: 'a+b/c==', rawId: 'a+b/c==', response: { authenticatorData: 'ZGF0YQ==', signature: 's+g/', userHandle: '' } };
+  assert.equal(normalizeAuthenticationResponse(assertion), null);
+  assert.deepEqual(normalizeAuthenticationResponse({ ...assertion, response: { ...assertion.response, clientDataJSON: 'Y2Q=' } }), {
+    id: 'a-b_c',
+    rawId: 'a-b_c',
+    type: 'public-key',
+    clientExtensionResults: {},
+    response: { authenticatorData: 'ZGF0YQ', signature: 's-g_', userHandle: undefined, clientDataJSON: 'Y2Q' },
+  });
+  assert.deepEqual(normalizeTransports(['usb', 'carrier-pigeon', 'hybrid']), ['usb', 'hybrid']);
+  assert.equal(normalizeTransports('usb'), null);
 });

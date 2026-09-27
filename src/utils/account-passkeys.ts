@@ -1,5 +1,7 @@
 import { decodeBase64Url } from 'hono/utils/encode';
+import { z } from 'zod';
 import type {
+  AuthenticationExtensionsClientOutputs,
   AuthenticationResponseJSON,
   AuthenticatorTransportFuture,
   RegistrationResponseJSON,
@@ -69,9 +71,59 @@ function uuidToDotNetGuidBytes(value: string): Uint8Array | null {
   ]);
 }
 
-function normalizeWebAuthnBase64(value: unknown): string {
-  return String(value || '').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+// Official clients send WebAuthn buffers as base64 or base64url, padded or not; @simplewebauthn reads
+// unpadded base64url.
+const webAuthnBase64 = z.string().min(1).transform((value) => value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''));
+const optionalWebAuthnBase64 = webAuthnBase64.optional().catch(undefined);
+
+const TRANSPORTS = ['ble', 'cable', 'hybrid', 'internal', 'nfc', 'smart-card', 'usb'] as const satisfies readonly AuthenticatorTransportFuture[];
+// Transport hints outside the WebAuthn set are dropped instead of failing the credential.
+const TransportsSchema = z.array(z.enum(TRANSPORTS).optional().catch(undefined))
+  .transform((transports) => transports.filter((transport) => transport !== undefined))
+  .catch([]);
+
+const extensionResults = z.custom<AuthenticationExtensionsClientOutputs>((value) => typeof value === 'object' && value !== null).optional().catch(undefined);
+const credentialFields = {
+  id: webAuthnBase64,
+  rawId: webAuthnBase64,
+  authenticatorAttachment: z.enum(['platform', 'cross-platform']).optional().catch(undefined),
+  clientExtensionResults: extensionResults,
+  extensions: extensionResults,
+};
+const clientDataFields = { clientDataJSON: optionalWebAuthnBase64, clientDataJson: optionalWebAuthnBase64 };
+
+// The official web vault spells the client data clientDataJson; one of the spellings must carry it.
+function withClientData<T extends { clientDataJSON?: string; clientDataJson?: string }>({ clientDataJSON, clientDataJson, ...response }: T, context: z.RefinementCtx) {
+  const clientData = clientDataJSON || clientDataJson;
+  if (!clientData) context.addIssue({ code: 'custom', message: 'clientDataJSON is required' });
+  return { ...response, clientDataJSON: clientData ?? '' };
 }
+
+function asPublicKeyCredential<T extends { clientExtensionResults?: AuthenticationExtensionsClientOutputs; extensions?: AuthenticationExtensionsClientOutputs }>({ clientExtensionResults, extensions, ...credential }: T) {
+  return { ...credential, type: 'public-key' as const, clientExtensionResults: clientExtensionResults ?? extensions ?? {} };
+}
+
+const RegistrationResponseSchema = z.object({
+  ...credentialFields,
+  response: z.object({
+    ...clientDataFields,
+    attestationObject: webAuthnBase64,
+    authenticatorData: optionalWebAuthnBase64,
+    transports: TransportsSchema.optional(),
+    publicKey: optionalWebAuthnBase64,
+    publicKeyAlgorithm: z.number().optional().catch(undefined),
+  }).transform(withClientData),
+}).transform(asPublicKeyCredential);
+
+const AuthenticationResponseSchema = z.object({
+  ...credentialFields,
+  response: z.object({
+    ...clientDataFields,
+    authenticatorData: webAuthnBase64,
+    signature: webAuthnBase64,
+    userHandle: optionalWebAuthnBase64,
+  }).transform(withClientData),
+}).transform(asPublicKeyCredential);
 
 export async function sha256Base64Url(value: string): Promise<string> {
   return bytesToBase64Url(await crypto.subtle.digest('SHA-256', textBytes(value)));
@@ -178,58 +230,20 @@ export function accountPasskeyCredentialToResponse(credential: AccountPasskeyCre
   };
 }
 
+export function passkeyDescriptor(credential: AccountPasskeyCredential): { id: string; transports?: AuthenticatorTransportFuture[] } {
+  return { id: credential.credentialId, transports: credential.transports ? TransportsSchema.parse(credential.transports) : undefined };
+}
+
 export function toSimpleWebAuthnCredential(credential: AccountPasskeyCredential): WebAuthnCredential {
-  return {
-    id: credential.credentialId,
-    publicKey: decodeBase64Url(credential.publicKey),
-    counter: credential.counter,
-    transports: (credential.transports || undefined) as AuthenticatorTransportFuture[] | undefined,
-  };
+  return { ...passkeyDescriptor(credential), publicKey: decodeBase64Url(credential.publicKey), counter: credential.counter };
 }
 
 export function normalizeRegistrationResponse(raw: unknown): RegistrationResponseJSON | null {
-  const input = raw && typeof raw === 'object' ? raw as Record<string, any> : null;
-  const response = input?.response && typeof input.response === 'object' ? input.response as Record<string, any> : null;
-  if (!input || !response) return null;
-  const clientDataJSON = response.clientDataJSON || response.clientDataJson;
-  const attestationObject = response.attestationObject;
-  if (!input.id || !input.rawId || !clientDataJSON || !attestationObject) return null;
-  return {
-    id: normalizeWebAuthnBase64(input.id),
-    rawId: normalizeWebAuthnBase64(input.rawId),
-    type: 'public-key',
-    authenticatorAttachment: input.authenticatorAttachment,
-    clientExtensionResults: input.clientExtensionResults || input.extensions || {},
-    response: {
-      attestationObject: normalizeWebAuthnBase64(attestationObject),
-      clientDataJSON: normalizeWebAuthnBase64(clientDataJSON),
-      authenticatorData: response.authenticatorData ? normalizeWebAuthnBase64(response.authenticatorData) : undefined,
-      transports: Array.isArray(response.transports) ? response.transports.map(String) as AuthenticatorTransportFuture[] : undefined,
-      publicKey: response.publicKey ? normalizeWebAuthnBase64(response.publicKey) : undefined,
-      publicKeyAlgorithm: typeof response.publicKeyAlgorithm === 'number' ? response.publicKeyAlgorithm : undefined,
-    },
-  };
+  return RegistrationResponseSchema.safeParse(raw).data ?? null;
 }
 
 export function normalizeAuthenticationResponse(raw: unknown): AuthenticationResponseJSON | null {
-  const input = raw && typeof raw === 'object' ? raw as Record<string, any> : null;
-  const response = input?.response && typeof input.response === 'object' ? input.response as Record<string, any> : null;
-  if (!input || !response) return null;
-  const clientDataJSON = response.clientDataJSON || response.clientDataJson;
-  if (!input.id || !input.rawId || !clientDataJSON || !response.authenticatorData || !response.signature) return null;
-  return {
-    id: normalizeWebAuthnBase64(input.id),
-    rawId: normalizeWebAuthnBase64(input.rawId),
-    type: 'public-key',
-    authenticatorAttachment: input.authenticatorAttachment,
-    clientExtensionResults: input.clientExtensionResults || input.extensions || {},
-    response: {
-      authenticatorData: normalizeWebAuthnBase64(response.authenticatorData),
-      clientDataJSON: normalizeWebAuthnBase64(clientDataJSON),
-      signature: normalizeWebAuthnBase64(response.signature),
-      userHandle: response.userHandle ? normalizeWebAuthnBase64(response.userHandle) : undefined,
-    },
-  };
+  return AuthenticationResponseSchema.safeParse(raw).data ?? null;
 }
 
 export function normalizeAccountPasskeyName(value: unknown): string {
@@ -238,9 +252,8 @@ export function normalizeAccountPasskeyName(value: unknown): string {
 }
 
 export function normalizeTransports(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  const transports = value.map((item) => String(item || '').trim()).filter(Boolean);
-  return transports.length ? transports.slice(0, 12) : null;
+  const transports = TransportsSchema.parse(value).slice(0, 12);
+  return transports.length ? transports : null;
 }
 
 export function isSerializedEncString(value: unknown): value is string {

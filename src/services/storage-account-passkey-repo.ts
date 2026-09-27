@@ -3,13 +3,12 @@ import { and, asc, count, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm
 import { getOrm } from '../db/client';
 import { webauthnChallenges, webauthnCredentials } from '../db/schema';
 import type { AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential } from '../types';
+import { normalizeTransports } from '../utils/account-passkeys';
 
 function parseTransports(value: string | null): string[] | null {
   if (!value) return null;
   try {
-    const parsed = JSON.parse(value);
-    if (!Array.isArray(parsed)) return null;
-    return parsed.map((item) => String(item || '').trim()).filter(Boolean);
+    return normalizeTransports(JSON.parse(value));
   } catch {
     return null;
   }
