@@ -11,30 +11,6 @@ import { jsonText } from '../services/org-types';
 // A JSON body is the license itself unless it nests one under license.
 const LicenseJsonRequest = z.looseObject({ key: z.string().nullish(), collectionName: z.string().nullish() });
 
-async function readOrgLicenseForm(request: Request): Promise<{ license: unknown; key: string; collectionName: string } | Response> {
-  const contentType = String(request.headers.get('Content-Type') || '');
-  if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
-    const form = await request.formData();
-    // The Workers FormData types omit the File entries a multipart upload carries.
-    const licenseField = (form.get('license') ?? form.get('License')) as Blob | string | null;
-    const text = typeof licenseField === 'string' ? licenseField : await licenseField?.text() ?? '';
-    // Text that is not JSON is the organization's name when posted as a field, and 'Organization' when uploaded as a file.
-    const unparsed = { name: typeof licenseField === 'string' ? text : 'Organization' };
-    return {
-      license: text.trim() ? jsonText.catch(unparsed).parse(text) : {},
-      key: String(form.get('key') || form.get('Key') || ''),
-      collectionName: String(form.get('collectionName') || form.get('CollectionName') || 'Default Collection'),
-    };
-  }
-  const body = await parseBody(request, LicenseJsonRequest);
-  if (body instanceof Response) return body;
-  return {
-    license: body.license || body,
-    key: body.key || '',
-    collectionName: body.collectionName || 'Default Collection',
-  };
-}
-
 export function enterpriseLicenseFileResponse(user: User): Response {
   const license = buildNodeWardenEnterpriseLicense({ name: user.name || 'NodeWarden Enterprise', billingEmail: user.email });
   return new Response(JSON.stringify(license, null, 2), {
@@ -48,8 +24,29 @@ export function enterpriseLicenseFileResponse(user: User): Response {
 }
 
 export async function handleCreateSelfHostedOrganizationLicense(request: Request, env: Env, user: User): Promise<Response> {
-  const form = await readOrgLicenseForm(request);
-  if (form instanceof Response) return form;
+  const contentType = String(request.headers.get('Content-Type') || '');
+  let form: { license: unknown; key: string; collectionName: string };
+  if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
+    const formData = await request.formData();
+    // The Workers FormData types omit the File entries a multipart upload carries.
+    const licenseField = (formData.get('license') ?? formData.get('License')) as Blob | string | null;
+    const text = typeof licenseField === 'string' ? licenseField : await licenseField?.text() ?? '';
+    // Text that is not JSON is the organization's name when posted as a field, and 'Organization' when uploaded as a file.
+    const unparsed = { name: typeof licenseField === 'string' ? text : 'Organization' };
+    form = {
+      license: text.trim() ? jsonText.catch(unparsed).parse(text) : {},
+      key: String(formData.get('key') || formData.get('Key') || ''),
+      collectionName: String(formData.get('collectionName') || formData.get('CollectionName') || 'Default Collection'),
+    };
+  } else {
+    const body = await parseBody(request, LicenseJsonRequest);
+    if (body instanceof Response) return body;
+    form = {
+      license: body.license || body,
+      key: body.key || '',
+      collectionName: body.collectionName || 'Default Collection',
+    };
+  }
   if (!form.key) return errorResponse('Organization key is required', 400);
   const parsed = parseOrganizationLicense(form.license, user.name || 'Organization');
   const org = await createOwnedOrganization(env, user, {
