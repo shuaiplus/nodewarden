@@ -523,28 +523,14 @@ async function downloadRemoteAttachmentBatch(
 
 function collectExternalRemoteAttachmentBlobNames(archiveBytes: Uint8Array): string[] {
   const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: true });
-  const refs = new Map(
-    (parsed.payload.manifest.attachmentBlobs || [])
-      .map((item) => [`${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}`, item])
-  );
-  const names: string[] = [];
-  const seen = new Set<string>();
-
-  for (const row of parsed.payload.db.attachments || []) {
+  const refs = new Map(parsed.payload.manifest.attachmentBlobs.map((item) => [`${item.cipherId}/${item.attachmentId}`, item.blobName]));
+  const names = parsed.payload.db.attachments.flatMap((row) => {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
-    const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
-    if (parsed.files[inlinePath]) continue;
-    const ref = refs.get(`${cipherId}/${attachmentId}`);
-    const blobName = String(ref?.blobName || '').trim();
-    if (!isSafeBackupAttachmentBlobName(blobName)) continue;
-    if (blobName && !seen.has(blobName)) {
-      seen.add(blobName);
-      names.push(blobName);
-    }
-  }
-
-  return names;
+    const blobName = refs.get(`${cipherId}/${attachmentId}`) ?? '';
+    return parsed.files[`attachments/${cipherId}/${attachmentId}.bin`] || !isSafeBackupAttachmentBlobName(blobName) ? [] : [blobName];
+  });
+  return Array.from(new Set(names));
 }
 
 function toImportStatusCode(message: string): number {

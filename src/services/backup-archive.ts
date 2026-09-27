@@ -1,5 +1,6 @@
 import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import { sha256 } from 'hono/utils/crypto';
+import { z } from 'zod';
 
 import { getOrm } from '../db/client';
 import type { Env } from '../types';
@@ -57,26 +58,37 @@ export interface BackupManifest {
   attachmentBlobs?: BackupManifestAttachmentBlob[];
 }
 
-export interface BackupManifestAttachmentBlob {
-  cipherId: string;
-  attachmentId: string;
-  blobName: string;
-  sizeBytes: number;
-}
+const BackupManifestAttachmentBlobSchema = z.object({
+  cipherId: z.string().trim(),
+  attachmentId: z.string().trim(),
+  blobName: z.string().trim(),
+  sizeBytes: z.number(),
+});
+export type BackupManifestAttachmentBlob = z.infer<typeof BackupManifestAttachmentBlobSchema>;
 
-export interface BackupPayload {
-  manifest: BackupManifest;
-  db: {
-    config: SqlRow[];
-    users: SqlRow[];
-    domain_settings: SqlRow[];
-    user_revisions: SqlRow[];
-    folders: SqlRow[];
-    ciphers: SqlRow[];
-    attachments: SqlRow[];
-    webauthn_credentials?: SqlRow[];
-  };
-}
+const sqlRows = z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()])));
+const optionalSqlRows = sqlRows.nullish().transform((rows) => rows ?? []);
+
+// Restore reads only the format version and the attachment references from the manifest. The db
+// shape is an explicit allowlist: z.object strips extra tables from old or modified archives,
+// especially runtime authentication state.
+const BackupPayloadSchema = z.object({
+  manifest: z.looseObject({
+    formatVersion: z.literal(BACKUP_FORMAT_VERSION, { error: 'Unsupported backup format version' }),
+    attachmentBlobs: z.array(BackupManifestAttachmentBlobSchema).nullish().transform((blobs) => blobs ?? []),
+  }, { error: 'Unsupported backup format version' }),
+  db: z.object({
+    config: sqlRows,
+    users: sqlRows,
+    user_revisions: sqlRows,
+    domain_settings: optionalSqlRows,
+    folders: sqlRows,
+    ciphers: sqlRows,
+    attachments: sqlRows,
+    webauthn_credentials: optionalSqlRows,
+  }, { error: 'Backup archive database payload is invalid' }),
+});
+export type BackupPayload = z.output<typeof BackupPayloadSchema>;
 
 export interface BackupArchiveBundle {
   bytes: Uint8Array;
@@ -252,30 +264,10 @@ function getRequiredZipEntries(db: BackupPayload['db']): string[] {
   return entries;
 }
 
-function ensureRowArray(value: unknown, table: string): SqlRow[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Backup archive table ${table} is invalid`);
-  }
-  return value as SqlRow[];
-}
-
-function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('Backup archive database payload is invalid');
-  }
-  const source = value as Record<string, unknown>;
-  // Restore uses an explicit allowlist. Extra tables from old or modified
-  // archives, especially runtime authentication state, are intentionally ignored.
-  return {
-    config: source.config as SqlRow[],
-    users: source.users as SqlRow[],
-    domain_settings: source.domain_settings as SqlRow[],
-    user_revisions: source.user_revisions as SqlRow[],
-    folders: source.folders as SqlRow[],
-    ciphers: source.ciphers as SqlRow[],
-    attachments: source.attachments as SqlRow[],
-    webauthn_credentials: source.webauthn_credentials as SqlRow[] | undefined,
-  };
+function externalAttachmentPaths(manifest: BackupPayload['manifest'], allowExternalAttachmentBlobs = false): Set<string> {
+  return new Set(allowExternalAttachmentBlobs
+    ? manifest.attachmentBlobs.map(({ cipherId, attachmentId }) => `attachments/${cipherId}/${attachmentId}.bin`)
+    : []);
 }
 
 function createZipEntries(files: Record<string, Uint8Array>): Record<string, Uint8Array | [Uint8Array, { level: 0 | 1 | 6 }]> {
@@ -330,26 +322,21 @@ export function parseBackupArchive(
   }
 
   const decoder = new TextDecoder();
-  let manifest: BackupManifest;
-  let rawDb: unknown;
+  let rawPayload: unknown;
   try {
-    manifest = JSON.parse(decoder.decode(manifestBytes)) as BackupManifest;
-    rawDb = JSON.parse(decoder.decode(dbBytes));
+    rawPayload = { manifest: JSON.parse(decoder.decode(manifestBytes)), db: JSON.parse(decoder.decode(dbBytes)) };
   } catch {
     throw new Error('Backup archive contains invalid JSON metadata');
   }
 
-  if (manifest?.formatVersion !== BACKUP_FORMAT_VERSION) {
-    throw new Error('Unsupported backup format version');
-  }
-  const db = normalizeParsedBackupDb(rawDb);
+  const parsed = BackupPayloadSchema.safeParse(rawPayload, {
+    error: ({ path = [] }) => (path[0] === 'db' ? `Backup archive table ${String(path[1])} is invalid` : 'Backup archive manifest is invalid'),
+  });
+  if (!parsed.success) throw new Error(parsed.error.issues[0].message);
+  const payload = parsed.data;
 
-  const externalAttachmentKeys = new Set<string>(
-    options.allowExternalAttachmentBlobs
-      ? (manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
-      : []
-  );
-  const requiredEntries = getRequiredZipEntries(db).filter((entry) => !externalAttachmentKeys.has(entry));
+  const externalAttachmentKeys = externalAttachmentPaths(payload.manifest, options.allowExternalAttachmentBlobs);
+  const requiredEntries = getRequiredZipEntries(payload.db).filter((entry) => !externalAttachmentKeys.has(entry));
   for (const entry of requiredEntries) {
     if (!zipped[entry]) {
       throw new Error(`Backup archive is missing required file: ${entry}`);
@@ -357,7 +344,7 @@ export function parseBackupArchive(
   }
 
   return {
-    payload: { manifest, db },
+    payload,
     files: zipped,
   };
 }
@@ -371,19 +358,17 @@ export function validateBackupPayloadContents(
   files: Record<string, Uint8Array>,
   options: ValidateBackupPayloadOptions = {}
 ): void {
-  const configRows = ensureRowArray(payload.db.config, 'config');
-  const userRows = ensureRowArray(payload.db.users, 'users');
-  const revisionRows = ensureRowArray(payload.db.user_revisions, 'user_revisions');
-  const domainSettingsRows = ensureRowArray(payload.db.domain_settings || [], 'domain_settings');
-  const folderRows = ensureRowArray(payload.db.folders, 'folders');
-  const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
-  const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
-  const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
-  const externalAttachmentKeys = new Set<string>(
-    options.allowExternalAttachmentBlobs
-      ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
-      : []
-  );
+  const {
+    config: configRows,
+    users: userRows,
+    user_revisions: revisionRows,
+    domain_settings: domainSettingsRows,
+    folders: folderRows,
+    ciphers: cipherRows,
+    attachments: attachmentRows,
+    webauthn_credentials: accountPasskeyRows,
+  } = payload.db;
+  const externalAttachmentKeys = externalAttachmentPaths(payload.manifest, options.allowExternalAttachmentBlobs);
 
   const userIds = new Set<string>();
   for (const row of userRows) {

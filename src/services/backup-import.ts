@@ -279,7 +279,7 @@ async function prepareImportedConfigRows(
   configRows: SqlRow[],
   userRows: SqlRow[]
 ): Promise<SqlRow[]> {
-  let nextConfigRows = cloneRows(configRows || []).filter(
+  let nextConfigRows = cloneRows(configRows).filter(
     (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY
   );
   const rawBackupSettings = nextConfigRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
@@ -305,25 +305,25 @@ async function prepareImportedConfigRows(
 
 async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['db'], env: Env): Promise<BackupPayload['db']> {
   const preparedDb: BackupPayload['db'] = {
-    config: await prepareImportedConfigRows(env, payload.config || [], payload.users || []),
-    users: cloneRows(payload.users || []).map((row) => ({
+    config: await prepareImportedConfigRows(env, payload.config, payload.users),
+    users: cloneRows(payload.users).map((row) => ({
       ...row,
       email_verified: row.email_verified ?? 1,
       verify_devices: row.verify_devices ?? 0,
       yubikey_nfc: row.yubikey_nfc ?? 0,
     })),
-    domain_settings: cloneRows(payload.domain_settings || []),
-    user_revisions: cloneRows(payload.user_revisions || []),
-    webauthn_credentials: cloneRows(payload.webauthn_credentials || []).map((row) => ({
+    domain_settings: cloneRows(payload.domain_settings),
+    user_revisions: cloneRows(payload.user_revisions),
+    webauthn_credentials: cloneRows(payload.webauthn_credentials).map((row) => ({
       ...row,
       purpose: normalizeAccountPasskeyPurpose(row.purpose),
     })),
-    folders: cloneRows(payload.folders || []),
-    ciphers: cloneRows(payload.ciphers || []).map((row) => ({
+    folders: cloneRows(payload.folders),
+    ciphers: cloneRows(payload.ciphers).map((row) => ({
       ...row,
       archived_at: row.archived_at ?? null,
     })),
-    attachments: cloneRows(payload.attachments || []),
+    attachments: cloneRows(payload.attachments),
   };
   await importBackupRows(db, preparedDb, true);
   return preparedDb;
@@ -343,7 +343,7 @@ function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: 
   }
 
   if (storageKind === null) {
-    const skippedItems = (payload.db.attachments || []).map((row) => {
+    const skippedItems = payload.db.attachments.map((row) => {
       const cipherId = String(row.cipher_id || '').trim();
       const attachmentId = String(row.id || '').trim();
       return {
@@ -383,7 +383,7 @@ function prepareImportPayloadForTarget(env: Env, payload: BackupPayload, files: 
     }
   }
 
-  const nextAttachments = (payload.db.attachments || []).filter((row) => {
+  const nextAttachments = payload.db.attachments.filter((row) => {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
     if (!cipherId || !attachmentId) return false;
@@ -436,7 +436,7 @@ async function restoreBlobFiles(env: Env, db: BackupPayload['db'], files: Record
   const restoredAttachments: SqlRow[] = [];
   const skippedItems: BackupImportSkipSummary['items'] = [];
 
-  for (const row of db.attachments || []) {
+  for (const row of db.attachments) {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
     if (!cipherId || !attachmentId) continue;
@@ -477,20 +477,9 @@ async function restoreBlobFiles(env: Env, db: BackupPayload['db'], files: Record
 }
 
 function buildAttachmentBlobLookup(manifest: BackupPayload['manifest']): Map<string, BackupManifestAttachmentBlob> {
-  const lookup = new Map<string, BackupManifestAttachmentBlob>();
-  for (const item of manifest.attachmentBlobs || []) {
-    const cipherId = String(item.cipherId || '').trim();
-    const attachmentId = String(item.attachmentId || '').trim();
-    const blobName = String(item.blobName || '').trim();
-    if (!cipherId || !attachmentId || !isSafeBackupAttachmentBlobName(blobName)) continue;
-    lookup.set(`${cipherId}/${attachmentId}`, {
-      ...item,
-      cipherId,
-      attachmentId,
-      blobName,
-    });
-  }
-  return lookup;
+  return new Map(manifest.attachmentBlobs
+    .filter(({ cipherId, attachmentId, blobName }) => cipherId && attachmentId && isSafeBackupAttachmentBlobName(blobName))
+    .map((item) => [`${item.cipherId}/${item.attachmentId}`, item]));
 }
 
 async function prepareRemoteAttachmentPayload(
@@ -503,7 +492,7 @@ async function prepareRemoteAttachmentPayload(
   const nextAttachments: SqlRow[] = [];
   const skippedItems: BackupImportSkipSummary['items'] = [];
 
-  for (const row of payload.db.attachments || []) {
+  for (const row of payload.db.attachments) {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
     const lookupKey = `${cipherId}/${attachmentId}`;
@@ -577,7 +566,7 @@ async function restoreRemoteAttachmentFiles(
   const restoredAttachments: SqlRow[] = [];
   const skippedItems: BackupImportSkipSummary['items'] = [];
 
-  for (const row of payload.db.attachments || []) {
+  for (const row of payload.db.attachments) {
     const cipherId = String(row.cipher_id || '').trim();
     const attachmentId = String(row.id || '').trim();
     const inlinePath = `attachments/${cipherId}/${attachmentId}.bin`;
@@ -637,7 +626,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
   await runInsertBatch(
     db,
     tableName('config'),
-    buildInsertStatements(db, tableName('config'), ['key', 'value'], payload.config || [], true)
+    buildInsertStatements(db, tableName('config'), ['key', 'value'], payload.config, true)
   );
   await runInsertBatch(
     db,
@@ -646,13 +635,13 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
       db,
       tableName('users'),
       ['id', 'email', 'email_verified', 'name', 'master_password_hint', 'master_password_hash', 'key', 'private_key', 'public_key', 'kdf_type', 'kdf_iterations', 'kdf_memory', 'kdf_parallelism', 'security_stamp', 'role', 'status', 'verify_devices', 'totp_secret', 'totp_recovery_code', 'two_factor_email', 'yubikey_key1', 'yubikey_key2', 'yubikey_key3', 'yubikey_key4', 'yubikey_key5', 'yubikey_nfc', 'created_at', 'updated_at'],
-      payload.users || []
+      payload.users
     )
   );
   await runInsertBatch(
     db,
     tableName('user_revisions'),
-    buildInsertStatements(db, tableName('user_revisions'), ['user_id', 'revision_date'], payload.user_revisions || [], true)
+    buildInsertStatements(db, tableName('user_revisions'), ['user_id', 'revision_date'], payload.user_revisions, true)
   );
   await runInsertBatch(
     db,
@@ -661,7 +650,7 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
       db,
       tableName('domain_settings'),
       ['user_id', 'equivalent_domains', 'custom_equivalent_domains', 'excluded_global_equivalent_domains', 'updated_at'],
-      payload.domain_settings || [],
+      payload.domain_settings,
       true
     )
   );
@@ -672,13 +661,13 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
       db,
       tableName('webauthn_credentials'),
       ['id', 'user_id', 'purpose', 'name', 'public_key', 'credential_id', 'counter', 'type', 'aa_guid', 'transports', 'encrypted_user_key', 'encrypted_public_key', 'encrypted_private_key', 'supports_prf', 'created_at', 'updated_at'],
-      payload.webauthn_credentials || []
+      payload.webauthn_credentials
     )
   );
   await runInsertBatch(
     db,
     tableName('folders'),
-    buildInsertStatements(db, tableName('folders'), ['id', 'user_id', 'name', 'created_at', 'updated_at'], payload.folders || [])
+    buildInsertStatements(db, tableName('folders'), ['id', 'user_id', 'name', 'created_at', 'updated_at'], payload.folders)
   );
   await runInsertBatch(
     db,
@@ -687,13 +676,13 @@ async function importBackupRows(db: D1Database, payload: BackupPayload['db'], us
       db,
       tableName('ciphers'),
       ['id', 'user_id', 'type', 'folder_id', 'name', 'notes', 'favorite', 'data', 'reprompt', 'key', 'created_at', 'updated_at', 'archived_at', 'deleted_at'],
-      payload.ciphers || []
+      payload.ciphers
     )
   );
   await runInsertBatch(
     db,
     tableName('attachments'),
-    buildInsertStatements(db, tableName('attachments'), ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], payload.attachments || [])
+    buildInsertStatements(db, tableName('attachments'), ['id', 'cipher_id', 'file_name', 'size', 'size_name', 'key'], payload.attachments)
   );
 }
 
@@ -744,31 +733,31 @@ export async function importBackupArchiveBytes(
     await report('import_data', 'data');
     const db = await importPreparedBackupRows(env.DB, prepared.payload.db, env);
     await validateShadowTableCounts(env.DB, {
-      config: (db.config || []).length,
-      users: (db.users || []).length,
-      domain_settings: (db.domain_settings || []).length,
-      user_revisions: (db.user_revisions || []).length,
-      webauthn_credentials: (db.webauthn_credentials || []).length,
-      folders: (db.folders || []).length,
-      ciphers: (db.ciphers || []).length,
-      attachments: (db.attachments || []).length,
+      config: db.config.length,
+      users: db.users.length,
+      domain_settings: db.domain_settings.length,
+      user_revisions: db.user_revisions.length,
+      webauthn_credentials: db.webauthn_credentials.length,
+      folders: db.folders.length,
+      ciphers: db.ciphers.length,
+      attachments: db.attachments.length,
     });
 
     await report('restore_files', 'files');
     const restored = source
       ? await restoreRemoteAttachmentFiles(env, prepared.payload, parsed.files, source)
       : await restoreBlobFiles(env, db, parsed.files);
-    const restoredAttachmentKeys = new Set((restored.restoredAttachments || []).map(attachmentRowKey));
-    const failedRestoreRows = (db.attachments || []).filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
+    const restoredAttachmentKeys = new Set(restored.restoredAttachments.map(attachmentRowKey));
+    const failedRestoreRows = db.attachments.filter((row) => !restoredAttachmentKeys.has(attachmentRowKey(row)));
     await removeAttachmentRows(env.DB, failedRestoreRows, true).catch(() => undefined);
     await validateShadowTableCounts(env.DB, {
-      config: (db.config || []).length,
-      users: (db.users || []).length,
-      domain_settings: (db.domain_settings || []).length,
-      user_revisions: (db.user_revisions || []).length,
-      webauthn_credentials: (db.webauthn_credentials || []).length,
-      folders: (db.folders || []).length,
-      ciphers: (db.ciphers || []).length,
+      config: db.config.length,
+      users: db.users.length,
+      domain_settings: db.domain_settings.length,
+      user_revisions: db.user_revisions.length,
+      webauthn_credentials: db.webauthn_credentials.length,
+      folders: db.folders.length,
+      ciphers: db.ciphers.length,
       attachments: restored.restoredAttachments.length,
     });
     await report('finalize', 'finalize');
@@ -784,17 +773,17 @@ export async function importBackupArchiveBytes(
 
     await report('complete', 'finalize', { done: true, ok: true });
     return {
-      auditActorUserId: (db.users || []).some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
+      auditActorUserId: db.users.some((row) => String(row.id || '').trim() === actorUserId) ? actorUserId : null,
       result: {
         object: 'instance-backup-import',
         imported: {
-          config: (db.config || []).length,
-          users: (db.users || []).length,
-          domainSettings: (db.domain_settings || []).length,
-          userRevisions: (db.user_revisions || []).length,
-          webauthnCredentials: (db.webauthn_credentials || []).length,
-          folders: (db.folders || []).length,
-          ciphers: (db.ciphers || []).length,
+          config: db.config.length,
+          users: db.users.length,
+          domainSettings: db.domain_settings.length,
+          userRevisions: db.user_revisions.length,
+          webauthnCredentials: db.webauthn_credentials.length,
+          folders: db.folders.length,
+          ciphers: db.ciphers.length,
           attachments: restored.restoredAttachments.length,
           attachmentFiles: restored.imported,
         },
