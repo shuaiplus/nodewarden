@@ -108,6 +108,7 @@ For most backend or shared changes:
 
 ```sh
 npx tsc -p tsconfig.json --noEmit
+npm run lint
 npm test
 ```
 

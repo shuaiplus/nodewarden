@@ -22,6 +22,7 @@
 ## Checks
 
 - [ ] `npx tsc -p tsconfig.json --noEmit`
+- [ ] `npm run lint`
 - [ ] `npm test`
 
 ## Notes

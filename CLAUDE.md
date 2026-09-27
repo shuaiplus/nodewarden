@@ -6,6 +6,7 @@ Bitwarden-compatible Cloudflare Worker. See `ARCHITECTURE.md` and `docs/`.
 
 - Schema lives in `src/db/schema.ts` (+ `relations.ts`). Generate with `npm run db:generate` (drizzle-kit + embed). Bump `STORAGE_SCHEMA_VERSION` in `src/db/migrate.ts`. Data-only fixes: `npx drizzle-kit generate --custom --name <slug>`, write the SQL, `npm run db:embed`; keep it replay-safe (each bump replays every migration).
 - D1: `db.batch()` only; never `db.transaction()`. Chunk at 100 bound parameters.
+- No raw SQL: every query and statement is a drizzle builder through `getOrm(db)` (Durable Object SQLite through `drizzle-orm/durable-sqlite`); batch them with `getOrm(db).batch([...])`, and use `abortUnlessChanged` (`src/db/client.ts`) for a batch that must roll back when a guarded write changed nothing. `sql` fragments inside builders are fine; `env.DB.prepare/exec/batch`, `storage.sql.exec`, `orm.run(sql...)` and `sql.raw` are not. `npm run lint` enforces this (`nodewarden/no-raw-sql` in `eslint.config.mjs`); the only exceptions are line-level disables with a concrete reason (migration execution, runtime DDL for backup restore).
 - Auth engine is Better Auth (`src/auth.ts`). Bitwarden `/identity` and `/api` stay adapters. Sessions live in `session`, credentials in `account`. Access JWTs stay HS256 via `JWT_SECRET`. Do not add `withCloudflare()` (drizzle 1.0-rc type clash).
 - Personal vault queries and mutations must exclude `organization_id IS NOT NULL`. Org cipher access goes through `src/handlers/cipher-access.ts`.
 - Do not store plaintext vault or SM values.
