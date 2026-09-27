@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { and, eq } from 'drizzle-orm';
+
+import { getOrm } from '../db/client';
+import { smAccessTokens, smProjects, smSecretServiceAccounts, smServiceAccountProjects } from '../db/schema';
 import { signHs256Jwt } from '../utils/jwt';
 import { authedFetch, createTestEnv } from './support/env';
 import { ENCRYPTED_FIELD, postJson, seedSmOrg, smLogin, TOKEN_FIELDS } from './support/sm';
@@ -48,14 +52,15 @@ test('machine JWTs enforce project and direct secret grants across CRUD and pres
   const edited = await request(`/api/secrets/${direct.id}`, 'PUT', { ...FIELDS, value: CHANGED, projectIds: [] });
   assert.equal(edited.status, 200);
   assert.equal((await edited.json() as any).value, CHANGED);
-  assert.ok(await env.DB.prepare('SELECT 1 FROM sm_secret_service_accounts WHERE secret_id = ? AND service_account_id = ? AND write_access = 1').bind(direct.id, account.id).first());
+  const orm = getOrm(env.DB);
+  assert.ok(await orm.select().from(smSecretServiceAccounts).where(and(eq(smSecretServiceAccounts.secretId, direct.id), eq(smSecretServiceAccounts.serviceAccountId, account.id), eq(smSecretServiceAccounts.writeAccess, 1))).get());
   const policyWrite = await request(`/api/secrets/${direct.id}`, 'PUT', { ...FIELDS, projectIds: [], accessPoliciesRequests: { userAccessPolicyRequests: [], groupAccessPolicyRequests: [], serviceAccountAccessPolicyRequests: [{ granteeId: account.id, read: true, write: true }] } });
   assert.equal(policyWrite.status, 404);
 
   const createdProject = await request(`/api/organizations/${orgId}/projects`, 'POST', { name: ENCRYPTED_FIELD });
   assert.equal(createdProject.status, 200);
   const p = await createdProject.json() as { id: string };
-  assert.ok(await env.DB.prepare('SELECT 1 FROM sm_service_account_projects WHERE project_id = ? AND service_account_id = ? AND read_access = 1 AND write_access = 1').bind(p.id, account.id).first());
+  assert.ok(await orm.select().from(smServiceAccountProjects).where(and(eq(smServiceAccountProjects.projectId, p.id), eq(smServiceAccountProjects.serviceAccountId, account.id), eq(smServiceAccountProjects.readAccess, 1), eq(smServiceAccountProjects.writeAccess, 1))).get());
   assert.equal((await request(`/api/projects/${p.id}`, 'PUT', { name: CHANGED })).status, 200);
   assert.equal((await (await request(`/api/projects/${p.id}`)).json() as any).name, CHANGED);
   const createdSecret = await request(`/api/organizations/${orgId}/secrets`, 'POST', { ...FIELDS, projectIds: [p.id] });
@@ -117,9 +122,9 @@ test('machine revocation, token expiry and account deletion take effect on the n
   const login = await smLogin(env, nextToken.id, nextToken.clientSecret);
   const nextJwt = (await login.json() as any).access_token;
   assert.equal((await request(path, 'GET', undefined, nextJwt)).status, 200);
-  await env.DB.prepare('UPDATE sm_access_tokens SET expire_at = ? WHERE id = ?').bind('2020-01-01T00:00:00.000Z', nextToken.id).run();
+  await getOrm(env.DB).update(smAccessTokens).set({ expireAt: '2020-01-01T00:00:00.000Z' }).where(eq(smAccessTokens.id, nextToken.id));
   assert.equal((await request(path, 'GET', undefined, nextJwt)).status, 401);
-  await env.DB.prepare('UPDATE sm_access_tokens SET expire_at = NULL WHERE id = ?').bind(nextToken.id).run();
+  await getOrm(env.DB).update(smAccessTokens).set({ expireAt: null }).where(eq(smAccessTokens.id, nextToken.id));
   assert.equal((await request(path, 'GET', undefined, nextJwt)).status, 200);
   assert.equal((await authedFetch(env, { userId: owner.id, path: '/api/service-accounts/delete', method: 'POST', body: [account.id] })).status, 200);
   assert.equal((await request(path, 'GET', undefined, nextJwt)).status, 401);
@@ -141,9 +146,10 @@ test('machine authentication rejects signed tokens with malformed or mismatched 
 
 test('machine mutation failures use the API error response and roll back creator grants', async () => {
   const { env, orgId, request } = await setup();
+  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the creator grant inside SQLite
   await env.DB.exec("CREATE TRIGGER fail_machine_project BEFORE INSERT ON sm_service_account_projects BEGIN SELECT RAISE(ABORT, 'test machine project failure'); END;");
   const response = await request(`/api/organizations/${orgId}/projects`, 'POST', { name: ENCRYPTED_FIELD });
   assert.equal(response.status, 500);
   assert.equal((await response.json() as any).message, 'Internal server error');
-  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_projects WHERE org_id = ?').bind(orgId).first<{ n: number }>())!.n, 0);
+  assert.equal(await getOrm(env.DB).$count(smProjects, eq(smProjects.orgId, orgId)), 0);
 });
