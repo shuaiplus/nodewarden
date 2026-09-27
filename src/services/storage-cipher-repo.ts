@@ -42,17 +42,6 @@ const CIPHER_SCALAR_DATA_KEYS = new Set([
   'deletedDate',
 ]);
 
-function buildCipherData(cipher: Cipher, folderId: string | null): string {
-  const payload: Record<string, unknown> = {
-    ...cipher,
-    folderId,
-  };
-  for (const key of CIPHER_SCALAR_DATA_KEYS) {
-    delete payload[key];
-  }
-  return JSON.stringify(payload);
-}
-
 // Older clients stored archivedDate / deletedDate inside the cipher blob; only string values are dates.
 const legacyDate = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
@@ -109,7 +98,14 @@ export async function getCipherForUser(db: D1Database, id: string, userId: strin
 // The upsert as an unexecuted statement, so callers can batch it with related writes.
 export function cipherUpsert(db: D1Database, cipher: Cipher) {
   const folderId = normalizeOptionalId(cipher.folderId);
-  const data = buildCipherData(cipher, folderId);
+  const payload: Record<string, unknown> = {
+    ...cipher,
+    folderId,
+  };
+  for (const key of CIPHER_SCALAR_DATA_KEYS) {
+    delete payload[key];
+  }
+  const data = JSON.stringify(payload);
   const organizationId = normalizeOptionalId(cipher.organizationId ?? null);
   const values = {
     id: cipher.id,
