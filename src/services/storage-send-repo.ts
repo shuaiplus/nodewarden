@@ -1,7 +1,8 @@
-import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
 
 import { chunkRows, getOrm } from '../db/client';
 import { sends } from '../db/schema';
+import { plus } from '../db/sql';
 import type { Send } from '../types';
 import { updateRevisionDate } from './storage-revision-repo';
 
@@ -101,13 +102,13 @@ export async function incrementSendAccessCount(db: D1Database, sendId: string): 
   const result = await getOrm(db)
     .update(sends)
     .set({
-      accessCount: sql`${sends.accessCount} + 1`,
+      accessCount: plus(sends.accessCount, 1),
       updatedAt: now,
     })
     .where(and(
       eq(sends.id, sendId),
       eq(sends.disabled, 0),
-      or(isNull(sends.maxAccessCount), sql`${sends.accessCount} < ${sends.maxAccessCount}`),
+      or(isNull(sends.maxAccessCount), lt(sends.accessCount, sends.maxAccessCount)),
       or(isNull(sends.expirationDate), gt(sends.expirationDate, now)),
       gt(sends.deletionDate, now),
     ))
