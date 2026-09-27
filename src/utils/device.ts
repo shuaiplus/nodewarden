@@ -36,10 +36,10 @@ export type AuthRequestDeviceInfo = z.output<typeof DeviceInfoSchema>;
 
 const firstPresent = (...values: unknown[]) => values.find((value) => value != null && value !== '');
 
-// The body wins over the X-Device-* headers, field by field.
+// The body wins over the headers, field by field; official clients name the device in Device-Identifier.
 export function readAuthRequestDeviceInfo(body: Record<string, unknown>, request: Request): AuthRequestDeviceInfo {
   return DeviceInfoSchema.parse({
-    deviceIdentifier: firstPresent(body.deviceIdentifier, body.device_identifier, request.headers.get('X-Device-Identifier')),
+    deviceIdentifier: firstPresent(body.deviceIdentifier, body.device_identifier, request.headers.get('Device-Identifier'), request.headers.get('X-Device-Identifier')),
     deviceName: firstPresent(body.deviceName, body.device_name, request.headers.get('X-Device-Name')),
     deviceType: firstPresent(body.deviceType, body.device_type, request.headers.get('Device-Type')),
   });

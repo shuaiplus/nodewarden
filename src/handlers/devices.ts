@@ -177,9 +177,8 @@ export async function handleRegisterDevice(request: Request, env: Env, userId: s
 
 // POST /api/devices/lost-trust
 export async function handleReportLostTrust(request: Request, env: Env, userId: string): Promise<Response> {
-  const body = await parseBody(request, DeviceFieldsSchema, 'Please provide a device identifier');
-  if (body instanceof Response) return body;
-  const deviceInfo = readAuthRequestDeviceInfo(body, request);
+  // Official clients post no body and send the device in the Device-Identifier header.
+  const deviceInfo = readAuthRequestDeviceInfo({}, request);
   if (!deviceInfo.deviceIdentifier) return errorResponse('Please provide a device identifier', 400);
 
   await writeAuditEvent(env.DB, {
