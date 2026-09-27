@@ -1,7 +1,8 @@
 import { EventType, recordUserEvent } from '../services/events';
-import { and, eq, sql } from 'drizzle-orm';
-import { getOrm, withoutQueryParams } from '../db/client';
+import { and, eq } from 'drizzle-orm';
+import { getOrm, userRowMatches, withoutQueryParams } from '../db/client';
 import { devices, session, userRevisions, users, webauthnCredentials } from '../db/schema';
+import { bound, excluded } from '../db/sql';
 import { toSafeUrl } from '../utils/html';
 import { runInBackground, notifyMail, notifyFailedTwoFactor, notifyNewDeviceVerification } from '../services/mail-notify';
 import { Env, User } from '../types';
@@ -504,7 +505,7 @@ export async function handleChangeEmail(request: Request, env: Env, userId: stri
   const now = new Date().toISOString();
   const orm = getOrm(env.DB);
   // Every dependent write runs only if the first statement installed this batch's fresh stamp.
-  const guard = sql`EXISTS (SELECT 1 FROM users WHERE id = ${user.id} AND security_stamp = ${stamp})`;
+  const guard = userRowMatches(orm, user.id, eq(users.securityStamp, stamp));
   let changed: D1Result;
   try {
     [changed] = await orm.batch([
@@ -512,9 +513,9 @@ export async function handleChangeEmail(request: Request, env: Env, userId: stri
         .where(and(eq(users.id, user.id), eq(users.securityStamp, user.securityStamp), eq(users.status, 'active'))),
       credentialAccountStatement(env.DB, user.id, passwordHash, stamp),
       orm.delete(session).where(and(eq(session.userId, user.id), guard)),
-      orm.insert(userRevisions).select(orm.select({ userId: users.id, revisionDate: sql`${now}`.as('revision_date') }).from(users)
+      orm.insert(userRevisions).select(orm.select({ userId: users.id, revisionDate: bound(now).as('revision_date') }).from(users)
         .where(and(eq(users.id, user.id), eq(users.securityStamp, stamp))))
-        .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: sql`excluded.revision_date` } }),
+        .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: excluded(userRevisions.revisionDate) } }),
       auditEventStatement(env.DB, {
         actorUserId: user.id, action: 'user.email.change', category: 'security', level: 'security',
         targetType: 'user', targetId: user.id, metadata: auditRequestMetadata(request),
@@ -1235,8 +1236,9 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     if (!updated) return errorResponse('User verification failed.', 400);
   }
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
-    await getOrm(env.DB).delete(webauthnCredentials).where(and(eq(webauthnCredentials.userId, user.id), eq(webauthnCredentials.purpose, 'twoFactor'),
-      sql`EXISTS (SELECT 1 FROM users WHERE id = ${user.id} AND security_stamp = ${user.securityStamp})`));
+    const orm = getOrm(env.DB);
+    await orm.delete(webauthnCredentials).where(and(eq(webauthnCredentials.userId, user.id), eq(webauthnCredentials.purpose, 'twoFactor'),
+      userRowMatches(orm, user.id, eq(users.securityStamp, user.securityStamp))));
   }
   await finalizeTwoFactorChange(request, env, user, type === TWO_FACTOR_PROVIDER_AUTHENTICATOR ? 'account.totp.disable' : type === TWO_FACTOR_PROVIDER_EMAIL ? 'account.two_factor.email.disable' : type === TWO_FACTOR_PROVIDER_YUBIKEY ? 'account.yubikey.disable' : 'account.webauthn_2fa.disable', wasEnabled ? EventType.UserDisabled2fa : null);
 

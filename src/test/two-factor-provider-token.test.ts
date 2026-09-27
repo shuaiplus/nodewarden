@@ -7,7 +7,8 @@ import { hashPassword } from '../services/auth-password';
 import type { Env, User } from '../types';
 import { sha256Base64Url } from '../utils/account-passkeys';
 import { signHs256Jwt, verifyHs256Jwt } from '../utils/jwt';
-import { authedFetch, createTestEnv, seedUser } from './support/env';
+import { authedFetch, createTestEnv, interceptStatement, seedUser } from './support/env';
+import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as userRepo from '../services/storage-user-repo';
 
 const PASSWORD = 'client-master-password-hash';
@@ -130,4 +131,21 @@ test('provider tokens are scoped to a user, provider, current stamp and finite 3
   const stale = await authedFetch(env, { method: 'DELETE', path: '/api/two-factor/yubikey', userId: user.id, body: { userVerificationToken: yubikey.UserVerificationToken } });
   assert.equal(stale.status, 400);
   assert.equal((await userRepo.getUserById(env.DB, user.id))!.yubikeyKey1, PUBLIC_ID);
+});
+
+test('disabling WebAuthn deletes no two-step key once the security stamp rotates before the delete runs', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
+  await passkeyRepo.saveAccountPasskeyCredential(env.DB, {
+    id: 'two-step-key', userId: user.id, purpose: 'twoFactor', name: 'Security key', publicKey: 'cHVibGlj', credentialId: 'two-step-key', counter: 0,
+    type: 'public-key', aaGuid: null, transports: null, encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null,
+    supportsPrf: false, createdAt: user.createdAt, updatedAt: user.updatedAt,
+  });
+  let rotated = false;
+  interceptStatement(env, /^delete from "webauthn_credentials"/, async () => {
+    rotated = await userRepo.saveUser(env.DB, { ...user, securityStamp: crypto.randomUUID() }, ['securityStamp'], user.securityStamp);
+  });
+  await authedFetch(env, { method: 'POST', path: '/api/two-factor/disable', userId: user.id, body: { type: 7, masterPasswordHash: PASSWORD } });
+  assert.equal(rotated, true);
+  assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 1);
 });
