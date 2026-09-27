@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { eq } from 'drizzle-orm';
+import { eq, getTableName } from 'drizzle-orm';
 
 import { createAuth } from '../auth';
 import { getOrm } from '../db/client';
 import {
-  ciphers, emergencyAccess, invites, organizationMemberships, sends, smAccessTokens, smProjects,
-  smSecretProjects, smSecrets, smServiceAccountProjects, smServiceAccounts, userRevisions,
+  auditLogs, ciphers, emergencyAccess, invites, organizationMemberships, sends, smAccessTokens, smProjects,
+  smSecretProjects, smSecrets, smServiceAccountProjects, smServiceAccounts, userRevisions, users,
 } from '../db/schema';
 import { deleteOrganizationAccount, deleteUserAccount } from '../services/account-deletion';
 import { AuthService } from '../services/auth';
@@ -81,8 +81,8 @@ async function assertIntact(f: Awaited<ReturnType<typeof setup>>) {
   assert.equal((await cipherRepo.getCipher(f.env.DB, f.orgCipher.id))?.userId, f.target.id);
   assert.ok(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id));
   assert.ok(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'));
-  assert.ok(await f.env.DB.prepare('SELECT id FROM emergency_access WHERE id = ?').bind(f.eaId).first());
-  assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM audit_logs').first('count'), 0);
+  assert.ok(await getOrm(f.env.DB).select({ id: emergencyAccess.id }).from(emergencyAccess).where(eq(emergencyAccess.id, f.eaId)).get());
+  assert.equal(await getOrm(f.env.DB).$count(auditLogs), 0);
   assert.equal(f.blobs.values.size, 3);
 }
 
@@ -103,12 +103,12 @@ test('admin user delete keeps org items with the oldest other Owner and cleans p
   assert.equal(await userRepo.getUserById(f.env.DB, f.target.id), null);
   assert.equal(await cipherRepo.getCipher(f.env.DB, f.personalCipher.id), null);
   assert.equal(await sessionRepo.getRefreshTokenRecord(f.env.DB, 'refresh-token'), null);
-  assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM emergency_access').first('count'), 0);
-  assert.equal(await f.env.DB.prepare('SELECT COUNT(*) AS count FROM invites').first('count'), 0);
-  const event = await f.env.DB.prepare('SELECT * FROM audit_logs').first<{ action: string; metadata: string; actor_user_id: string }>();
+  assert.equal(await getOrm(f.env.DB).$count(emergencyAccess), 0);
+  assert.equal(await getOrm(f.env.DB).$count(invites), 0);
+  const event = await getOrm(f.env.DB).select().from(auditLogs).get();
   assert.equal(event?.action, 'admin.user.delete');
-  assert.equal(event?.actor_user_id, f.admin.id);
-  assert.equal(JSON.parse(event!.metadata).targetEmail, f.target.email);
+  assert.equal(event?.actorUserId, f.admin.id);
+  assert.equal(JSON.parse(event!.metadata!).targetEmail, f.target.email);
 });
 
 test('user delete falls back to the oldest confirmed member when no other Owner exists', async () => {
@@ -139,8 +139,8 @@ test('sole Owners and item creators without a confirmed successor are refused wi
 
 test('deleting the last active vault admin is refused even if an inactive admin exists', async () => {
   const f = await setup();
-  await f.env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(f.target.id).run();
-  await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.admin.id).run();
+  await getOrm(f.env.DB).update(users).set({ role: 'admin' }).where(eq(users.id, f.target.id));
+  await getOrm(f.env.DB).update(users).set({ status: 'banned' }).where(eq(users.id, f.admin.id));
   assert.deepEqual(await deleteUserAccount(f.env, f.target.id, audit), { kind: 'last-vault-admin' });
   await assertIntact(f);
   assert.deepEqual(await deleteUserAccount(f.env, 'missing', audit), { kind: 'not-found' });
@@ -149,14 +149,14 @@ test('deleting the last active vault admin is refused even if an inactive admin 
 test('a concurrent successor revocation or admin deactivation makes every batch write a no-op', async () => {
   for (const change of ['successor', 'admin']) {
     const f = await setup();
-    if (change === 'admin') await f.env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(f.target.id).run();
+    if (change === 'admin') await getOrm(f.env.DB).update(users).set({ role: 'admin' }).where(eq(users.id, f.target.id));
     const batch = f.env.DB.batch.bind(f.env.DB);
     f.env.DB.batch = async (statements) => {
       if (change === 'successor') {
         await getOrm(f.env.DB).update(organizationMemberships).set({ status: 1 })
           .where(eq(organizationMemberships.userId, f.successor.id));
       } else {
-        await f.env.DB.prepare("UPDATE users SET status = 'banned' WHERE id = ?").bind(f.admin.id).run();
+        await getOrm(f.env.DB).update(users).set({ status: 'banned' }).where(eq(users.id, f.admin.id));
       }
       return batch(statements);
     };
@@ -180,6 +180,7 @@ test('a cipher shared after the refusal check keeps its attachment blob', async 
 
 test('an audit write failure rolls back user deletion and leaves every blob in place', async () => {
   const f = await setup();
+  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the deletion batch
   await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
   await assert.rejects(deleteUserAccount(f.env, f.target.id, audit), /audit failure/);
   await assertIntact(f);
@@ -237,7 +238,7 @@ test('self-deletion requires the master password and refuses sole Owners and the
   assert.equal(lastAdmin.status, 400);
   assert.equal((await lastAdmin.json() as { error: string }).error, 'You cannot delete the last instance administrator.');
   assert.ok(await userRepo.getUserById(env.DB, admin.id));
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS n FROM audit_logs').first('n'), 0);
+  assert.equal(await getOrm(env.DB).$count(auditLogs), 0);
 });
 
 test('self-deletion transfers org items, cleans personal blobs and revokes access and refresh tokens', async () => {
@@ -253,8 +254,8 @@ test('self-deletion transfers org items, cleans personal blobs and revokes acces
   assert.equal((await authedFetch(f.env, { path: '/api/accounts/profile', headers: { Authorization: `Bearer ${token}` } })).status, 401);
   const refresh = await authedFetch(f.env, { method: 'POST', path: '/identity/connect/token', body: { grant_type: 'refresh_token', refresh_token: 'refresh-token' } });
   assert.equal(refresh.status, 400);
-  const logged = await f.env.DB.prepare('SELECT action, target_id FROM audit_logs').first();
-  assert.deepEqual(logged, { action: 'user.account.delete', target_id: f.target.id });
+  const logged = await getOrm(f.env.DB).select({ action: auditLogs.action, targetId: auditLogs.targetId }).from(auditLogs).get();
+  assert.deepEqual(logged, { action: 'user.account.delete', targetId: f.target.id });
   await drainWaitUntil();
 });
 
@@ -304,7 +305,7 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
     ]);
   }
   for (let index = 0; index < 100; index++) await addMember(f.env, f.org.id, 2);
-  await f.env.DB.prepare('UPDATE user_revisions SET revision_date = ?').bind(PAST).run();
+  await getOrm(f.env.DB).update(userRevisions).set({ revisionDate: PAST });
   // Leave one member with no revision row, which the batch must create.
   await getOrm(f.env.DB).delete(userRevisions).where(eq(userRevisions.userId, f.successor.id));
   const members = await orgRepo.listMembershipsByOrg(f.env.DB, f.org.id);
@@ -322,10 +323,10 @@ test('Owner org deletion cleans blobs and Secrets Manager data and bumps over 10
   assert.ok(await orgRepo.getOrganization(f.env.DB, otherOrg.id));
   assert.ok(await cipherRepo.getCipher(f.env.DB, otherCipher.id));
   assert.ok(f.blobs.values.has(otherCipher.key));
-  for (const table of ['sm_projects', 'sm_secrets', 'sm_service_accounts', 'sm_access_tokens', 'sm_secret_projects', 'sm_service_account_projects']) {
-    assert.equal(await f.env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first('count'), 1, table);
+  for (const table of [smProjects, smSecrets, smServiceAccounts, smAccessTokens, smSecretProjects, smServiceAccountProjects]) {
+    assert.equal(await getOrm(f.env.DB).$count(table), 1, getTableName(table));
   }
-  assert.equal(await f.env.DB.prepare('SELECT action FROM audit_logs').first('action'), 'organization.delete');
+  assert.equal((await getOrm(f.env.DB).select({ action: auditLogs.action }).from(auditLogs).get())?.action, 'organization.delete');
 });
 
 test('a non-owner cannot delete an organization', async () => {
@@ -340,7 +341,8 @@ test('a non-owner cannot delete an organization', async () => {
 
 test('an org deletion audit failure rolls back revisions, ciphers and the org before touching blobs', async () => {
   const f = await setup();
-  await f.env.DB.prepare('UPDATE user_revisions SET revision_date = ?').bind(PAST).run();
+  await getOrm(f.env.DB).update(userRevisions).set({ revisionDate: PAST });
+  // eslint-disable-next-line nodewarden/no-raw-sql -- drizzle has no CREATE TRIGGER; it fails the audit insert inside the deletion batch
   await f.env.DB.prepare("CREATE TRIGGER fail_audit BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit failure'); END").run();
   await assert.rejects(deleteOrganizationAccount(f.env, f.org.id, audit), /audit failure/);
   assert.ok(await orgRepo.getOrganization(f.env.DB, f.org.id));
