@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { eq, isNotNull } from 'drizzle-orm';
+
 import { getOrm } from '../db/client';
-import { smSecretMembers } from '../db/schema';
+import { orgGroupMembers, orgGroups, smProjectGroups, smProjectMembers, smProjects, smSecretGroups, smSecretMembers, smSecretProjects, smSecrets } from '../db/schema';
 import { handleDeleteSecrets, handleUpdateSecret } from '../handlers/secrets-manager';
 import * as orgRepo from '../services/storage-org-repo';
 import * as smRepo from '../services/storage-secret-repo';
@@ -34,12 +36,13 @@ test('secret lists combine project and direct grants, retain project names, and 
   const membership = await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId);
   const groupId = crypto.randomUUID();
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare('INSERT INTO org_groups (id, org_id, name, access_all, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(groupId, orgId, 'Readers', now, now),
-    env.DB.prepare('INSERT INTO org_group_members (group_id, membership_id) VALUES (?, ?)').bind(groupId, membership!.id),
-    env.DB.prepare('INSERT INTO sm_project_groups (project_id, group_id, write_access) VALUES (?, ?, 0)').bind(shared.id, groupId),
-    env.DB.prepare('INSERT INTO sm_secret_members (secret_id, membership_id, write_access) VALUES (?, ?, 1)').bind(direct.id, membership!.id),
-    env.DB.prepare('INSERT INTO sm_secret_groups (secret_id, group_id, write_access) VALUES (?, ?, 0)').bind(groupSecret.id, groupId),
+  const orm = getOrm(env.DB);
+  await orm.batch([
+    orm.insert(orgGroups).values({ id: groupId, orgId, name: 'Readers', createdAt: now, updatedAt: now }),
+    orm.insert(orgGroupMembers).values({ groupId, membershipId: membership!.id }),
+    orm.insert(smProjectGroups).values({ projectId: shared.id, groupId, writeAccess: 0 }),
+    orm.insert(smSecretMembers).values({ secretId: direct.id, membershipId: membership!.id, writeAccess: 1 }),
+    orm.insert(smSecretGroups).values({ secretId: groupSecret.id, groupId, writeAccess: 0 }),
   ]);
   const listed = await request(a.id, `/api/organizations/${orgId}/secrets`);
   assert.equal(listed.status, 200);
@@ -64,7 +67,7 @@ test('secret lists combine project and direct grants, retain project names, and 
 
   const foreign = await seedSmOrg(env);
   const foreignSecret = await postJson<{ id: string }>(env, foreign.owner, `/api/organizations/${foreign.orgId}/secrets`, FIELDS);
-  await env.DB.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(foreignSecret.id, own.id).run();
+  await orm.insert(smSecretProjects).values({ secretId: foreignSecret.id, projectId: own.id });
   const byProject = await request(owner.id, `/api/projects/${own.id}/secrets`);
   assert.equal(byProject.status, 200);
   assert.deepEqual((await byProject.json() as any).secrets.map((item: any) => item.id), [writable.id]);
@@ -76,7 +79,7 @@ test('secret create and move validate encrypted fields, one same-org project, an
   const own = await project(a);
   const denied = await project();
   const member = await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId);
-  await env.DB.prepare('INSERT INTO sm_project_members (project_id, membership_id, write_access) VALUES (?, ?, 0)').bind(denied.id, member!.id).run();
+  await getOrm(env.DB).insert(smProjectMembers).values({ projectId: denied.id, membershipId: member!.id, writeAccess: 0 });
   const path = `/api/organizations/${orgId}/secrets`;
   for (const body of [null, { key: ENCRYPTED_FIELD, value: ENCRYPTED_FIELD }, { ...FIELDS, key: 'plaintext' }, { ...FIELDS, note: null }, { ...FIELDS, value: '2.' + 'a'.repeat(35000) + '|a|a' }]) {
     const response = await request(owner.id, path, 'POST', body);
@@ -144,10 +147,11 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
   const oldProject = await project();
   const newProject = await project();
   const trashed = await secret([oldProject.id]);
+  const orm = getOrm(env.DB);
   const put = new Request('https://vault.example.test', { method: 'PUT' });
   const deletedAt = '2026-01-01T00:00:00.000Z';
   put.json = async () => {
-    await env.DB.prepare('UPDATE sm_secrets SET deleted_at = ? WHERE id = ?').bind(deletedAt, trashed.id).run();
+    await orm.update(smSecrets).set({ deletedAt }).where(eq(smSecrets.id, trashed.id));
     return { ...FIELDS, projectIds: [newProject.id] };
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), trashed.id)).status, 404);
@@ -158,7 +162,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
 
   const removed = await secret([oldProject.id]);
   put.json = async () => {
-    await env.DB.prepare('DELETE FROM sm_secrets WHERE id = ?').bind(removed.id).run();
+    await orm.delete(smSecrets).where(eq(smSecrets.id, removed.id));
     return { ...FIELDS, projectIds: [oldProject.id] };
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), removed.id)).status, 404);
@@ -166,7 +170,7 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
 
   const moved = await secret([oldProject.id]);
   put.json = async () => {
-    await env.DB.prepare('UPDATE sm_secret_projects SET project_id = ? WHERE secret_id = ?').bind(newProject.id, moved.id).run();
+    await orm.update(smSecretProjects).set({ projectId: newProject.id }).where(eq(smSecretProjects.secretId, moved.id));
     return { ...FIELDS, projectIds: [oldProject.id] };
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), moved.id)).status, 404);
@@ -179,15 +183,19 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   const accountId = crypto.randomUUID();
   await smRepo.saveServiceAccount(env.DB, { id: accountId, orgId, name: ENCRYPTED_FIELD, createdAt: before, updatedAt: before });
   const ids = Array.from({ length: 150 }, () => crypto.randomUUID());
-  await env.DB.batch(ids.map(id => env.DB.prepare('INSERT INTO sm_secrets (id, org_id, key, value, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, orgId, FIELDS.key, FIELDS.value, FIELDS.note, before, before)));
+  const orm = getOrm(env.DB);
+  const inserts = ids.map(id => orm.insert(smSecrets).values({ id, orgId, ...FIELDS, createdAt: before, updatedAt: before }));
+  await orm.batch(inserts as [typeof inserts[0], ...typeof inserts]);
   const get = await request(owner.id, '/api/secrets/get-by-ids', 'POST', { ids });
   assert.equal(get.status, 200);
   assert.equal((await get.json() as any).data.length, ids.length);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- a trigger is DDL with no drizzle builder; it fails the last chunk inside SQLite
   await env.DB.exec(`CREATE TRIGGER fail_last_secret BEFORE UPDATE OF deleted_at ON sm_secrets WHEN NEW.id = '${ids.at(-1)}' BEGIN SELECT RAISE(ABORT, 'test bulk rollback'); END;`);
   const deleteRequest = () => new Request('https://vault.example.test', { method: 'POST', body: JSON.stringify(ids) });
   await assert.rejects(async () => handleDeleteSecrets(deleteRequest(), env, await smUser(env, owner)), /test bulk rollback/);
-  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_secrets WHERE deleted_at IS NOT NULL').first<{ n: number }>())!.n, 0);
+  assert.equal(await orm.$count(smSecrets, isNotNull(smSecrets.deletedAt)), 0);
   assert.equal((await smRepo.getServiceAccount(env.DB, accountId))!.updatedAt, before);
+  // eslint-disable-next-line nodewarden/no-raw-sql -- dropping the fault-injection trigger is DDL with no drizzle builder
   await env.DB.exec('DROP TRIGGER fail_last_secret;');
   const deleted = await request(owner.id, '/api/secrets/delete', 'POST', ids);
   assert.equal(deleted.status, 200);
@@ -195,7 +203,7 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
   assert.equal(body.data.length, ids.length);
   assert.deepEqual(new Set(body.data.map((item: any) => item.id)), new Set(ids));
   assert.ok(body.data.every((item: any) => item.error === null && item.object === 'BulkDeleteResponseModel'));
-  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM sm_secrets WHERE deleted_at IS NOT NULL').first<{ n: number }>())!.n, ids.length);
+  assert.equal(await orm.$count(smSecrets, isNotNull(smSecrets.deletedAt)), ids.length);
   assert.ok((await smRepo.getServiceAccount(env.DB, accountId))!.updatedAt > before);
 });
 
@@ -203,14 +211,15 @@ test('a stale member edit cannot overwrite a secret after its project moved or w
   const { env, orgId, a, project, secret } = await setup();
   const readable = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const hidden = await project();
+  const orm = getOrm(env.DB);
   const changed = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';
   for (const move of [true, false]) {
     const source = move ? readable : await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
     const target = await secret([source.id]);
     const put = new Request('https://vault.example.test', { method: 'PUT' });
     put.json = async () => {
-      if (move) await env.DB.prepare('UPDATE sm_secret_projects SET project_id = ? WHERE secret_id = ?').bind(hidden.id, target.id).run();
-      else await env.DB.prepare('DELETE FROM sm_projects WHERE id = ?').bind(source.id).run();
+      if (move) await orm.update(smSecretProjects).set({ projectId: hidden.id }).where(eq(smSecretProjects.secretId, target.id));
+      else await orm.delete(smProjects).where(eq(smProjects.id, source.id));
       return { ...FIELDS, value: changed, projectIds: move ? [source.id] : [readable.id] };
     };
     assert.equal((await handleUpdateSecret(put, env, await smUser(env, a), target.id)).status, 404);
@@ -229,13 +238,14 @@ test('a rejected secret snapshot aborts links, policies and machine revision in 
   const account = await postJson<{ id: string }>(env, owner, `/api/organizations/${orgId}/service-accounts`, { name: ENCRYPTED_FIELD });
   const previousAccount = await smRepo.getServiceAccount(env.DB, account.id);
   const member = (await orgRepo.getMembershipByUserAndOrg(env.DB, a.id, orgId))!;
-  await env.DB.prepare('UPDATE sm_secrets SET updated_at = ? WHERE id = ?').bind('2099-01-01T00:00:00.000Z', target.id).run();
-  const policies = [getOrm(env.DB).insert(smSecretMembers).values({ secretId: target.id, membershipId: member.id, writeAccess: 1 })];
+  const orm = getOrm(env.DB);
+  await orm.update(smSecrets).set({ updatedAt: '2099-01-01T00:00:00.000Z' }).where(eq(smSecrets.id, target.id));
+  const policies = [orm.insert(smSecretMembers).values({ secretId: target.id, membershipId: member.id, writeAccess: 1 })];
   assert.equal(await smRepo.updateSecret(env.DB, { ...before, value: '2.changed|value|mac', projectIds: [q.id], updatedAt: '2099-02-01T00:00:00.000Z' }, before.projectIds, before.updatedAt, policies), false);
   const after = (await smRepo.getSecret(env.DB, target.id))!;
   assert.equal(after.value, before.value);
   assert.deepEqual(after.projectIds, [p.id]);
-  assert.equal(await env.DB.prepare('SELECT secret_id FROM sm_secret_members WHERE secret_id = ?').bind(target.id).first(), null);
+  assert.equal(await orm.select().from(smSecretMembers).where(eq(smSecretMembers.secretId, target.id)).get(), undefined);
   assert.deepEqual(await smRepo.getServiceAccount(env.DB, account.id), previousAccount);
 });
 
@@ -244,7 +254,7 @@ test('editing a legacy multi-project secret rewrites its complete mapping to the
   const p = await project();
   const q = await project();
   const target = await secret([p.id]);
-  await env.DB.prepare('INSERT INTO sm_secret_projects (secret_id, project_id) VALUES (?, ?)').bind(target.id, q.id).run();
+  await getOrm(env.DB).insert(smSecretProjects).values({ secretId: target.id, projectId: q.id });
   const original = (await smRepo.getSecret(env.DB, target.id))!;
   const response = await request(owner.id, `/api/secrets/${target.id}`, 'PUT', { ...FIELDS, projectIds: [original.projectIds[0]] });
   assert.equal(response.status, 200);
