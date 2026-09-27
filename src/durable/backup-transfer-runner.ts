@@ -1,5 +1,6 @@
+import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../types';
-import type { BackupDestinationRecord } from '../services/backup-config';
+import type { BackupDestinationRecord, BackupSettings } from '../services/backup-config';
 import {
   BACKUP_SCHEDULER_WINDOW_MINUTES,
   requireBackupDestination,
@@ -12,6 +13,7 @@ import {
   downloadRemoteBackupFile,
   ensureRemoteRestoreCandidate,
 } from '../services/backup-uploader';
+import type { BackupImportResultBody } from '../services/backup-import';
 import { getBlobObject } from '../services/blob-store';
 import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from './notifications-hub';
 import {
@@ -24,6 +26,7 @@ import { zipSync } from 'fflate';
 const BACKUP_JOB_STATE_KEY = 'backup.job.state.v1';
 const BACKUP_JOB_LEASE_MS = 10 * 60 * 1000;
 const BACKUP_JOB_HEARTBEAT_MS = 30 * 1000;
+const REMOTE_ATTACHMENT_BATCH_LIMIT = 40;
 
 interface BackupJobState {
   token: string;
@@ -33,70 +36,44 @@ interface BackupJobState {
   expiresAtMs: number;
 }
 
-interface RemoteAttachmentChunkRequest {
-  destination: BackupDestinationRecord;
-  attachments: Array<{
-    blobName: string;
-  }>;
+export interface ConfiguredBackupRunRequest {
+  actorUserId: string;
+  auditMetadata: Record<string, unknown> | null;
+  destinationId: string | null;
+  targetDeviceIdentifier: string | null;
 }
 
-interface RemoteAttachmentDownloadRequest {
-  destination: BackupDestinationRecord;
-  blobName?: string | null;
+export interface ConfiguredBackupRunResult {
+  result: Awaited<ReturnType<typeof executeConfiguredBackup>>;
+  settings: BackupSettings;
 }
 
-interface RemoteAttachmentBatchDownloadRequest {
-  destination: BackupDestinationRecord;
-  blobNames?: string[] | null;
+export interface RemoteBackupRestoreRequest {
+  actorUserId: string;
+  allowChecksumMismatch: boolean;
+  auditMetadata: Record<string, unknown> | null;
+  destinationId: string | null;
+  path: string;
+  replaceExisting: boolean;
+  targetDeviceIdentifier: string | null;
 }
 
-interface ConfiguredBackupRunRequest {
-  actorUserId?: string | null;
-  auditMetadata?: Record<string, unknown> | null;
-  destinationId?: string | null;
-  targetDeviceIdentifier?: string | null;
-  trigger?: 'manual' | 'scheduled';
-}
-
-interface RemoteBackupRestoreRequest {
-  actorUserId?: string | null;
-  allowChecksumMismatch?: boolean;
-  auditMetadata?: Record<string, unknown> | null;
-  destinationId?: string | null;
-  path?: string | null;
-  replaceExisting?: boolean;
-  targetDeviceIdentifier?: string | null;
-}
-
-function badRequest(message: string, status: number = 400): Response {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
-  });
-}
-
-export class BackupTransferRunner {
+// Backup and restore jobs serialize through a storage-backed lease on the named runner instance;
+// the job methods return null while another job holds it. Attachment transfers run here too so
+// each chunk spends the Durable Object's own subrequest budget rather than the request's.
+export class BackupTransferRunner extends DurableObject<Env> {
   private lastHeartbeatAt = 0;
-
-  constructor(
-    private readonly state: DurableObjectState,
-    private readonly env: Env
-  ) {
-  }
 
   private async acquireJob(reason: string): Promise<string | null> {
     const nowMs = Date.now();
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+    const current = await this.ctx.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
     if (current?.expiresAtMs && current.expiresAtMs > nowMs) {
       return null;
     }
 
     const token = crypto.randomUUID();
     const nowIso = new Date(nowMs).toISOString();
-    await this.state.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
+    await this.ctx.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
       token,
       reason,
       acquiredAt: nowIso,
@@ -112,10 +89,10 @@ export class BackupTransferRunner {
     if (nowMs - this.lastHeartbeatAt < BACKUP_JOB_HEARTBEAT_MS) return;
     this.lastHeartbeatAt = nowMs;
 
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+    const current = await this.ctx.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
     if (current?.token !== token) return;
 
-    await this.state.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
+    await this.ctx.storage.put<BackupJobState>(BACKUP_JOB_STATE_KEY, {
       ...current,
       touchedAt: new Date(nowMs).toISOString(),
       expiresAtMs: nowMs + BACKUP_JOB_LEASE_MS,
@@ -123,91 +100,38 @@ export class BackupTransferRunner {
   }
 
   private async releaseJob(token: string): Promise<void> {
-    const current = await this.state.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
+    const current = await this.ctx.storage.get<BackupJobState>(BACKUP_JOB_STATE_KEY);
     if (current?.token === token) {
-      await this.state.storage.delete(BACKUP_JOB_STATE_KEY);
+      await this.ctx.storage.delete(BACKUP_JOB_STATE_KEY);
     }
   }
 
-  private async runConfiguredBackup(request: Request): Promise<Response> {
-    let body: ConfiguredBackupRunRequest;
-    try {
-      body = await request.json<ConfiguredBackupRunRequest>();
-    } catch {
-      return badRequest('Backup run payload is invalid');
-    }
-
-    const trigger = body.trigger === 'scheduled' ? 'scheduled' : 'manual';
-    const actorUserId = String(body.actorUserId || '').trim() || null;
-    if (trigger === 'manual' && !actorUserId) {
-      return badRequest('Manual backup run requires an actor');
-    }
-
-    const token = await this.acquireJob(`${trigger}:${actorUserId || 'system'}`);
-    if (!token) {
-      return badRequest('Another backup run is already in progress', 409);
-    }
+  async runConfiguredBackup(request: ConfiguredBackupRunRequest): Promise<ConfiguredBackupRunResult | null> {
+    const token = await this.acquireJob(`manual:${request.actorUserId}`);
+    if (!token) return null;
 
     try {
       await this.touchJob(token);
-      const progress = actorUserId
-        ? async (event: {
-          operation: 'backup-remote-run';
-          step: string;
-          fileName: string;
-          stageTitle: string;
-          stageDetail: string;
-          done?: boolean;
-          ok?: boolean;
-          error?: string | null;
-        }) => {
-          await notifyUserBackupProgress(
-            this.env,
-            actorUserId,
-            event,
-            String(body.targetDeviceIdentifier || '').trim() || null
-          );
-        }
-        : null;
-
       const result = await executeConfiguredBackup(
         this.env,
         this.env.DB,
-        actorUserId,
-        trigger,
-        body.destinationId || null,
+        request.actorUserId,
+        'manual',
+        request.destinationId,
         () => this.touchJob(token),
-        progress,
-        body.auditMetadata || null
+        (event) => notifyUserBackupProgress(this.env, request.actorUserId, event, request.targetDeviceIdentifier),
+        request.auditMetadata
       );
-      const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
-
-      return new Response(JSON.stringify({
-        object: 'backup-runner-result',
-        result,
-        settings,
-      }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-store',
-        },
-      });
-    } catch (error) {
-      return badRequest(error instanceof Error ? error.message : 'Backup run failed', 500);
+      return { result, settings: await loadBackupSettings(this.env.DB, this.env, 'UTC') };
     } finally {
       await this.releaseJob(token);
     }
   }
 
-  private async runScheduledBackups(): Promise<Response> {
+  async runScheduledBackups(): Promise<void> {
     const token = await this.acquireJob('scheduled');
-    if (!token) {
-      return badRequest('Another backup run is already in progress', 409);
-    }
+    if (!token) return;
 
-    let completed = 0;
-    const failures: Array<{ destinationId: string; error: string }> = [];
     try {
       await this.touchJob(token);
       let scanStartMs = Date.now();
@@ -228,74 +152,31 @@ export class BackupTransferRunner {
         scanStartMs = now.getTime();
         for (const destination of dueDestinations) {
           await this.touchJob(token);
-          try {
-            await executeConfiguredBackup(
-              this.env,
-              this.env.DB,
-              null,
-              'scheduled',
-              destination.id,
-              () => this.touchJob(token)
-            );
-            completed += 1;
-          } catch (error) {
-            failures.push({
-              destinationId: destination.id,
-              error: error instanceof Error ? error.message : 'Scheduled backup failed',
-            });
-          }
+          // One failing destination must not stop the others; executeConfiguredBackup has already
+          // recorded the error in that destination's runtime state for the admin page.
+          await executeConfiguredBackup(this.env, this.env.DB, null, 'scheduled', destination.id, () => this.touchJob(token))
+            .catch((error: unknown) => console.error('Scheduled backup failed', destination.id, error));
         }
       }
-
-      return new Response(JSON.stringify({
-        ok: true,
-        completed,
-        failed: failures.length,
-        failures,
-      }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-store',
-        },
-      });
-    } catch (error) {
-      return badRequest(error instanceof Error ? error.message : 'Scheduled backup failed', 500);
     } finally {
       await this.releaseJob(token);
     }
   }
 
-  private async restoreRemoteBackup(request: Request): Promise<Response> {
-    let body: RemoteBackupRestoreRequest;
-    try {
-      body = await request.json<RemoteBackupRestoreRequest>();
-    } catch {
-      return badRequest('Remote restore payload is invalid');
-    }
-
-    const actorUserId = String(body.actorUserId || '').trim() || null;
-    if (!actorUserId) {
-      return badRequest('Remote restore requires an actor');
-    }
-
-    const token = await this.acquireJob(`restore:${actorUserId}`);
-    if (!token) {
-      return badRequest('Another backup or restore run is already in progress', 409);
-    }
+  async restoreRemoteBackup(request: RemoteBackupRestoreRequest): Promise<BackupImportResultBody | null> {
+    const token = await this.acquireJob(`restore:${request.actorUserId}`);
+    if (!token) return null;
 
     try {
       await this.touchJob(token);
       const settings = await loadBackupSettings(this.env.DB, this.env, 'UTC');
-      const destination = requireBackupDestination(settings, body.destinationId || null);
-      const path = ensureRemoteRestoreCandidate(String(body.path || ''));
+      const destination = requireBackupDestination(settings, request.destinationId);
+      const path = ensureRemoteRestoreCandidate(request.path);
       const restoreFileNameFromPath = path.split('/').pop() || path;
-      const targetDeviceIdentifier = String(body.targetDeviceIdentifier || '').trim() || null;
-      const replaceExisting = !!body.replaceExisting;
 
       await notifyUserBackupRestoreProgress(
         this.env,
-        actorUserId,
+        request.actorUserId,
         {
           operation: 'backup-restore',
           source: 'remote',
@@ -303,170 +184,79 @@ export class BackupTransferRunner {
           fileName: restoreFileNameFromPath,
           stageTitle: 'txt_backup_restore_progress_remote_fetch_title',
           stageDetail: 'txt_backup_restore_progress_remote_fetch_detail',
-          replaceExisting,
+          replaceExisting: request.replaceExisting,
         },
-        targetDeviceIdentifier
+        request.targetDeviceIdentifier
       );
 
       const remoteFile = await downloadRemoteBackupFile(destination, path);
       const checksumOk = await verifyBackupArchiveFileNameChecksum(remoteFile.bytes, remoteFile.fileName || path);
-      if (!checksumOk && !body.allowChecksumMismatch) {
-        return badRequest('Remote backup file checksum does not match its filename');
+      if (!checksumOk && !request.allowChecksumMismatch) {
+        throw new Error('Remote backup file checksum does not match its filename');
       }
 
-      const result = await importAndAuditRemoteBackupFile(
+      const imported = await importAndAuditRemoteBackupFile(
         this.env,
         this.env.DB,
-        actorUserId,
+        request.actorUserId,
         remoteFile,
         destination,
         path,
-        replaceExisting,
+        request.replaceExisting,
         !checksumOk,
-        body.auditMetadata || null,
-        targetDeviceIdentifier,
+        request.auditMetadata,
+        request.targetDeviceIdentifier,
         () => this.touchJob(token)
       );
-
-      return new Response(JSON.stringify(result.result), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-store',
-        },
-      });
-    } catch (error) {
-      return badRequest(error instanceof Error ? error.message : 'Remote backup restore failed', 500);
+      return imported.result;
     } finally {
       await this.releaseJob(token);
     }
   }
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (request.method !== 'POST') {
-      return badRequest('Not found', 404);
+  // Attachment bytes return as streams: RPC streams bypass the 32 MiB message cap that a large
+  // attachment or a 40-file batch would otherwise hit.
+  async downloadRemoteAttachment(destination: BackupDestinationRecord, blobName: string): Promise<ReadableStream<Uint8Array> | null> {
+    if (!isSafeBackupAttachmentBlobName(blobName)) {
+      throw new Error('Remote attachment download payload is invalid');
+    }
+    const file = await downloadRemoteBackupFile(destination, `attachments/${blobName}`).catch(() => null);
+    return file ? new Response(file.bytes).body : null;
+  }
+
+  async downloadRemoteAttachmentBatch(destination: BackupDestinationRecord, blobNames: string[]): Promise<ReadableStream<Uint8Array>> {
+    const names = Array.from(new Set(blobNames.filter(isSafeBackupAttachmentBlobName)));
+    if (!names.length || names.length > REMOTE_ATTACHMENT_BATCH_LIMIT) {
+      throw new Error('Remote attachment batch download payload is invalid');
     }
 
-    if (url.pathname === '/internal/run-configured-backup') {
-      return this.runConfiguredBackup(request);
+    const entries: Array<{ blobName: string; path: string }> = [];
+    const files: Record<string, Uint8Array> = {};
+    for (const [index, blobName] of names.entries()) {
+      const file = await downloadRemoteBackupFile(destination, `attachments/${blobName}`).catch(() => null);
+      if (!file) continue;
+      const path = `files/${index}.bin`;
+      entries.push({ blobName, path });
+      files[path] = file.bytes;
     }
+    files['manifest.json'] = new TextEncoder().encode(JSON.stringify({ version: 1, entries }));
+    return new Response(zipSync(files)).body!;
+  }
 
-    if (url.pathname === '/internal/run-scheduled-backups') {
-      return this.runScheduledBackups();
-    }
-
-    if (url.pathname === '/internal/restore-remote-backup') {
-      return this.restoreRemoteBackup(request);
-    }
-
-    if (url.pathname === '/internal/download-remote-attachment') {
-      let body: RemoteAttachmentDownloadRequest;
-      try {
-        body = await request.json<RemoteAttachmentDownloadRequest>();
-      } catch {
-        return badRequest('Remote attachment download payload is invalid');
-      }
-      const blobName = String(body?.blobName || '').trim();
-      if (!body?.destination || !isSafeBackupAttachmentBlobName(blobName)) {
-        return badRequest('Remote attachment download payload is invalid');
-      }
-      const file = await downloadRemoteBackupFile(body.destination, `attachments/${blobName}`).catch(() => null);
-      if (!file) {
-        return badRequest('Remote attachment not found', 404);
-      }
-      return new Response(file.bytes, {
-        status: 200,
-        headers: {
-          'Content-Type': file.contentType || 'application/octet-stream',
-          'Cache-Control': 'no-store',
-        },
-      });
-    }
-
-    if (url.pathname === '/internal/download-remote-attachment-batch') {
-      let body: RemoteAttachmentBatchDownloadRequest;
-      try {
-        body = await request.json<RemoteAttachmentBatchDownloadRequest>();
-      } catch {
-        return badRequest('Remote attachment batch download payload is invalid');
-      }
-      const blobNames = Array.from(new Set(
-        (Array.isArray(body?.blobNames) ? body.blobNames : [])
-          .map((blobName) => String(blobName || '').trim())
-          .filter(isSafeBackupAttachmentBlobName)
-      ));
-      if (!body?.destination || !blobNames.length || blobNames.length > 40) {
-        return badRequest('Remote attachment batch download payload is invalid');
-      }
-
-      const encoder = new TextEncoder();
-      const entries: Array<{ blobName: string; path: string }> = [];
-      const files: Record<string, Uint8Array> = {};
-      for (let i = 0; i < blobNames.length; i += 1) {
-        const blobName = blobNames[i];
-        const file = await downloadRemoteBackupFile(body.destination, `attachments/${blobName}`).catch(() => null);
-        if (!file) continue;
-        const path = `files/${i}.bin`;
-        entries.push({ blobName, path });
-        files[path] = file.bytes;
-      }
-      files['manifest.json'] = encoder.encode(JSON.stringify({ version: 1, entries }));
-
-      return new Response(zipSync(files), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/zip',
-          'Cache-Control': 'no-store',
-        },
-      });
-    }
-
-    if (url.pathname !== '/internal/upload-attachment-chunk') {
-      return badRequest('Not found', 404);
-    }
-
-    let body: RemoteAttachmentChunkRequest;
-    try {
-      body = await request.json<RemoteAttachmentChunkRequest>();
-    } catch {
-      return badRequest('Attachment chunk payload is invalid');
-    }
-
-    if (!body?.destination || !Array.isArray(body.attachments)) {
-      return badRequest('Attachment chunk payload is invalid');
-    }
-
-    const remoteSession = createRemoteBackupTransferSession(body.destination);
-    let uploaded = 0;
-
-    for (const attachment of body.attachments) {
-      const blobName = String(attachment?.blobName || '').trim();
+  async uploadAttachmentChunk(destination: BackupDestinationRecord, attachments: Array<{ blobName: string }>): Promise<void> {
+    const remoteSession = createRemoteBackupTransferSession(destination);
+    for (const { blobName } of attachments) {
       if (!isSafeBackupAttachmentBlobName(blobName)) {
-        return badRequest('Attachment chunk payload is invalid');
+        throw new Error('Attachment chunk payload is invalid');
       }
-
       const object = await getBlobObject(this.env, blobName);
       if (!object) {
-        return badRequest(`Attachment blob missing for ${blobName}`, 409);
+        throw new Error(`Attachment blob missing for ${blobName}`);
       }
-
       const bytes = new Uint8Array(await new Response(object.body).arrayBuffer());
       await remoteSession.putFile(`attachments/${blobName}`, bytes, {
         contentType: object.contentType,
       });
-      uploaded += 1;
     }
-
-    return new Response(JSON.stringify({
-      ok: true,
-      uploaded,
-    }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-      },
-    });
   }
 }
