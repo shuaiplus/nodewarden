@@ -53,6 +53,9 @@ function buildCipherData(cipher: Cipher, folderId: string | null): string {
   return JSON.stringify(payload);
 }
 
+// Older clients stored archivedDate / deletedDate inside the cipher blob; only string values are dates.
+const legacyDate = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+
 function parseCipherRow(row: typeof ciphers.$inferSelect | null | undefined): Cipher | null {
   if (!row?.data) return null;
   try {
@@ -72,8 +75,8 @@ function parseCipherRow(row: typeof ciphers.$inferSelect | null | undefined): Ci
       key: row.key ?? parsed.key ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-      archivedAt: row.archivedAt ?? parsed.archivedAt ?? parsed.archivedDate ?? null,
-      deletedAt: row.deletedAt ?? parsed.deletedAt ?? parsed.deletedDate ?? null,
+      archivedAt: row.archivedAt ?? parsed.archivedAt ?? legacyDate(parsed.archivedDate),
+      deletedAt: row.deletedAt ?? parsed.deletedAt ?? legacyDate(parsed.deletedDate),
     };
   } catch {
     console.error('Corrupted cipher data, id:', row.id);

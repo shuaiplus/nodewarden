@@ -196,7 +196,7 @@ export interface CipherBankAccount {
   swiftCode: string | null;
   iban: string | null;
   bankContactPhone: string | null;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface CipherDriversLicense {
@@ -211,7 +211,7 @@ export interface CipherDriversLicense {
   expirationDate: string | null;
   issuingAuthority: string | null;
   licenseClass: string | null;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface CipherPassport {
@@ -228,7 +228,7 @@ export interface CipherPassport {
   issuingAuthority: string | null;
   issueDate: string | null;
   expirationDate: string | null;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface CipherIdentity {
@@ -294,7 +294,7 @@ export interface Cipher {
   archivedAt: string | null;
   deletedAt: string | null;
   /** Allow unknown fields from Bitwarden clients to be stored and passed through transparently. */
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 // Folder model
@@ -400,7 +400,7 @@ export interface DeviceResponse {
   encryptedPublicKey: string | null;
   devicePendingAuthRequest: DevicePendingAuthRequest | null;
   object: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ProtectedDeviceResponse {
@@ -412,7 +412,7 @@ export interface ProtectedDeviceResponse {
   encryptedUserKey: string | null;
   encryptedPublicKey: string | null;
   object: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface RefreshTokenRecord {
@@ -643,7 +643,7 @@ export interface CipherResponse {
   key: string | null;
   encryptedFor: string | null;
   /** Allow unknown fields to pass through to clients transparently. */
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface CipherPermissions {
