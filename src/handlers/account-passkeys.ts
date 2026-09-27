@@ -7,7 +7,8 @@ import {
 } from '@simplewebauthn/server';
 import type { AccountPasskeyChallengeScope, AccountPasskeyCredential, Env, User } from '../types';
 import { AuthService } from '../services/auth';
-import { errorResponse, identityErrorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
+import { z } from 'zod';
+import { errorResponse, identityErrorResponse, jsonResponse, parseBody } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { bytesToBase64Url, parseClientDataJSON } from '../utils/passkey';
 import {
@@ -22,6 +23,7 @@ import {
   normalizeAuthenticationResponse,
   normalizeRegistrationResponse,
   normalizeTransports,
+  passkeyDescriptor,
   sha256Base64Url,
   toSimpleWebAuthnCredential,
   userHandleToUserId,
@@ -38,22 +40,18 @@ import * as userRepo from '../services/storage-user-repo';
 const MAX_ACCOUNT_PASSKEYS = 5;
 const MAX_TWO_FACTOR_PASSKEYS = 5;
 
-function parseBodyObject(body: unknown): Record<string, any> {
-  return body && typeof body === 'object' ? body as Record<string, any> : {};
-}
+// Passkey routes share one loose body; each legacy alias (secret, password, master_password_hash) is coerced where read.
+const PasskeyRequestSchema = z.looseObject({});
+type PasskeyRequest = z.output<typeof PasskeyRequestSchema>;
 
-async function readJsonBody(request: Request): Promise<Record<string, any> | null> {
-  try {
-    return parseBodyObject(normalizeJsonKeys(await request.json()));
-  } catch {
-    return null;
-  }
+async function readJsonBody(request: Request): Promise<PasskeyRequest | Response> {
+  return parseBody(request, PasskeyRequestSchema, 'Invalid request payload');
 }
 
 async function verifyUserSecret(
   env: Env,
   user: User,
-  body: Record<string, any>
+  body: PasskeyRequest
 ): Promise<boolean> {
   const secret = String(body.masterPasswordHash || body.master_password_hash || body.secret || body.password || '').trim();
   if (!secret) return false;
@@ -63,7 +61,7 @@ async function verifyUserSecret(
   return auth.verifyPassword(secret, storedHash, user.email);
 }
 
-async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: Record<string, any>): Promise<boolean> {
+async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRequest): Promise<boolean> {
   const token = String(body.userVerificationToken || '');
   return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
 }
@@ -88,7 +86,7 @@ function passkeySetupStageMessage(stage: string): string {
   return 'preparing passkey setup';
 }
 
-function hasCompletePrfKeySet(body: Record<string, any>): boolean {
+function hasCompletePrfKeySet(body: PasskeyRequest): boolean {
   return !!(body.encryptedUserKey && body.encryptedPublicKey && body.encryptedPrivateKey);
 }
 
@@ -112,33 +110,19 @@ function twoFactorWebAuthnResponse(credentials: AccountPasskeyCredential[], obje
   };
 }
 
-function readRegistrationChallenge(response: ReturnType<typeof normalizeRegistrationResponse>): string | null {
-  if (!response) return null;
+// The client data carries the challenge the authenticator signed.
+function readChallenge(response: { response: { clientDataJSON: string } }): string | null {
   const clientData = parseClientDataJSON(response.response.clientDataJSON);
   return String(clientData?.challenge || '').trim() || null;
 }
 
-function readAuthenticationChallenge(response: ReturnType<typeof normalizeAuthenticationResponse>): string | null {
-  if (!response) return null;
-  const clientData = parseClientDataJSON(response.response.clientDataJSON);
-  return String(clientData?.challenge || '').trim() || null;
-}
+const encryptedKey = z.string().trim().refine(isSerializedEncString);
+const PrfKeySetSchema = z.object({ encryptedUserKey: encryptedKey, encryptedPublicKey: encryptedKey, encryptedPrivateKey: encryptedKey });
+const NO_PRF_KEY_SET = { encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null };
 
-function readPrfKeySet(body: Record<string, any>): {
-  encryptedUserKey: string | null;
-  encryptedPublicKey: string | null;
-  encryptedPrivateKey: string | null;
-} {
-  if (!hasCompletePrfKeySet(body)) {
-    return { encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null };
-  }
-  const encryptedUserKey = String(body.encryptedUserKey).trim();
-  const encryptedPublicKey = String(body.encryptedPublicKey).trim();
-  const encryptedPrivateKey = String(body.encryptedPrivateKey).trim();
-  if (!isSerializedEncString(encryptedUserKey) || !isSerializedEncString(encryptedPublicKey) || !isSerializedEncString(encryptedPrivateKey)) {
-    throw new Error('Invalid encrypted key set');
-  }
-  return { encryptedUserKey, encryptedPublicKey, encryptedPrivateKey };
+// A partial key set stores nothing; a complete one must be three EncStrings.
+function readPrfKeySet(body: PasskeyRequest) {
+  return hasCompletePrfKeySet(body) ? PrfKeySetSchema.safeParse(body) : { success: true as const, data: NO_PRF_KEY_SET };
 }
 
 async function saveChallenge(
@@ -281,10 +265,7 @@ export async function buildTwoFactorPasskeyAssertionOptions(
   const { rpId } = getAccountPasskeyRpConfig(request, env);
   const options = await generateAuthenticationOptions({
     rpID: rpId,
-    allowCredentials: credentials.map((credential) => ({
-      id: credential.credentialId,
-      transports: (credential.transports || undefined) as any,
-    })),
+    allowCredentials: credentials.map(passkeyDescriptor),
     userVerification: 'discouraged',
     timeout: 60000,
   });
@@ -309,7 +290,7 @@ export async function assertTwoFactorPasskeyCredential(
     throw new Error('Passkey is not registered for two-step login');
   }
 
-  const challenge = readAuthenticationChallenge(response);
+  const challenge = readChallenge(response);
   if (!challenge) {
     throw new Error('Passkey assertion challenge is missing');
   }
@@ -348,7 +329,7 @@ export async function assertTwoFactorPasskeyCredential(
 
 export async function handleGetTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
@@ -362,7 +343,7 @@ export async function handleGetTwoFactorWebAuthn(request: Request, env: Env, use
 
 export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
@@ -381,10 +362,7 @@ export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env:
     userDisplayName: user.name || user.email,
     attestationType: 'none',
     timeout: 60000,
-    excludeCredentials: credentials.map((credential) => ({
-      id: credential.credentialId,
-      transports: (credential.transports || undefined) as any,
-    })),
+    excludeCredentials: credentials.map(passkeyDescriptor),
     authenticatorSelection: {
       residentKey: 'discouraged',
       requireResidentKey: false,
@@ -397,7 +375,7 @@ export async function handleGetTwoFactorWebAuthnChallenge(request: Request, env:
 
 export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
@@ -411,7 +389,7 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
   if (!registrationResponse) {
     return errorResponse('Invalid passkey registration response', 400);
   }
-  const challenge = readRegistrationChallenge(registrationResponse);
+  const challenge = readChallenge(registrationResponse);
   if (!challenge) {
     return errorResponse('Passkey challenge is missing', 400);
   }
@@ -491,7 +469,7 @@ export async function handlePutTwoFactorWebAuthn(request: Request, env: Env, use
 
 export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyTwoFactorWebAuthnUser(env, user, body))) {
     return errorResponse('User verification failed.', 400);
   }
@@ -531,7 +509,7 @@ export async function handleDeleteTwoFactorWebAuthn(request: Request, env: Env, 
 
 export async function handleGetAccountPasskeyAttestationOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
 
   let stage = 'verify_master_password';
   try {
@@ -555,20 +533,13 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
       userDisplayName: user.name || user.email,
       attestationType: 'none',
       timeout: 60000,
-      excludeCredentials: credentials.map((credential) => ({
-        id: credential.credentialId,
-        transports: (credential.transports || undefined) as any,
-      })),
+      excludeCredentials: credentials.map(passkeyDescriptor),
       authenticatorSelection: {
         residentKey: 'required',
         requireResidentKey: true,
         userVerification: 'required',
       },
     });
-    (options as any).extensions = {
-      ...((options as any).extensions || {}),
-      prf: {},
-    };
     stage = 'save_challenge';
     await saveChallenge(env.DB, 'CreateCredential', options.challenge, userId);
     stage = 'create_token';
@@ -578,7 +549,7 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
       userId,
       rpId,
     });
-    return jsonResponse({ options, token, object: 'webauthnCredentialCreateOptions', Object: 'webauthnCredentialCreateOptions' });
+    return jsonResponse({ options: { ...options, extensions: { ...options.extensions, prf: {} } }, token, object: 'webauthnCredentialCreateOptions', Object: 'webauthnCredentialCreateOptions' });
   } catch (error) {
     logAccountPasskeyHandlerError(stage, error, { userId });
     return errorResponse(`Passkey setup failed while ${passkeySetupStageMessage(stage)}`, 500);
@@ -587,7 +558,7 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
 
 export async function handleGetAccountPasskeyUpdateAssertionOptions(request: Request, env: Env, userId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {
     return errorResponse('Master password verification failed', 400);
   }
@@ -603,10 +574,7 @@ export async function handleGetAccountPasskeyUpdateAssertionOptions(request: Req
   const { rpId } = getAccountPasskeyRpConfig(request, env);
   const options = await generateAuthenticationOptions({
     rpID: rpId,
-    allowCredentials: credentials.map((credential) => ({
-      id: credential.credentialId,
-      transports: (credential.transports || undefined) as any,
-    })),
+    allowCredentials: credentials.map(passkeyDescriptor),
     userVerification: 'required',
     timeout: 60000,
   });
@@ -622,7 +590,7 @@ export async function handleGetAccountPasskeyUpdateAssertionOptions(request: Req
 
 export async function handleCreateAccountPasskeyCredential(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
 
   const payload = await verifyAccountPasskeyToken(env, String(body.token || ''), 'CreateCredential');
   if (!payload || payload.userId !== userId) {
@@ -640,12 +608,8 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
     return errorResponse('Maximum passkey count reached', 400);
   }
 
-  let prfKeySet: ReturnType<typeof readPrfKeySet>;
-  try {
-    prfKeySet = readPrfKeySet(body);
-  } catch {
-    return errorResponse('Invalid encrypted passkey key set', 400);
-  }
+  const prfKeySet = readPrfKeySet(body);
+  if (!prfKeySet.success) return errorResponse('Invalid encrypted passkey key set', 400);
 
   const registrationResponse = normalizeRegistrationResponse(body.deviceResponse);
   if (!registrationResponse) {
@@ -689,9 +653,7 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
     type: verification.registrationInfo.credentialType || 'public-key',
     aaGuid: verification.registrationInfo.aaguid || null,
     transports,
-    encryptedUserKey: prfKeySet.encryptedUserKey,
-    encryptedPublicKey: prfKeySet.encryptedPublicKey,
-    encryptedPrivateKey: prfKeySet.encryptedPrivateKey,
+    ...prfKeySet.data,
     supportsPrf,
     createdAt: now,
     updatedAt: now,
@@ -716,17 +678,11 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
 
 export async function handleUpdateAccountPasskeyEncryption(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
 
-  let prfKeySet: ReturnType<typeof readPrfKeySet>;
-  try {
-    prfKeySet = readPrfKeySet(body);
-  } catch {
-    return errorResponse('Invalid encrypted passkey key set', 400);
-  }
-  if (!prfKeySet.encryptedUserKey || !prfKeySet.encryptedPublicKey || !prfKeySet.encryptedPrivateKey) {
-    return errorResponse('Encrypted passkey key set is required', 400);
-  }
+  if (!hasCompletePrfKeySet(body)) return errorResponse('Encrypted passkey key set is required', 400);
+  const prfKeySet = PrfKeySetSchema.safeParse(body);
+  if (!prfKeySet.success) return errorResponse('Invalid encrypted passkey key set', 400);
 
   let assertion: Awaited<ReturnType<typeof assertAccountPasskeyCredential>>;
   try {
@@ -743,9 +699,9 @@ export async function handleUpdateAccountPasskeyEncryption(request: Request, env
   const updated = await passkeyRepo.updateAccountPasskeyEncryption(env.DB,
     userId,
     assertion.credential.credentialId,
-    prfKeySet.encryptedUserKey,
-    prfKeySet.encryptedPublicKey,
-    prfKeySet.encryptedPrivateKey
+    prfKeySet.data.encryptedUserKey,
+    prfKeySet.data.encryptedPublicKey,
+    prfKeySet.data.encryptedPrivateKey
   );
   if (!updated) return errorResponse('Passkey not found', 404);
 
@@ -763,7 +719,7 @@ export async function handleUpdateAccountPasskeyEncryption(request: Request, env
 
 export async function handleDeleteAccountPasskeyCredential(request: Request, env: Env, userId: string, credentialId: string, user: User): Promise<Response> {
   const body = await readJsonBody(request);
-  if (!body) return errorResponse('Invalid request payload', 400);
+  if (body instanceof Response) return body;
   if (!(await verifyUserSecret(env, user, body))) {
     return errorResponse('Master password verification failed', 400);
   }
