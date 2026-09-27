@@ -156,10 +156,15 @@ function contentDispositionBackup(fileName: string | null | undefined): string {
 
 const REMOTE_ATTACHMENT_INDEX_PATH = 'attachments/.nodewarden-attachment-index.v1.json';
 
-interface RemoteAttachmentIndexPayload {
-  version: 1;
-  blobs: Record<string, { sizeBytes: number; updatedAt: string }>;
-}
+const RemoteAttachmentIndexSchema = z.object({
+  version: z.literal(1),
+  blobs: z.record(z.string(), z.object({ sizeBytes: z.number(), updatedAt: z.string() })),
+});
+
+// Written by BackupTransferRunner.downloadRemoteAttachmentBatch next to the fetched files.
+const RemoteAttachmentBatchManifestSchema = z.object({
+  entries: z.array(z.object({ blobName: z.string(), path: z.string() })),
+});
 
 const REMOTE_ATTACHMENT_SYNC_EXTERNAL_SUBREQUEST_LIMIT = 50;
 const REMOTE_ATTACHMENT_SYNC_SUBREQUEST_RESERVE = 6;
@@ -195,15 +200,11 @@ function getRemoteAttachmentSyncBatchSize(destination: BackupDestinationRecord):
 async function loadRemoteAttachmentIndex(session: RemoteBackupTransferSession): Promise<Map<string, number>> {
   try {
     const file = await session.download(REMOTE_ATTACHMENT_INDEX_PATH);
-    const payload = JSON.parse(new TextDecoder().decode(file.bytes)) as RemoteAttachmentIndexPayload;
-    if (payload?.version !== 1 || !payload.blobs || typeof payload.blobs !== 'object') {
-      return new Map<string, number>();
-    }
-    return new Map(
-      Object.entries(payload.blobs)
-        .filter(([key, value]) => !!String(key || '').trim() && Number.isFinite(Number(value?.sizeBytes || 0)))
-        .map(([key, value]) => [key, Number(value.sizeBytes || 0)])
-    );
+    // An unreadable index re-uploads every attachment rather than trusting partial sizes.
+    const index = RemoteAttachmentIndexSchema.safeParse(JSON.parse(new TextDecoder().decode(file.bytes)));
+    return new Map(index.success
+      ? Object.entries(index.data.blobs).filter(([blobName]) => blobName.trim()).map(([blobName, { sizeBytes }]) => [blobName, sizeBytes])
+      : []);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const normalized = message.toLowerCase();
@@ -229,7 +230,7 @@ async function saveRemoteAttachmentIndex(
   session: RemoteBackupTransferSession,
   index: Map<string, number>
 ): Promise<void> {
-  const payload: RemoteAttachmentIndexPayload = {
+  const payload: z.input<typeof RemoteAttachmentIndexSchema> = {
     version: 1,
     blobs: Object.fromEntries(
       Array.from(index.entries()).map(([blobName, sizeBytes]) => [
@@ -508,15 +509,10 @@ async function downloadRemoteAttachmentBatch(
   const files = unzipSync(new Uint8Array(await new Response(stream).arrayBuffer()));
   const manifestBytes = files['manifest.json'];
   if (!manifestBytes) return result;
-  const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as {
-    entries?: Array<{ blobName?: string; path?: string }>;
-  };
-  for (const entry of manifest.entries || []) {
-    const blobName = String(entry.blobName || '').trim();
-    const path = String(entry.path || '').trim();
-    const bytes = path ? files[path] : null;
-    if (blobName && bytes) {
-      result.set(blobName, bytes);
+  const { entries } = RemoteAttachmentBatchManifestSchema.parse(JSON.parse(new TextDecoder().decode(manifestBytes)));
+  for (const { blobName, path } of entries) {
+    if (blobName && files[path]) {
+      result.set(blobName, files[path]);
     }
   }
   return result;
