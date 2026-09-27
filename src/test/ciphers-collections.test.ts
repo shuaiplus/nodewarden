@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { D1_MAX_BOUND_PARAMETERS } from '../db/client';
+import { D1_MAX_BOUND_PARAMETERS, getOrm } from '../db/client';
+import { ciphers } from '../db/schema';
 import { MembershipType, type CollectionAccess } from '../services/org-types';
 import * as orgRepo from '../services/storage-org-repo';
 import type { Env, User } from '../types';
@@ -232,7 +233,7 @@ test('creating an org cipher refuses it whole unless the member can write every 
   assert.equal((await postCipher(env, owner, orgId, [collectionA, otherOrgCollectionId])).status, 400);
   // An item in no collection would be invisible to a member without full access.
   assert.equal((await postCipher(env, member, orgId, [])).status, 400);
-  assert.equal(await env.DB.prepare('SELECT count(*) AS total FROM ciphers').first('total'), 0);
+  assert.equal(await getOrm(env.DB).$count(ciphers), 0);
 
   const cipherId = await createCipher(env, member, orgId, [collectionA]);
   assert.deepEqual(await storedCollectionIds(env, cipherId), [collectionA]);

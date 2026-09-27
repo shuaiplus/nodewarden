@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { eq } from 'drizzle-orm';
 
+import { getOrm } from '../db/client';
+import { ciphers, folders } from '../db/schema';
 import { authedFetch, createTestEnv, seedUser } from './support/env';
 
 const ENC = '2.dGVzdA==|dGVzdA==|dGVzdA==';
@@ -22,9 +25,9 @@ test('cipher import accepts PascalCase bodies, files ciphers into imported folde
   const { cipherMap } = await response.json() as { cipherMap: Array<{ index: number; sourceId: string | null; id: string }> };
   assert.equal(cipherMap[0].sourceId, 'source-1');
 
-  const row = await env.DB.prepare('SELECT folder_id, data FROM ciphers WHERE id = ?').bind(cipherMap[0].id).first<{ folder_id: string | null; data: string }>();
-  const folder = await env.DB.prepare('SELECT id FROM folders WHERE user_id = ?').bind(user.id).first<{ id: string }>();
-  assert.equal(row?.folder_id, folder?.id);
+  const row = await getOrm(env.DB).select({ folderId: ciphers.folderId, data: ciphers.data }).from(ciphers).where(eq(ciphers.id, cipherMap[0].id)).get();
+  const folder = await getOrm(env.DB).select({ id: folders.id }).from(folders).where(eq(folders.userId, user.id)).get();
+  assert.equal(row?.folderId, folder?.id);
   const data = JSON.parse(row?.data ?? '{}');
   assert.equal(data.clientOnly, 'kept');
   assert.deepEqual([data.notes, data.favorite, data.reprompt, data.card, data.fields], [null, false, 0, null, null]);
@@ -44,5 +47,5 @@ test('cipher import rejects malformed entries before writing anything', async ()
   assert.equal(response.status, 400);
   const { validationErrors } = await response.json() as { validationErrors: Record<string, string[]> };
   assert.deepEqual(Object.keys(validationErrors), ['ciphers.0.type']);
-  assert.equal(await env.DB.prepare('SELECT COUNT(*) AS count FROM folders WHERE user_id = ?').bind(user.id).first('count'), 0);
+  assert.equal(await getOrm(env.DB).$count(folders, eq(folders.userId, user.id)), 0);
 });
