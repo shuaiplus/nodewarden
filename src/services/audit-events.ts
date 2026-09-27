@@ -130,22 +130,6 @@ export function auditRequestMetadata(request: Request): Record<string, unknown> 
   };
 }
 
-function sanitizeMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  const clean: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (!ALLOWED_METADATA_KEYS.has(key)) continue;
-    if (value === undefined || value === null || value === '') continue;
-    if (SENSITIVE_KEY_RE.test(key)) continue;
-    if (Array.isArray(value)) {
-      clean[key] = value.length;
-      continue;
-    }
-    if (typeof value === 'object') continue;
-    clean[key] = value;
-  }
-  return clean;
-}
-
 export async function getAuditLogSettings(db: D1Database): Promise<AuditLogSettings> {
   const raw = await configRepo.getConfigValue(db, AUDIT_LOG_SETTINGS_KEY);
   if (!raw) return { ...DEFAULT_AUDIT_LOG_SETTINGS };
@@ -174,16 +158,20 @@ export async function applyAuditLogRetention(db: D1Database, settings?: AuditLog
   }
 }
 
-async function maybePruneAuditLogs(db: D1Database): Promise<void> {
-  const now = Date.now();
-  if (now - lastAuditCleanupAt < AUDIT_CLEANUP_INTERVAL_MS) return;
-  if (Math.random() > AUDIT_CLEANUP_PROBABILITY) return;
-  lastAuditCleanupAt = now;
-  await applyAuditLogRetention(db);
-}
-
 export function auditEventStatement(db: D1Database, event: AuditEventInput, guard: SQL = sql`1`) {
-  const metadata = sanitizeMetadata(event.metadata || {});
+  // Only allow-listed, non-sensitive scalar metadata is stored; an array keeps just its length.
+  const metadata: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(event.metadata || {})) {
+    if (!ALLOWED_METADATA_KEYS.has(key)) continue;
+    if (value === undefined || value === null || value === '') continue;
+    if (SENSITIVE_KEY_RE.test(key)) continue;
+    if (Array.isArray(value)) {
+      metadata[key] = value.length;
+      continue;
+    }
+    if (typeof value === 'object') continue;
+    metadata[key] = value;
+  }
   let metadataJson = JSON.stringify(metadata);
   if (new TextEncoder().encode(metadataJson).byteLength > MAX_METADATA_BYTES) {
     metadataJson = JSON.stringify({ truncated: true });
@@ -200,7 +188,12 @@ export function auditEventStatement(db: D1Database, event: AuditEventInput, guar
 export async function writeAuditEvent(db: D1Database, event: AuditEventInput): Promise<void> {
   try {
     await auditEventStatement(db, event);
-    await maybePruneAuditLogs(db);
+    // Opportunistic retention: at most once per interval per isolate, and only on a small share of writes.
+    const now = Date.now();
+    if (now - lastAuditCleanupAt < AUDIT_CLEANUP_INTERVAL_MS) return;
+    if (Math.random() > AUDIT_CLEANUP_PROBABILITY) return;
+    lastAuditCleanupAt = now;
+    await applyAuditLogRetention(db);
   } catch (error) {
     console.error('audit log write failed', withoutQueryParams(error));
   }
