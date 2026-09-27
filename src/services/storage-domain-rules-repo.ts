@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 
 import { getOrm } from '../db/client';
 import { domainSettings } from '../db/schema';
@@ -6,15 +7,16 @@ import type { UserDomainSettings } from '../types';
 import { normalizeCustomEquivalentDomains, normalizeEquivalentDomains } from './domain-rules';
 import { updateRevisionDate } from './storage-revision-repo';
 
-function parseJsonArray<T>(raw: string | null | undefined, fallback: T[]): T[] {
-  if (!raw) return fallback;
+// Rules are normalized on write, so a missing or corrupt stored value reads as no rules instead of failing sync.
+function parseStored(raw: string | null | undefined): unknown {
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed as T[] : fallback;
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return fallback;
+    return null;
   }
 }
+
+const StoredTypes = z.array(z.int()).catch([]);
 
 export async function getUserDomainSettings(db: D1Database, userId: string): Promise<UserDomainSettings> {
   const [row] = await getOrm(db)
@@ -22,10 +24,8 @@ export async function getUserDomainSettings(db: D1Database, userId: string): Pro
     .from(domainSettings)
     .where(eq(domainSettings.userId, userId))
     .limit(1);
-  const equivalentDomains = normalizeEquivalentDomains(parseJsonArray<string[]>(row?.equivalentDomains, []));
-  const storedCustomEquivalentDomains = row?.customEquivalentDomains
-    ? normalizeCustomEquivalentDomains(parseJsonArray<unknown>(row.customEquivalentDomains, []))
-    : [];
+  const equivalentDomains = normalizeEquivalentDomains(parseStored(row?.equivalentDomains));
+  const storedCustomEquivalentDomains = normalizeCustomEquivalentDomains(parseStored(row?.customEquivalentDomains));
   const customEquivalentDomains = storedCustomEquivalentDomains.length
     ? storedCustomEquivalentDomains
     : normalizeCustomEquivalentDomains(equivalentDomains);
@@ -34,7 +34,7 @@ export async function getUserDomainSettings(db: D1Database, userId: string): Pro
     userId,
     equivalentDomains,
     customEquivalentDomains,
-    excludedGlobalEquivalentDomains: parseJsonArray<number>(row?.excludedGlobalEquivalentDomains, []),
+    excludedGlobalEquivalentDomains: StoredTypes.parse(parseStored(row?.excludedGlobalEquivalentDomains)),
     updatedAt: row?.updatedAt || null,
   };
 }

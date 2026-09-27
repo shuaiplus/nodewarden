@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Env } from '../types';
 import {
   buildDomainsResponse,
@@ -6,7 +7,7 @@ import {
   normalizeEquivalentDomains,
   normalizeExcludedGlobalTypes,
 } from '../services/domain-rules';
-import { errorResponse, jsonResponse } from '../utils/response';
+import { errorResponse, jsonResponse, normalizeJsonKeys } from '../utils/response';
 import * as domainRulesRepo from '../services/storage-domain-rules-repo';
 
 // CONTRACT:
@@ -14,23 +15,9 @@ import * as domainRulesRepo from '../services/storage-domain-rules-repo';
 // It stores custom rules, then derives equivalentDomains from the non-excluded
 // custom rules. Keep this behavior aligned with backup import/export and
 // src/services/storage-domain-rules-repo.ts.
-function firstPresent(payload: Record<string, unknown>, keys: string[]): unknown {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(payload, key)) return payload[key];
-  }
-  return undefined;
-}
-
-async function readPayload(request: Request): Promise<Record<string, unknown>> {
-  try {
-    const parsed = await request.json();
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
-}
+// A field that is present, even as null, replaces the stored rules; an absent one keeps them. The
+// normalizers drop malformed entries, so a body that is not a JSON object changes nothing.
+const DomainsBody = z.record(z.string(), z.unknown()).catch({});
 
 export async function handleGetDomains(env: Env, userId: string): Promise<Response> {
   const settings = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
@@ -42,32 +29,19 @@ export async function handleGetDomains(env: Env, userId: string): Promise<Respon
 }
 
 export async function handleUpdateDomains(request: Request, env: Env, userId: string): Promise<Response> {
-  const payload = await readPayload(request);
+  const payload = DomainsBody.parse(normalizeJsonKeys(await request.json().catch(() => null)));
   const current = await domainRulesRepo.getUserDomainSettings(env.DB, userId);
-  const equivalentDomainsRaw = firstPresent(payload, [
-    'equivalentDomains',
-    'EquivalentDomains',
-  ]);
-  const customEquivalentDomainsRaw = firstPresent(payload, [
-    'customEquivalentDomains',
-    'CustomEquivalentDomains',
-  ]);
-  const excludedGlobalEquivalentDomainsRaw = firstPresent(payload, [
-    'excludedGlobalEquivalentDomains',
-    'ExcludedGlobalEquivalentDomains',
-    // Some older compatible clients send the excluded type list under this key.
-    'globalEquivalentDomains',
-    'GlobalEquivalentDomains',
-  ]);
-  const customEquivalentDomains = customEquivalentDomainsRaw === undefined
-    ? (equivalentDomainsRaw === undefined
-        ? current.customEquivalentDomains
-        : normalizeCustomEquivalentDomains(normalizeEquivalentDomains(equivalentDomainsRaw)))
-    : normalizeCustomEquivalentDomains(customEquivalentDomainsRaw);
+  const customEquivalentDomains = payload.customEquivalentDomains !== undefined
+    ? normalizeCustomEquivalentDomains(payload.customEquivalentDomains)
+    : payload.equivalentDomains !== undefined
+      ? normalizeCustomEquivalentDomains(normalizeEquivalentDomains(payload.equivalentDomains))
+      : current.customEquivalentDomains;
   const equivalentDomains = customRulesToActiveEquivalentDomains(customEquivalentDomains);
-  const excludedGlobalEquivalentDomains = excludedGlobalEquivalentDomainsRaw === undefined
+  // Some older compatible clients send the excluded type list as globalEquivalentDomains.
+  const excludedTypes = payload.excludedGlobalEquivalentDomains !== undefined ? payload.excludedGlobalEquivalentDomains : payload.globalEquivalentDomains;
+  const excludedGlobalEquivalentDomains = excludedTypes === undefined
     ? current.excludedGlobalEquivalentDomains
-    : normalizeExcludedGlobalTypes(excludedGlobalEquivalentDomainsRaw);
+    : normalizeExcludedGlobalTypes(excludedTypes);
 
   await domainRulesRepo.saveUserDomainSettings(env.DB, userId, equivalentDomains, customEquivalentDomains, excludedGlobalEquivalentDomains);
 

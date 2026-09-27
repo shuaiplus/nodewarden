@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import bitwardenGlobalDomainsRaw from '../static/global_domains.bitwarden.json';
 import customGlobalDomainsRaw from '../static/global_domains.custom.json';
 import type { CustomEquivalentDomain, DomainRulesResponse, GlobalEquivalentDomain } from '../types';
@@ -11,45 +12,40 @@ import { normalizeEquivalentDomain } from '../../shared/domain-normalize';
 // - excluded_global_equivalent_domains: disabled global rule type ids.
 // Do not treat equivalent_domains and custom_equivalent_domains as accidental
 // duplicates without a migration and compatibility plan.
-type RawGlobalDomain = Partial<GlobalEquivalentDomain> & {
-  Type?: unknown;
-  Domains?: unknown;
-  Excluded?: unknown;
-};
 
-function normalizeDomain(value: unknown): string {
-  return normalizeEquivalentDomain(value);
-}
+// Domain rules are advisory: malformed entries are dropped rather than failing the whole list, so legacy
+// rows and older clients still load whatever rules remain valid.
+const DomainGroup = z.array(z.unknown())
+  .transform((group) => Array.from(new Set(group.map(normalizeEquivalentDomain).filter(Boolean))))
+  .refine((domains) => domains.length >= 2);
+const excludedFlag = z.unknown().optional().transform(Boolean);
+const GlobalDomain = z.object({ type: z.coerce.number().int(), domains: DomainGroup, excluded: excludedFlag });
+// A bare domain list is an included rule whose id is derived from its domains.
+const CustomDomain = z.union([
+  DomainGroup.transform((domains) => ({ id: '', domains, excluded: false })),
+  z.object({ id: z.unknown().optional().transform((id) => String(id ?? '').trim()), domains: DomainGroup, excluded: excludedFlag }),
+]);
+// An object entry names a type and whether it is excluded; any other entry is an excluded type number.
+const ExcludedType = z.union([
+  z.object({ type: z.coerce.number(), excluded: z.unknown().refine(Boolean) }).transform((entry) => entry.type),
+  z.custom((entry) => typeof entry !== 'object' || entry === null).transform(Number),
+]);
 
-function normalizeGlobalDomain(entry: RawGlobalDomain): GlobalEquivalentDomain | null {
-  const type = Number(entry.type ?? entry.Type);
-  if (!Number.isInteger(type)) return null;
+const groupKey = (domains: string[]) => domains.slice().sort().join('\n');
 
-  const rawDomains = entry.domains ?? entry.Domains;
-  if (!Array.isArray(rawDomains)) return null;
-
-  const domains = Array.from(new Set(rawDomains.map(normalizeDomain).filter(Boolean)));
-  if (domains.length < 2) return null;
-
-  return {
-    type,
-    domains,
-    excluded: Boolean(entry.excluded ?? entry.Excluded ?? false),
-  };
+// The valid entries of a list with their original positions, keeping the first entry per key.
+function uniqueEntries<T>(input: unknown, entry: z.ZodType<T>, key: (value: T) => unknown): [T, number][] {
+  const seen = new Set<unknown>();
+  return (Array.isArray(input) ? input : []).flatMap((item, index) => {
+    const parsed = entry.safeParse(item);
+    if (!parsed.success || seen.has(key(parsed.data))) return [];
+    seen.add(key(parsed.data));
+    return [[parsed.data, index] as [T, number]];
+  });
 }
 
 function normalizeGlobalDomains(input: unknown): GlobalEquivalentDomain[] {
-  if (!Array.isArray(input)) return [];
-
-  const seen = new Set<number>();
-  const out: GlobalEquivalentDomain[] = [];
-  for (const entry of input) {
-    const normalized = normalizeGlobalDomain(entry as RawGlobalDomain);
-    if (!normalized || seen.has(normalized.type)) continue;
-    seen.add(normalized.type);
-    out.push(normalized);
-  }
-  return out;
+  return uniqueEntries(input, GlobalDomain, (domain) => domain.type).map(([domain]) => domain);
 }
 
 const bitwardenGlobalDomains = normalizeGlobalDomains(bitwardenGlobalDomainsRaw);
@@ -61,20 +57,7 @@ export const globalDomains: readonly GlobalEquivalentDomain[] = [
 ];
 
 export function normalizeEquivalentDomains(input: unknown): string[][] {
-  if (!Array.isArray(input)) return [];
-
-  const groups: string[][] = [];
-  const seenGroups = new Set<string>();
-  for (const group of input) {
-    if (!Array.isArray(group)) continue;
-    const domains = Array.from(new Set(group.map(normalizeDomain).filter(Boolean)));
-    if (domains.length < 2) continue;
-    const key = domains.slice().sort().join('\n');
-    if (seenGroups.has(key)) continue;
-    seenGroups.add(key);
-    groups.push(domains);
-  }
-  return groups;
+  return uniqueEntries(input, DomainGroup, groupKey).map(([domains]) => domains);
 }
 
 export function mergeEquivalentDomainGroups(input: string[][]): string[][] {
@@ -138,33 +121,8 @@ function createCustomDomainId(domains: string[], index: number): string {
 }
 
 export function normalizeCustomEquivalentDomains(input: unknown): CustomEquivalentDomain[] {
-  if (!Array.isArray(input)) return [];
-
-  const rules: CustomEquivalentDomain[] = [];
-  const seenGroups = new Set<string>();
-  for (const [index, item] of input.entries()) {
-    const record = Array.isArray(item)
-      ? { domains: item, excluded: false, id: '' }
-      : item && typeof item === 'object'
-        ? item as Record<string, unknown>
-        : null;
-    if (!record) continue;
-
-    const domains = normalizeEquivalentDomains([record.domains ?? record.Domains])[0];
-    if (!domains) continue;
-
-    const key = domains.slice().sort().join('\n');
-    if (seenGroups.has(key)) continue;
-    seenGroups.add(key);
-
-    const rawId = String(record.id ?? record.Id ?? '').trim();
-    rules.push({
-      id: rawId || createCustomDomainId(domains, index),
-      domains,
-      excluded: Boolean(record.excluded ?? record.Excluded ?? false),
-    });
-  }
-  return rules;
+  return uniqueEntries(input, CustomDomain, (rule) => groupKey(rule.domains))
+    .map(([rule, index]) => ({ ...rule, id: rule.id || createCustomDomainId(rule.domains, index) }));
 }
 
 export function customRulesToActiveEquivalentDomains(rules: CustomEquivalentDomain[]): string[][] {
@@ -174,21 +132,8 @@ export function customRulesToActiveEquivalentDomains(rules: CustomEquivalentDoma
 }
 
 export function normalizeExcludedGlobalTypes(input: unknown): number[] {
-  if (!Array.isArray(input)) return [];
-
-  const validTypes = new Set(globalDomains.map((entry) => entry.type));
-  const seen = new Set<number>();
-  const out: number[] = [];
-  for (const item of input) {
-    const type = Number(typeof item === 'object' && item !== null ? (item as Record<string, unknown>).type : item);
-    const excluded = typeof item === 'object' && item !== null
-      ? Boolean((item as Record<string, unknown>).excluded)
-      : true;
-    if (!excluded || !Number.isInteger(type) || !validTypes.has(type) || seen.has(type)) continue;
-    seen.add(type);
-    out.push(type);
-  }
-  return out;
+  const knownTypes = new Set(globalDomains.map((entry) => entry.type));
+  return uniqueEntries(input, ExcludedType.refine((type) => knownTypes.has(type)), (type) => type).map(([type]) => type);
 }
 
 export function buildDomainsResponse(
