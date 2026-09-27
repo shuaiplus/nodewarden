@@ -140,10 +140,6 @@ export type MemberCollectionsCheck =
   | { ok: true; collections: CollectionAccess[] }
   | { ok: false; status: number; message: string };
 
-function sameAccess(left: CollectionAccess, right: CollectionAccess | undefined): boolean {
-  return !!right && left.readOnly === right.readOnly && left.hidePasswords === right.hidePasswords && left.manage === right.manage;
-}
-
 // Upstream OrganizationUsersController.Invite and GetAuthorizedCollectionsToSaveAsync: granting
 // access needs ModifyUserAccess on the collection. Owners, Admins and editAnyCollection members hold
 // it everywhere, anyone else only where its stored Manage flag is set, own or via a group (upstream
@@ -166,7 +162,12 @@ export function memberCollectionsCheck({ actor, actorAccess, requested, current,
   const modifiesAll = hasFullCollectionAccess(actor) || resolvePermissions(actor).editAnyCollection;
   const managed = new Set(actorAccess.filter((access) => access.manage).map(({ collectionId }) => collectionId));
   const canModify = ({ collectionId }: CollectionAccess) => modifiesAll || managed.has(collectionId);
-  if (requested.some((access) => !canModify(access) && !sameAccess(access, currentById.get(access.collectionId)))) {
+  if (requested.some((access) => {
+    if (canModify(access)) return false;
+    // An entry the actor cannot modify passes only when it repeats the member's stored access.
+    const stored = currentById.get(access.collectionId);
+    return !(stored && access.readOnly === stored.readOnly && access.hidePasswords === stored.hidePasswords && access.manage === stored.manage);
+  })) {
     return { ok: false, status: 404, message: 'Resource not found.' };
   }
   return { ok: true, collections: [...requested.filter(canModify), ...current.filter((access) => !canModify(access))] };

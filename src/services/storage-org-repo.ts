@@ -562,13 +562,6 @@ function userOrgAccessDelete(orm: Orm, userId: string, orgId: string) {
   return orm.delete(collectionUsers).where(and(eq(collectionUsers.userId, userId), inArray(collectionUsers.collectionId, orgCollectionIds)));
 }
 
-// Clears a member's direct access to this org's collections. Pending rows are always dropped, so
-// once a user is bound the two tables never disagree.
-function memberAccessDeletes(orm: Orm, member: MembershipRecord) {
-  const clearPending = pendingAccessDelete(orm, member.id);
-  return member.userId ? [clearPending, userOrgAccessDelete(orm, member.userId, member.orgId)] : [clearPending];
-}
-
 function membershipGroupInserts(orm: Orm, membershipId: string, groupIds: string[]) {
   return chunkRows(groupIds, columnCount(orgGroupMembers))
     .map((chunk) => orm.insert(orgGroupMembers).values(chunk.map((groupId) => ({ groupId, membershipId }))).onConflictDoNothing());
@@ -586,8 +579,14 @@ export async function saveMembershipWithAccess(db: D1Database, member: Membershi
   const orm = getOrm(db);
   await orm.batch([
     membershipUpsert(orm, member),
+    // New collections first clear the member's direct access to this org's collections. Pending rows are
+    // always dropped, so once a user is bound the two tables never disagree.
     ...(change.collections
-      ? [...memberAccessDeletes(orm, member), ...memberAccessInserts(orm, change.collections.map((access) => ({ ...access, member })))]
+      ? [
+        pendingAccessDelete(orm, member.id),
+        ...(member.userId ? [userOrgAccessDelete(orm, member.userId, member.orgId)] : []),
+        ...memberAccessInserts(orm, change.collections.map((access) => ({ ...access, member }))),
+      ]
       : []),
     ...(change.groupIds
       ? [orm.delete(orgGroupMembers).where(eq(orgGroupMembers.membershipId, member.id)), ...membershipGroupInserts(orm, member.id, change.groupIds)]
@@ -771,45 +770,6 @@ async function listOrgCipherCollectionIds(db: D1Database, orgId: string): Promis
   return map;
 }
 
-async function listRestrictedOrgCiphers(
-  db: D1Database,
-  userId: string,
-  membershipId: string,
-  orgId: string
-): Promise<Array<typeof ciphers.$inferSelect>> {
-  const orm = getOrm(db);
-  const direct = await orm
-    .select({ collectionId: collectionUsers.collectionId })
-    .from(collectionUsers)
-    .where(eq(collectionUsers.userId, userId));
-  const grouped = await orm
-    .select({ collectionId: collectionGroups.collectionId })
-    .from(collectionGroups)
-    .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, collectionGroups.groupId))
-    .where(eq(orgGroupMembers.membershipId, membershipId));
-  const allowed = [...new Set([...direct, ...grouped].map((row) => row.collectionId))];
-  if (!allowed.length) return [];
-
-  const rows = await orm
-    .select({ cipher: ciphers })
-    .from(ciphers)
-    .innerJoin(cipherCollections, eq(cipherCollections.cipherId, ciphers.id))
-    .where(and(
-      eq(ciphers.organizationId, orgId),
-      inArray(cipherCollections.collectionId, allowed),
-    ))
-    .orderBy(desc(ciphers.updatedAt));
-
-  const seen = new Set<string>();
-  const unique: Array<typeof ciphers.$inferSelect> = [];
-  for (const row of rows) {
-    if (seen.has(row.cipher.id)) continue;
-    seen.add(row.cipher.id);
-    unique.push(row.cipher);
-  }
-  return unique;
-}
-
 export async function listAccessibleOrgCiphers(db: D1Database, userId: string): Promise<Cipher[]> {
   const memberships = await listMembershipsByUser(db, userId);
   const confirmed = memberships.filter((member) => member.status === 2);
@@ -819,13 +779,46 @@ export async function listAccessibleOrgCiphers(db: D1Database, userId: string): 
   for (const member of confirmed) {
     // Members without full access only reach ciphers in collections assigned to them
     // directly or through a group they belong to; everything else stays invisible.
-    const rows = hasFullCollectionAccess(member)
-      ? await getOrm(db)
+    let rows: Array<typeof ciphers.$inferSelect>;
+    if (hasFullCollectionAccess(member)) {
+      rows = await getOrm(db)
         .select()
         .from(ciphers)
         .where(eq(ciphers.organizationId, member.orgId))
-        .orderBy(desc(ciphers.updatedAt))
-      : await listRestrictedOrgCiphers(db, userId, member.id, member.orgId);
+        .orderBy(desc(ciphers.updatedAt));
+    } else {
+      const orm = getOrm(db);
+      const direct = await orm
+        .select({ collectionId: collectionUsers.collectionId })
+        .from(collectionUsers)
+        .where(eq(collectionUsers.userId, userId));
+      const grouped = await orm
+        .select({ collectionId: collectionGroups.collectionId })
+        .from(collectionGroups)
+        .innerJoin(orgGroupMembers, eq(orgGroupMembers.groupId, collectionGroups.groupId))
+        .where(eq(orgGroupMembers.membershipId, member.id));
+      const allowed = [...new Set([...direct, ...grouped].map((row) => row.collectionId))];
+      if (!allowed.length) continue;
+
+      const joined = await orm
+        .select({ cipher: ciphers })
+        .from(ciphers)
+        .innerJoin(cipherCollections, eq(cipherCollections.cipherId, ciphers.id))
+        .where(and(
+          eq(ciphers.organizationId, member.orgId),
+          inArray(cipherCollections.collectionId, allowed),
+        ))
+        .orderBy(desc(ciphers.updatedAt));
+
+      // The join repeats a cipher once per allowed collection; keep its first row.
+      const seen = new Set<string>();
+      rows = [];
+      for (const row of joined) {
+        if (seen.has(row.cipher.id)) continue;
+        seen.add(row.cipher.id);
+        rows.push(row.cipher);
+      }
+    }
 
     if (rows.length === 0) continue;
     const collectionsByCipher = await listOrgCipherCollectionIds(db, member.orgId);
