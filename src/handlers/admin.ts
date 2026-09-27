@@ -30,16 +30,6 @@ async function readConfirmedBody<S extends typeof PasswordBody>(request: Request
   return valid ? body : errorResponse('Invalid password', 400);
 }
 
-function randomHex(bytes: number): string {
-  const data = crypto.getRandomValues(new Uint8Array(bytes));
-  return Array.from(data).map(v => v.toString(16).padStart(2, '0')).join('');
-}
-
-function buildInviteLink(request: Request, code: string): string {
-  const url = new URL(request.url);
-  return `${url.origin}/?invite=${encodeURIComponent(code)}`;
-}
-
 async function writeAuditLog(
   db: D1Database,
   actorUserId: string | null,
@@ -72,7 +62,7 @@ function toInviteResponse(request: Request, invite: Invite): Record<string, unkn
     createdAt: invite.createdAt,
     updatedAt: invite.updatedAt,
     expiresAt: invite.expiresAt,
-    inviteLink: buildInviteLink(request, invite.code),
+    inviteLink: `${new URL(request.url).origin}/?invite=${encodeURIComponent(invite.code)}`,
     object: 'invite',
   };
 }
@@ -220,7 +210,7 @@ export async function handleAdminCreateInvite(
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresInHours * 60 * 60 * 1000);
   const invite: Invite = {
-    code: randomHex(20),
+    code: Array.from(crypto.getRandomValues(new Uint8Array(20))).map(byte => byte.toString(16).padStart(2, '0')).join(''),
     createdBy: actorUser.id,
     usedBy: null,
     expiresAt: expiresAt.toISOString(),

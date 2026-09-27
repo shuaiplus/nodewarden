@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { User } from './types';
 import {
   handleAdminListUsers,
   handleAdminCreateInvite,
@@ -17,10 +16,6 @@ import { adminBackupRoutes } from './router-admin-backup';
 import { errorResponse } from './utils/response';
 import type { AppEnv } from './router';
 
-function isActiveAdmin(user: User): boolean {
-  return user.role === 'admin' && user.status === 'active';
-}
-
 const adminUser = '/api/admin/users/:userId{[a-f0-9-]+}';
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -37,7 +32,8 @@ adminRoutes.on('ALL', [
   adminUser,
   `${adminUser}/status`,
 ], async (c, next) => {
-  if (!isActiveAdmin(c.get('currentUser'))) return errorResponse('Forbidden', 403);
+  const currentUser = c.get('currentUser');
+  if (currentUser.role !== 'admin' || currentUser.status !== 'active') return errorResponse('Forbidden', 403);
   await next();
 });
 
