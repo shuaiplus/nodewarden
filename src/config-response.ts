@@ -1,13 +1,5 @@
 import { LIMITS } from './config/limits';
 
-function buildIconServiceTemplate(origin: string): string {
-  return `${origin}/icons/{}/icon.png`;
-}
-
-function buildIconServiceCsp(origin: string): string {
-  return `img-src 'self' data: ${origin}`;
-}
-
 export function buildConfigResponse(origin: string) {
   const fillAssistBase = `${origin}/fill-assist/`;
   return {
@@ -34,8 +26,8 @@ export function buildConfigResponse(origin: string) {
       disableUserRegistration: false,
       suppressOnboardingInterstitials: false,
     },
-    _icon_service_url: buildIconServiceTemplate(origin),
-    _icon_service_csp: buildIconServiceCsp(origin),
+    _icon_service_url: `${origin}/icons/{}/icon.png`,
+    _icon_service_csp: `img-src 'self' data: ${origin}`,
     featureStates: {
       'cipher-key-encryption': LIMITS.compatibility.cipherKeyEncryptionFeatureEnabled,
       'desktop-ui-settings-dialog': true,
