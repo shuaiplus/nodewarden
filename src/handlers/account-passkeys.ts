@@ -75,27 +75,6 @@ async function verifyTwoFactorWebAuthnUser(env: Env, user: User, body: PasskeyRe
   return await verifyTwoFactorUserVerificationToken(env, user, 7, token) || await verifyUserSecret(env, user, body);
 }
 
-function logAccountPasskeyHandlerError(stage: string, error: unknown, details: Record<string, unknown> = {}): void {
-  const redacted = withoutQueryParams(error);
-  const err = redacted instanceof Error ? redacted : null;
-  console.error('Account passkey handler failed', {
-    stage,
-    name: err?.name || typeof error,
-    message: err?.message || String(redacted),
-    stack: err?.stack,
-    ...details,
-  });
-}
-
-function passkeySetupStageMessage(stage: string): string {
-  if (stage === 'verify_master_password') return 'verifying master password';
-  if (stage === 'load_existing_credentials') return 'loading existing passkeys';
-  if (stage === 'generate_options') return 'generating passkey options';
-  if (stage === 'save_challenge') return 'saving passkey challenge';
-  if (stage === 'create_token') return 'creating passkey challenge token';
-  return 'preparing passkey setup';
-}
-
 function hasCompletePrfKeySet(body: PasskeyRequest): boolean {
   return !!(body.encryptedUserKey && body.encryptedPublicKey && body.encryptedPrivateKey);
 }
@@ -129,11 +108,6 @@ function readChallenge(response: { response: { clientDataJSON: string } }): stri
 const encryptedKey = z.string().trim().refine(isSerializedEncString);
 const PrfKeySetSchema = z.object({ encryptedUserKey: encryptedKey, encryptedPublicKey: encryptedKey, encryptedPrivateKey: encryptedKey });
 const NO_PRF_KEY_SET = { encryptedUserKey: null, encryptedPublicKey: null, encryptedPrivateKey: null };
-
-// A partial key set stores nothing; a complete one must be three EncStrings.
-function readPrfKeySet(body: PasskeyRequest) {
-  return hasCompletePrfKeySet(body) ? PrfKeySetSchema.safeParse(body) : { success: true as const, data: NO_PRF_KEY_SET };
-}
 
 async function saveChallenge(
   db: D1Database,
@@ -561,8 +535,22 @@ export async function handleGetAccountPasskeyAttestationOptions(request: Request
     });
     return jsonResponse({ options: { ...options, extensions: { ...options.extensions, prf: {} } }, token, object: 'webauthnCredentialCreateOptions', Object: 'webauthnCredentialCreateOptions' });
   } catch (error) {
-    logAccountPasskeyHandlerError(stage, error, { userId });
-    return errorResponse(`Passkey setup failed while ${passkeySetupStageMessage(stage)}`, 500);
+    const redacted = withoutQueryParams(error);
+    const err = redacted instanceof Error ? redacted : null;
+    console.error('Account passkey handler failed', {
+      stage,
+      name: err?.name || typeof error,
+      message: err?.message || String(redacted),
+      stack: err?.stack,
+      userId,
+    });
+    const stageMessage = stage === 'verify_master_password' ? 'verifying master password'
+      : stage === 'load_existing_credentials' ? 'loading existing passkeys'
+      : stage === 'generate_options' ? 'generating passkey options'
+      : stage === 'save_challenge' ? 'saving passkey challenge'
+      : stage === 'create_token' ? 'creating passkey challenge token'
+      : 'preparing passkey setup';
+    return errorResponse(`Passkey setup failed while ${stageMessage}`, 500);
   }
 }
 
@@ -618,7 +606,8 @@ export async function handleCreateAccountPasskeyCredential(request: Request, env
     return errorResponse('Maximum passkey count reached', 400);
   }
 
-  const prfKeySet = readPrfKeySet(body);
+  // A partial key set stores nothing; a complete one must be three EncStrings.
+  const prfKeySet = hasCompletePrfKeySet(body) ? PrfKeySetSchema.safeParse(body) : { success: true as const, data: NO_PRF_KEY_SET };
   if (!prfKeySet.success) return errorResponse('Invalid encrypted passkey key set', 400);
 
   const registrationResponse = normalizeRegistrationResponse(body.deviceResponse);
