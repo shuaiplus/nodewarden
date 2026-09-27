@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, exists, gt, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
-import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { alias, type SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import { chunkRows, columnCount, getOrm, type Orm } from '../db/client';
 import {
@@ -26,10 +26,12 @@ import {
   userRevisions,
   users,
 } from '../db/schema';
+import { bound, excluded, likeEscaped, lower, plus } from '../db/sql';
 import type { Attachment, Cipher } from '../types';
 import { hasFullCollectionAccess, type CollectionAssignmentPlan } from './org-authz';
 import { attachmentUpsert } from './storage-attachment-repo';
 import { cipherUpsert } from './storage-cipher-repo';
+import { hasTwoFactorPasskey } from './two-factor-providers';
 import {
   MembershipStatus,
   REVOKE_STATUS_OFFSET,
@@ -231,7 +233,8 @@ export async function listMembershipsWithAccountsByOrg(
   db: D1Database,
   orgId: string
 ) {
-  const rows = await getOrm(db)
+  const orm = getOrm(db);
+  const rows = await orm
     .select({
       membership: organizationMemberships,
       account: {
@@ -239,7 +242,7 @@ export async function listMembershipsWithAccountsByOrg(
         yubikeyKey1: users.yubikeyKey1, yubikeyKey2: users.yubikeyKey2, yubikeyKey3: users.yubikeyKey3,
         yubikeyKey4: users.yubikeyKey4, yubikeyKey5: users.yubikeyKey5,
       },
-      hasTwoFactorPasskey: sql<number>`EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id = users.id AND w.purpose = 'twoFactor')`.mapWith(Boolean),
+      hasTwoFactorPasskey: hasTwoFactorPasskey(orm),
     })
     .from(organizationMemberships)
     .leftJoin(users, eq(users.id, organizationMemberships.userId))
@@ -271,7 +274,7 @@ export async function applyMembershipAction(db: D1Database, orgId: string, ids: 
     return action === 'remove'
       ? orm.delete(organizationMemberships).where(inOrg)
       : orm.update(organizationMemberships)
-        .set({ status: sql`${status} + ${action === 'revoke' ? -REVOKE_STATUS_OFFSET : REVOKE_STATUS_OFFSET}`, updatedAt: now })
+        .set({ status: plus(status, action === 'revoke' ? -REVOKE_STATUS_OFFSET : REVOKE_STATUS_OFFSET), updatedAt: now })
         .where(and(inOrg, action === 'revoke' ? gt(status, MembershipStatus.Revoked) : lte(status, MembershipStatus.Revoked)));
   };
   // An empty id list renders as `false`, so an empty chunk binds exactly the parameters every chunk adds to its ids.
@@ -614,7 +617,7 @@ export async function saveAcceptedMembership(db: D1Database, member: MembershipR
   const orm = getOrm(db);
   const pendingAccess = orm
     .select({
-      userId: sql<string>`${member.userId}`.as(collectionUsers.userId.name),
+      userId: bound(member.userId).as(collectionUsers.userId.name),
       collectionId: pendingCollectionUsers.collectionId,
       readOnly: pendingCollectionUsers.readOnly,
       hidePasswords: pendingCollectionUsers.hidePasswords,
@@ -1094,17 +1097,26 @@ export async function getSsoUserByUserId(db: D1Database, userId: string): Promis
 export function bumpOrgMemberRevisions(db: D1Database, orgId: string, now = new Date().toISOString()) {
   const orm = getOrm(db);
   return orm.insert(userRevisions)
-    .select(orm.select({ userId: organizationMemberships.userId, revisionDate: sql`${now}`.as('revision_date') })
+    .select(orm.select({ userId: organizationMemberships.userId, revisionDate: bound(now).as(userRevisions.revisionDate.name) })
       .from(organizationMemberships)
       .where(and(eq(organizationMemberships.orgId, orgId), isNotNull(organizationMemberships.userId))))
-    .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: sql`excluded.revision_date` } });
+    .onConflictDoUpdate({ target: userRevisions.userId, set: { revisionDate: excluded(userRevisions.revisionDate) } });
 }
 
 export async function searchOrganizations(db: D1Database, options: { nameContains: string; memberEmail: string; offset: number; limit: number }) {
   const pattern = '%' + options.nameContains.replace(/[\\%_]/g, (value) => `\\${value}`) + '%';
-  const rows = await getOrm(db).select().from(organizations).where(and(
-    sql`${organizations.name} LIKE ${pattern} ESCAPE '\\'`,
-    options.memberEmail ? sql`EXISTS (SELECT 1 FROM organization_memberships m LEFT JOIN users u ON u.id=m.user_id WHERE m.org_id=${organizations.id} AND (lower(m.email)=lower(${options.memberEmail}) OR lower(u.email)=lower(${options.memberEmail})))` : undefined,
+  const orm = getOrm(db);
+  const member = alias(organizationMemberships, 'm');
+  const memberAccount = alias(users, 'u');
+  const loweredEmail = lower(options.memberEmail);
+  const rows = await orm.select().from(organizations).where(and(
+    likeEscaped(organizations.name, pattern),
+    // SQL lower() on both sides, not toLowerCase(): the two fold non-ASCII letters differently.
+    options.memberEmail
+      ? exists(orm.select({ id: member.id }).from(member)
+        .leftJoin(memberAccount, eq(memberAccount.id, member.userId))
+        .where(and(eq(member.orgId, organizations.id), or(eq(lower(member.email), loweredEmail), eq(lower(memberAccount.email), loweredEmail)))))
+      : undefined,
   )).orderBy(asc(organizations.createdAt), asc(organizations.id)).limit(options.limit + 1).offset(options.offset);
   return rows;
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createTestEnv, portalFetch, seedUser, signInToAdminPortal } from './support/env';
-import { seedMembership } from './support/sm';
+import { seedMember, seedMembership } from './support/sm';
 import { MembershipStatus } from '../services/org-types';
 const { createOwnedOrganization } = await import('../handlers/organizations');
 import * as orgRepo from '../services/storage-org-repo';
@@ -18,7 +18,9 @@ test('portal organization searches use literal names and either member email; de
   const other = await createOwnedOrganization(env, await seedUser(env), { name: 'other', key: '4.dGVzdA==' });
   await getOrm(env.DB).update(organizations).set({ privateKey: 'DO-NOT-RENDER-PRIVATE-KEY', publicKey: 'DO-NOT-RENDER-PUBLIC-KEY' }).where(eq(organizations.id, org.id));
   await seedMembership(env, org.id, { email: 'invitee@x.io', status: MembershipStatus.Invited });
-  for (const memberEmail of ['invitee@x.io', owner.email.toUpperCase()]) {
+  // A membership row without an email of its own is found through its account.
+  const { user: accountOnly } = await seedMember(env, org.id, { email: null });
+  for (const memberEmail of ['invitee@x.io', owner.email.toUpperCase(), accountOnly.email.toUpperCase()]) {
     const rows = await orgRepo.searchOrganizations(env.DB, { memberEmail, nameContains: '', offset: 0, limit: 25 });
     assert.deepEqual(rows.map((row) => row.id), [org.id]);
   }
