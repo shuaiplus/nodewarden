@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHmac } from 'node:crypto';
+import { TOTP } from 'otpauth';
 import { unzipSync, zipSync } from 'fflate';
 
 import { ensureStorageSchema } from '../src/db/migrate';
@@ -70,11 +70,9 @@ test('known devices, young accounts, empty device history, opt-out, flag-off and
 });
 
 test('TOTP, approved device requests and personal API keys do not need new-device email verification', async () => {
-  const f = await setup({ totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' });
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
-  const digest = createHmac('sha1', '12345678901234567890').update(counter).digest();
-  const token = String((digest.readUInt32BE(digest[digest.length - 1] & 15) & 0x7fffffff) % 1000000).padStart(6, '0');
+  const totpSecret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  const f = await setup({ totpSecret });
+  const token = new TOTP({ secret: totpSecret }).generate();
   assert.equal((await f.login({ twoFactorProvider: '0', twoFactorToken: token })).status, 200);
   await drainWaitUntil();
   assert.equal(f.mail.sent.length, 0);

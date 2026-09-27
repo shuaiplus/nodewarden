@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
+import { TOTP } from 'otpauth';
 import type { User } from '../src/types';
 import { verifyJWT } from '../src/utils/jwt';
 import { authedFetch, captureEmail, createTestEnv, seedUser, TEST_ORIGIN, MAILABLE_DOMAIN } from './support/env';
@@ -14,12 +14,7 @@ const DEVICE = 'sso-device';
 const RECOVERY = 'ABCD EFGH IJKL MNOP QRST UVWX YZ23 4567';
 const PATH = '/identity/connect/token';
 
-function totp(): string {
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
-  const mac = createHmac('sha1', '12345678901234567890').update(counter).digest();
-  return String((mac.readUInt32BE(mac[mac.length - 1] & 15) & 0x7fffffff) % 1_000_000).padStart(6, '0');
-}
+const totp = () => new TOTP({ secret: TOTP_SECRET }).generate();
 
 async function setup(t: TestContext, userOverrides: Partial<User> = {}) {
   const mail = captureEmail();

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHmac } from 'node:crypto';
+import * as OTPAuth from 'otpauth';
 
 import { LIMITS } from '../src/config/limits';
 import { hashPassword } from '../src/services/auth-password';
@@ -39,12 +39,7 @@ test('official authenticator DELETE verifies its key-bound token and clears the 
   const updated = (await userRepo.getUserById(env.DB, user.id))!;
   assert.equal(updated.totpSecret, null);
   assert.equal(updated.yubikeyKey1, PUBLIC_ID);
-  // RFC 6238 test secret (base32 above) makes a real enrollment OTP for the current step.
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
-  const digest = createHmac('sha1', '12345678901234567890').update(counter).digest();
-  const offset = digest[digest.length - 1] & 15;
-  const token = String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
+  const token = new OTPAuth.TOTP({ secret: TOTP }).generate();
   const enabled = await authedFetch(env, {
     method: 'PUT', path: '/api/two-factor/authenticator', userId: user.id,
     body: { key: TOTP, token, userVerificationToken: settings.UserVerificationToken },
