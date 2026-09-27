@@ -50,8 +50,10 @@ async function collectEvents(request: Request, env: Env, user: User): Promise<Re
   const records: EventInput[] = [];
   for (const event of input) {
     if (event.type === EventType.UserClientExportedVault) {
+      // Upstream LogUserEventAsync keeps the client date only on the personal row; organization copies
+      // get receipt time, so a member cannot backdate an export out of the range their admins review.
       records.push({ type: event.type, organizationId: null, userId: user.id, date: event.date },
-        ...memberships.map(member => ({ type: event.type, organizationId: member.orgId, userId: user.id, date: event.date })));
+        ...memberships.map(member => ({ type: event.type, organizationId: member.orgId, userId: user.id })));
     } else if (CLIENT_CIPHER_TYPES.has(event.type) && event.cipherId) {
       const orgId = accessible.get(event.cipherId);
       if (!orgId || (event.organizationId !== null && event.organizationId !== orgId)) continue;

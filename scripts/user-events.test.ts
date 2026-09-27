@@ -46,3 +46,19 @@ test('client export events fan out only to confirmed organizations and factor fa
   assert.ok(!rows.results.some(row => row.organization_id === acceptedOrg.id));
   assert.equal((await new StorageService(env.DB).getUserById(user.id))!.totpSecret, user.totpSecret);
 });
+
+test('a backdated client export keeps its date only on the personal row', async () => {
+  const env = await createTestEnv();
+  const user = await seedUser(env);
+  const org = await createOwnedOrganization(env, user, { name: 'Export review', key: '4.dGVzdA==' });
+  await env.DB.prepare('DELETE FROM events').run();
+  const backdated = '2001-01-01T00:00:00.000Z';
+  const before = new Date().toISOString();
+  assert.equal((await authedFetch(env, { method: 'POST', path: '/events/collect', userId: user.id, body: [{ type: 1007, date: backdated }] })).status, 200);
+  const rows = await env.DB.prepare('SELECT organization_id,date FROM events WHERE type = 1007').all<{ organization_id: string | null; date: string }>();
+  assert.equal(rows.results.find(row => row.organization_id === null)?.date, backdated);
+  const orgRow = rows.results.find(row => row.organization_id === org.id);
+  assert.ok(orgRow && orgRow.date >= before, 'the organization copy carries receipt time');
+  const listed = await (await authedFetch(env, { path: `/api/organizations/${org.id}/events`, userId: user.id })).json() as { data: { type: number }[] };
+  assert.ok(listed.data.some(event => event.type === 1007), 'the export appears in the default organization window');
+});
