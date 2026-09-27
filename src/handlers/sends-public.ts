@@ -200,8 +200,7 @@ export async function handleDownloadSendFile(
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
   const data = parseStoredSendData(send);
-  const expectedFileId = typeof data.id === 'string' ? data.id : null;
-  if (!expectedFileId || expectedFileId !== fileId) {
+  if (data.id !== fileId) {
     return errorResponse(SEND_INACCESSIBLE_MSG, 404);
   }
 
@@ -214,7 +213,7 @@ export async function handleDownloadSendFile(
   if (!object) {
     return errorResponse('Send file not found', 404);
   }
-  const fileName = typeof data.fileName === 'string' ? data.fileName : fileId;
+  const fileName = data.fileName ?? fileId;
 
   return new Response(object.body, {
     headers: {

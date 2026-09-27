@@ -104,13 +104,20 @@ export function sanitizeSendData(raw: unknown): Record<string, unknown> | null {
   return data;
 }
 
-export function parseStoredSendData(send: Send): Record<string, unknown> {
+// Clients send integers as JSON numbers or numeric strings; a blank string stays invalid.
+export const toInteger = (raw: unknown) => (typeof raw === 'string' && raw !== '' ? Number(raw) : raw);
+
+// The stored blob round-trips every client field. Clients read the file size as a string, while
+// creation stores the byte count as a number; a malformed field is dropped rather than failing the row.
+const StoredSendData = z.looseObject({
+  id: z.string().optional().catch(undefined),
+  fileName: z.string().optional().catch(undefined),
+  size: z.preprocess(toInteger, z.int()).transform(String).optional().catch(undefined),
+});
+
+export function parseStoredSendData(send: Send): z.output<typeof StoredSendData> {
   try {
-    const parsed = JSON.parse(send.data) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return { ...(parsed as Record<string, unknown>) };
-    }
-    return {};
+    return StoredSendData.parse(JSON.parse(send.data));
   } catch {
     return {};
   }
@@ -118,16 +125,7 @@ export function parseStoredSendData(send: Send): Record<string, unknown> {
 
 // A file Send names its stored object inside the data blob; the route's file id must be that one.
 export function sendFileIdMatches(send: Send, fileId: string): boolean {
-  const { id } = parseStoredSendData(send);
-  return !!id && id === fileId;
-}
-
-function normalizeSendDataSizeField(data: Record<string, unknown>): Record<string, unknown> {
-  const normalized = { ...data };
-  if (typeof normalized.size === 'number' && Number.isFinite(normalized.size)) {
-    normalized.size = String(Math.trunc(normalized.size));
-  }
-  return normalized;
+  return parseStoredSendData(send).id === fileId;
 }
 
 export function isSendAvailable(send: Send): boolean {
@@ -312,7 +310,7 @@ export function extractBearerToken(request: Request): string | null {
 }
 
 export function sendToResponse(send: Send): SendResponse {
-  const data = normalizeSendDataSizeField(parseStoredSendData(send));
+  const data = parseStoredSendData(send);
   return {
     id: send.id,
     accessId: toAccessId(send.id),
@@ -337,7 +335,7 @@ export function sendToResponse(send: Send): SendResponse {
 }
 
 export function sendToAccessResponse(send: Send, creatorIdentifier: string | null): Record<string, unknown> {
-  const data = normalizeSendDataSizeField(parseStoredSendData(send));
+  const data = parseStoredSendData(send);
   return {
     id: send.id,
     type: Number(send.type) || 0,

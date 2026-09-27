@@ -25,7 +25,6 @@ import {
   normalizeEmails,
   parseDate,
   parseFileLength,
-  parseInteger,
   parseMaxAccessCount,
   parseSendAuthType,
   parseSendType,
@@ -49,17 +48,14 @@ async function processSendFileUpload(
   fileId: string
 ): Promise<Response> {
   const maxFileSize = getBlobStorageMaxBytes(env, LIMITS.send.maxFileSizeBytes);
-  const sendData = parseStoredSendData(send);
-  const expectedFileId = typeof sendData.id === 'string' ? sendData.id : null;
-  if (!expectedFileId || expectedFileId !== fileId) {
+  const { id, fileName, size } = parseStoredSendData(send);
+  if (id !== fileId) {
     return errorResponse('Send file does not match send data.', 400);
   }
 
-  const expectedFileName = typeof sendData.fileName === 'string' ? sendData.fileName : null;
-  const expectedSize = parseInteger(sendData.size);
   const upload = await parseDirectUploadPayload(request, {
-    expectedSize,
-    expectedFileName,
+    expectedSize: size === undefined ? null : Number(size),
+    expectedFileName: fileName ?? null,
     maxFileSize,
     tooLargeMessage: 'Send storage limit exceeded with this file',
     sizeMismatchMessage: 'Send file size does not match.',
@@ -487,13 +483,8 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
     return errorResponse('Send not found', 404);
   }
 
-  if (send.type === SendType.File) {
-    const data = parseStoredSendData(send);
-    const fileId = typeof data.id === 'string' ? data.id : null;
-    if (fileId) {
-      await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
-    }
-  }
+  const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
+  if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
 
   await sendRepo.deleteSend(env.DB, sendId, userId);
   const revisionDate = await revisionRepo.updateRevisionDate(env.DB, userId);
@@ -520,12 +511,8 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
 
   const sends = await sendRepo.getSendsByIds(env.DB, body.ids, userId);
   for (const send of sends) {
-    if (send.type !== SendType.File) continue;
-    const data = parseStoredSendData(send);
-    const fileId = typeof data.id === 'string' ? data.id : null;
-    if (fileId) {
-      await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
-    }
+    const fileId = send.type === SendType.File ? parseStoredSendData(send).id : undefined;
+    if (fileId) await deleteBlobObject(env, getSendFileObjectKey(send.id, fileId));
   }
 
   const revisionDate = await sendRepo.bulkDeleteSends(env.DB, body.ids, userId);
