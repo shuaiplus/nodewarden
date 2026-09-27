@@ -198,7 +198,7 @@ test('150-secret bulk delete chunks parameters and rolls back every chunk and SA
 });
 
 test('a stale member edit cannot overwrite a secret after its project moved or was deleted', async () => {
-  const { env, orgId, owner, a, project, secret } = await setup();
+  const { env, orgId, a, project, secret } = await setup();
   const readable = await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
   const hidden = await project();
   const changed = '2.Y2hhbmdlZA==|Y2hhbmdlZA==|Y2hhbmdlZA==';

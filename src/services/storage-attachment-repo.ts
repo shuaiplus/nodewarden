@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { chunkRows, getOrm } from '../db/client';
 import { attachments, ciphers } from '../db/schema';
-import type { Attachment, Cipher } from '../types';
+import type { Attachment } from '../types';
 import { getCipher, saveCipher } from './storage-cipher-repo';
 import { updateRevisionDate } from './storage-revision-repo';
 

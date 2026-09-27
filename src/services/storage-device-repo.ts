@@ -2,7 +2,7 @@ import { and, count, desc, eq, gte, inArray, isNotNull, lt, max, sql } from 'dri
 
 import { getOrm } from '../db/client';
 import { devices, trustedTwoFactorDeviceTokens } from '../db/schema';
-import type { Device, TrustedDeviceTokenSummary, User } from '../types';
+import type { Device, TrustedDeviceTokenSummary } from '../types';
 import { generateUUID } from '../utils/uuid';
 import { hashedTokenKey } from './storage-session-repo';
 import { getUser } from './storage-user-repo';
