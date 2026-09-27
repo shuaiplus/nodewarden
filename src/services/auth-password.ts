@@ -27,23 +27,20 @@ export async function hashPassword(password: string): Promise<string> {
   return `${S2_PREFIX}${SERVER_HASH_ITERATIONS}$${encodeBase64(salt.buffer)}$${digest}`;
 }
 
-async function verifyS2(password: string, stored: string): Promise<boolean> {
-  const parts = stored.split('$');
-  if (parts.length !== 5 || parts[1] !== 's2') return false;
-  const iterations = Number(parts[2]);
-  if (!Number.isFinite(iterations) || iterations < 1) return false;
-  const digest = await pbkdf2Hex(password, decodeBase64(parts[3]), iterations);
-  return constantTimeEquals(digest, parts[4]);
-}
-
-async function verifyLegacyEmailSalt(password: string, stored: string, email: string): Promise<boolean> {
-  const digest = await pbkdf2Hex(password, new TextEncoder().encode(email.toLowerCase().trim()), SERVER_HASH_ITERATIONS);
-  return constantTimeEquals(`${LEGACY_PREFIX}${digest}`, stored);
-}
-
 export async function verifyPassword(password: string, storedHash: string, email?: string): Promise<boolean> {
-  if (storedHash.startsWith(S2_PREFIX)) return verifyS2(password, storedHash);
-  if (storedHash.startsWith(LEGACY_PREFIX) && email) return verifyLegacyEmailSalt(password, storedHash, email);
+  if (storedHash.startsWith(S2_PREFIX)) {
+    const parts = storedHash.split('$');
+    if (parts.length !== 5 || parts[1] !== 's2') return false;
+    const iterations = Number(parts[2]);
+    if (!Number.isFinite(iterations) || iterations < 1) return false;
+    const digest = await pbkdf2Hex(password, decodeBase64(parts[3]), iterations);
+    return constantTimeEquals(digest, parts[4]);
+  }
+  if (storedHash.startsWith(LEGACY_PREFIX) && email) {
+    // Legacy hashes were salted with the normalized account email.
+    const digest = await pbkdf2Hex(password, new TextEncoder().encode(email.toLowerCase().trim()), SERVER_HASH_ITERATIONS);
+    return constantTimeEquals(`${LEGACY_PREFIX}${digest}`, storedHash);
+  }
   return constantTimeEquals(password, storedHash);
 }
 
