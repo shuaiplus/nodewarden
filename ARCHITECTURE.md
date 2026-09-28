@@ -6,7 +6,7 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 
 - [Organizations, SSO/SCIM, Secrets Manager, Cloudflare offload](docs/architecture/01-organizations-sso-sm-cloudflare.md)
 - [Kubernetes secret operator](docs/architecture/02-k8s-secret-operator.md)
-- [Official Bitwarden web (Pages) and E2E](docs/architecture/03-official-web-and-e2e.md)
+- [Official Bitwarden web and E2E](docs/architecture/03-official-web-and-e2e.md)
 - [Enterprise license upload and emergency access](docs/architecture/04-enterprise-license-emergency-access.md)
 - [Research: Bitwarden / Vaultwarden parity](docs/research/2026-08-13-bitwarden-vaultwarden-orgs-sso-sm.md)
 
@@ -18,8 +18,8 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 - Blobs: R2 or KV (`src/services/blob-store.ts`)
 - Push: `NotificationsHub` Durable Object
 - Backups: `BackupTransferRunner` Durable Object
-- Web vault: `official-web/` (Bitwarden OSS self-host Angular) → Cloudflare Pages, API proxied to the Worker. The Worker's static assets (`public/`) are only the WebAuthn and SSO connector pages official clients open on the server origin.
-- Shared: `shared/backend-paths.ts` lists the backend path prefixes used by the Pages proxy, `scripts/serve-official-web.mjs` and the Worker web-vault visibility check
+- Web vault: `official-web/` (Bitwarden OSS self-host Angular), served as the Worker's static assets together with our connector pages (`public/`), assembled by `scripts/build-worker-assets.mjs`. One origin for the vault, API and connectors gives passkeys a single relying-party ID. `run_worker_first` runs the Worker only for backend paths, `/admin` and our own pages.
+- Shared: `shared/backend-paths.ts` lists the backend paths behind `run_worker_first` and the Worker's asset-versus-app decision; a test keeps it in sync with the mounted routes and both wrangler configs
 - Validation: request bodies go through zod schemas via `parseBody` (`src/utils/response.ts`; PascalCase keys are normalised first and failures answer 400 with `validationErrors`), Worker variables through `readEnvConfig` (`src/config/env.ts`), stored JSON columns through tolerant schemas that fall back instead of throwing
 - Platform helpers instead of hand-rolled code: HS256 tokens via `hono/jwt` (still keyed by `JWT_SECRET`), base64/sha256 via `hono/utils/encode` and `hono/utils/crypto`, constant-time compares via `crypto.subtle.timingSafeEqual`, cookies via `hono/utils/cookie`, CORS via `hono/cors`, admin HTML via `hono/html`, OIDC id_tokens via `verifyWithJwks`, S3/R2 SigV4 via `aws4fetch`, TOTP via `otpauth`
 - Rate limits: per-minute budgets spend Workers Rate Limiting bindings (`RATE_LIMIT_<n>_PER_MINUTE` in `wrangler.toml` and `wrangler.kv.toml`); login lockouts and strict budgets stay in D1

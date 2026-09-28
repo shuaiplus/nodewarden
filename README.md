@@ -34,7 +34,7 @@
 
 | Feature | Bitwarden Free | NodeWarden | Notes |
 |---|---|---|---|
-| Web vault | ✅ | ✅ | Official Bitwarden web on Cloudflare Pages |
+| Web vault | ✅ | ✅ | Official Bitwarden web, served by the Worker |
 | TOTP | ❌ | ✅ | Authenticator codes in every official client |
 | **Passkey login** | ✅ | ✅ | **passwordless auth** |
 | API keys | ✅ | ✅ | CLI keys; create and rotate |
@@ -139,25 +139,22 @@ npm run deploy:kv
 npm run dev
 npm run dev:kv
 
-# Official Bitwarden web (Cloudflare Pages frontend)
-npm run build:official-web
-WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
-npm run deploy:official-web
+# Official Bitwarden web, served by the Worker from the same origin as the API
+npm run build:official-web   # once per pinned release; deploy and dev include it
 ```
 
-Set Worker `WEB_VAULT_ORIGINS` to the Pages origin, or to the local official-web origin (`https://127.0.0.1:8090` when using the certificate below). Current official web builds refuse `http://` API calls, so Playwright against that UI needs a local certificate:
+Set `WEB_VAULT_ORIGINS` to the Worker origin. Current official web builds refuse `http://` API calls, so run the Worker over HTTPS for browser tests:
 
 ```bash
-OFFICIAL_WEB_PORT=8090 OFFICIAL_WEB_CERT=/tmp/nw-web.crt OFFICIAL_WEB_KEY=/tmp/nw-web.key \
-  WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
-E2E_ORIGIN=http://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8090 npm run test:e2e
+npx wrangler dev --local-protocol https
+E2E_ORIGIN=https://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8787 npm run test:e2e
 ```
 
 Official clients register through `/identity/accounts/register/*`; set `ALLOW_OPEN_REGISTRATION=1` if you want signups after the first admin without NodeWarden invite codes.
 
-The Pages web vault built by this repository creates organizations from a name, without a license upload. Its small Bitwarden frontend patch preserves browser-side key generation and opens Secrets Manager when creation starts there. Unmodified self-hosted Bitwarden web builds still use the license-upload dialog; `GET /api/licenses/nodewarden-enterprise.json` remains available for their compatibility flow.
+The web vault built by this repository creates organizations from a name, without a license upload. Its small Bitwarden frontend patch preserves browser-side key generation and opens Secrets Manager when creation starts there. Unmodified self-hosted Bitwarden web builds still use the license-upload dialog; `GET /api/licenses/nodewarden-enterprise.json` remains available for their compatibility flow.
 
-`npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on port 8080.
+`npm run test:e2e` runs the API suite and the official-web signup smoke. `npm run test:e2e:official` is only the signup file. Pass `OFFICIAL_WEB_ORIGIN` when the vault is not on the `E2E_ORIGIN` origin.
 
 ---
 

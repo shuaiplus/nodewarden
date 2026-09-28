@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 
 const workerOrigin = process.env.E2E_ORIGIN || 'http://127.0.0.1:8787';
-const officialWebOrigin = process.env.OFFICIAL_WEB_ORIGIN || 'http://127.0.0.1:8080';
+// The Worker serves the vault itself, so it defaults to the same origin.
+const officialWebOrigin = process.env.OFFICIAL_WEB_ORIGIN || workerOrigin;
 
 test.describe('official Bitwarden web against NodeWarden', () => {
   test.beforeAll(async ({ request }) => {
