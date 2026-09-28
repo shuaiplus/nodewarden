@@ -12,6 +12,7 @@ problem.md
 # Build output
 dist/
 build/
+.svelte-kit/
 official-web/dist/
 official-web/.deploy/
 

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Error %sveltekit.status% · NodeWarden</title>
+    <style>
+      body {
+        font: 16px system-ui, sans-serif;
+        max-width: 72rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #182230;
+        background: #f5f7fa;
+      }
+      main {
+        background: white;
+        padding: 2rem;
+        border: 1px solid #dce1e8;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Error %sveltekit.status%</h1>
+      <p>%sveltekit.error.message%</p>
+    </main>
+  </body>
+</html>

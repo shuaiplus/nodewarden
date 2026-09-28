@@ -1,5 +1,14 @@
 {
   "printWidth": 120,
   "singleQuote": true,
-  "embeddedLanguageFormatting": "off"
+  "embeddedLanguageFormatting": "off",
+  "plugins": ["prettier-plugin-svelte"],
+  "overrides": [
+    {
+      "files": "*.svelte",
+      "options": {
+        "embeddedLanguageFormatting": "auto"
+      }
+    }
+  ]
 }

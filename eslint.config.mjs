@@ -1,5 +1,6 @@
 import { defineConfig } from 'eslint/config';
 import prettierRecommended from 'eslint-plugin-prettier/recommended';
+import svelte from 'eslint-plugin-svelte';
 import ts from 'typescript';
 import tseslint from 'typescript-eslint';
 
@@ -141,9 +142,10 @@ const noSingleUseFunction = {
 };
 
 export default defineConfig([
+  // The admin portal's build output and SvelteKit's generated files.
+  { ignores: ['admin/build/**', 'admin/.svelte-kit/**'] },
   {
-    files: ['**/*.{ts,mts,js,mjs,cjs}'],
-    languageOptions: { parser: tseslint.parser },
+    files: ['**/*.{ts,mts,js,mjs,cjs,svelte}'],
     linterOptions: { reportUnusedDisableDirectives: 'error' },
     plugins: {
       '@typescript-eslint': tseslint.plugin,
@@ -168,6 +170,13 @@ export default defineConfig([
       ],
     },
   },
+  { files: ['**/*.{ts,mts,js,mjs,cjs}'], languageOptions: { parser: tseslint.parser } },
+  // The admin portal's components: Svelte's recommended rules, with TypeScript in their scripts.
+  ...svelte.configs.recommended,
+  {
+    files: ['**/*.svelte'],
+    languageOptions: { parserOptions: { parser: tseslint.parser, extraFileExtensions: ['.svelte'] } },
+  },
   {
     files: ['src/db/sql.ts'],
     rules: { 'no-restricted-imports': 'off' },
@@ -177,6 +186,11 @@ export default defineConfig([
     files: ['**/*.ts'],
     languageOptions: { parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: import.meta.dirname } },
     rules: { 'nodewarden/no-raw-sql': 'error' },
+  },
+  {
+    // The portal type-checks against its own SvelteKit tsconfig, which knows its generated $types and $lib.
+    files: ['admin/**/*.ts'],
+    languageOptions: { parserOptions: { project: './admin/tsconfig.json', tsconfigRootDir: import.meta.dirname } },
   },
   // Formatting belongs to Prettier (.prettierrc.json): drift is a lint error, and the stylistic rules that
   // would fight it are off.

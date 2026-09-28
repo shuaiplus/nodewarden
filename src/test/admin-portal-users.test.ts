@@ -32,7 +32,7 @@ test('portal user search escapes LIKE wildcards, bounds paging and safely render
     assert.equal((body.match(/\/admin\/users\/view\//g) ?? []).length, 100);
     assert.match(body, /Page 1/);
     assert.match(body, /Next/);
-    assert.match(body, /&lt;script&gt;/);
+    assert.match(body, /&lt;script/);
     assert.doesNotMatch(body, /<script>/);
     assert.match(body, /<td>Yes<\/td>/);
   }
@@ -77,7 +77,7 @@ test('portal delete requires CSRF, recent login and matching email; logs success
   assert.match(stale.headers.get('Location')!, /m=reauth/);
   const fresh = await signInToAdminPortal(env, adminEmail);
   const view = await portalFetch(env, { path: `/admin/users/view/${user.id}`, cookie: fresh.cookie });
-  assert.match(await view.text(), /&lt;script&gt;/);
+  assert.match(await view.text(), /&lt;script/);
   assert.equal(
     (
       await portalFetch(env, {

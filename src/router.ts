@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { isMachineAllowedRoute, secretsManagerRoutes } from './router-sm';
 import { isAdminPortalPath } from './web-vault-visibility';
-import { handleAdminPortal } from './handlers/admin-portal';
+import { handleAdminPortal } from './admin/portal';
 import type { Env, User } from './types';
 import { AuthService, type Principal } from './services/auth';
 import { RateLimitService } from './services/ratelimit';

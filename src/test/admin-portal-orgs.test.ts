@@ -76,10 +76,10 @@ test('portal organization searches use literal names and either member email; de
   assert.equal(response.status, 200);
   const body = await response.text();
   assert.match(body, /&lt;img src=x/);
-  assert.match(body, /<dt>SM secrets<\/dt><dd>1<\/dd>/);
-  assert.match(body, /<dt>SM projects<\/dt><dd>1<\/dd>/);
-  assert.match(body, /<dt>Invited<\/dt><dd>1<\/dd>/);
-  assert.match(body, /<dt>Has keys<\/dt><dd>Yes<\/dd>/);
+  assert.match(body, /<dt>SM secrets<\/dt>\s*<dd>1<\/dd>/);
+  assert.match(body, /<dt>SM projects<\/dt>\s*<dd>1<\/dd>/);
+  assert.match(body, /<dt>Invited<\/dt>\s*<dd>1<\/dd>/);
+  assert.match(body, /<dt>Has keys<\/dt>\s*<dd>Yes<\/dd>/);
   assert.doesNotMatch(body, /DO-NOT-RENDER|ENCRYPTED-|OTHER-SECRET/);
 });
 

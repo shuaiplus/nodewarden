@@ -11,7 +11,7 @@
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
     "domains:sync": "node scripts/sync-global-domains.mjs",
     "test": "tsx --test 'src/**/*.test.ts' 'src/**/*.test.mjs'",
-    "lint": "eslint src scripts e2e shared eslint.config.mjs",
+    "lint": "eslint src scripts e2e shared admin eslint.config.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "drizzle-kit generate && node scripts/embed-baseline.mjs",
@@ -23,7 +23,10 @@
     "build:assets": "node scripts/build-worker-assets.mjs",
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
-    "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs"
+    "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs",
+    "build:admin": "cd admin && vite build",
+    "pretest": "npm run build:admin",
+    "check:admin": "cd admin && svelte-kit sync && svelte-check --fail-on-warnings"
   },
   "keywords": [
     "bitwarden",
@@ -59,6 +62,8 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260630.1",
     "@playwright/test": "^1.55.0",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "^26.0.1",
     "better-sqlite3": "13.0.3",
     "drizzle-kit": "1.0.0-rc.4",
@@ -66,10 +71,16 @@
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-svelte": "^3.23.0",
     "prettier": "^3.9.9",
+    "prettier-plugin-svelte": "^4.1.1",
+    "svelte": "^5.57.1",
+    "svelte-check": "^4.7.6",
+    "svelte-eslint-parser": "^1.8.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.1",
     "wrangler": "^4.105.0"
   },
   "dependencies": {

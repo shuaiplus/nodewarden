@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { authedFetch, createTestEnv, portalFetch } from './support/env';
 import { isAdminPortalPath } from '../web-vault-visibility';
-import { PORTAL_HEADERS } from '../views/admin-portal';
+import { PORTAL_HEADERS } from '../admin/headers';
 
 test('portal remains on the Worker origin and independent of vault/JWT configuration', async (t) => {
   t.mock.method(console, 'error', () => {});
