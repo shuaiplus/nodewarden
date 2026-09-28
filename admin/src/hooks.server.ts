@@ -1,5 +1,7 @@
 import { error, redirect, type Handle, type HandleServerError } from '@sveltejs/kit';
 
+import { PORTAL_COOKIE } from '$lib/server/cookies';
+
 // The sign-in flow is the only part of the portal reachable without a session.
 const SIGN_IN_PATHS = new Set(['/admin/login', '/admin/login/confirm']);
 
@@ -10,7 +12,7 @@ export const handle: Handle = async ({ event, resolve }) => {
   if (!SIGN_IN_PATHS.has(event.url.pathname)) {
     const session = await portal.readSession();
     if (!session) {
-      event.cookies.delete(portal.cookies.session.name, { path: '/', sameSite: 'strict' });
+      event.cookies.delete(portal.cookies.session.name, PORTAL_COOKIE);
       const returnPath = portal.returnPath(event.url.pathname + event.url.search);
       redirect(303, `/admin/login?returnUrl=${encodeURIComponent(returnPath)}`);
     }

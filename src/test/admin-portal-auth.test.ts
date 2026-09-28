@@ -223,3 +223,20 @@ test('throttled or failed resends preserve earlier links from the same browser',
     );
   }
 });
+
+test('portal cookies stay Secure on plain-http localhost, where SvelteKit would drop it and break __Host-', async () => {
+  const env = await createTestEnv({ ADMIN_EMAILS: email });
+  const origin = 'http://localhost:8787';
+  const requested = await portalFetch(env, {
+    method: 'POST',
+    path: `${origin}/admin/login`,
+    form: { email },
+    headers: { Origin: origin },
+  });
+  await drainWaitUntil();
+  assert.equal(requested.status, 303);
+  assert.match(
+    requested.headers.getSetCookie().find((c) => c.startsWith('__Host-nw_admin_login='))!,
+    /; Secure;/,
+  );
+});

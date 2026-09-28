@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 
 import { LOGIN_MESSAGES } from '$lib/messages';
+import { PORTAL_COOKIE } from '$lib/server/cookies';
 import { formText } from '$lib/server/forms';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -24,11 +25,7 @@ export const actions: Actions = {
       error(429, 'Try signing in later.');
     }
     // The link only signs in the browser that holds this nonce.
-    cookies.set(portal.cookies.login.name, outcome.nonce, {
-      path: '/',
-      sameSite: 'strict',
-      maxAge: portal.cookies.login.maxAge,
-    });
+    cookies.set(portal.cookies.login.name, outcome.nonce, { ...PORTAL_COOKIE, maxAge: portal.cookies.login.maxAge });
     redirect(303, '/admin/login?m=sent');
   },
 };
