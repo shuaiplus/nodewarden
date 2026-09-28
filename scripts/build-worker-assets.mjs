@@ -14,7 +14,12 @@ if (!existsSync(join(officialWeb, 'index.html'))) {
 rmSync(out, { recursive: true, force: true });
 // The official build's _redirects and _headers were written for Pages: assets.not_found_handling now
 // provides the single-page fallback, and the headers below replace theirs rather than doubling them.
-cpSync(officialWeb, out, { recursive: true, filter: (path) => !/[\\/]_(redirects|headers)$/.test(path) });
+// dereference: the official build may be a symlink to one shared across checkouts.
+cpSync(officialWeb, out, {
+  recursive: true,
+  dereference: true,
+  filter: (path) => !/[\\/]_(redirects|headers)$/.test(path),
+});
 cpSync(join(root, 'public'), out, { recursive: true });
 writeFileSync(
   join(out, '_headers'),
