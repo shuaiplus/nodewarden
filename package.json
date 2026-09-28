@@ -26,7 +26,8 @@
     "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs",
     "build:admin": "cd admin && vite build",
     "pretest": "npm run build:admin",
-    "check:admin": "cd admin && svelte-kit sync && svelte-check --fail-on-warnings"
+    "check:admin": "cd admin && svelte-kit sync && svelte-check --fail-on-warnings",
+    "prepare": "cd admin && svelte-kit sync"
   },
   "keywords": [
     "bitwarden",
