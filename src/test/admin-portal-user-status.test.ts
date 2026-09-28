@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { subtle } from 'node:crypto';
 import test from 'node:test';
 import { eq, like } from 'drizzle-orm';
 
@@ -158,12 +159,12 @@ test('both admin surfaces refuse the last active vault administrator; stale user
 
 test('disabling an administrator re-wraps backup settings without their key, and enabling restores it', async () => {
   const env = await createTestEnv();
-  const { publicKey } = await crypto.subtle.generateKey(
+  const { publicKey } = await subtle.generateKey(
     { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' },
     true,
     ['encrypt', 'decrypt'],
   );
-  const spki = Buffer.from(await crypto.subtle.exportKey('spki', publicKey)).toString('base64');
+  const spki = Buffer.from(await subtle.exportKey('spki', publicKey)).toString('base64');
   const admin = await seedUser(env, { role: 'admin', publicKey: spki });
   const target = await seedUser(env, { role: 'admin', publicKey: spki });
   await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
@@ -198,7 +199,7 @@ test('Better Auth refuses new sessions while a user is disabled', async () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  assert.deepEqual(await beforeCreate(candidate, null), { data: candidate });
+  assert.deepEqual(await beforeCreate(candidate), { data: candidate });
   assert.equal((await signIn()).status, 200);
   assert.deepEqual(await setUserStatus(env, user.id, 'banned', audit), { kind: 'updated' });
   const rejected = await signIn();
@@ -206,7 +207,7 @@ test('Better Auth refuses new sessions while a user is disabled', async () => {
   assert.equal(((await rejected.json()) as { code: string }).code, 'FAILED_TO_CREATE_SESSION');
   assert.equal(await getOrm(env.DB).$count(session, eq(session.userId, user.id)), 0);
   assert.deepEqual(await setUserStatus(env, user.id, 'active', audit), { kind: 'updated' });
-  assert.deepEqual(await beforeCreate(candidate, null), { data: candidate });
+  assert.deepEqual(await beforeCreate(candidate), { data: candidate });
   assert.equal((await signIn()).status, 200);
   await drainWaitUntil();
 });
@@ -248,7 +249,7 @@ test('stale Better Auth KV sessions cannot survive disable and re-enable', async
   assert.equal(activeSession.status, 200);
   assert.equal(((await activeSession.json()) as { user: { id: string } }).user.id, user.id);
   const options = createAuth(env).options;
-  assert.equal(options.secondaryStorage, undefined);
+  assert.equal('secondaryStorage' in options, false);
   const rateLimit = options.rateLimit!.customStorage!;
   const counter = { key: 'rate-limit-test', count: 2, lastRequest: Date.now() };
   await rateLimit.set(counter.key, counter);

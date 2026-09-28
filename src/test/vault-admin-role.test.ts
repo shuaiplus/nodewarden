@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { subtle } from 'node:crypto';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { unzipSync, zipSync } from 'fflate';
@@ -129,12 +130,12 @@ test('markEmailVerified grants a listed account once and stale saves cannot clea
 
 test('role changes re-wrap live backup settings for the derived administrator', async () => {
   const env = await createTestEnv();
-  const { publicKey } = await crypto.subtle.generateKey(
+  const { publicKey } = await subtle.generateKey(
     { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: Uint8Array.of(1, 0, 1), hash: 'SHA-1' },
     true,
     ['encrypt', 'decrypt'],
   );
-  const spki = Buffer.from(await crypto.subtle.exportKey('spki', publicKey)).toString('base64');
+  const spki = Buffer.from(await subtle.exportKey('spki', publicKey)).toString('base64');
   const old = await seedUser(env, { role: 'admin', publicKey: spki });
   const listed = await seedUser(env, { publicKey: spki });
   await saveBackupSettings(env.DB, env, getDefaultBackupSettings());
@@ -164,7 +165,7 @@ test('local and remote backup restore preserve verified state, default legacy ro
   const db = JSON.parse(new TextDecoder().decode(files['db.json']));
   assert.equal(db.users.find((row: { id: string }) => row.id === unverified.id).email_verified, 0);
   delete db.users.find((row: { id: string }) => row.id === listed.id).email_verified;
-  files['db.json'] = new TextEncoder().encode(JSON.stringify(db));
+  files['db.json'] = Buffer.from(JSON.stringify(db));
   const bytes = zipSync(files);
   for (const remote of [false, true]) {
     const env = await createTestEnv({ ADMIN_EMAILS: listed.email });

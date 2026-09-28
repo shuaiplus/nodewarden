@@ -247,7 +247,7 @@ test('registration opts in and baseline replay or legacy backup restore never ov
   const db = JSON.parse(new TextDecoder().decode(files['db.json']));
   db.config = db.config.filter((row: { key: string }) => row.key !== 'migration.verify-devices-on');
   delete db.users[0].verify_devices;
-  files['db.json'] = new TextEncoder().encode(JSON.stringify(db));
+  files['db.json'] = Buffer.from(JSON.stringify(db));
   const restored = await createTestEnv();
   await importBackupArchiveBytes(zipSync(files), restored, user.id, false);
   await ensureStorageSchema(restored.DB);

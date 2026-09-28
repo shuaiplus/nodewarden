@@ -182,9 +182,15 @@ export default defineConfig([
     rules: { 'no-restricted-imports': 'off' },
   },
   {
-    // Type-aware, over tests and tooling too: tsconfig.eslint.json adds what the Worker build excludes.
+    // Type-aware, over tests and tooling too: tsconfig.eslint.json adds what the Worker build excludes, and the
+    // Playwright specs use e2e/tsconfig.json, whose DOM types cover their in-page callbacks.
     files: ['**/*.ts'],
-    languageOptions: { parserOptions: { project: './tsconfig.eslint.json', tsconfigRootDir: import.meta.dirname } },
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.eslint.json', './e2e/tsconfig.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
     rules: { 'nodewarden/no-raw-sql': 'error' },
   },
   {

@@ -151,7 +151,7 @@ test('backup restore brings back every archived value, fills legacy defaults and
   const legacy = structuredClone(archived);
   delete legacy.domain_settings.find((row) => row.user_id === owner.id)!.custom_equivalent_domains;
   Object.assign(legacy.users[0], { api_key: 'archived-api-key', user_key_id: 'archived-key-id' });
-  files['db.json'] = new TextEncoder().encode(JSON.stringify(legacy));
+  files['db.json'] = Buffer.from(JSON.stringify(legacy));
 
   const kv = memoryKv();
   const restored = await createTestEnv({ ATTACHMENTS_KV: kv.binding });
@@ -207,7 +207,7 @@ test('backup restore rejects a row missing a required value outside the replace 
   const files = unzipSync((await buildBackupArchive(source, new Date(), { includeAttachments: false })).bytes);
   const archived = JSON.parse(new TextDecoder().decode(files['db.json'])) as Record<string, Row[]>;
   delete archived.ciphers[0].favorite;
-  files['db.json'] = new TextEncoder().encode(JSON.stringify(archived));
+  files['db.json'] = Buffer.from(JSON.stringify(archived));
 
   const restored = await createTestEnv();
   await assert.rejects(

@@ -122,7 +122,7 @@ test('mail config and delivery failures do not expose addresses or exception tex
         throw Object.assign(new Error('private@x.io'), { code: 'E_RECIPIENT_SUPPRESSED' });
       },
     },
-  } as Env;
+  } as Partial<Env> as Env;
   const model = { vaultOrigin: 'https://vault.io', email: 'private@x.io', token: 'secret-token' };
   for (const to of ['a@x.io, b@y.io', 'a@x.io\r\nbcc: b@y.io'])
     assert.equal((await sendMail(env, to, 'registerVerification', model)).kind, 'failed');

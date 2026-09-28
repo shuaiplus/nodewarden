@@ -45,7 +45,7 @@ test('portal navigation, origin and return paths are constrained', () => {
     { Origin: 'https://evil.io' },
     {},
     { Origin: origin, 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' },
-  ])
+  ] as Record<string, string>[])
     assert.equal(checkPortalRequest(new Request(origin, { method: 'POST', headers })), false);
   assert.equal(
     checkPortalRequest(new Request(origin, { method: 'POST', headers: { 'Sec-Fetch-Site': 'same-origin' } })),

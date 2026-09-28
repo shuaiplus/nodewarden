@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { registerHooks } from 'node:module';
 import { getTableName, type Table } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
@@ -37,7 +38,7 @@ const namedCache = (cacheName: string) => ({
 const rateLimitCounts = new Map<string, number>();
 const rateLimitBindings = Object.fromEntries(
   [
-    ...readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8').matchAll(
+    ...readFileSync(resolve(import.meta.dirname, '../../../wrangler.toml'), 'utf8').matchAll(
       /name = "(\w+)"\s+namespace_id = "\d+"\s+simple = \{ limit = (\d+), period = (\d+) \}/g,
     ),
   ].map(([, name, limit, period]): [string, RateLimit] => [

@@ -69,9 +69,9 @@ test('project updates cannot resurrect a concurrently deleted row and reject nul
   );
   const orm = getOrm(env.DB);
   const request = new Request(`https://example.test/api/projects/${p.id}`, { method: 'PUT' });
-  request.json = async () => {
+  request.json = async <T>() => {
     await orm.delete(smProjects).where(eq(smProjects.id, p.id));
-    return { name: ENCRYPTED_FIELD };
+    return { name: ENCRYPTED_FIELD } as T;
   };
   assert.equal((await handleProject(request, env, await smUser(env, owner), p.id)).status, 404);
   assert.equal(await orm.select().from(smProjects).where(eq(smProjects.id, p.id)).get(), undefined);

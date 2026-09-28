@@ -209,9 +209,9 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
   const orm = getOrm(env.DB);
   const put = new Request('https://vault.example.test', { method: 'PUT' });
   const deletedAt = '2026-01-01T00:00:00.000Z';
-  put.json = async () => {
+  put.json = async <T>() => {
     await orm.update(smSecrets).set({ deletedAt }).where(eq(smSecrets.id, trashed.id));
-    return { ...FIELDS, projectIds: [newProject.id] };
+    return { ...FIELDS, projectIds: [newProject.id] } as T;
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), trashed.id)).status, 404);
   const persisted = await smRepo.getSecret(env.DB, trashed.id);
@@ -220,17 +220,17 @@ test('secret PUT never revives a trashed or deleted row, or rewrites an unchange
   assert.equal((await request(owner.id, `/api/secrets/${trashed.id}`)).status, 404);
 
   const removed = await secret([oldProject.id]);
-  put.json = async () => {
+  put.json = async <T>() => {
     await orm.delete(smSecrets).where(eq(smSecrets.id, removed.id));
-    return { ...FIELDS, projectIds: [oldProject.id] };
+    return { ...FIELDS, projectIds: [oldProject.id] } as T;
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), removed.id)).status, 404);
   assert.equal(await smRepo.getSecret(env.DB, removed.id), null);
 
   const moved = await secret([oldProject.id]);
-  put.json = async () => {
+  put.json = async <T>() => {
     await orm.update(smSecretProjects).set({ projectId: newProject.id }).where(eq(smSecretProjects.secretId, moved.id));
-    return { ...FIELDS, projectIds: [oldProject.id] };
+    return { ...FIELDS, projectIds: [oldProject.id] } as T;
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), moved.id)).status, 404);
   assert.deepEqual((await smRepo.getSecret(env.DB, moved.id))!.projectIds, [newProject.id]);
@@ -293,14 +293,14 @@ test('a stale member edit cannot overwrite a secret after its project moved or w
       : await postJson<{ id: string }>(env, a, `/api/organizations/${orgId}/projects`, { name: ENCRYPTED_FIELD });
     const target = await secret([source.id]);
     const put = new Request('https://vault.example.test', { method: 'PUT' });
-    put.json = async () => {
+    put.json = async <T>() => {
       if (move)
         await orm
           .update(smSecretProjects)
           .set({ projectId: hidden.id })
           .where(eq(smSecretProjects.secretId, target.id));
       else await orm.delete(smProjects).where(eq(smProjects.id, source.id));
-      return { ...FIELDS, value: changed, projectIds: move ? [source.id] : [readable.id] };
+      return { ...FIELDS, value: changed, projectIds: move ? [source.id] : [readable.id] } as T;
     };
     assert.equal((await handleUpdateSecret(put, env, await smUser(env, a), target.id)).status, 404);
     const persisted = await smRepo.getSecret(env.DB, target.id);

@@ -236,14 +236,14 @@ test('a stale secret snapshot aborts new and removed policies together with its 
   const orm = getOrm(env.DB);
   await orm.update(smServiceAccounts).set({ updatedAt: before }).where(eq(smServiceAccounts.id, machine.id));
   const put = new Request('https://vault.example.test', { method: 'PUT' });
-  put.json = async () => {
+  put.json = async <T>() => {
     await orm.update(smSecrets).set({ deletedAt: before }).where(eq(smSecrets.id, secret.id));
     return {
       ...FIELDS,
       value: CHANGED,
       projectIds: [],
       accessPoliciesRequests: policies([policy(bMember.id, true)], [], [policy(machine.id)]),
-    };
+    } as T;
   };
   assert.equal((await handleUpdateSecret(put, env, await smUser(env, owner), secret.id)).status, 404);
   const persisted = (await smRepo.getSecret(env.DB, secret.id))!;

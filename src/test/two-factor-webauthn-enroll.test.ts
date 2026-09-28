@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { subtle } from 'node:crypto';
 import test from 'node:test';
 
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
@@ -59,7 +60,7 @@ async function officialEnrollment(
     (await seedUser(env, {
       masterPasswordHash: await new AuthService(env).hashPasswordServer(CLIENT_MASTER_PASSWORD_HASH),
     }));
-  const userVerificationToken =
+  const userVerificationToken: string =
     context?.userVerificationToken ??
     (await authedFetch(env, {
       method: 'POST',
@@ -91,11 +92,8 @@ async function officialEnrollment(
     return body.Options;
   });
 
-  const { publicKey } = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
-    'sign',
-    'verify',
-  ]);
-  const { x, y } = await crypto.subtle.exportKey('jwk', publicKey);
+  const { publicKey } = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const { x, y } = await subtle.exportKey('jwk', publicKey);
   const coseKey = isoCBOR.encode(
     new Map<number, CborValue>([
       [cose.COSEKEYS.kty, cose.COSEKTY.EC2],
@@ -109,7 +107,7 @@ async function officialEnrollment(
   const credentialIdLength = new Uint8Array(CREDENTIAL_ID_LENGTH_BYTES);
   new DataView(credentialIdLength.buffer).setUint16(0, credentialId.length);
   const authData = Buffer.concat([
-    new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(options.rp.id))),
+    new Uint8Array(await subtle.digest('SHA-256', Buffer.from(options.rp.id))),
     Uint8Array.of(FLAG_USER_PRESENT | FLAG_ATTESTED_CREDENTIAL_DATA),
     new Uint8Array(SIGN_COUNT_BYTES),
     new Uint8Array(AAGUID_BYTES),

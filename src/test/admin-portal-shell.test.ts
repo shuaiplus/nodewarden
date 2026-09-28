@@ -36,7 +36,7 @@ test('portal remains on the Worker origin and independent of vault/JWT configura
 test('portal rejects fetch and cross-origin form requests', async () => {
   const env = await createTestEnv({ ADMIN_EMAILS: 'admin@x.io' });
   assert.equal((await portalFetch(env, { path: '/admin/login', headers: { 'Sec-Fetch-Mode': 'cors' } })).status, 403);
-  for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.io' }, {}])
+  for (const headers of [{ Origin: 'null' }, { Origin: 'https://evil.io' }, {}] as Record<string, string>[])
     assert.equal((await authedFetch(env, { path: '/admin/login', method: 'POST', headers })).status, 403);
   assert.equal(
     (

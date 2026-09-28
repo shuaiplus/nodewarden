@@ -165,7 +165,7 @@ test('machine token input and failed exchanges return the expected request or cl
     { scope: 'api.secrets', client_id: token.id },
     { client_id: token.id },
     {},
-  ]) {
+  ] as Record<string, string>[]) {
     const response = await authedFetch(env, {
       path: '/identity/connect/token',
       method: 'POST',

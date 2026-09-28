@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { subtle } from 'node:crypto';
 import test from 'node:test';
 
 import { hashPassword } from '../services/auth-password';
@@ -65,7 +66,7 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
     email: `sso@${MAILABLE_DOMAIN}`,
     createdAt: '2020-01-01T00:00:00.000Z',
   });
-  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const keys = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'test-idp' })).toString('base64url');
   const claims = Buffer.from(
     JSON.stringify({
@@ -78,13 +79,9 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
     }),
   ).toString('base64url');
   const signed = `${header}.${claims}`;
-  const signature = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    keys.privateKey,
-    new TextEncoder().encode(signed),
-  );
+  const signature = await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, Buffer.from(signed));
   const idToken = `${signed}.${Buffer.from(signature).toString('base64url')}`;
-  const jwk = { ...(await crypto.subtle.exportKey('jwk', keys.publicKey)), kid: 'test-idp' };
+  const jwk = { ...(await subtle.exportKey('jwk', keys.publicKey)), kid: 'test-idp' };
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     switch (request.url) {
@@ -138,8 +135,8 @@ test('verified SSO signs in an SSO-only account with a server-hashed password an
 test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_tokens but tolerates clock skew and a missing kid', async (t) => {
   const env = await createTestEnv({ ...SSO_CONFIG, SSO_AUTHORITY: 'https://forged.idp.example.test', SSO_ONLY: '1' });
   const user = await seedUser(env, { email: `forged-sso@${MAILABLE_DOMAIN}` });
-  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-  const jwk = { ...(await crypto.subtle.exportKey('jwk', keys.publicKey)), kid: 'forged-idp' };
+  const keys = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = { ...(await subtle.exportKey('jwk', keys.publicKey)), kid: 'forged-idp' };
   const now = Math.floor(Date.now() / 1000);
   const encode = (part: object) => Buffer.from(JSON.stringify(part)).toString('base64url');
   const claims = (overrides: object = {}) =>
@@ -154,12 +151,12 @@ test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_toke
     });
   const signEs256 = async (unsigned: string) =>
     `${unsigned}.${Buffer.from(
-      await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, new TextEncoder().encode(unsigned)),
+      await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.privateKey, Buffer.from(unsigned)),
     ).toString('base64url')}`;
   const es256Header = encode({ alg: 'ES256', kid: 'forged-idp' });
-  const hmacKey = await crypto.subtle.importKey(
+  const hmacKey = await subtle.importKey(
     'raw',
-    new TextEncoder().encode(JSON.stringify(jwk)),
+    Buffer.from(JSON.stringify(jwk)),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
@@ -167,7 +164,7 @@ test('SSO rejects unsigned, HMAC, tampered, foreign-audience and expired id_toke
   const hmacUnsigned = `${encode({ alg: 'HS256', kid: 'forged-idp' })}.${claims()}`;
   const tokens: Record<string, string> = {
     unsigned: `${encode({ alg: 'none', kid: 'forged-idp' })}.${claims()}.`,
-    hmac: `${hmacUnsigned}.${Buffer.from(await crypto.subtle.sign('HMAC', hmacKey, new TextEncoder().encode(hmacUnsigned))).toString('base64url')}`,
+    hmac: `${hmacUnsigned}.${Buffer.from(await subtle.sign('HMAC', hmacKey, Buffer.from(hmacUnsigned))).toString('base64url')}`,
     tampered: `${(await signEs256(`${es256Header}.${claims()}`))
       .split('.')
       .with(1, claims({ sub: 'someone-else' }))

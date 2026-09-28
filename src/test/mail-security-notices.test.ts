@@ -173,7 +173,7 @@ test('both recovery paths send a security notice and delivery failure never roll
 });
 
 import { cose, isoCBOR } from '@simplewebauthn/server/helpers';
-import { createPrivateKey, sign } from 'node:crypto';
+import { createPrivateKey, sign, subtle } from 'node:crypto';
 import { TEST_ORIGIN } from './support/env';
 import * as passkeyRepo from '../services/storage-account-passkey-repo';
 import * as deviceRepo from '../services/storage-device-repo';
@@ -187,8 +187,8 @@ test('a verified passkey grant notifies its new device', async () => {
     createdAt: new Date(Date.now() - 2 * 86400_000).toISOString(),
   });
   await deviceRepo.upsertDevice(env.DB, user.id, 'known-device', 'Known', 9);
-  const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-  const jwk = await crypto.subtle.exportKey('jwk', keys.privateKey);
+  const keys = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const jwk = await subtle.exportKey('jwk', keys.privateKey);
   type CborValue = Parameters<typeof isoCBOR.encode>[0];
   const publicKey = isoCBOR.encode(
     new Map<number, CborValue>([
@@ -228,10 +228,10 @@ test('a verified passkey grant notifies its new device', async () => {
     JSON.stringify({ type: 'webauthn.get', challenge: options.challenge, origin: TEST_ORIGIN }),
   );
   const authenticatorData = Buffer.concat([
-    new Uint8Array(await crypto.subtle.digest('SHA-256', Buffer.from(options.rpId))),
+    new Uint8Array(await subtle.digest('SHA-256', Buffer.from(options.rpId))),
     Buffer.from([5, 0, 0, 0, 1]),
   ]);
-  const signed = Buffer.concat([authenticatorData, new Uint8Array(await crypto.subtle.digest('SHA-256', clientData))]);
+  const signed = Buffer.concat([authenticatorData, new Uint8Array(await subtle.digest('SHA-256', clientData))]);
   const deviceResponse = {
     id: credentialId,
     rawId: credentialId,

@@ -112,7 +112,7 @@ test('admin request responses conceal directory membership, mail failure and per
   t.mock.method(console, 'warn', () => {});
   const capture = captureEmail();
   const env = await createTestEnv({ ...capture.overrides, ADMIN_EMAILS: email });
-  const statuses = [];
+  const statuses: unknown[][] = [];
   for (const address of [email, 'unknown@' + MAILABLE_DOMAIN, email, email, email]) {
     const response = await portalFetch(env, { method: 'POST', path: '/admin/login', form: { email: address } });
     statuses.push([

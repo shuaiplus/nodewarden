@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { subtle } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { eq, lt } from 'drizzle-orm';
 import { TOTP } from 'otpauth';
@@ -31,7 +32,7 @@ async function setup(t: TestContext, userOverrides: Partial<User> = {}) {
     SSO_CLIENT_ID: 'nodewarden',
   });
   const user = await seedUser(env, { totpSecret: TOTP_SECRET, totpRecoveryCode: RECOVERY, ...userOverrides });
-  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const header = Buffer.from(JSON.stringify({ alg: 'ES256', kid: 'continuation-test' })).toString('base64url');
   const claims = Buffer.from(
     JSON.stringify({
@@ -44,13 +45,9 @@ async function setup(t: TestContext, userOverrides: Partial<User> = {}) {
     }),
   ).toString('base64url');
   const unsigned = `${header}.${claims}`;
-  const signature = await crypto.subtle.sign(
-    { name: 'ECDSA', hash: 'SHA-256' },
-    pair.privateKey,
-    new TextEncoder().encode(unsigned),
-  );
+  const signature = await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, Buffer.from(unsigned));
   const idToken = `${unsigned}.${Buffer.from(signature).toString('base64url')}`;
-  const jwk = { ...(await crypto.subtle.exportKey('jwk', pair.publicKey)), kid: 'continuation-test' };
+  const jwk = { ...(await subtle.exportKey('jwk', pair.publicKey)), kid: 'continuation-test' };
   let exchanges = 0;
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -133,7 +130,7 @@ test('SSO exchanges its PKCE code once across challenge, invalid/context retries
     { code_verifier: 'wrong-verifier' },
     { redirect_uri: 'https://other.test/callback' },
     { scope: 'other' },
-  ]) {
+  ] as Record<string, string>[]) {
     assert.equal((await f.login({ ...changed, twoFactorProvider: '0', twoFactorToken: totp() })).status, 400);
   }
   assert.equal((await f.login({}, undefined, 'https://other-vault.test/identity/connect/token')).status, 400);

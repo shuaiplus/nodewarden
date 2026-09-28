@@ -106,7 +106,10 @@ test('Better Auth date writes and comparisons preserve numeric credential and ve
   const { adapter } = await createAuth(env, new Request('https://vault.example.test')).$context;
   const now = new Date();
   const expires = new Date(now.getTime() + 60_000);
-  const credential = await adapter.create<{ id: string; createdAt: Date; accessTokenExpiresAt: Date }>({
+  const credential = await adapter.create<
+    Record<string, unknown>,
+    { id: string; createdAt: Date; accessTokenExpiresAt: Date }
+  >({
     model: 'account',
     data: {
       accountId: user.id,
@@ -136,7 +139,7 @@ test('Better Auth date writes and comparisons preserve numeric credential and ve
     accessTokenExpiresAt: expires.getTime(),
     refreshTokenExpiresAt: expires.getTime(),
   });
-  const verification = await adapter.create<{ id: string; expiresAt: Date }>({
+  const verification = await adapter.create<Record<string, unknown>, { id: string; expiresAt: Date }>({
     model: 'verification',
     data: {
       identifier: 'test-date-conversion',

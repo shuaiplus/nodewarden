@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { Miniflare } from 'miniflare';
 
-const repo = process.env.SM_E2E_REPO_ROOT || fileURLToPath(new URL('../..', import.meta.url));
+const repo = process.env.SM_E2E_REPO_ROOT || resolve(import.meta.dirname, '../..');
 const load = (path: string) => import(pathToFileURL(resolve(repo, path)).href);
 const { updateSecret } = await load('src/services/storage-secret-repo.ts');
 const { abortUnlessChanged, getOrm } = await load('src/db/client.ts');

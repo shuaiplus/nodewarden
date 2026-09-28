@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import type { Env } from '../types';
@@ -39,11 +40,8 @@ test('official Bitwarden desktop origin receives credentialed CORS', async () =>
 });
 
 test('Worker assets preserve exact official connector .html paths', async () => {
-  for (const configUrl of [
-    new URL('../../wrangler.toml', import.meta.url),
-    new URL('../../wrangler.kv.toml', import.meta.url),
-  ]) {
-    const config = await readFile(configUrl, 'utf8');
+  for (const configName of ['wrangler.toml', 'wrangler.kv.toml']) {
+    const config = await readFile(resolve(import.meta.dirname, '../..', configName), 'utf8');
     const assetsSection = config.match(/\[assets\]([\s\S]*?)(?=\n\[|$)/)?.[1] || '';
     assert.match(assetsSection, /^\s*html_handling\s*=\s*"none"\s*$/m);
   }
