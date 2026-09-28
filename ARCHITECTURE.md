@@ -18,10 +18,11 @@ Bitwarden-compatible password manager on Cloudflare Workers.
 - Blobs: R2 or KV (`src/services/blob-store.ts`)
 - Push: `NotificationsHub` Durable Object
 - Backups: `BackupTransferRunner` Durable Object
+- Admin portal: `admin/`, a SvelteKit app rendered on the server only and embedded by `src/admin/portal.ts`; its pages reach the Worker's services only through `platform.portal`, so both share one module graph
 - Web vault: `official-web/` (Bitwarden OSS self-host Angular), served as the Worker's static assets together with our connector pages (`public/`), assembled by `scripts/build-worker-assets.mjs`. One origin for the vault, API and connectors gives passkeys a single relying-party ID. `run_worker_first` runs the Worker only for backend paths, `/admin` and our own pages.
 - Shared: `shared/backend-paths.ts` lists the backend paths behind `run_worker_first` and the Worker's asset-versus-app decision; a test keeps it in sync with the mounted routes and both wrangler configs
 - Validation: request bodies go through zod schemas via `parseBody` (`src/utils/response.ts`; PascalCase keys are normalised first and failures answer 400 with `validationErrors`), Worker variables through `readEnvConfig` (`src/config/env.ts`), stored JSON columns through tolerant schemas that fall back instead of throwing
-- Platform helpers instead of hand-rolled code: HS256 tokens via `hono/jwt` (still keyed by `JWT_SECRET`), base64/sha256 via `hono/utils/encode` and `hono/utils/crypto`, constant-time compares via `crypto.subtle.timingSafeEqual`, cookies via `hono/utils/cookie`, CORS via `hono/cors`, admin HTML via `hono/html`, OIDC id_tokens via `verifyWithJwks`, S3/R2 SigV4 via `aws4fetch`, TOTP via `otpauth`
+- Platform helpers instead of hand-rolled code: HS256 tokens via `hono/jwt` (still keyed by `JWT_SECRET`), base64/sha256 via `hono/utils/encode` and `hono/utils/crypto`, constant-time compares via `crypto.subtle.timingSafeEqual`, cookies via `hono/utils/cookie`, CORS via `hono/cors`, mail HTML via `hono/html`, OIDC id_tokens via `verifyWithJwks`, S3/R2 SigV4 via `aws4fetch`, TOTP via `otpauth`
 - Rate limits: per-minute budgets spend Workers Rate Limiting bindings (`RATE_LIMIT_<n>_PER_MINUTE` in `wrangler.toml` and `wrangler.kv.toml`); login lockouts and strict budgets stay in D1
 
 ## Data
