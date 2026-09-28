@@ -26,6 +26,10 @@ const CONFIG = {
   API_WINDOW_SECONDS: LIMITS.rateLimit.apiWindowSeconds,
 };
 
+// A refusal always says when the window reopens, so callers can send Retry-After without guessing.
+export type StrictBudget =
+  { allowed: true; remaining: number } | { allowed: false; remaining: 0; retryAfterSeconds: number };
+
 export class RateLimitService {
   private static lastLoginIpCleanupAt = 0;
   private static lastStrictBudgetCleanupAt = 0;
@@ -166,7 +170,7 @@ export class RateLimitService {
     maxRequests: number,
     windowSeconds: number,
     cost = 1,
-  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds?: number }> {
+  ): Promise<StrictBudget> {
     const key = String(identifier || '').trim() || 'unknown';
     const max = Math.max(1, Math.floor(maxRequests));
     const windowSize = Math.max(1, Math.floor(windowSeconds));
