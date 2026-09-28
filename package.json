@@ -11,7 +11,7 @@
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
     "domains:sync": "node scripts/sync-global-domains.mjs",
     "test": "tsx --test 'src/**/*.test.ts' 'src/**/*.test.mjs'",
-    "lint": "eslint src scripts e2e shared official-web/functions eslint.config.mjs",
+    "lint": "eslint src scripts e2e shared eslint.config.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "drizzle-kit generate && node scripts/embed-baseline.mjs",
@@ -20,10 +20,9 @@
     "test:e2e": "playwright test",
     "test:e2e:official": "playwright test e2e/official-web.spec.ts e2e/official-org-create.spec.ts e2e/official-org-reporting.spec.ts",
     "build:official-web": "node scripts/build-official-web.mjs",
-    "dev:official-web": "node scripts/serve-official-web.mjs",
+    "build:assets": "node scripts/build-worker-assets.mjs",
     "deploy": "wrangler deploy",
     "deploy:kv": "node scripts/ensure-kv.cjs && wrangler deploy -c wrangler.kv.toml",
-    "deploy:official-web": "npm run build:official-web && wrangler pages deploy --cwd official-web --project-name nodewarden-official-web",
     "test:e2e:sm-clients": "node scripts/sm-client-e2e.mjs"
   },
   "keywords": [

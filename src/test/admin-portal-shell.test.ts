@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
 import { authedFetch, createTestEnv, portalFetch } from './support/env';
 import { isAdminPortalPath } from '../web-vault-visibility';
 import { PORTAL_HEADERS } from '../views/admin-portal';
@@ -32,7 +31,6 @@ test('portal remains on the Worker origin and independent of vault/JWT configura
     assert.ok(![...response.headers.keys()].some((key) => key.startsWith('access-control-')));
   }
   for (const path of ['/admin-panel', '/administrator', '/ADMIN']) assert.equal(isAdminPortalPath(path), false);
-  assert.doesNotMatch(readFileSync('official-web/functions/_middleware.js', 'utf8'), /['"]\/admin['"]/);
 });
 
 test('portal rejects fetch and cross-origin form requests', async () => {

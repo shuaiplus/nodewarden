@@ -3,20 +3,78 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = [ "nodejs_compat" ]
 
-# Only the Bitwarden WebAuthn and SSO connector pages official clients open on the server origin.
+[build]
+command = "npm run build:assets"
+
+# The official web vault plus our own connector pages, assembled by scripts/build-worker-assets.mjs.
+# Cloudflare serves them directly on this origin, so passkeys share one relying-party ID. The Worker runs
+# first only for the backend paths in shared/backend-paths.ts, the admin portal and our own pages, which
+# need its security headers (only the WebAuthn iframe connector may be framed).
 [assets]
 binding = "ASSETS"
-directory = "./public"
+directory = "./dist/worker-assets"
 html_handling = "none"
-not_found_handling = "none"
-run_worker_first = true
+not_found_handling = "single-page-application"
+run_worker_first = [
+  "/api",
+  "/api/*",
+  "/identity",
+  "/identity/*",
+  "/icons",
+  "/icons/*",
+  "/fill-assist",
+  "/fill-assist/*",
+  "/notifications",
+  "/notifications/*",
+  "/events",
+  "/events/*",
+  "/accounts",
+  "/accounts/*",
+  "/organizations",
+  "/organizations/*",
+  "/two-factor",
+  "/two-factor/*",
+  "/devices",
+  "/devices/*",
+  "/auth-requests",
+  "/auth-requests/*",
+  "/webauthn",
+  "/webauthn/*",
+  "/scim",
+  "/scim/*",
+  "/v2",
+  "/v2/*",
+  "/connect",
+  "/connect/*",
+  "/sso",
+  "/sso/*",
+  "/oidc-signin",
+  "/oidc-signin/*",
+  "/licenses",
+  "/licenses/*",
+  "/plans",
+  "/plans/*",
+  "/emergency-access",
+  "/emergency-access/*",
+  "/v1/assetlinks:check",
+  "/web-bootstrap",
+  "/config",
+  "/alive",
+  "/settings/domains",
+  "/admin",
+  "/admin/*",
+  "/sso-connector.html",
+  "/webauthn-connector.html",
+  "/webauthn-fallback-connector.html",
+  "/webauthn-mobile-connector.html",
+]
 
 [triggers]
 crons = [ "*/5 * * * *" ]
 
 [vars]
 ALLOW_OPEN_REGISTRATION = "1"
-WEB_VAULT_ORIGINS = "https://nodewarden-official-web.pages.dev"
+WEB_VAULT_ORIGINS = "https://nodewarden.stevefan1999.workers.dev"
 EMAIL_FROM = "noreply@stevefan1999.tech"
 EMAIL_FROM_NAME = "NodeWarden"
 
