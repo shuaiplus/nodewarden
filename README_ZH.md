@@ -34,7 +34,7 @@
 
 | 能力 | Bitwarden免费版 | NodeWarden | 说明 |
 |---|---|---|---|
-| 网页密码库 | ✅ | ✅ | Cloudflare Pages 上的官方 Bitwarden 网页版 |
+| 网页密码库 | ✅ | ✅ | 由 Worker 提供的官方 Bitwarden 网页版 |
 | TOTP | ❌ | ✅ | 所有官方客户端均可生成验证码 |
 | **Passkey 登录** | ✅ | ✅ | **支持WebAuthn/FIDO2无密码登录** |
 | API 密钥 | ✅ | ✅ | 供bitwarden cli使用，支持获取和轮换 |

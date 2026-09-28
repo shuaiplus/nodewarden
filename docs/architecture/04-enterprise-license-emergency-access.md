@@ -4,7 +4,7 @@ Official Bitwarden self-host web **always** shows “upload a valid license file
 
 ## How to create an org on official web
 
-1. Sign in at the official web (Pages).
+1. Sign in at the official web vault on the Worker origin.
 2. Download a NodeWarden Enterprise license while logged in:
 
    `GET /api/licenses/nodewarden-enterprise.json`

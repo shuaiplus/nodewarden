@@ -97,7 +97,7 @@ SM access equals confirmed membership, including User and Custom roles. Owners a
 
 Transactional email uses one typed sender with data-only templates and escaped text/HTML rendering; see [admin portal and mail](docs/architecture/05-admin-portal-and-mail.md).
 
-The Worker `/admin` portal authenticates configured `ADMIN_EMAILS` independently of vault JWTs and `users.role`. Hashed, browser-bound single-use email links create fixed two-day D1 sessions. All form POSTs enforce origin and CSRF; top-level navigation checks and CSP isolate the portal from other same-origin scripts. `/admin` is never forwarded by the official-web Pages proxy.
+The Worker `/admin` portal authenticates configured `ADMIN_EMAILS` independently of vault JWTs and `users.role`. Hashed, browser-bound single-use email links create fixed two-day D1 sessions. All form POSTs enforce origin and CSRF; top-level navigation checks and CSP isolate the portal from other same-origin scripts.
 The system administrator portal reads Secrets Manager tables for counts only; it never renders encrypted names or values.
 Registration verification returns an empty JSON string before background mail delivery, uniformly for registered and new addresses; disabled or misconfigured mail gives 503 for both.
 Password hints are emailed with uniform anonymous responses when email is configured; with mail disabled, the legacy inline hint remains a documented disclosure risk.

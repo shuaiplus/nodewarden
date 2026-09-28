@@ -33,8 +33,6 @@ NodeWarden therefore runs:
 `e2e/official-org-reporting.spec.ts` opts in with `E2E_OFFICIAL_REPORT_FIXTURE`, a JSON file naming a disposable HTTPS `localhost` vault origin, a synthetic account and the ids of one encrypted weak-password login, one group and one Secrets Manager project created through the API. It asserts web 2026.9.0, then checks the weak-password report over `GET /api/ciphers/organization-details`, remediates the item through `PUT /api/ciphers/{id}/admin` with a re-encrypted password (the dialog stays open in view mode; closing it refreshes the report), reloads and unlocks to prove the ciphertext persisted, reads the member access report, and finally checks the event log for the typed item and project events plus an empty date range. Nothing in it mocks API responses or sends plaintext vault data.
 
 ```bash
-npm run dev
-OFFICIAL_WEB_PORT=8090 OFFICIAL_WEB_CERT=/tmp/nw-web.crt OFFICIAL_WEB_KEY=/tmp/nw-web.key \
-  WORKER_ORIGIN=http://127.0.0.1:8787 npm run dev:official-web
-E2E_ORIGIN=http://127.0.0.1:8787 OFFICIAL_WEB_ORIGIN=https://127.0.0.1:8090 npm run test:e2e:official
+npm run dev -- --local-protocol https
+E2E_ORIGIN=https://localhost:8787 npm run test:e2e:official
 ```
