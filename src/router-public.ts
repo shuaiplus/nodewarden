@@ -39,7 +39,7 @@ import { isSafeWebsiteIconContentType } from './utils/content-type';
 import { jsonResponse, unsupportedResponse } from './utils/response';
 import { createAuth } from './auth';
 import type { Env } from './types';
-import { isConfiguredWebVaultOrigin, requestPublicOrigin } from './utils/origins';
+import { isConfiguredWebVaultOrigin } from './utils/origins';
 import { buildConfigResponse } from './config-response';
 import { RateLimitService, getClientIdentifier } from './services/ratelimit';
 import type { AppEnv } from './router';
@@ -430,7 +430,7 @@ publicRoutes.on(
     }),
 );
 publicRoutes.on('GET', ['/config', '/api/config'], publicRead, (c) =>
-  jsonResponse(buildConfigResponse(requestPublicOrigin(c.req.raw)), 200, { 'Cache-Control': 'no-store' }),
+  jsonResponse(buildConfigResponse(new URL(c.req.url).origin), 200, { 'Cache-Control': 'no-store' }),
 );
 publicRoutes.get('/api/version', publicRead, () => jsonResponse(LIMITS.compatibility.bitwardenServerVersion));
 

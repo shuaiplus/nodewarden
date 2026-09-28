@@ -16,20 +16,6 @@ export const OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS = [
 // fallback while self-hosted servers add CORS support for the new origin.
 export const OFFICIAL_BITWARDEN_DESKTOP_ORIGINS = ['bw-desktop-file://bundle'] as const;
 
-export function requestPublicOrigin(request: Request): string {
-  const forwardedHost = String(request.headers.get('X-Forwarded-Host') || '')
-    .split(',')[0]
-    .trim();
-  if (forwardedHost) {
-    const forwardedProto =
-      String(request.headers.get('X-Forwarded-Proto') || 'https')
-        .split(',')[0]
-        .trim() || 'https';
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-  return new URL(request.url).origin;
-}
-
 export function isBrowserExtensionOrigin(origin: unknown): boolean {
   const normalized = normalizeOrigin(origin);
   return (
