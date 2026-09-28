@@ -1598,7 +1598,7 @@ export async function handleDisableTwoFactorProvider(
   }
   if (type === TWO_FACTOR_PROVIDER_WEBAUTHN) {
     const orm = getOrm(env.DB);
-    await orm
+    const deleted = await orm
       .delete(webauthnCredentials)
       .where(
         and(
@@ -1606,7 +1606,12 @@ export async function handleDisableTwoFactorProvider(
           eq(webauthnCredentials.purpose, 'twoFactor'),
           userRowMatches(orm, user.id, eq(users.securityStamp, user.securityStamp)),
         ),
-      );
+      )
+      .returning({ id: webauthnCredentials.id });
+    // Deleting nothing while two-step keys remain means the stamp guard failed: the account changed after
+    // verification, so the provider is still enabled.
+    if (!deleted.length && (await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor')) > 0)
+      return errorResponse('User verification failed.', 400);
   }
   await finalizeTwoFactorChange(
     request,

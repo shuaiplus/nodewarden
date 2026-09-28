@@ -172,7 +172,7 @@ test('provider tokens are scoped to a user, provider, current stamp and finite 3
   assert.equal((await userRepo.getUserById(env.DB, user.id))!.yubikeyKey1, PUBLIC_ID);
 });
 
-test('disabling WebAuthn deletes no two-step key once the security stamp rotates before the delete runs', async () => {
+test('disabling WebAuthn fails and keeps the two-step key once the security stamp rotates before the delete runs', async () => {
   const env = await createTestEnv();
   const user = await seedUser(env, { masterPasswordHash: await hashPassword(PASSWORD) });
   await passkeyRepo.saveAccountPasskeyCredential(env.DB, {
@@ -202,12 +202,14 @@ test('disabling WebAuthn deletes no two-step key once the security stamp rotates
       user.securityStamp,
     );
   });
-  await authedFetch(env, {
+  const response = await authedFetch(env, {
     method: 'POST',
     path: '/api/two-factor/disable',
     userId: user.id,
     body: { type: 7, masterPasswordHash: PASSWORD },
   });
   assert.equal(rotated, true);
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /User verification failed\./);
   assert.equal(await passkeyRepo.countAccountPasskeyCredentialsByUserId(env.DB, user.id, 'twoFactor'), 1);
 });
