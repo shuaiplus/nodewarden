@@ -534,6 +534,7 @@ export async function buildBackupArchive(
       [
         'id',
         'user_id',
+        'organization_id',
         'type',
         'folder_id',
         'name',

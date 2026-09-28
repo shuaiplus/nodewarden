@@ -151,7 +151,6 @@ test('backup restore brings back every archived value, fills legacy defaults and
   const legacy = structuredClone(archived);
   delete legacy.domain_settings.find((row) => row.user_id === owner.id)!.custom_equivalent_domains;
   Object.assign(legacy.users[0], { api_key: 'archived-api-key', user_key_id: 'archived-key-id' });
-  Object.assign(legacy.ciphers[0], { organization_id: 'archived-org' });
   files['db.json'] = new TextEncoder().encode(JSON.stringify(legacy));
 
   const kv = memoryKv();
@@ -185,7 +184,15 @@ test('backup restore brings back every archived value, fills legacy defaults and
   }
   const userRows = await rowsOf(restored.DB, users, users.id);
   assert.ok(userRows.every((row) => row.api_key === null && row.user_key_id === null));
-  assert.ok((await rowsOf(restored.DB, ciphers, ciphers.id)).every((row) => row.organization_id === null));
+  // An organization item stays one: without its link it would land in its creator's personal vault,
+  // encrypted with a key that vault cannot open.
+  assert.deepEqual(
+    (await rowsOf(restored.DB, ciphers, ciphers.id)).map((row) => [row.id, row.organization_id]),
+    [
+      ['cipher-1', null],
+      ['cipher-2', 'org-1'],
+    ],
+  );
   const settings = new Map((await rowsOf(restored.DB, config, config.key)).map((row) => [row.key, row.value]));
   assert.equal(settings.get('custom.setting'), 'kept');
   assert.equal(settings.get('registered'), 'true');
