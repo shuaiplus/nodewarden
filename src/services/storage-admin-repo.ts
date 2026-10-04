@@ -70,15 +70,15 @@ function buildAuditWhere(options: AuditLogListOptions): { where: string; params:
 export async function createInvite(db: D1Database, invite: Invite): Promise<void> {
   await db
     .prepare(
-      'INSERT INTO invites(code, created_by, used_by, expires_at, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO invites(code, created_by, used_by, email, expires_at, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .bind(invite.code, invite.createdBy, invite.usedBy, invite.expiresAt, invite.status, invite.createdAt, invite.updatedAt)
+    .bind(invite.code, invite.createdBy, invite.usedBy, invite.email ?? null, invite.expiresAt, invite.status, invite.createdAt, invite.updatedAt)
     .run();
 }
 
 export async function getInvite(db: D1Database, code: string): Promise<Invite | null> {
   const row = await db
-    .prepare('SELECT code, created_by, used_by, expires_at, status, created_at, updated_at FROM invites WHERE code = ?')
+    .prepare('SELECT code, created_by, used_by, email, expires_at, status, created_at, updated_at FROM invites WHERE code = ?')
     .bind(code)
     .first<any>();
   if (!row) return null;
@@ -86,6 +86,7 @@ export async function getInvite(db: D1Database, code: string): Promise<Invite | 
     code: row.code,
     createdBy: row.created_by,
     usedBy: row.used_by ?? null,
+    email: row.email ?? null,
     expiresAt: row.expires_at,
     status: row.status,
     createdAt: row.created_at,
@@ -99,7 +100,7 @@ export async function listInvites(db: D1Database, includeInactive: boolean = fal
     ? '1 = 1'
     : "(status = 'active' AND expires_at > ?)";
   const query =
-    'SELECT code, created_by, used_by, expires_at, status, created_at, updated_at FROM invites ' +
+    'SELECT code, created_by, used_by, email, expires_at, status, created_at, updated_at FROM invites ' +
     `WHERE ${predicate} ORDER BY created_at DESC`;
   const res = includeInactive
     ? await db.prepare(query).all<any>()
@@ -109,6 +110,7 @@ export async function listInvites(db: D1Database, includeInactive: boolean = fal
     code: row.code,
     createdBy: row.created_by,
     usedBy: row.used_by ?? null,
+    email: row.email ?? null,
     expiresAt: row.expires_at,
     status: row.status,
     createdAt: row.created_at,
@@ -116,14 +118,18 @@ export async function listInvites(db: D1Database, includeInactive: boolean = fal
   }));
 }
 
-export async function markInviteUsed(db: D1Database, code: string, userId: string): Promise<boolean> {
+export async function markInviteUsed(db: D1Database, code: string, userId: string, email?: string): Promise<boolean> {
   void userId;
   const now = new Date().toISOString();
+  // When the invite was minted for a specific email (org-minted codes), only
+  // that email may consume it. Admin-minted codes (email NULL) stay generic.
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : null;
   const result = await db
     .prepare(
-      "UPDATE invites SET status = 'used', used_by = NULL, updated_at = ? WHERE code = ? AND status = 'active' AND expires_at > ?"
+      "UPDATE invites SET status = 'used', used_by = NULL, updated_at = ? " +
+      "WHERE code = ? AND status = 'active' AND expires_at > ? AND (email IS NULL OR email = ?)"
     )
-    .bind(now, code, now)
+    .bind(now, code, now, normalizedEmail)
     .run();
   return (result.meta.changes ?? 0) > 0;
 }

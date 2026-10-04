@@ -1,5 +1,5 @@
 import ConfirmDialog from '@/components/ConfirmDialog';
-import type { CustomFieldType, Folder } from '@/lib/types';
+import type { CustomFieldType, Folder, VaultCollection } from '@/lib/types';
 import { getFieldTypeOptions, toBooleanFieldValue } from '@/components/vault/vault-page-helpers';
 import { t } from '@/lib/i18n';
 
@@ -27,6 +27,15 @@ interface VaultDialogsProps {
   repromptOpen: boolean;
   repromptPassword: string;
   deletePasskeyOpen: boolean;
+  shareToOrgOpen: boolean;
+  shareOrgId: string;
+  shareCollectionId: string;
+  shareOrganizations: Array<{ id: string; name: string }>;
+  shareCollections: VaultCollection[];
+  onShareOrgIdChange: (value: string) => void;
+  onShareCollectionIdChange: (value: string) => void;
+  onConfirmShareToOrg: () => void;
+  onCancelShareToOrg: () => void;
   onConfirmAddField: () => void;
   onCancelFieldModal: () => void;
   onFieldTypeChange: (value: CustomFieldType) => void;
@@ -180,6 +189,50 @@ export default function VaultDialogs(props: VaultDialogsProps) {
             ))}
           </select>
         </label>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={props.shareToOrgOpen}
+        title={t('txt_org_share_dialog_title')}
+        message={t('txt_org_share_hint')}
+        confirmText={t('txt_org_share_confirm')}
+        cancelText={t('txt_cancel')}
+        confirmDisabled={props.busy || !props.shareOrgId || !props.shareCollectionId}
+        cancelDisabled={props.busy}
+        onConfirm={props.onConfirmShareToOrg}
+        onCancel={props.onCancelShareToOrg}
+      >
+        <label className="field">
+          <span>{t('txt_organizations_title')}</span>
+          <select
+            className="input"
+            value={props.shareOrgId}
+            onInput={(e) => {
+              props.onShareOrgIdChange((e.currentTarget as HTMLSelectElement).value);
+              props.onShareCollectionIdChange('');
+            }}
+          >
+            <option value="">{t('txt_org_share_select_org')}</option>
+            {props.shareOrganizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.name || organization.id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {props.shareOrgId && (
+          <label className="field">
+            <span>{t('txt_organizations_collections')}</span>
+            <select className="input" value={props.shareCollectionId} onInput={(e) => props.onShareCollectionIdChange((e.currentTarget as HTMLSelectElement).value)}>
+              <option value="">{t('txt_import_org_select_collection')}</option>
+              {props.shareCollections.map((collection) => (
+                <option key={collection.id} value={collection.id}>
+                  {collection.decName || collection.name || collection.id.slice(0, 8)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </ConfirmDialog>
 
       <ConfirmDialog

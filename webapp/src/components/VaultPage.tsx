@@ -34,12 +34,16 @@ import {
 import { calcTotpNow, type TotpCodeResult } from '@/lib/crypto';
 import { computeSshFingerprint, generateDefaultSshKeyMaterial } from '@/lib/ssh';
 import { ChevronLeft } from 'lucide-preact';
-import type { Cipher, CustomFieldType, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
+import type { Cipher, CustomFieldType, Folder, VaultCollection, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 
 interface VaultPageProps {
   ciphers: Cipher[];
   folders: Folder[];
+  /** Organization collections with decrypted names. */
+  collections?: VaultCollection[];
+  /** Confirmed organizations with decrypted names. type: 0=Owner 1=Admin 2=User. */
+  organizations?: Array<{ id: string; name: string; keyAvailable: boolean; type: number }>;
   loading: boolean;
   error: string;
   emailForReprompt: string;
@@ -56,6 +60,7 @@ interface VaultPageProps {
   onBulkArchive: (ids: string[]) => Promise<void>;
   onBulkUnarchive: (ids: string[]) => Promise<void>;
   onBulkMove: (ids: string[], folderId: string | null) => Promise<void>;
+  onShareVaultItemToOrganization?: (cipher: Cipher, organizationId: string, collectionIds: string[]) => Promise<void>;
   onVerifyMasterPassword: (email: string, password: string) => Promise<void>;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
   onCreateFolder: (name: string) => Promise<void>;
@@ -106,6 +111,9 @@ export default function VaultPage(props: VaultPageProps) {
   const [moveFolderId, setMoveFolderId] = useState('__none__');
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [shareToOrgOpen, setShareToOrgOpen] = useState(false);
+  const [shareOrgId, setShareOrgId] = useState('');
+  const [shareCollectionId, setShareCollectionId] = useState('');
   const [pendingRenameFolder, setPendingRenameFolder] = useState<Folder | null>(null);
   const [renameFolderName, setRenameFolderName] = useState('');
   const [pendingDeleteFolder, setPendingDeleteFolder] = useState<Folder | null>(null);
@@ -410,6 +418,9 @@ export default function VaultPage(props: VaultPageProps) {
         }
         if (sidebarFilter.kind === 'favorite' && !cipher.favorite) return false;
         if (sidebarFilter.kind === 'type' && meta?.typeKey !== sidebarFilter.value) return false;
+        if (sidebarFilter.kind === 'collection') {
+          if (!cipher.organizationId || !(cipher.collectionIds || []).includes(sidebarFilter.collectionId)) return false;
+        }
         if (sidebarFilter.kind === 'folder') {
           if (sidebarFilter.folderId === null) {
             if (cipher.folderId) return false;
@@ -480,6 +491,7 @@ export default function VaultPage(props: VaultPageProps) {
   const sidebarFilterKey = useMemo(() => {
     if (sidebarFilter.kind === 'folder') return `folder:${sidebarFilter.folderId ?? 'none'}`;
     if (sidebarFilter.kind === 'type') return `type:${sidebarFilter.value}`;
+    if (sidebarFilter.kind === 'collection') return `collection:${sidebarFilter.collectionId}`;
     if (sidebarFilter.kind === 'duplicates') return `duplicates:${duplicateMode}`;
     return sidebarFilter.kind;
   }, [sidebarFilter, duplicateMode]);
@@ -670,6 +682,10 @@ const folderName = useCallback((id: string | null | undefined): string => {
 
   const startEdit = useCallback((): void => {
     if (!selectedCipher) return;
+    if (selectedCipher.organizationId && selectedCipher.edit === false) {
+      props.onNotify('warning', t('txt_organizations_readonly_warning'));
+      return;
+    }
     setDraft(draftFromCipher(selectedCipher));
     setIsCreating(false);
     setIsEditing(true);
@@ -866,6 +882,41 @@ const folderName = useCallback((id: string | null | undefined): string => {
       setPendingDelete(null);
       cancelEdit();
       if (isMobileLayout) setMobilePanel('list');
+    } catch {
+      // The action layer already shows the user-facing error toast.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Organization sharing is offered for personal, active items when the
+  // account has at least one confirmed organization with an available key.
+  const shareableOrganizations = useMemo(
+    () => (props.organizations || []).filter((organization) => organization.keyAvailable),
+    [props.organizations]
+  );
+  const canShareToOrganization = (cipher: Cipher): boolean =>
+    !!props.onShareVaultItemToOrganization &&
+    !cipher.organizationId &&
+    !cipher.deletedDate &&
+    !cipher.archivedDate &&
+    shareableOrganizations.length > 0;
+
+  function openShareToOrganization(): void {
+    setShareOrgId('');
+    setShareCollectionId('');
+    setShareToOrgOpen(true);
+  }
+
+  async function confirmShareToOrganization(): Promise<void> {
+    if (!selectedCipher || !props.onShareVaultItemToOrganization) return;
+    if (!shareOrgId || !shareCollectionId) return;
+    setBusy(true);
+    try {
+      await props.onShareVaultItemToOrganization(selectedCipher, shareOrgId, [shareCollectionId]);
+      setShareToOrgOpen(false);
+      setShareOrgId('');
+      setShareCollectionId('');
     } catch {
       // The action layer already shows the user-facing error toast.
     } finally {
@@ -1208,6 +1259,8 @@ const folderName = useCallback((id: string | null | undefined): string => {
         )}
         <VaultSidebar
           folders={props.folders}
+          collections={props.collections}
+          organizations={props.organizations}
           sidebarFilter={sidebarFilter}
           busy={busy}
           isMobileLayout={isMobileLayout}
@@ -1298,6 +1351,8 @@ const folderName = useCallback((id: string | null | undefined): string => {
                 isCreating={isCreating}
                 busy={busy}
                 folders={props.folders}
+                organizations={shareableOrganizations}
+                collections={props.collections}
                 selectedCipher={selectedCipher}
                 editExistingAttachments={editExistingAttachments}
                 removedAttachmentIds={removedAttachmentIds}
@@ -1340,6 +1395,14 @@ const folderName = useCallback((id: string | null | undefined): string => {
                 passkeyCreatedAt={firstPasskeyCreationTime(selectedCipher)}
                 hiddenFieldVisibleMap={hiddenFieldVisibleMap}
                 folderName={folderName}
+                organizationName={(() => {
+                  const orgId = selectedCipher.organizationId;
+                  if (!orgId) return '';
+                  return (props.organizations || []).find((organization) => organization.id === orgId)?.name || '';
+                })()}
+                collectionNames={(props.collections || [])
+                  .filter((collection) => (selectedCipher.collectionIds || []).includes(collection.id))
+                  .map((collection) => collection.decName || collection.name || '')}
                 onOpenReprompt={() => setRepromptOpen(true)}
                 onToggleShowPassword={() => setShowPassword((value) => !value)}
                 onToggleHiddenField={(index) => setHiddenFieldVisibleMap((prev) => ({ ...prev, [index]: !prev[index] }))}
@@ -1351,6 +1414,7 @@ const folderName = useCallback((id: string | null | undefined): string => {
                 onRestore={(cipher) => void handleRestoreSelected(cipher)}
                 onArchive={(cipher) => setPendingArchive(cipher)}
                 onUnarchive={(cipher) => void handleUnarchiveSelected(cipher)}
+                onShareToOrganization={canShareToOrganization(selectedCipher) ? openShareToOrganization : undefined}
               />
             </div>
           )}
@@ -1396,6 +1460,15 @@ const folderName = useCallback((id: string | null | undefined): string => {
         repromptOpen={repromptOpen}
         repromptPassword={repromptPassword}
         deletePasskeyOpen={pendingDeletePasskeyIndex != null}
+        shareToOrgOpen={shareToOrgOpen}
+        shareOrgId={shareOrgId}
+        shareCollectionId={shareCollectionId}
+        shareOrganizations={shareableOrganizations}
+        shareCollections={(props.collections || []).filter((collection) => collection.organizationId === shareOrgId)}
+        onShareOrgIdChange={setShareOrgId}
+        onShareCollectionIdChange={setShareCollectionId}
+        onConfirmShareToOrg={() => void confirmShareToOrganization()}
+        onCancelShareToOrg={() => setShareToOrgOpen(false)}
         onConfirmAddField={() => {
           if (!draft) return;
           if (!fieldLabel.trim()) {

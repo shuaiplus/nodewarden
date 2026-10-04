@@ -1,7 +1,10 @@
 // CONTRACT:
-// Locale bundles are standalone and loaded on demand. Adding a locale requires
-// updating Locale, AVAILABLE_LOCALES, browser-language detection, localeLoaders,
-// scripts/i18n-utils.cjs, and the locale file itself.
+// Locale bundles are standalone and loaded on demand. Each locale has a base
+// bundle (i18n/locales) and an organizations-feature bundle (i18n/org) that is
+// merged on top at load time, keeping the base files free of feature-key
+// additions. Adding a locale requires updating Locale, AVAILABLE_LOCALES,
+// browser-language detection, localeLoaders, orgLocaleLoaders,
+// scripts/i18n-utils.cjs, and both the base and org locale files.
 //
 // Do not call t() at module scope for exported arrays/constants; async init can
 // otherwise leave raw txt_* keys in the rendered UI.
@@ -18,6 +21,7 @@ export type Locale =
   | 'sv';
 
 import enMessages from './i18n/locales/en';
+import orgEnMessages from './i18n/org/en';
 const LOCALE_STORAGE_KEY = 'nodewarden.locale';
 
 type MessageTable = Record<string, string>;
@@ -36,8 +40,12 @@ export const AVAILABLE_LOCALES: readonly { value: Locale; label: string }[] = [
 ];
 
 let locale: Locale = resolveInitialLocale();
-let activeMessages: MessageTable = enMessages;
-const loadedMessages = new Map<Locale, MessageTable>([['en', enMessages]]);
+let activeMessages: MessageTable = mergeMessages(enMessages, orgEnMessages);
+const loadedMessages = new Map<Locale, MessageTable>([['en', activeMessages]]);
+
+function mergeMessages(base: MessageTable, org: MessageTable): MessageTable {
+  return { ...base, ...org };
+}
 
 function isLocale(value: unknown): value is Locale {
   return AVAILABLE_LOCALES.some((item) => item.value === value);
@@ -81,6 +89,19 @@ const localeLoaders: Record<Locale, () => Promise<{ default: MessageTable }>> = 
   sv: () => import('./i18n/locales/sv'),
 };
 
+const orgLocaleLoaders: Record<Locale, () => Promise<{ default: MessageTable }>> = {
+  en: () => Promise.resolve({ default: orgEnMessages }),
+  'zh-CN': () => import('./i18n/org/zh-CN'),
+  'zh-TW': () => import('./i18n/org/zh-TW'),
+  ru: () => import('./i18n/org/ru'),
+  es: () => import('./i18n/org/es'),
+  fi: () => import('./i18n/org/fi'),
+  de: () => import('./i18n/org/de'),
+  fr: () => import('./i18n/org/fr'),
+  it: () => import('./i18n/org/it'),
+  sv: () => import('./i18n/org/sv'),
+};
+
 function localeToHtmlLang(value: Locale): string {
   return value;
 }
@@ -93,13 +114,14 @@ function syncDocumentLanguage(): void {
 async function loadLocaleMessages(next: Locale): Promise<MessageTable> {
   const cached = loadedMessages.get(next);
   if (cached) return cached;
-  const mod = await localeLoaders[next]();
-  loadedMessages.set(next, mod.default);
-  return mod.default;
+  const [base, org] = await Promise.all([localeLoaders[next](), orgLocaleLoaders[next]()]);
+  const merged = mergeMessages(base.default, org.default);
+  loadedMessages.set(next, merged);
+  return merged;
 }
 
 async function loadFallbackMessages(): Promise<MessageTable> {
-  return enMessages;
+  return mergeMessages(enMessages, orgEnMessages);
 }
 
 export type I18nParams = Record<string, string | number | null | undefined>;

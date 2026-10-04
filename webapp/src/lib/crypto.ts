@@ -35,6 +35,21 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
+// Matches the "<encType>.<body>" EncString shape where the body is
+// pipe-separated base64 parts ("2.iv|ct|mac"). Current official Bitwarden
+// clients store the ORGANIZATION name in plaintext (the server returns it
+// in the clear and clients render it verbatim), so org names that do not
+// match this shape are plaintext. The strict body test keeps ordinary
+// plaintext names like "1. Acme Corp" or "2.Q3 budget" rendering as
+// themselves instead of falling into the decrypt path.
+export function looksLikeEncString(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const dot = value.indexOf('.');
+  if (dot < 1) return false;
+  if (!/^\d+$/.test(value.slice(0, dot))) return false;
+  return /^[A-Za-z0-9+/=]+(\|[A-Za-z0-9+/=]+)+$/.test(value.slice(dot + 1));
+}
+
 export function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);

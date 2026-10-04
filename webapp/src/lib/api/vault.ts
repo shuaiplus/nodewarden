@@ -1019,6 +1019,10 @@ export async function repairCipherUriChecksums(
 
   for (const cipher of ciphers) {
     if (!cipher?.id || cipher.type !== 1 || !cipher.login || !Array.isArray(cipher.login.uris)) continue;
+    // Organization ciphers are encrypted with the organization key; this repair
+    // only speaks the user key and would corrupt their URIs by re-encrypting
+    // org-key data with the wrong key. They are handled separately.
+    if (cipher.organizationId) continue;
     let keys: { enc: Uint8Array; mac: Uint8Array; key: string | null } = {
       enc: userEnc,
       mac: userMac,
@@ -1250,6 +1254,7 @@ export async function repairCipherKeyMismatches(
 
   for (const cipher of ciphers) {
     if (!cipher?.id || !looksLikeCipherString(cipher.key)) continue;
+    if (cipher.organizationId) continue;
     if (!(await hasItemKeyFieldMismatch(cipher, userEnc, userMac))) continue;
     if (hasUnresolvedEncryptedFields(cipher)) continue;
     await updateCipher(
@@ -1436,6 +1441,52 @@ export async function buildCipherImportPayload(session: SessionState, draft: Vau
   return buildCipherPayload(session, draft, null);
 }
 
+// PUT /api/ciphers/:id/collections — move an organization cipher between collections.
+export async function updateCipherCollections(
+  authedFetch: AuthedFetch,
+  cipherId: string,
+  collectionIds: string[]
+): Promise<void> {
+  const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipherId)}/collections`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-NodeWarden-Web': '1',
+    },
+    body: JSON.stringify({ collectionIds }),
+  });
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Update collections failed'));
+}
+
+// POST /api/ciphers with an organization target. Payload must be encrypted with
+// the organization key (orgSession carries the org key halves).
+export async function createCipherInOrganization(
+  authedFetch: AuthedFetch,
+  orgSession: SessionState,
+  draft: VaultDraft,
+  organizationId: string,
+  collectionIds: string[]
+): Promise<Cipher> {
+  // draft.folderId may reference one of the user's own folders; the server
+  // stores it as the acting user's per-user filing on the shared item.
+  const payload = await buildCipherImportPayload(orgSession, { ...draft });
+  payload.organizationId = organizationId;
+  payload.collectionIds = [...collectionIds];
+
+  const resp = await authedFetch('/api/ciphers', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-NodeWarden-Web': '1',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Create item failed'));
+  const body = await parseJson<Cipher>(resp);
+  if (!body?.id) throw new Error('Create item failed');
+  return body;
+}
+
 export async function createCipher(
   authedFetch: AuthedFetch,
   session: SessionState,
@@ -1582,4 +1633,177 @@ export async function bulkMoveCiphers(
     });
     if (!resp.ok) throw new Error('Bulk move failed');
   }
+}
+
+// POST /api/ciphers/:id/share — move a personal cipher into an organization.
+// The cipher payload must already be re-encrypted with the organization key.
+export async function shareCipherToOrganization(
+  authedFetch: AuthedFetch,
+  cipherId: string,
+  payload: {
+    cipher: Record<string, unknown>;
+    organizationId: string;
+    collectionIds: string[];
+  }
+): Promise<Cipher> {
+  const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipherId)}/share`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-NodeWarden-Web': '1',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Share failed'));
+  return (await parseJson<Cipher>(resp)) as Cipher;
+}
+
+// Repair for corrupted organization cipher URIs.
+//
+// Two historical bugs damaged org items' login.uris:
+//   1. repairCipherUriChecksums re-encrypted org URIs with the USER key
+//      (it now skips org ciphers), leaving user-key-encrypted strings inside
+//      org-key ciphers.
+//   2. The vault editor's draft captured the raw encrypted URI when the
+//      decrypted one was empty (fixed), producing nested EncStrings.
+//
+// This sweep recovers the real URI by peeling the layers — org key, then user
+// key, alternating until a non-EncString plaintext emerges — re-encrypts it
+// with the organization key, and writes a surgical update that leaves all
+// other fields untouched.
+const failedOrgUriRepairs = new Set<string>();
+const MAX_URI_LAYER_PEEL = 6;
+
+export async function repairCorruptedOrgUris(
+  authedFetch: AuthedFetch,
+  session: SessionState,
+  orgKeys: Record<string, { encB64: string; macB64: string }>,
+  encryptedCiphers: Cipher[]
+): Promise<number> {
+  if (!session.symEncKey || !session.symMacKey || !Array.isArray(encryptedCiphers) || !orgKeys) {
+    return 0;
+  }
+  const userEnc = base64ToBytes(session.symEncKey);
+  const userMac = base64ToBytes(session.symMacKey);
+  let repaired = 0;
+
+  for (const cipher of encryptedCiphers) {
+    if (!cipher?.id || !cipher.organizationId || cipher.type !== 1) continue;
+    const orgKey = orgKeys[cipher.organizationId];
+    if (!orgKey) continue;
+    if (failedOrgUriRepairs.has(cipher.id)) continue;
+    const login = cipher.login;
+    if (!login || !Array.isArray(login.uris) || login.uris.length === 0) continue;
+
+    const orgEnc = base64ToBytes(orgKey.encB64);
+    const orgMac = base64ToBytes(orgKey.macB64);
+
+    let changed = false;
+    const nextUris: Array<Record<string, unknown>> = [];
+
+    for (const entry of login.uris) {
+      if (!entry || typeof entry !== 'object') continue;
+      const { decUri: _dec, ...rawEntry } = entry as Record<string, unknown>;
+      const rawUri = typeof entry.uri === 'string' ? entry.uri.trim() : '';
+      if (!looksLikeCipherString(rawUri)) {
+        nextUris.push({ ...rawEntry });
+        continue;
+      }
+
+      // A healthy org cipher URI decrypts with the org key to a real URI —
+      // leave those untouched.
+      let healthy = false;
+      try {
+        const direct = await decryptStr(rawUri, orgEnc, orgMac);
+        if (!looksLikeCipherString(direct)) healthy = true;
+      } catch {
+        // org-key decrypt failed → corrupted
+      }
+      if (healthy) {
+        nextUris.push({ ...rawEntry });
+        continue;
+      }
+
+      // Peel encryption layers: org key first (the correct key), then the user
+      // key (round-1 corruption), alternating until plaintext emerges.
+      let current = rawUri;
+      let recovered: string | null = null;
+      try {
+        for (let depth = 0; depth < MAX_URI_LAYER_PEEL; depth += 1) {
+          let layer: string;
+          try {
+            layer = await decryptStr(current, orgEnc, orgMac);
+          } catch {
+            layer = await decryptStr(current, userEnc, userMac);
+          }
+          if (!looksLikeCipherString(layer)) {
+            recovered = layer.trim();
+            break;
+          }
+          current = layer;
+        }
+      } catch {
+        recovered = null;
+      }
+
+      if (recovered === null) {
+        // Unrecoverable nesting: leave the entry as-is.
+        nextUris.push({ ...rawEntry });
+        continue;
+      }
+
+      const recoveredChecksum = await sha256Base64(recovered);
+      const repairedUri = await encryptTextValue(recovered, orgEnc, orgMac);
+      const repairedChecksum = await encryptTextValue(recoveredChecksum, orgEnc, orgMac);
+      if (!repairedUri || !repairedChecksum) continue;
+
+      nextUris.push({
+        ...rawEntry,
+        uri: repairedUri,
+        uriChecksum: repairedChecksum,
+        match: typeof entry.match === 'number' && Number.isFinite(entry.match) ? entry.match : null,
+      });
+      changed = true;
+    }
+
+    if (!changed) continue;
+
+    const {
+      decUsername: _u,
+      decPassword: _p,
+      decTotp: _t,
+      decUri: _du,
+      ...rawLogin
+    } = login as Record<string, unknown>;
+
+    const payload: Record<string, unknown> = {
+      type: cipher.type,
+      organizationId: cipher.organizationId,
+      folderId: null,
+      favorite: !!cipher.favorite,
+      reprompt: cipher.reprompt ?? 0,
+      name: cipher.name ?? null,
+      notes: cipher.notes ?? null,
+      login: { ...rawLogin, uris: nextUris },
+      fields: Array.isArray(cipher.fields)
+        ? cipher.fields.map(({ decName: _dn, decValue: _dv, ...field }) => field)
+        : null,
+      lastKnownRevisionDate: cipher.revisionDate ?? null,
+      preserveRevisionDate: true,
+    };
+
+    try {
+      const resp = await authedFetch(`/api/ciphers/${encodeURIComponent(cipher.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', [NODEWARDEN_WEB_REPAIR_HEADER]: '1' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error(await parseErrorMessage(resp, 'Org URI repair failed'));
+      repaired += 1;
+    } catch {
+      failedOrgUriRepairs.add(cipher.id);
+    }
+  }
+
+  return repaired;
 }

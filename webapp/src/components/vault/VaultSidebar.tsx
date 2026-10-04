@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-preact';
 import { Link } from 'wouter';
-import type { Folder } from '@/lib/types';
+import type { Folder, VaultCollection } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { getFolderSortOptions, type SidebarFilter, type VaultSortMode } from '@/components/vault/vault-page-helpers';
 
@@ -37,6 +37,10 @@ interface VaultSidebarProps {
   folderSortMode: VaultSortMode;
   folderSortMenuOpen: boolean;
   folderSortMenuRef: RefObject<HTMLDivElement>;
+  /** Organization collections with decrypted names (empty when none). */
+  collections?: VaultCollection[];
+  /** Confirmed organizations with decrypted names (empty when none). */
+  organizations?: Array<{ id: string; name: string; keyAvailable: boolean }>;
   onCloseMobileSidebar: () => void;
   onChangeFilter: (filter: SidebarFilter) => void;
   onOpenDeleteAllFolders: () => void;
@@ -236,6 +240,39 @@ export default function VaultSidebar(props: VaultSidebarProps) {
           </div>
         ))}
       </div>
+
+      {(props.organizations || []).length > 0 && (
+        <div className="sidebar-block">
+          <div className="sidebar-title-row">
+            <div className="sidebar-title">{t('txt_organizations_title')}</div>
+          </div>
+          {(props.organizations || []).map((organization) => (
+            <div key={organization.id} className="org-sidebar-group">
+              <div className="tree-btn tree-head" title={organization.name || organization.id}>
+                <ShieldUser size={14} className="tree-icon" />
+                <span className="tree-label">{organization.name || organization.id.slice(0, 8)}</span>
+              </div>
+              {(props.collections || [])
+                .filter((collection) => collection.organizationId === organization.id)
+                .map((collection) => (
+                  <button
+                    key={collection.id}
+                    type="button"
+                    className={`tree-btn tree-sub ${props.sidebarFilter.kind === 'collection' && props.sidebarFilter.collectionId === collection.id ? 'active' : ''}`}
+                    onClick={() =>
+                      props.onChangeFilter({ kind: 'collection', collectionId: collection.id, organizationId: organization.id })
+                    }
+                  >
+                    <FolderIcon size={14} className="tree-icon" />
+                    <span className="tree-label" title={collection.decName || collection.name || collection.id}>
+                      {collection.decName || collection.name || collection.id.slice(0, 8)}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
     </aside>
   );
 }
