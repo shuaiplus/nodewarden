@@ -4,6 +4,7 @@ import { AlertTriangle, Archive, Clipboard, Download, Eye, EyeOff, ExternalLink,
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
 import type { TotpCodeResult } from '@/lib/crypto';
 import { checkPasswordLeaked, type PasswordBreachResult } from '@/lib/password-security';
+import { linkedFieldLabelKey, linkedFieldValue, isSensitiveLinkedId } from '@/lib/linked-fields';
 import type { Cipher } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import {
@@ -94,6 +95,7 @@ function PasswordHistoryDialog(props: {
 export default function VaultDetailView(props: VaultDetailViewProps) {
   const selectedAttachments = Array.isArray(props.selectedCipher.attachments) ? props.selectedCipher.attachments : [];
   const [showSshPrivateKey, setShowSshPrivateKey] = useState(false);
+  const [showCardCode, setShowCardCode] = useState(false);
   const [passwordHistoryOpen, setPasswordHistoryOpen] = useState(false);
   const [breachResult, setBreachResult] = useState<PasswordBreachResult | null>(null);
   const [checkingBreach, setCheckingBreach] = useState(false);
@@ -114,6 +116,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
     breachControllerRef.current?.abort();
     breachControllerRef.current = null;
     setShowSshPrivateKey(false);
+    setShowCardCode(false);
     setPasswordHistoryOpen(false);
     setBreachResult(null);
     setCheckingBreach(false);
@@ -301,17 +304,60 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
           {props.selectedCipher.card && (
             <div className="card">
               <h4>{t('txt_card_details')}</h4>
-              <div className="kv-line"><span>{t('txt_cardholder_name')}</span><strong>{props.selectedCipher.card.decCardholderName || ''}</strong></div>
-              <div className="kv-line"><span>{t('txt_number')}</span><strong>{props.selectedCipher.card.decNumber || ''}</strong></div>
-              <div className="kv-line">
-                <span>{t('txt_brand')}</span>
-                <strong className="card-brand-detail">
-                  <CardBrandIcon brand={props.selectedCipher.card.decBrand} />
-                  {displayCardBrand(props.selectedCipher.card.decBrand)}
-                </strong>
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_cardholder_name')}</span>
+                <div className="kv-main">
+                  <strong className="value-ellipsis" title={props.selectedCipher.card.decCardholderName || ''}>{props.selectedCipher.card.decCardholderName || ''}</strong>
+                </div>
               </div>
-              <div className="kv-line"><span>{t('txt_expiry')}</span><strong>{`${props.selectedCipher.card.decExpMonth || ''}/${props.selectedCipher.card.decExpYear || ''}`}</strong></div>
-              <div className="kv-line"><span>{t('txt_security_code')}</span><strong>{props.selectedCipher.card.decCode || ''}</strong></div>
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_number')}</span>
+                <div className="kv-main">
+                  <strong className="value-ellipsis" title={props.selectedCipher.card.decNumber || ''}>
+                    {props.selectedCipher.card.decNumber || ''}
+                  </strong>
+                </div>
+                <div className="kv-actions">
+                  <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(props.selectedCipher.card?.decNumber || '')}>
+                    <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
+                  </button>
+                </div>
+              </div>
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_brand')}</span>
+                <div className="kv-main">
+                  <strong className="card-brand-detail">
+                    <CardBrandIcon brand={props.selectedCipher.card.decBrand} />
+                    {displayCardBrand(props.selectedCipher.card.decBrand)}
+                  </strong>
+                </div>
+              </div>
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_expiry')}</span>
+                <div className="kv-main">
+                  <strong className="value-ellipsis" title={`${props.selectedCipher.card.decExpMonth || ''}/${props.selectedCipher.card.decExpYear || ''}`}>{`${props.selectedCipher.card.decExpMonth || ''}/${props.selectedCipher.card.decExpYear || ''}`}</strong>
+                </div>
+              </div>
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_security_code')}</span>
+                <div className="kv-main">
+                  <strong
+                    className="value-ellipsis"
+                    title={showCardCode ? props.selectedCipher.card.decCode || '' : maskSecret(props.selectedCipher.card.decCode || '')}
+                  >
+                    {showCardCode ? props.selectedCipher.card.decCode || '' : maskSecret(props.selectedCipher.card.decCode || '')}
+                  </strong>
+                </div>
+                <div className="kv-actions">
+                  <button type="button" className="btn btn-secondary small" onClick={() => setShowCardCode((value) => !value)}>
+                    {showCardCode ? <EyeOff size={14} className="btn-icon" /> : <Eye size={14} className="btn-icon" />}
+                    {showCardCode ? t('txt_hide') : t('txt_reveal')}
+                  </button>
+                  <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(props.selectedCipher.card?.decCode || '')}>
+                    <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -435,16 +481,50 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
             </div>
           )}
 
-          {(props.selectedCipher.fields || []).some((x) => parseFieldType(x.type) !== 3) && (
+          {(props.selectedCipher.fields || []).length > 0 && (
             <div className="card">
               <h4>{t('txt_custom_fields')}</h4>
               {(props.selectedCipher.fields || [])
-                .filter((x) => parseFieldType(x.type) !== 3)
                 .map((field, index) => {
                   const fieldType = parseFieldType(field.type);
                   const fieldName = field.decName || t('txt_field');
                   const rawValue = field.decValue || '';
                   const isHiddenVisible = !!props.hiddenFieldVisibleMap[index];
+                  if (fieldType === 3) {
+                    const linkedLabel = linkedFieldLabelKey(field.linkedId);
+                    const linkedRaw = linkedFieldValue(props.selectedCipher, field.linkedId);
+                    const isSensitive = isSensitiveLinkedId(field.linkedId);
+                    const isLinkedVisible = !!props.hiddenFieldVisibleMap[index];
+                    const linkedMasked = isSensitive && !isLinkedVisible;
+                    const linkedDisplay = linkedMasked ? maskSecret(linkedRaw) : linkedRaw;
+                    return (
+                      <div key={`view-field-${index}`} className="custom-field-card">
+                        <div className="custom-field-label" title={fieldName}>{fieldName}</div>
+                        <div className="custom-field-body">
+                          <div className="custom-field-value">
+                            <span className="linked-field-badge">{t('txt_linked')}</span>
+                            <strong
+                              className={linkedMasked ? 'custom-field-masked' : 'custom-field-display'}
+                              title={linkedMasked ? '' : `${t(linkedLabel)}: ${linkedRaw}`}
+                            >
+                              {t(linkedLabel)}: {linkedDisplay}
+                            </strong>
+                          </div>
+                          <div className="kv-actions">
+                            {isSensitive && (
+                              <button type="button" className="btn btn-secondary small" onClick={() => props.onToggleHiddenField(index)}>
+                                {isLinkedVisible ? <EyeOff size={14} className="btn-icon" /> : <Eye size={14} className="btn-icon" />}
+                                {isLinkedVisible ? t('txt_hide') : t('txt_reveal')}
+                              </button>
+                            )}
+                            <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(linkedRaw)}>
+                              <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
                   if (fieldType === 2) {
                     const checked = toBooleanFieldValue(rawValue);
                     return (
@@ -474,7 +554,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
                       <div className="custom-field-body">
                         <div className="custom-field-value">
                           <strong
-                            className={fieldType === 1 && !isHiddenVisible ? 'value-ellipsis' : 'custom-field-display'}
+                            className={fieldType === 1 && !isHiddenVisible ? 'custom-field-masked' : 'custom-field-display'}
                             title={fieldType === 1 && !isHiddenVisible ? '' : rawValue}
                           >
                             {fieldType === 1 && !isHiddenVisible ? maskSecret(rawValue) : rawValue}

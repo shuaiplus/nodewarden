@@ -320,6 +320,7 @@ export interface VaultDraftField {
   type: CustomFieldType;
   label: string;
   value: string;
+  linkedId?: number | null;
 }
 
 export interface VaultDraft {

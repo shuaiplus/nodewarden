@@ -653,6 +653,7 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
       type: parseFieldType(field.type ?? 0),
       label: plainCipherValue(field.decName, field.name).trim(),
       value: plainCipherValue(field.decValue, field.value),
+      linkedId: field.linkedId ?? null,
     }))
     .filter((field) => field.label);
 
@@ -793,12 +794,19 @@ async function buildUpdatedPasswordHistory(
   return nextEntries.slice(0, 5);
 }
 
+interface EncryptedCustomField {
+  type: number;
+  name: string | null;
+  value: string | null;
+  linkedId: number | null;
+}
+
 async function encryptCustomFields(
   fields: VaultDraftField[],
   enc: Uint8Array,
   mac: Uint8Array
-): Promise<Array<{ type: number; name: string | null; value: string | null }>> {
-  const out: Array<{ type: number; name: string | null; value: string | null }> = [];
+): Promise<EncryptedCustomField[]> {
+  const out: EncryptedCustomField[] = [];
   for (const field of fields || []) {
     const label = String(field.label || '').trim();
     if (!label) continue;
@@ -806,6 +814,7 @@ async function encryptCustomFields(
       type: parseFieldType(field.type),
       name: await encryptTextValue(label, enc, mac),
       value: await encryptTextValue(String(field.value || ''), enc, mac),
+      linkedId: field.type === 3 ? field.linkedId ?? null : null,
     });
   }
   return out;
