@@ -428,6 +428,47 @@ export interface YubiKeyOtpSettings {
   yubicoSecretKey: string;
 }
 
+export interface TwoFactorAuthenticatorSettings {
+  /** Whether an authenticator key is already active on the account. */
+  enabled: boolean;
+  /** Server-generated authenticator key. Never generated on the client. */
+  key: string;
+  /**
+   * True when the server minted a fresh key that is not stored yet: the active key keeps working
+   * until the new one is verified, and abandoning the dialog leaves it untouched.
+   */
+  rotating: boolean;
+  /**
+   * Signed server-side proof that the setup was authorized: bound to the user, security stamp and
+   * TTL, and records which second factor authorized a rotation. It does not bind the key, which
+   * is hand-editable; the server re-validates any submitted key at commit time.
+   */
+  userVerificationToken: string;
+}
+
+/** Proof the caller supplies to start authenticator setup. */
+export interface TotpSetupRequest {
+  /** Master password, required to enable an authenticator for the first time. */
+  masterPassword?: string;
+  /**
+   * Code from the authenticator currently in use, or the recovery code, required to replace the key.
+   * It is the step-up check for rotation: no replacement key is minted before the server verified it.
+   */
+  currentToken?: string;
+}
+
+/** Outcome of committing the key the server handed out. */
+export interface TotpSetupResult {
+  /** New recovery code, present when the commit minted (first enable) or replaced (change via recovery code) the recovery code. */
+  recoveryCode: string;
+  /**
+   * True only when this commit consumed the previous recovery code (a change authorized with it).
+   * False for a first enable, which merely mints a fresh code. Mirrors the server's `RecoveryCodeConsumed`
+   * flag so the UI wording never has to be inferred from a client-side rotation flag.
+   */
+  recoveryCodeConsumed: boolean;
+}
+
 export interface TokenSuccess {
   access_token: string;
   refresh_token?: string;

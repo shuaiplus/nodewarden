@@ -768,6 +768,10 @@
   color: var(--text);
 }
 
+.two-step-provider-actions {
+  @apply flex flex-wrap items-center justify-end gap-2;
+}
+
 .two-step-provider-copy span {
   @apply text-sm leading-5;
   color: var(--muted-strong);
@@ -778,6 +782,17 @@
   border-color: color-mix(in srgb, var(--success) 28%, var(--line));
   background: color-mix(in srgb, var(--success) 10%, var(--panel));
   color: var(--success);
+}
+
+/* Shown after a change that consumed the recovery code: the replacement is only ever visible here,
+   so it sits next to the authenticator it belongs to rather than in a dialog that has closed. */
+.totp-new-recovery-code {
+  @apply mt-1 grid gap-1.5;
+}
+
+.totp-new-recovery-code > span {
+  @apply text-xs leading-4;
+  color: color-mix(in srgb, var(--warning) 76%, var(--text));
 }
 
 .totp-manage-dialog-body {

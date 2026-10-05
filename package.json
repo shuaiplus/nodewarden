@@ -15,6 +15,7 @@
     "domains:sync": "node scripts/sync-global-domains.mjs",
     "i18n": "node scripts/i18n-validate.cjs",
     "i18n:validate": "node scripts/i18n-validate.cjs",
+    "test:totp-rotation": "tsx --test scripts/totp-rotation-authorization.test.ts",
     "test:config-compatibility": "tsx --test scripts/config-compatibility.test.ts",
     "test:web-crypto": "tsx --test scripts/web-crypto-availability.test.ts",
     "test:notifications-security": "tsx --test scripts/notifications-security.test.ts",
