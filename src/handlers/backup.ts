@@ -36,8 +36,6 @@ import {
   type RemoteBackupTransferSession,
   type RemoteBackupFile,
   createRemoteBackupTransferSession,
-  deleteRemoteBackupFile,
-  downloadRemoteBackupFile,
   ensureRemoteRestoreCandidate,
   listRemoteBackupEntries,
   pruneRemoteBackupArchives,
@@ -1030,6 +1028,59 @@ async function listRemoteBackupEntriesViaRunner(
   return await response.json<Awaited<ReturnType<typeof listRemoteBackupEntries>>>();
 }
 
+async function downloadRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<RemoteBackupFile> {
+  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
+  const response = await stub.fetch('https://backup-transfer/internal/download-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup download failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+  return {
+    provider: destination.type,
+    remotePath: path,
+    fileName: decodeURIComponent(response.headers.get('X-Backup-File-Name') || '') || path.split('/').pop() || 'backup.zip',
+    contentType: response.headers.get('Content-Type') || 'application/zip',
+    bytes: new Uint8Array(await response.arrayBuffer()),
+  };
+}
+
+async function deleteRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<void> {
+  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
+  const response = await stub.fetch('https://backup-transfer/internal/delete-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup delete failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+}
+
 export async function handleListAdminRemoteBackups(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
@@ -1068,7 +1119,7 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    const remoteFile = await downloadRemoteBackupFile(destination, path);
+    const remoteFile = await downloadRemoteBackupViaRunner(env, destination, path);
     return new Response(remoteFile.bytes, {
       status: 200,
       headers: {
@@ -1101,7 +1152,7 @@ export async function handleInspectAdminRemoteBackup(request: Request, env: Env,
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    const remoteFile = await downloadRemoteBackupFile(destination, path);
+    const remoteFile = await downloadRemoteBackupViaRunner(env, destination, path);
     const integrity = await inspectBackupArchiveFileNameChecksum(remoteFile.bytes, remoteFile.fileName || path);
     return jsonResponse({
       object: 'backup-remote-integrity',
@@ -1133,7 +1184,7 @@ export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, 
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    await deleteRemoteBackupFile(destination, path);
+    await deleteRemoteBackupViaRunner(env, destination, path);
     await writeAuditLog(storage, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
       ...getBackupDestinationSummary(destination),
       remotePath: path,
