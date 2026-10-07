@@ -58,7 +58,7 @@
     "@babel/core": ">=7.29.6",
     "esbuild": ">=0.28.1",
     "ws": "8.21.0",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "browserslist": "4.28.7",
     "baseline-browser-mapping": "2.11.0"
   },
