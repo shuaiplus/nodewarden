@@ -1006,6 +1006,30 @@ export async function handleRunAdminConfiguredBackup(request: Request, env: Env,
   }
 }
 
+async function listRemoteBackupEntriesViaRunner(
+  env: Env,
+  destination: Parameters<typeof listRemoteBackupEntries>[0],
+  path: string
+): Promise<Awaited<ReturnType<typeof listRemoteBackupEntries>>> {
+  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
+  const response = await stub.fetch('https://backup-transfer/internal/list-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup listing failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+  return await response.json<Awaited<ReturnType<typeof listRemoteBackupEntries>>>();
+}
+
 export async function handleListAdminRemoteBackups(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
@@ -1014,7 +1038,7 @@ export async function handleListAdminRemoteBackups(request: Request, env: Env, a
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const url = new URL(request.url);
     const destination = requireBackupDestination(settings, url.searchParams.get('destinationId') || null);
-    const listing = await listRemoteBackupEntries(destination, url.searchParams.get('path') || '');
+    const listing = await listRemoteBackupEntriesViaRunner(env, destination, url.searchParams.get('path') || '');
     return jsonResponse({
       object: 'backup-remote-browser',
       destinationId: destination.id,
