@@ -425,6 +425,27 @@ export class BackupTransferRunner {
         },
       });
     }
+    
+    if (url.pathname === '/internal/list-remote-backup') {
+      let listBody: { destination?: RemoteAttachmentChunkRequest['destination']; path?: string };
+      try {
+        listBody = await request.json<{ destination?: RemoteAttachmentChunkRequest['destination']; path?: string }>();
+      } catch {
+        return badRequest('Remote backup listing payload is invalid');
+      }
+      if (!listBody?.destination) {
+        return badRequest('Remote backup listing payload is invalid');
+      }
+      try {
+        const listing = await createRemoteBackupTransferSession(listBody.destination).list(String(listBody.path || ''));
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      } catch (error) {
+        return badRequest(error instanceof Error ? error.message : 'Remote backup listing failed', 409);
+      }
+    }
 
     if (url.pathname !== '/internal/upload-attachment-chunk') {
       return badRequest('Not found', 404);
