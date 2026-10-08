@@ -5,6 +5,7 @@ import { strFromU8, unzipSync, type UnzipFileInfo } from 'fflate';
 import { BlobReader, Uint8ArrayWriter, ZipReader, configure as configureZipJs } from '@zip.js/zip.js';
 import { Download, FileUp } from 'lucide-preact';
 import ConfirmDialog, { useDialogLifecycle } from '@/components/ConfirmDialog';
+import GoogleAuthenticatorMigrationImport from '@/components/GoogleAuthenticatorMigrationImport';
 import type { CiphersImportPayload } from '@/lib/api/vault';
 import {
   type EncryptedJsonMode,
@@ -58,6 +59,7 @@ export interface ImportResultSummary {
   attachmentCount: number;
   importedAttachmentCount: number;
   failedAttachments: Array<{ fileName: string; reason: string }>;
+  confirmedItemCount?: number;
 }
 
 interface BitwardenPasswordProtectedInput extends BitwardenJsonInput {
@@ -76,6 +78,7 @@ const COMMON_IMPORT_SOURCE_IDS: ImportSourceId[] = [
   'bitwarden_csv',
   'bitwarden_zip',
   'nodewarden_json',
+  'google_authenticator_migration',
   'onepassword_1pux',
   'onepassword_1pif',
   'onepassword_mac_csv',
@@ -720,7 +723,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
             <select className="input" value={source} onChange={(e) => setSource((e.currentTarget as HTMLSelectElement).value as ImportSourceId)}>
               {commonSources.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {item.id === 'google_authenticator_migration' ? t('txt_google_authenticator_migration') : item.label}
                 </option>
               ))}
               {otherSources.length > 0 && (
@@ -736,18 +739,20 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
             </select>
           </label>
 
-          <label className="field field-span-2">
-            <span>{t('txt_source_file')}</span>
-            <input
-              className="input"
-              type="file"
-              accept={getFileAcceptBySource(source)}
-              onChange={(e) => {
-                const next = (e.currentTarget as HTMLInputElement).files?.[0] || null;
-                setFile(next);
-              }}
-            />
-          </label>
+          {source !== 'google_authenticator_migration' && (
+            <label className="field field-span-2">
+              <span>{t('txt_source_file')}</span>
+              <input
+                className="input"
+                type="file"
+                accept={getFileAcceptBySource(source)}
+                onChange={(e) => {
+                  const next = (e.currentTarget as HTMLInputElement).files?.[0] || null;
+                  setFile(next);
+                }}
+              />
+            </label>
+          )}
 
           <label className="field field-span-2">
             <span>{t('txt_folder_handling')}</span>
@@ -780,16 +785,27 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
           )}
         </div>
 
-        <div className="actions">
-          <button
-            type="button"
-            className="btn btn-primary"
+        {source === 'google_authenticator_migration' ? (
+          <GoogleAuthenticatorMigrationImport
+            folderMode={folderMode}
+            targetFolderId={folderMode === 'target' ? targetFolderId || null : null}
             disabled={isSubmitting || (folderMode === 'target' && !targetFolderId)}
-            onClick={() => void handleSubmit()}
-          >
-            <FileUp size={15} /> {isSubmitting ? t('txt_loading') : t('txt_import')}
-          </button>
-        </div>
+            onImport={onImport}
+            onNotify={onNotify}
+            onSummary={setImportSummary}
+          />
+        ) : (
+          <div className="actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={isSubmitting || (folderMode === 'target' && !targetFolderId)}
+              onClick={() => void handleSubmit()}
+            >
+              <FileUp size={15} /> {isSubmitting ? t('txt_loading') : t('txt_import')}
+            </button>
+          </div>
+        )}
       </section>
 
       <section className="card import-export-panel">

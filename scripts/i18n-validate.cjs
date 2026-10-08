@@ -21,6 +21,7 @@ const intentionallyEnglishKeys = new Set([
   'txt_backup_destination_name_default_s3',
   'txt_dash',
   'txt_text_3',
+  'txt_ga_migration_unnamed',
 ]);
 const intentionallyEnglishPrefixes = [
   'txt_log_action_',

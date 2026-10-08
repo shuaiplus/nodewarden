@@ -1,3 +1,5 @@
+import { parseGoogleAuthenticatorMigrationPage } from './google-authenticator-migration';
+
 export const WEB_CRYPTO_UNAVAILABLE_MESSAGE =
   'Secure browser cryptography is unavailable. Open NodeWarden over HTTPS in a supported browser.';
 
@@ -293,15 +295,6 @@ interface TotpConfig {
   period: number;
 }
 
-interface GoogleAuthenticatorMigrationTotp {
-  secret: string;
-  name: string;
-  issuer: string;
-  algorithm: TotpHashAlgorithm;
-  digits: number;
-  period: number;
-}
-
 const DEFAULT_TOTP_CONFIG: Omit<TotpConfig, 'secret' | 'steam'> = {
   algorithm: 'SHA-1',
   digits: 6,
@@ -329,181 +322,13 @@ function parseTotpHashAlgorithm(value: string | null): TotpHashAlgorithm {
   return 'SHA-1';
 }
 
-function base64ToBytesLoose(value: string): Uint8Array {
-  const normalized = value.trim().replace(/\s/g, '+').replace(/-/g, '+').replace(/_/g, '/');
-  if (!normalized) return new Uint8Array();
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-  try {
-    const binary = atob(padded);
-    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  } catch {
-    return new Uint8Array();
-  }
-}
-
-function bytesToBase32(bytes: Uint8Array): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = 0;
-  let value = 0;
-  let out = '';
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += alphabet[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) {
-    out += alphabet[(value << (5 - bits)) & 31];
-  }
-  return out;
-}
-
-function readProtoVarint(bytes: Uint8Array, state: { offset: number }): number | null {
-  let result = 0;
-  let factor = 1;
-  for (let i = 0; i < 10 && state.offset < bytes.length; i += 1) {
-    const byte = bytes[state.offset++];
-    result += (byte & 0x7f) * factor;
-    if ((byte & 0x80) === 0) return Number.isSafeInteger(result) ? result : null;
-    factor *= 128;
-  }
-  return null;
-}
-
-function readProtoBytes(bytes: Uint8Array, state: { offset: number }): Uint8Array | null {
-  const length = readProtoVarint(bytes, state);
-  if (length == null || length < 0 || state.offset + length > bytes.length) return null;
-  const out = bytes.slice(state.offset, state.offset + length);
-  state.offset += length;
-  return out;
-}
-
-function skipProtoField(bytes: Uint8Array, state: { offset: number }, wireType: number): boolean {
-  if (wireType === 0) return readProtoVarint(bytes, state) != null;
-  if (wireType === 1 && state.offset + 8 <= bytes.length) {
-    state.offset += 8;
-    return true;
-  }
-  if (wireType === 2) return readProtoBytes(bytes, state) != null;
-  if (wireType === 5 && state.offset + 4 <= bytes.length) {
-    state.offset += 4;
-    return true;
-  }
-  return false;
-}
-
-function googleMigrationAlgorithm(value: number): TotpHashAlgorithm | null {
-  if (value === 0 || value === 1) return 'SHA-1';
-  if (value === 2) return 'SHA-256';
-  if (value === 3) return 'SHA-512';
-  return null;
-}
-
-function googleMigrationDigits(value: number): number {
-  if (value === 2) return 8;
-  return 6;
-}
-
-function parseGoogleMigrationOtpParameter(bytes: Uint8Array): GoogleAuthenticatorMigrationTotp | null {
-  const state = { offset: 0 };
-  let secretBytes: Uint8Array | null = null;
-  let name = '';
-  let issuer = '';
-  let algorithm: TotpHashAlgorithm | null = 'SHA-1';
-  let digits = 6;
-  let otpType = 0;
-  const decoder = new TextDecoder();
-
-  while (state.offset < bytes.length) {
-    const key = readProtoVarint(bytes, state);
-    if (key == null) return null;
-    const fieldNumber = Math.floor(key / 8);
-    const wireType = key % 8;
-
-    if (fieldNumber === 1 && wireType === 2) {
-      secretBytes = readProtoBytes(bytes, state);
-    } else if (fieldNumber === 2 && wireType === 2) {
-      const value = readProtoBytes(bytes, state);
-      name = value ? decoder.decode(value) : '';
-    } else if (fieldNumber === 3 && wireType === 2) {
-      const value = readProtoBytes(bytes, state);
-      issuer = value ? decoder.decode(value) : '';
-    } else if (fieldNumber === 4 && wireType === 0) {
-      const value = readProtoVarint(bytes, state);
-      algorithm = value == null ? null : googleMigrationAlgorithm(value);
-    } else if (fieldNumber === 5 && wireType === 0) {
-      const value = readProtoVarint(bytes, state);
-      digits = googleMigrationDigits(value ?? 0);
-    } else if (fieldNumber === 6 && wireType === 0) {
-      otpType = readProtoVarint(bytes, state) ?? 0;
-    } else if (!skipProtoField(bytes, state, wireType)) {
-      return null;
-    }
-  }
-
-  if (!secretBytes?.length || !algorithm || otpType === 1) return null;
-  return {
-    secret: bytesToBase32(secretBytes),
-    name,
-    issuer,
-    algorithm,
-    digits,
-    period: DEFAULT_TOTP_CONFIG.period,
-  };
-}
-
-function parseGoogleAuthenticatorMigration(raw: string): GoogleAuthenticatorMigrationTotp[] {
-  let data = '';
-  try {
-    data = new URL(raw).searchParams.get('data') || '';
-  } catch {
-    data = readOtpAuthParam(raw, 'data');
-  }
-  const bytes = base64ToBytesLoose(data);
-  if (!bytes.length) return [];
-
-  const state = { offset: 0 };
-  const out: GoogleAuthenticatorMigrationTotp[] = [];
-  while (state.offset < bytes.length) {
-    const key = readProtoVarint(bytes, state);
-    if (key == null) return [];
-    const fieldNumber = Math.floor(key / 8);
-    const wireType = key % 8;
-    if (fieldNumber === 1 && wireType === 2) {
-      const parameterBytes = readProtoBytes(bytes, state);
-      const parameter = parameterBytes ? parseGoogleMigrationOtpParameter(parameterBytes) : null;
-      if (parameter) out.push(parameter);
-    } else if (!skipProtoField(bytes, state, wireType)) {
-      return [];
-    }
-  }
-  return out;
-}
-
-function buildOtpAuthUri(account: GoogleAuthenticatorMigrationTotp): string {
-  const issuer = account.issuer.trim();
-  const name = account.name.trim();
-  const label = issuer && name && !name.toLowerCase().startsWith(`${issuer.toLowerCase()}:`)
-    ? `${issuer}:${name}`
-    : name || issuer || 'TOTP';
-  const params = new URLSearchParams({
-    secret: account.secret,
-    algorithm: account.algorithm.replace('-', ''),
-    digits: String(account.digits),
-    period: String(account.period),
-  });
-  if (issuer) params.set('issuer', issuer);
-  return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`;
-}
-
 export function normalizeTotpInput(raw: string): string {
   const s = raw.trim();
   if (!s) return '';
   if (/^otpauth-migration:\/\//i.test(s)) {
-    const accounts = parseGoogleAuthenticatorMigration(s);
-    return accounts.length === 1 ? buildOtpAuthUri(accounts[0]) : '';
+    const parsed = parseGoogleAuthenticatorMigrationPage(s);
+    const accepted = parsed.ok ? parsed.page.accounts.filter((account) => account.kind === 'accepted') : [];
+    return accepted.length === 1 ? accepted[0].totp : '';
   }
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) && !/^otpauth:\/\//i.test(s) && !/^steam:\/\//i.test(s)) {
     return '';

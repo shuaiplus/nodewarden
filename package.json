@@ -19,6 +19,7 @@
     "i18n": "node scripts/i18n-validate.cjs",
     "i18n:validate": "node scripts/i18n-validate.cjs",
     "test:config-compatibility": "tsx --test scripts/config-compatibility.test.ts",
+    "test:google-authenticator-migration": "tsx --test scripts/google-authenticator-migration.test.ts",
     "test:vault-compatibility": "tsx --tsconfig webapp/tsconfig.json --import ./scripts/offline-workers-loader.mjs --test scripts/vault-compatibility.test.ts",
     "test:web-crypto": "tsx --test scripts/web-crypto-availability.test.ts",
     "test:notifications-security": "tsx --test scripts/notifications-security.test.ts",
