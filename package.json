@@ -58,12 +58,12 @@
     "@babel/core": ">=7.29.6",
     "esbuild": ">=0.28.1",
     "ws": "8.21.0",
-    "sharp": "0.35.4",
-    "browserslist": "4.28.7",
+    "sharp": "0.35.5",
+    "browserslist": "4.28.9",
     "baseline-browser-mapping": "2.11.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260630.1",
+    "@cloudflare/workers-types": "^5.20261001.1",
     "@preact/preset-vite": "^2.10.6",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.4",
