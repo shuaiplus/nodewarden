@@ -50,6 +50,20 @@ import { getMultipartRequestMaxBytes } from '../utils/direct-upload';
 import { verifyPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { unzipSync } from 'fflate';
 
+export const INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER = 'X-Internal-Token';
+
+function internalTransferFetch(
+  env: Env,
+  objectName: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName(objectName));
+  const headers = new Headers(init.headers);
+  headers.set(INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER, env.INTERNAL_ACCESS_TOKEN || env.JWT_SECRET);
+  return stub.fetch('https://backup-transfer' + path, { ...init, headers });
+}
+
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
 }
@@ -252,9 +266,7 @@ async function uploadRemoteAttachmentChunk(
   attachments: Array<{ blobName: string }>
 ): Promise<void> {
   if (!attachments.length) return;
-  const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-sync');
-  const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/upload-attachment-chunk', {
+  const response = await internalTransferFetch(env, 'remote-attachment-sync', '/internal/upload-attachment-chunk', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -539,7 +551,7 @@ async function runConfiguredBackupInDurableObject(
 ): Promise<DurableBackupRunResponse | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/run-configured-backup', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/run-configured-backup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -569,7 +581,7 @@ async function runConfiguredBackupInDurableObject(
 async function runScheduledBackupsInDurableObject(env: Env): Promise<void> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/run-scheduled-backups', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/run-scheduled-backups', {
     method: 'POST',
   });
   if (response.status === 409) {
@@ -594,7 +606,7 @@ async function downloadRemoteAttachmentViaDurableObject(
 ): Promise<Uint8Array | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-restore');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/download-remote-attachment', {
+  const response = await internalTransferFetch(env, 'remote-attachment-restore', '/internal/download-remote-attachment', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -624,7 +636,7 @@ async function downloadRemoteAttachmentBatchViaDurableObject(
 
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-restore');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/download-remote-attachment-batch', {
+  const response = await internalTransferFetch(env, 'remote-attachment-restore', '/internal/download-remote-attachment-batch', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -791,7 +803,7 @@ async function restoreRemoteBackupInDurableObject(
 ): Promise<BackupImportExecutionResult['result'] | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/restore-remote-backup', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/restore-remote-backup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -1009,8 +1021,7 @@ async function listRemoteBackupEntriesViaRunner(
   destination: Parameters<typeof listRemoteBackupEntries>[0],
   path: string
 ): Promise<Awaited<ReturnType<typeof listRemoteBackupEntries>>> {
-  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
-  const response = await stub.fetch('https://backup-transfer/internal/list-remote-backup', {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/list-remote-backup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ destination, path }),
@@ -1033,8 +1044,7 @@ async function downloadRemoteBackupViaRunner(
   destination: BackupDestinationRecord,
   path: string
 ): Promise<RemoteBackupFile> {
-  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
-  const response = await stub.fetch('https://backup-transfer/internal/download-remote-backup', {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/download-remote-backup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ destination, path }),
@@ -1063,8 +1073,7 @@ async function deleteRemoteBackupViaRunner(
   destination: BackupDestinationRecord,
   path: string
 ): Promise<void> {
-  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName('remote-browser'));
-  const response = await stub.fetch('https://backup-transfer/internal/delete-remote-backup', {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/delete-remote-backup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ destination, path }),
