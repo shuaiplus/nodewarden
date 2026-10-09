@@ -18,8 +18,10 @@ import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from './not
 import {
   executeConfiguredBackup,
   importAndAuditRemoteBackupFile,
+  INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER,
 } from '../handlers/backup';
 import { isSafeBackupAttachmentBlobName, verifyBackupArchiveFileNameChecksum } from '../services/backup-archive';
+import { constantTimeEquals } from '../utils/api-key';
 import { zipSync } from 'fflate';
 
 const BACKUP_JOB_STATE_KEY = 'backup.job.state.v1';
@@ -352,6 +354,12 @@ export class BackupTransferRunner {
       return badRequest('Not found', 404);
     }
 
+    const expected = this.env.INTERNAL_ACCESS_TOKEN || this.env.JWT_SECRET;
+    const provided = String(request.headers.get(INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER) || '');
+    if (!expected || !provided || !constantTimeEquals(provided, expected)) {
+      return badRequest('Unauthorized', 401);
+    }
+
     if (url.pathname === '/internal/run-configured-backup') {
       return this.runConfiguredBackup(request);
     }
@@ -424,6 +432,75 @@ export class BackupTransferRunner {
           'Cache-Control': 'no-store',
         },
       });
+    }
+    
+    if (url.pathname === '/internal/list-remote-backup') {
+      let listBody: { destination?: BackupDestinationRecord; path?: string };
+      try {
+        listBody = await request.json<{ destination?: BackupDestinationRecord; path?: string }>();
+      } catch {
+        return badRequest('Remote backup listing payload is invalid');
+      }
+      if (!listBody?.destination) {
+        return badRequest('Remote backup listing payload is invalid');
+      }
+      try {
+        const listing = await createRemoteBackupTransferSession(listBody.destination).list(String(listBody.path || ''));
+        return new Response(JSON.stringify(listing), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      } catch (error) {
+        return badRequest(error instanceof Error ? error.message : 'Remote backup listing failed', 409);
+      }
+    }
+
+    if (url.pathname === '/internal/download-remote-backup') {
+      let dlBody: { destination?: BackupDestinationRecord; path?: string };
+      try {
+        dlBody = await request.json<{ destination?: BackupDestinationRecord; path?: string }>();
+      } catch {
+        return badRequest('Remote backup download payload is invalid');
+      }
+      if (!dlBody?.destination) {
+        return badRequest('Remote backup download payload is invalid');
+      }
+      try {
+        const path = ensureRemoteRestoreCandidate(String(dlBody.path || ''));
+        const file = await downloadRemoteBackupFile(dlBody.destination, path);
+        return new Response(file.bytes, {
+          status: 200,
+          headers: {
+            'Content-Type': file.contentType || 'application/zip',
+            'X-Backup-File-Name': encodeURIComponent(file.fileName || ''),
+            'Cache-Control': 'no-store',
+          },
+        });
+      } catch (error) {
+        return badRequest(error instanceof Error ? error.message : 'Remote backup download failed', 409);
+      }
+    }
+
+    if (url.pathname === '/internal/delete-remote-backup') {
+      let delBody: { destination?: BackupDestinationRecord; path?: string };
+      try {
+        delBody = await request.json<{ destination?: BackupDestinationRecord; path?: string }>();
+      } catch {
+        return badRequest('Remote backup delete payload is invalid');
+      }
+      if (!delBody?.destination) {
+        return badRequest('Remote backup delete payload is invalid');
+      }
+      try {
+        const path = ensureRemoteRestoreCandidate(String(delBody.path || ''));
+        await createRemoteBackupTransferSession(delBody.destination).deleteFile(path);
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      } catch (error) {
+        return badRequest(error instanceof Error ? error.message : 'Remote backup delete failed', 409);
+      }
     }
 
     if (url.pathname !== '/internal/upload-attachment-chunk') {
