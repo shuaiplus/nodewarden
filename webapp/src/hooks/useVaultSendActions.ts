@@ -241,7 +241,7 @@ function isEncryptedFieldUnresolved(raw: unknown, decrypted: unknown): boolean {
   return !plain || looksLikeCipherString(plain);
 }
 
-function hasUnresolvedCipherData(cipher: Cipher): boolean {
+function collectUnresolvedCipherFields(cipher: Cipher): string[] {
   const checks: Array<[unknown, unknown]> = [
     [cipher.name, cipher.decName],
     [cipher.notes, cipher.decNotes],
@@ -281,7 +281,43 @@ function hasUnresolvedCipherData(cipher: Cipher): boolean {
       [field.value, field.decValue] as [unknown, unknown],
     ]),
   ];
-  return checks.some(([raw, decrypted]) => isEncryptedFieldUnresolved(raw, decrypted));
+  return checks
+    .filter(([raw, decrypted]) => isEncryptedFieldUnresolved(raw, decrypted))
+    .map(([raw]) => String(raw).trim());
+}
+
+async function hasUnresolvedCipherData(cipher: Cipher, session: SessionState): Promise<boolean> {
+  const candidates = collectUnresolvedCipherFields(cipher);
+  if (!candidates.length) return false;
+  if (!session.symEncKey || !session.symMacKey) return true;
+
+  // An encrypted empty string also decrypts to '', so only block the save
+  // when a field really cannot be decrypted (same key order as decryptSingleCipher).
+  const userEnc = base64ToBytes(session.symEncKey);
+  const userMac = base64ToBytes(session.symMacKey);
+  const keys: Array<[Uint8Array, Uint8Array]> = [[userEnc, userMac]];
+  if (cipher.key) {
+    try {
+      const itemKey = await decryptBw(String(cipher.key), userEnc, userMac);
+      if (itemKey.length >= 64) keys.unshift([itemKey.slice(0, 32), itemKey.slice(32, 64)]);
+    } catch {
+      // Keep user key only.
+    }
+  }
+
+  for (const raw of candidates) {
+    let resolved = false;
+    for (const [enc, mac] of keys) {
+      try {
+        resolved = !looksLikeCipherString((await decryptStr(raw, enc, mac)).trim());
+        break;
+      } catch {
+        // Try the next key.
+      }
+    }
+    if (!resolved) return true;
+  }
+  return false;
 }
 
 export default function useVaultSendActions(options: UseVaultSendActionsOptions) {
@@ -568,7 +604,8 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
           throw error;
         }
-        if (hasUnresolvedCipherData(cipher)) {
+        if (await hasUnresolvedCipherData(cipher, session)) {
+          onNotify('error', t('txt_decrypt_failed_2'));
           throw new Error(t('txt_decrypt_failed_2'));
         }
         const addFiles = Array.isArray(options?.addFiles) ? options.addFiles : [];
