@@ -22,6 +22,7 @@
     "test:vault-compatibility": "tsx --tsconfig webapp/tsconfig.json --import ./scripts/offline-workers-loader.mjs --test scripts/vault-compatibility.test.ts",
     "test:web-crypto": "tsx --test scripts/web-crypto-availability.test.ts",
     "test:notifications-security": "tsx --test scripts/notifications-security.test.ts",
+    "test:cipher-empty-fields": "tsx --tsconfig webapp/tsconfig.json --test scripts/cipher-empty-fields.test.ts",
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
