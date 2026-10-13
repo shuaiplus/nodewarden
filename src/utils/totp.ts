@@ -3,7 +3,12 @@ const TOTP_DIGITS = 6;
 const TOTP_WINDOW = 1; // allow previous/current/next step for small clock drift
 
 function normalizeBase32(input: string): string {
-  const raw = String(input || '').toUpperCase();
+  let raw = String(input || '').trim();
+  const uriMatch = raw.match(/[?&]secret=([A-Za-z2-7=]+)/i);
+  if (uriMatch) {
+    raw = uriMatch[1];
+  }
+  raw = raw.toUpperCase();
   let out = '';
   for (const char of raw) {
     if (char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '-') continue;
@@ -104,4 +109,46 @@ export async function verifyTotpToken(secretRaw: string, tokenRaw: string, nowMs
 
 export function isTotpEnabled(secretRaw: string | undefined | null): boolean {
   return Boolean(secretRaw && normalizeBase32(secretRaw).length > 0);
+}
+
+// A user may hand-edit the setup key, so the server re-validates it before commit.
+export function isValidTotpSecret(secretRaw: string | undefined | null): boolean {
+  return Boolean(secretRaw) && base32Decode(String(secretRaw)) != null;
+}
+
+// True when an existing, active secret is replaced by a different one (not first enable, not a
+// same-key re-commit). Derived purely from server state, never a client flag.
+export function isTotpRotation(
+  existingSecret: string | null | undefined,
+  submittedKey: string
+): boolean {
+  return (
+    isTotpEnabled(existingSecret) &&
+    normalizeBase32(existingSecret || '') !== normalizeBase32(submittedKey)
+  );
+}
+
+// Rotation needs proof of the current second factor ('totp' | 'recovery'); a missing via
+// (master password only) does not.
+export function totpRotationRequiresStepUp(
+  existingSecret: string | null | undefined,
+  submittedKey: string,
+  via: string | undefined
+): boolean {
+  return isTotpRotation(existingSecret, submittedKey) && via !== 'totp' && via !== 'recovery';
+}
+
+// A recovery code can later clear every second factor, so minting one for an existing
+// authenticator needs a current second factor, not the master password alone.
+export function recoveryCodeMintRequiresStepUp(
+  existingSecret: string | null | undefined,
+  existingRecoveryCode: string | null | undefined,
+  via: string | undefined
+): boolean {
+  return (
+    isTotpEnabled(existingSecret) &&
+    !existingRecoveryCode &&
+    via !== 'totp' &&
+    via !== 'recovery'
+  );
 }

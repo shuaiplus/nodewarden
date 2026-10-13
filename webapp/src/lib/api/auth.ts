@@ -15,6 +15,8 @@ import type {
   SessionState,
   TokenError,
   TokenSuccess,
+  TotpSetupResult,
+  TwoFactorAuthenticatorSettings,
   TwoFactorPasskeySettings,
   YubiKeyOtpSettings,
 } from '../types';
@@ -670,7 +672,7 @@ export async function changeMasterPassword(
 
 export async function setTotp(
   authedFetch: AuthedFetch,
-  payload: { enabled: boolean; token?: string; secret?: string; masterPasswordHash?: string }
+  payload: { enabled: boolean; token?: string; recoveryCode?: string; secret?: string; masterPasswordHash?: string }
 ): Promise<void> {
   const resp = await authedFetch('/api/accounts/totp', {
     method: 'PUT',
@@ -698,6 +700,70 @@ function normalizeYubiKeySettings(raw: any): YubiKeyOtpSettings {
     yubicoCanManage: !!(raw?.yubicoCanManage ?? raw?.YubicoCanManage),
     yubicoClientId: String(raw?.yubicoClientId ?? raw?.YubicoClientId ?? ''),
     yubicoSecretKey: String(raw?.yubicoSecretKey ?? raw?.YubicoSecretKey ?? ''),
+  };
+}
+
+/**
+ * Asks the server for the authenticator key. Without `regenerate` this is the key already in use
+ * while two-step login is on, or a fresh key during the initial setup, and it takes the master
+ * password. With `regenerate` the server mints a new key while the active one keeps working until
+ * the new key is verified, and it takes a code from the authenticator currently in use instead:
+ * that code is the step-up check that lets the replacement start at all.
+ *
+ * The key is always generated server-side — the web client never invents one.
+ */
+export async function getTwoFactorAuthenticator(
+  authedFetch: AuthedFetch,
+  payload: { masterPasswordHash?: string; token?: string; regenerate?: boolean }
+): Promise<TwoFactorAuthenticatorSettings> {
+  const requestBody: Record<string, unknown> = { regenerate: !!payload.regenerate };
+  if (payload.masterPasswordHash) requestBody.masterPasswordHash = payload.masterPasswordHash;
+  if (payload.token) requestBody.token = payload.token;
+  const resp = await authedFetch('/api/two-factor/get-authenticator', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  if (!resp.ok) {
+    const errorBody = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(
+      errorBody?.error_description || errorBody?.error,
+      t(payload.regenerate ? 'txt_server_error_invalid_authenticator_code' : 'txt_master_password_verify_failed')
+    ));
+  }
+  const raw = await parseJson<Record<string, unknown>>(resp);
+  return {
+    enabled: !!(raw?.Enabled ?? raw?.enabled),
+    key: String(raw?.Key ?? raw?.key ?? ''),
+    rotating: !!(raw?.Rotating ?? raw?.rotating),
+    userVerificationToken: String(raw?.UserVerificationToken ?? raw?.userVerificationToken ?? ''),
+  };
+}
+
+/**
+ * Commits an authenticator key. The server only stores the key once a valid code generated from it
+ * is presented, so an abandoned setup or rotation never touches the key that is currently active.
+ */
+export async function putTwoFactorAuthenticator(
+  authedFetch: AuthedFetch,
+  payload: { key: string; token: string; userVerificationToken: string }
+): Promise<TotpSetupResult> {
+  const resp = await authedFetch('/api/two-factor/authenticator', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_enable_totp_failed')));
+  }
+  const raw = await parseJson<Record<string, unknown>>(resp);
+  // Sent when the commit minted (first enable) or replaced (change via recovery code) the recovery
+  // code; empty for a change authorized with the current TOTP. `RecoveryCodeConsumed` distinguishes
+  // the two cases so the UI can show the right notice without guessing from a rotation flag.
+  return {
+    recoveryCode: String(raw?.RecoveryCode ?? raw?.recoveryCode ?? ''),
+    recoveryCodeConsumed: !!(raw?.RecoveryCodeConsumed ?? raw?.recoveryCodeConsumed),
   };
 }
 
