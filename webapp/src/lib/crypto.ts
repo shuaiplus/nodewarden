@@ -283,7 +283,15 @@ function parseSteamSecret(raw: string): string {
   }
 }
 
-type TotpHashAlgorithm = 'SHA-1' | 'SHA-256' | 'SHA-512';
+export type TotpHashAlgorithm = 'SHA-1' | 'SHA-256' | 'SHA-512';
+
+export interface TotpEditorSettings {
+  algorithm: TotpHashAlgorithm;
+  digits: number;
+  period: number;
+  steam: boolean;
+  supported: boolean;
+}
 
 interface TotpConfig {
   secret: string;
@@ -544,6 +552,38 @@ function parseTotpConfig(raw: string): TotpConfig {
     }
   }
   return { secret: normalizeTotpSecret(s), steam: false, ...DEFAULT_TOTP_CONFIG };
+}
+
+export function parseTotpSettings(raw: string): TotpEditorSettings {
+  const normalized = normalizeTotpInput(raw);
+  const { algorithm, digits, period, steam } = parseTotpConfig(normalized);
+  return { algorithm, digits, period, steam, supported: Boolean(normalized) };
+}
+
+export function updateTotpSettings(
+  raw: string,
+  algorithm: TotpHashAlgorithm,
+  digits: number
+): string {
+  const value = normalizeTotpInput(raw);
+  if (!value) return raw.trim();
+  if (/^steam:\/\//i.test(value)) return value;
+
+  let uri: URL;
+  if (/^otpauth:\/\//i.test(value)) {
+    try {
+      uri = new URL(value);
+    } catch {
+      return value;
+    }
+  } else {
+    uri = new URL('otpauth://totp/TOTP');
+    uri.searchParams.set('secret', normalizeTotpSecret(value));
+    uri.searchParams.set('period', String(DEFAULT_TOTP_CONFIG.period));
+  }
+  uri.searchParams.set('algorithm', algorithm.replace('-', ''));
+  uri.searchParams.set('digits', String(digits));
+  return uri.toString();
 }
 
 export function extractTotpSecret(raw: string): string {
