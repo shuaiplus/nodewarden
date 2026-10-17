@@ -5,6 +5,7 @@ import {
   ArrowUpDown,
   BookUser,
   Check,
+  Clock,
   Copy,
   CreditCard,
   Folder as FolderIcon,
@@ -136,6 +137,9 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'passport' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'passport' })}>
           <BookUser size={14} className="tree-icon" /> <span className="tree-label">{t('txt_passport')}</span>
+        </button>
+        <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'totp' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'totp' })}>
+          <Clock size={14} className="tree-icon" /> <span className="tree-label">{t('txt_verification_code')}</span>
         </button>
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'note' ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'type', value: 'note' })}>
           <StickyNote size={14} className="tree-icon" /> <span className="tree-label">{t('txt_note')}</span>

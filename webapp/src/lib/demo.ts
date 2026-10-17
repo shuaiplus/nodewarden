@@ -1059,6 +1059,16 @@ function cipherFromDraft(draft: VaultDraft, current?: Cipher | null): Cipher {
     decFingerprint: draft.sshFingerprint || '',
   } : null;
 
+  next.totp = type === 9 ? {
+    ...(current?.totp || {}),
+    secret: draft.totpSecret || '',
+    issuer: draft.totpIssuer || '',
+    accountName: draft.totpAccountName || '',
+    decSecret: draft.totpSecret || '',
+    decIssuer: draft.totpIssuer || '',
+    decAccountName: draft.totpAccountName || '',
+  } : null;
+
   next.fields = draft.customFields.map((field) => ({
     type: field.type,
     name: field.label,

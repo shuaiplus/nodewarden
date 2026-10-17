@@ -10,6 +10,7 @@ import {
   CipherBankAccount,
   CipherDriversLicense,
   CipherPassport,
+  CipherTotp,
   Attachment,
   PasswordHistory,
 } from '../types';
@@ -301,6 +302,12 @@ const PASSPORT_ENCRYPTED_KEYS = [
   'expirationDate',
 ] as const;
 
+const TOTP_ENCRYPTED_KEYS = [
+  'secret',
+  'issuer',
+  'accountName',
+] as const;
+
 function normalizeCipherForStorage(cipher: Cipher): Cipher {
   cipher.login = normalizeCipherLoginForStorage(cipher.login);
   cipher.sshKey = normalizeCipherSshKeyForCompatibility(cipher.sshKey);
@@ -427,6 +434,7 @@ export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): s
     ['Bank account', (cipher as any).bankAccount, BANK_ACCOUNT_ENCRYPTED_KEYS],
     ['Drivers license', (cipher as any).driversLicense, DRIVERS_LICENSE_ENCRYPTED_KEYS],
     ['Passport', (cipher as any).passport, PASSPORT_ENCRYPTED_KEYS],
+    ['TOTP', (cipher as any).totp, TOTP_ENCRYPTED_KEYS],
   ];
   for (const [label, source, keys] of typedEncryptedObjects) {
     if (!source || typeof source !== 'object') continue;
@@ -822,6 +830,10 @@ export function cipherToResponse(
     (passthrough as any).passport ?? null,
     PASSPORT_ENCRYPTED_KEYS
   );
+  const normalizedTotp = sanitizeEncryptedObject(
+    (passthrough as any).totp ?? null,
+    TOTP_ENCRYPTED_KEYS
+  );
   const responseType = Number(cipher.type) || 1;
   const normalizedSecureNote = responseType === 2
     ? normalizeCipherSecureNoteForCompatibility((passthrough as any).secureNote ?? null) ?? { type: 0 }
@@ -859,6 +871,7 @@ export function cipherToResponse(
     bankAccount: responseType === 6 ? normalizedBankAccount : null,
     driversLicense: responseType === 7 ? normalizedDriversLicense : null,
     passport: responseType === 8 ? normalizedPassport : null,
+    totp: responseType === 9 ? normalizedTotp : null,
     key: responseCipherKey,
     data: typeof (passthrough as any).data === 'string' ? (passthrough as any).data : null,
     encryptedFor: (passthrough as any).encryptedFor ?? null,
@@ -957,6 +970,7 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   const createBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
   const createDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
   const createPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
+  const createTotp = readCipherProp<CipherTotp | null>(cipherData, ['totp', 'Totp']);
   const createPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
 
   if (createKey.present && !shouldAcceptCipherKey(createKey.value)) {
@@ -989,6 +1003,7 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   cipher.bankAccount = createBankAccount.present ? (createBankAccount.value ?? null) : ((cipher as any).bankAccount ?? null);
   cipher.driversLicense = createDriversLicense.present ? (createDriversLicense.value ?? null) : ((cipher as any).driversLicense ?? null);
   cipher.passport = createPassport.present ? (createPassport.value ?? null) : ((cipher as any).passport ?? null);
+  cipher.totp = createTotp.present ? (createTotp.value ?? null) : ((cipher as any).totp ?? null);
   cipher.passwordHistory = createPasswordHistory.present ? (createPasswordHistory.value ?? null) : (cipher.passwordHistory ?? null);
   const createFields = getAliasedProp(cipherData, ['fields', 'Fields']);
   cipher.fields = createFields.present ? (createFields.value ?? null) : (cipher.fields ?? null);
@@ -1043,6 +1058,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingBankAccount = readCipherProp<CipherBankAccount | null>(cipherData, ['bankAccount', 'BankAccount']);
   const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
   const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
+  const incomingTotp = readCipherProp<CipherTotp | null>(cipherData, ['totp', 'Totp']);
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
   const incomingRevisionDate = readCipherRevisionDate(cipherData);
   const preserveRevisionDate =
@@ -1099,6 +1115,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   cipher.bankAccount = nextType === 6 ? (incomingBankAccount.present ? (incomingBankAccount.value ?? null) : ((existingCipher as any).bankAccount ?? null)) : null;
   cipher.driversLicense = nextType === 7 ? (incomingDriversLicense.present ? (incomingDriversLicense.value ?? null) : ((existingCipher as any).driversLicense ?? null)) : null;
   cipher.passport = nextType === 8 ? (incomingPassport.present ? (incomingPassport.value ?? null) : ((existingCipher as any).passport ?? null)) : null;
+  cipher.totp = nextType === 9 ? (incomingTotp.present ? (incomingTotp.value ?? null) : ((existingCipher as any).totp ?? null)) : null;
   if (incomingPasswordHistory.present) {
     cipher.passwordHistory = incomingPasswordHistory.value ?? null;
   }

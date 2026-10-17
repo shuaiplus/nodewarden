@@ -1051,6 +1051,8 @@ const zhCN: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "此账户已启用 TOTP。",
   "txt_total_items_count": "共 {count} 项",
   "txt_totp_secret": "TOTP 密钥",
+  "txt_totp_issuer": "发行方",
+  "txt_totp_account": "账号",
   "txt_scan_totp_qr": "扫描 TOTP 二维码",
   "txt_totp_qr_starting_camera": "正在启动摄像头...",
   "txt_totp_qr_point_camera": "把摄像头对准 TOTP 二维码。",

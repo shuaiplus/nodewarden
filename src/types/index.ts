@@ -126,6 +126,7 @@ export enum CipherType {
   BankAccount = 6,
   DriversLicense = 7,
   Passport = 8,
+  Totp = 9,
 }
 
 export interface CipherLoginUri {
@@ -206,6 +207,15 @@ export interface CipherPassport {
   [key: string]: any;
 }
 
+// Standalone authenticator (TOTP) entry, independent of login items.
+// The secret may be a raw Base32 secret, an otpauth:// URI, or a steam:// URI.
+export interface CipherTotp {
+  secret: string | null;
+  issuer: string | null;
+  accountName: string | null;
+  [key: string]: any;
+}
+
 export interface CipherIdentity {
   title: string | null;
   firstName: string | null;
@@ -259,6 +269,7 @@ export interface Cipher {
   bankAccount?: CipherBankAccount | null;
   driversLicense?: CipherDriversLicense | null;
   passport?: CipherPassport | null;
+  totp?: CipherTotp | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;
@@ -606,6 +617,7 @@ export interface CipherResponse {
   bankAccount: CipherBankAccount | null;
   driversLicense: CipherDriversLicense | null;
   passport: CipherPassport | null;
+  totp: CipherTotp | null;
   fields: CipherField[] | null;
   passwordHistory: PasswordHistory[] | null;
   reprompt: number;

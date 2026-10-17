@@ -1048,6 +1048,8 @@ const sv: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "TOTP är aktiverat för detta konto.",
   "txt_total_items_count": "{count} objekt",
   "txt_totp_secret": "TOTP-hemlighet",
+  "txt_totp_issuer": "Utfärdare",
+  "txt_totp_account": "Konto",
   "txt_scan_totp_qr": "Skanna TOTP QR-kod",
   "txt_totp_qr_starting_camera": "Startar kameran...",
   "txt_totp_qr_point_camera": "Rikta kameran mot en TOTP QR-kod.",

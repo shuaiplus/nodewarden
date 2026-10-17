@@ -2,6 +2,7 @@ import { useMemo } from 'preact/hooks';
 import { cipherFieldMetadata } from '@/lib/cipher-fields';
 import {
   BookUser,
+  Clock,
   CreditCard,
   FileKey2,
   Globe,
@@ -18,7 +19,7 @@ import { firstCipherUri, hostFromUri, websiteIconUrl } from '@/lib/website-utils
 import { normalizeEquivalentDomain } from '@shared/domain-normalize';
 import WebsiteIcon from './WebsiteIcon';
 
-export type TypeFilter = 'login' | 'card' | 'identity' | 'note' | 'ssh' | 'bank' | 'license' | 'passport';
+export type TypeFilter = 'login' | 'card' | 'identity' | 'note' | 'ssh' | 'bank' | 'license' | 'passport' | 'totp';
 export type VaultSortMode = 'edited' | 'created' | 'name';
 export type DuplicateDetectionMode = 'exact' | 'login-site' | 'login-credentials' | 'password';
 export type SidebarFilter =
@@ -128,6 +129,12 @@ export function passportListSubtitle(cipher: Cipher): string {
   return passportNumber || name || cipherTypeLabel(8);
 }
 
+export function totpListSubtitle(cipher: Cipher): string {
+  const issuer = valueOrFallback(cipher.totp?.decIssuer ?? cipher.totp?.issuer).trim();
+  const accountName = valueOrFallback(cipher.totp?.decAccountName ?? cipher.totp?.accountName).trim();
+  return [issuer, accountName].filter(Boolean).join(' · ') || cipherTypeLabel(9);
+}
+
 export function CardBrandIcon({ brand }: { brand?: string | null }) {
   const display = displayCardBrand(brand);
   const key = display.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'generic';
@@ -152,6 +159,7 @@ export function getCreateTypeOptions(): TypeOption[] {
     { type: 4, label: t('txt_identity') },
     { type: 7, label: t('txt_drivers_license') },
     { type: 8, label: t('txt_passport') },
+    { type: 9, label: t('txt_verification_code') },
     { type: 2, label: t('txt_note') },
     { type: 5, label: t('txt_ssh_key') },
   ];
@@ -220,6 +228,7 @@ export function CreateTypeIcon({ type }: { type: number }) {
   if (type === 6) return <Landmark size={15} />;
   if (type === 7) return <IdCard size={15} />;
   if (type === 8) return <BookUser size={15} />;
+  if (type === 9) return <Clock size={15} />;
   return <FileKey2 size={15} />;
 }
 
@@ -232,6 +241,7 @@ export function cipherTypeKey(type: number): TypeFilter {
   if (type === 6) return 'bank';
   if (type === 7) return 'license';
   if (type === 8) return 'passport';
+  if (type === 9) return 'totp';
   return 'note';
 }
 
@@ -272,6 +282,7 @@ export function cipherTypeLabel(type: number): string {
   if (type === 6) return t('txt_bank_account');
   if (type === 7) return t('txt_drivers_license');
   if (type === 8) return t('txt_passport');
+  if (type === 9) return t('txt_verification_code');
   return t('txt_item');
 }
 
@@ -284,6 +295,7 @@ export function TypeIcon({ type }: { type: number }) {
   if (type === 6) return <Landmark size={18} />;
   if (type === 7) return <IdCard size={18} />;
   if (type === 8) return <BookUser size={18} />;
+  if (type === 9) return <Clock size={18} />;
   return <FileKey2 size={18} />;
 }
 
@@ -446,6 +458,13 @@ export function buildCipherDuplicateSignature(cipher: Cipher): string {
           expirationDate: valueOrFallback(cipher.passport.decExpirationDate ?? cipher.passport.expirationDate),
         }
       : null,
+    totp: cipher.totp
+      ? {
+          secret: valueOrFallback(cipher.totp.decSecret ?? cipher.totp.secret),
+          issuer: valueOrFallback(cipher.totp.decIssuer ?? cipher.totp.issuer),
+          accountName: valueOrFallback(cipher.totp.decAccountName ?? cipher.totp.accountName),
+        }
+      : null,
     secureNoteType: cipher.secureNote?.type ?? null,
     fields: (cipher.fields || []).map((field) => ({
       type: field.type ?? null,
@@ -552,6 +571,9 @@ export function createEmptyDraft(type: number): VaultDraft {
     passportIssuingAuthority: '',
     passportIssueDate: '',
     passportExpirationDate: '',
+    totpSecret: '',
+    totpIssuer: '',
+    totpAccountName: '',
     customFields: [],
   };
 }
@@ -655,6 +677,11 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
     draft.passportIssuingAuthority = cipher.passport.decIssuingAuthority || '';
     draft.passportIssueDate = cipher.passport.decIssueDate || '';
     draft.passportExpirationDate = cipher.passport.decExpirationDate || '';
+  }
+  if (cipher.totp) {
+    draft.totpSecret = cipher.totp.decSecret || '';
+    draft.totpIssuer = cipher.totp.decIssuer || '';
+    draft.totpAccountName = cipher.totp.decAccountName || '';
   }
   draft.customFields = (cipher.fields || []).map((field) => ({
     ...cipherFieldMetadata(field),

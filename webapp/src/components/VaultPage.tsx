@@ -26,6 +26,7 @@ import {
   isCipherVisibleInNormalVault,
   isCipherVisibleInTrash,
   passportListSubtitle,
+  totpListSubtitle,
   sortTimeValue,
   type DuplicateDetectionMode,
   type SidebarFilter,
@@ -322,6 +323,8 @@ export default function VaultPage(props: VaultPageProps) {
         cipher.passport?.decPassportNumber,
         cipher.passport?.decGivenName,
         cipher.passport?.decSurname,
+        cipher.totp?.decIssuer,
+        cipher.totp?.decAccountName,
       ].filter(Boolean).join('\n');
       const cipherId = String(cipher.id || '').trim();
       meta.set(cipher.id, {
@@ -596,8 +599,10 @@ export default function VaultPage(props: VaultPageProps) {
   );
   const removedAttachmentCount = useMemo(() => Object.values(removedAttachmentIds).filter(Boolean).length, [removedAttachmentIds]);
 
+  const selectedTotpRaw = selectedCipher?.login?.decTotp || selectedCipher?.totp?.decSecret || '';
+
   useEffect(() => {
-    const raw = selectedCipher?.login?.decTotp || '';
+    const raw = selectedTotpRaw;
     if (!raw) {
       setTotpLive(null);
       return;
@@ -618,7 +623,7 @@ export default function VaultPage(props: VaultPageProps) {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [selectedCipher?.id, selectedCipher?.login?.decTotp]);
+  }, [selectedCipher?.id, selectedTotpRaw]);
 
   const selectedCount = useMemo(
     () => Object.values(selectedMap).reduce((sum, v) => sum + (v ? 1 : 0), 0),
@@ -642,6 +647,7 @@ const folderName = useCallback((id: string | null | undefined): string => {
     if (Number(cipher.type || 1) === 6) return bankAccountListSubtitle(cipher);
     if (Number(cipher.type || 1) === 7) return driversLicenseListSubtitle(cipher);
     if (Number(cipher.type || 1) === 8) return passportListSubtitle(cipher);
+    if (Number(cipher.type || 1) === 9) return totpListSubtitle(cipher);
     return cipherTypeLabel(Number(cipher.type || 1));
   }, [cipherMetaById]);
 

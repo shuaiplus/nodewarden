@@ -164,7 +164,11 @@ export default function VaultEditor(props: VaultEditorProps) {
   const applyTotpQrValue = (value: string) => {
     const normalized = normalizeTotpInput(value);
     if (!normalized) return false;
-    props.onUpdateDraft({ loginTotp: normalized });
+    if (props.draft.type === 9) {
+      props.onUpdateDraft({ totpSecret: normalized });
+    } else {
+      props.onUpdateDraft({ loginTotp: normalized });
+    }
     setTotpQrStatus(t('txt_totp_qr_scanned'));
     setTotpQrOpen(false);
     return true;
@@ -644,6 +648,41 @@ export default function VaultEditor(props: VaultEditorProps) {
             <label className="field"><span>{t('txt_issuing_authority')}</span><input className="input" value={props.draft.passportIssuingAuthority} onInput={(e) => props.onUpdateDraft({ passportIssuingAuthority: (e.currentTarget as HTMLInputElement).value })} /></label>
             <label className="field"><span>{t('txt_issue_date')}</span><input className="input" value={props.draft.passportIssueDate} onInput={(e) => props.onUpdateDraft({ passportIssueDate: (e.currentTarget as HTMLInputElement).value })} /></label>
             <label className="field"><span>{t('txt_expiration_date')}</span><input className="input" value={props.draft.passportExpirationDate} onInput={(e) => props.onUpdateDraft({ passportExpirationDate: (e.currentTarget as HTMLInputElement).value })} /></label>
+          </div>
+        </div>
+      )}
+
+      {props.draft.type === 9 && (
+        <div className="card">
+          <h4>{t('txt_verification_code')}</h4>
+          <label className="field">
+            <span>{t('txt_totp_secret')}</span>
+            <div className="input-action-wrap">
+              <input className="input" value={props.draft.totpSecret} onInput={(e) => props.onUpdateDraft({ totpSecret: (e.currentTarget as HTMLInputElement).value })} />
+              <button
+                type="button"
+                className="input-icon-btn"
+                title={t('txt_scan_totp_qr')}
+                aria-label={t('txt_scan_totp_qr')}
+                disabled={props.busy}
+                onClick={() => {
+                  setTotpQrStatus('');
+                  setTotpQrOpen(true);
+                }}
+              >
+                <QrCode size={18} className="btn-icon" />
+              </button>
+            </div>
+          </label>
+          <div className="field-grid">
+            <label className="field">
+              <span>{t('txt_totp_issuer')}</span>
+              <input className="input" value={props.draft.totpIssuer} onInput={(e) => props.onUpdateDraft({ totpIssuer: (e.currentTarget as HTMLInputElement).value })} />
+            </label>
+            <label className="field">
+              <span>{t('txt_totp_account')}</span>
+              <input className="input" value={props.draft.totpAccountName} onInput={(e) => props.onUpdateDraft({ totpAccountName: (e.currentTarget as HTMLInputElement).value })} />
+            </label>
           </div>
         </div>
       )}

@@ -261,6 +261,15 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
         );
       }
 
+      if (cipher.totp) {
+        nextCipher.totp = {
+          ...cipher.totp,
+          decSecret: await decryptCipherField(cipher.totp.secret || '', itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+          decIssuer: await decryptCipherField(cipher.totp.issuer || '', itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+          decAccountName: await decryptCipherField(cipher.totp.accountName || '', itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+        };
+      }
+
       if (cipher.fields) {
         nextCipher.fields = await Promise.all(
           cipher.fields.map(async (field) => ({

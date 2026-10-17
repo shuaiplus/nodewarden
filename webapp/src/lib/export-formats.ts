@@ -448,6 +448,7 @@ function sourceTypeLabel(type: number): string {
   if (type === 6) return 'bankAccount';
   if (type === 7) return 'driversLicense';
   if (type === 8) return 'passport';
+  if (type === 9) return 'totp';
   if (type === 2) return 'note';
   return `type ${type}`;
 }

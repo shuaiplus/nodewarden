@@ -85,6 +85,7 @@ export function summarizeImportResult(
     if (type === 6) return t('txt_bank_account');
     if (type === 7) return t('txt_drivers_license');
     if (type === 8) return t('txt_passport');
+    if (type === 9) return t('txt_verification_code');
     return t('txt_other');
   };
   const counter = new Map<number, number>();
@@ -92,7 +93,7 @@ export function summarizeImportResult(
     const cipherType = Number(raw?.type || 1) || 1;
     counter.set(cipherType, (counter.get(cipherType) || 0) + 1);
   }
-  const order = [1, 2, 3, 4, 5, 6, 7, 8];
+  const order = [1, 2, 3, 4, 5, 6, 7, 8, 9];
   const seen = new Set<number>(order);
   const typeCounts = order
     .filter((type) => (counter.get(type) || 0) > 0)
@@ -184,6 +185,9 @@ function buildEmptyImportDraft(type: number): VaultDraft {
     passportIssuingAuthority: '',
     passportIssueDate: '',
     passportExpirationDate: '',
+    totpSecret: '',
+    totpIssuer: '',
+    totpAccountName: '',
     customFields: [],
   };
 }
@@ -327,6 +331,11 @@ export function importCipherToDraft(cipher: Record<string, unknown>, folderId: s
     draft.passportIssuingAuthority = asText(passport.issuingAuthority);
     draft.passportIssueDate = asText(passport.issueDate);
     draft.passportExpirationDate = asText(passport.expirationDate);
+  } else if (type === 9) {
+    const totp = (cipher.totp || {}) as Record<string, unknown>;
+    draft.totpSecret = asText(totp.secret);
+    draft.totpIssuer = asText(totp.issuer);
+    draft.totpAccountName = asText(totp.accountName);
   }
 
   return draft;

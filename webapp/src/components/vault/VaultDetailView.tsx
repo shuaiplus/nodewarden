@@ -428,6 +428,54 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
             </div>
           )}
 
+          {props.selectedCipher.totp && (
+            <div className="card">
+              <h4>{t('txt_verification_code')}</h4>
+              {!!(props.selectedCipher.totp.decIssuer || '').trim() && (
+                <div className="kv-line"><span>{t('txt_totp_issuer')}</span><strong>{props.selectedCipher.totp.decIssuer || ''}</strong></div>
+              )}
+              {!!(props.selectedCipher.totp.decAccountName || '').trim() && (
+                <div className="kv-line"><span>{t('txt_totp_account')}</span><strong>{props.selectedCipher.totp.decAccountName || ''}</strong></div>
+              )}
+              <div className="kv-row">
+                <span className="kv-label">{t('txt_totp')}</span>
+                <div className="kv-main">
+                  <div className="totp-inline">
+                    <strong>{props.totpLive ? formatTotp(props.totpLive.code) : t('txt_text_3')}</strong>
+                    <div
+                      className="totp-timer"
+                      title={t('txt_refresh_in_seconds_s', { seconds: props.totpLive ? props.totpLive.remain : 0 })}
+                      aria-label={t('txt_refresh_in_seconds_s', { seconds: props.totpLive ? props.totpLive.remain : 0 })}
+                    >
+                      <svg viewBox="0 0 36 36" className="totp-ring" role="presentation" aria-hidden="true">
+                        <circle className="totp-ring-track" cx="18" cy="18" r="15.9155" />
+                        <circle
+                          className="totp-ring-progress"
+                          cx="18"
+                          cy="18"
+                          r="15.9155"
+                          style={{
+                            strokeDasharray: `${TOTP_RING_CIRCUMFERENCE} ${TOTP_RING_CIRCUMFERENCE}`,
+                            strokeDashoffset: String(
+                              TOTP_RING_CIRCUMFERENCE -
+                                TOTP_RING_CIRCUMFERENCE * totpProgress(props.totpLive)
+                            ),
+                          }}
+                        />
+                      </svg>
+                      <span className="totp-timer-value">{props.totpLive ? props.totpLive.remain : 0}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="kv-actions">
+                  <button type="button" className="btn btn-secondary small" onClick={() => copyToClipboard(props.totpLive?.code || '')}>
+                    <Clipboard size={14} className="btn-icon" /> {t('txt_copy')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {!!(props.selectedCipher.decNotes || '').trim() && (
             <div className="card">
               <h4>{t('txt_notes')}</h4>
