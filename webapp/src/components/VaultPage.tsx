@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import LoadingState from '@/components/LoadingState';
 import VaultDialogs from '@/components/vault/VaultDialogs';
 import VaultDetailView from '@/components/vault/VaultDetailView';
@@ -858,7 +858,8 @@ const folderName = useCallback((id: string | null | undefined): string => {
       setAttachmentQueue([]);
       setRemovedAttachmentIds({});
       if (isMobileLayout) setMobilePanel('detail');
-    } catch {
+    } catch (error) {
+      console.error('[VaultPage] saveDraft failed:', error);
       // The action layer already shows the user-facing error toast.
     } finally {
       setBusy(false);
