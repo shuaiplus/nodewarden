@@ -63,25 +63,25 @@
     "baseline-browser-mapping": "2.11.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261001.1",
+    "@cloudflare/workers-types": "^5.20261019.1",
     "@preact/preset-vite": "^2.10.6",
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "opencc-js": "^1.4.2",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vite": "^8.3.3",
-    "wrangler": "^4.146.0"
+    "vite": "^8.3.4",
+    "wrangler": "^4.151.2"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "@simplewebauthn/server": "^13.3.2",
-    "@tanstack/react-query": "^5.104.0",
-    "@zip.js/zip.js": "^2.22.0",
+    "@tanstack/react-query": "^5.104.4",
+    "@zip.js/zip.js": "^2.24.0",
     "fflate": "^0.8.3",
     "jsqr": "1.4.0",
-    "lucide-preact": "^1.49.0",
+    "lucide-preact": "^1.59.0",
     "preact": "^10.29.3",
     "qrcode-generator": "^2.0.4",
     "wouter": "^3.13.0"
