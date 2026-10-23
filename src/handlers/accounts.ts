@@ -1473,6 +1473,7 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
+  await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await rateLimit.clearLoginAttempts(recoverLimitKey);
   await safeWriteAuditEvent(env, {
