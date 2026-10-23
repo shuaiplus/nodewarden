@@ -43,6 +43,7 @@ export interface BitwardenCipherInput {
   bankAccount?: Record<string, unknown> | null;
   driversLicense?: Record<string, unknown> | null;
   passport?: Record<string, unknown> | null;
+  totp?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 

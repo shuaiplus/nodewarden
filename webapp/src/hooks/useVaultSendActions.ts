@@ -101,7 +101,7 @@ function createOptimisticCipherId(): string {
   return `optimistic:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): Cipher {
+export function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): Cipher {
   const now = new Date().toISOString();
   const type = Number(draft.type || current?.type || 1) || 1;
   const next: Cipher = {
@@ -221,6 +221,20 @@ function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): 
     next.sshKey = null;
   }
 
+  if (type === 9) {
+    next.totp = {
+      ...(current?.totp || {}),
+      secret: draft.totpSecret || '',
+      issuer: draft.totpIssuer || '',
+      accountName: draft.totpAccountName || '',
+      decSecret: draft.totpSecret || '',
+      decIssuer: draft.totpIssuer || '',
+      decAccountName: draft.totpAccountName || '',
+    };
+  } else {
+    next.totp = null;
+  }
+
   next.fields = draft.customFields.map((field) => ({
     ...cipherFieldMetadata(field.extra || {}).extra,
     type: field.type,
@@ -276,6 +290,9 @@ function hasUnresolvedCipherData(cipher: Cipher): boolean {
     [cipher.sshKey?.privateKey, cipher.sshKey?.decPrivateKey],
     [cipher.sshKey?.publicKey, cipher.sshKey?.decPublicKey],
     [cipher.sshKey?.keyFingerprint || cipher.sshKey?.fingerprint, cipher.sshKey?.decFingerprint],
+    [cipher.totp?.secret, cipher.totp?.decSecret],
+    [cipher.totp?.issuer, cipher.totp?.decIssuer],
+    [cipher.totp?.accountName, cipher.totp?.decAccountName],
     ...(cipher.fields || []).flatMap((field) => [
       [field.name, field.decName] as [unknown, unknown],
       [field.value, field.decValue] as [unknown, unknown],

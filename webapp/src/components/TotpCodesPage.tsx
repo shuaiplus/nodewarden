@@ -6,7 +6,7 @@ import { t } from '@/lib/i18n';
 import type { Cipher } from '@/lib/types';
 import LoadingState from '@/components/LoadingState';
 import WebsiteIcon from '@/components/vault/WebsiteIcon';
-import { formatTotp, isCipherVisibleInNormalVault } from '@/components/vault/vault-page-helpers';
+import { formatTotp, isCipherVisibleInNormalVault, TypeIcon } from '@/components/vault/vault-page-helpers';
 
 interface TotpCodesPageProps {
   ciphers: Cipher[];
@@ -18,7 +18,13 @@ const TOTP_RING_RADIUS = 14;
 const TOTP_RING_CIRCUMFERENCE = 2 * Math.PI * TOTP_RING_RADIUS;
 const TOTP_REFRESH_BATCH_SIZE = 16;
 
+function totpRawValue(cipher: Cipher): string {
+  if (cipher.totp?.decSecret) return cipher.totp.decSecret;
+  return cipher.login?.decTotp || '';
+}
+
 function TotpListIcon({ cipher }: { cipher: Cipher }) {
+  if (cipher.totp) return <TypeIcon type={cipher.type} />;
   return <WebsiteIcon cipher={cipher} fallback={<Globe size={18} />} />;
 }
 
@@ -30,7 +36,9 @@ interface TotpRowProps {
 
 function TotpRow(props: TotpRowProps) {
   const name = props.cipher.decName || props.cipher.name || t('txt_no_name');
-  const username = props.cipher.login?.decUsername || '';
+  const username = props.cipher.totp
+    ? [props.cipher.totp.decIssuer, props.cipher.totp.decAccountName].filter(Boolean).join(' · ')
+    : props.cipher.login?.decUsername || '';
   const period = Math.max(1, props.live?.period || 30);
   const progress = props.live ? Math.max(0, Math.min(period, props.live.remain)) / period : 0;
 
@@ -95,7 +103,7 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
   const totpItems = useMemo(
     () =>
       props.ciphers
-        .filter((cipher) => isCipherVisibleInNormalVault(cipher) && !!cipher.login?.decTotp)
+        .filter((cipher) => isCipherVisibleInNormalVault(cipher) && !!totpRawValue(cipher))
         .sort((a, b) => {
           const nameA = (a.decName || a.name || '').trim();
           const nameB = (b.decName || b.name || '').trim();
@@ -122,7 +130,7 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
         const entries = await Promise.all(
           batch.map(async (cipher) => {
             try {
-              const next = await calcTotpNow(cipher.login?.decTotp || '');
+              const next = await calcTotpNow(totpRawValue(cipher));
               return [cipher.id, next] as const;
             } catch {
               return [cipher.id, null] as const;

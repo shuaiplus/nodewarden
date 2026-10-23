@@ -11,13 +11,15 @@ const NODEWARDEN_CSV_PREFIX_TYPES: Record<string, number> = {
   card: 3,
   identity: 4,
   sshkey: 5,
+  totp: 9,
 };
-const NODEWARDEN_CSV_TYPE_PREFIXES: Record<number, 'card' | 'identity' | 'sshKey'> = {
+const NODEWARDEN_CSV_TYPE_PREFIXES: Record<number, 'card' | 'identity' | 'sshKey' | 'totp'> = {
   3: 'card',
   4: 'identity',
   5: 'sshKey',
+  9: 'totp',
 };
-const NODEWARDEN_CSV_OBJECT_FIELDS: Record<'card' | 'identity' | 'sshKey', readonly string[]> = {
+const NODEWARDEN_CSV_OBJECT_FIELDS: Record<'card' | 'identity' | 'sshKey' | 'totp', readonly string[]> = {
   card: ['cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code'],
   identity: [
     'title',
@@ -40,6 +42,7 @@ const NODEWARDEN_CSV_OBJECT_FIELDS: Record<'card' | 'identity' | 'sshKey', reado
     'country',
   ],
   sshKey: ['privateKey', 'publicKey', 'keyFingerprint', 'fingerprint'],
+  totp: ['secret', 'issuer', 'accountName'],
 };
 
 // Parse the `fields` CSV column into key-value pairs.
@@ -84,7 +87,7 @@ function applyBitwardenCustomFields(cipher: Record<string, unknown>, lines: Bitw
   }
 }
 
-function restoreNodeWardenObject(lines: BitwardenCsvFieldLine[], prefix: 'card' | 'identity' | 'sshKey'): Record<string, unknown> {
+function restoreNodeWardenObject(lines: BitwardenCsvFieldLine[], prefix: 'card' | 'identity' | 'sshKey' | 'totp'): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const fieldPrefix = `${prefix}.`;
   const allowedKeys = new Set(NODEWARDEN_CSV_OBJECT_FIELDS[prefix]);
@@ -104,7 +107,8 @@ function nodeWardenMetadataLines(lines: BitwardenCsvFieldLine[]): Set<BitwardenC
         line.key === NODEWARDEN_CSV_TYPE_FIELD ||
         line.key.startsWith('card.') ||
         line.key.startsWith('identity.') ||
-        line.key.startsWith('sshKey.')
+        line.key.startsWith('sshKey.') ||
+        line.key.startsWith('totp.')
     )
   );
 }
@@ -174,7 +178,7 @@ export function parseBitwardenCsv(textRaw: string): CiphersImportPayload {
     const type = txt(row.type).toLowerCase() || 'login';
     const fieldLines = parseBitwardenCsvFieldLines(row.fields);
     const restoredNodeWardenType = type === 'note' ? getNodeWardenCsvType(fieldLines) : null;
-    if (restoredNodeWardenType === 3 || restoredNodeWardenType === 4 || restoredNodeWardenType === 5) {
+    if (restoredNodeWardenType === 3 || restoredNodeWardenType === 4 || restoredNodeWardenType === 5 || restoredNodeWardenType === 9) {
       const metadataLines = nodeWardenMetadataLines(fieldLines);
       const customLines = fieldLines.filter((line) => !metadataLines.has(line));
       const cipher: Record<string, unknown> = {
@@ -191,6 +195,7 @@ export function parseBitwardenCsv(textRaw: string): CiphersImportPayload {
         fields: [],
         passwordHistory: null,
         sshKey: restoredNodeWardenType === 5 ? restoreNodeWardenObject(fieldLines, 'sshKey') : null,
+        totp: restoredNodeWardenType === 9 ? restoreNodeWardenObject(fieldLines, 'totp') : null,
       };
       applyBitwardenCustomFields(cipher, customLines);
       const idx = result.ciphers.push(cipher) - 1;

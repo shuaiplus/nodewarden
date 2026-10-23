@@ -1101,6 +1101,8 @@ const zhTW: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "此帳戶已啟用 TOTP。",
   "txt_total_items_count": "共 {count} 項",
   "txt_totp_secret": "TOTP 金鑰",
+  "txt_totp_issuer": "發行者",
+  "txt_totp_account": "帳號",
   "txt_scan_totp_qr": "掃描 TOTP QR Code",
   "txt_totp_qr_starting_camera": "正在啟動攝影機...",
   "txt_totp_qr_point_camera": "把攝影機對準 TOTP QR Code。",

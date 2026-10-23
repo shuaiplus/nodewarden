@@ -649,6 +649,9 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
     passportIssuingAuthority: '',
     passportIssueDate: '',
     passportExpirationDate: '',
+    totpSecret: '',
+    totpIssuer: '',
+    totpAccountName: '',
     customFields: [],
   };
 
@@ -762,6 +765,10 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
     draft.passportIssuingAuthority = plainCipherValue(cipher.passport.decIssuingAuthority, cipher.passport.issuingAuthority);
     draft.passportIssueDate = plainCipherValue(cipher.passport.decIssueDate, cipher.passport.issueDate);
     draft.passportExpirationDate = plainCipherValue(cipher.passport.decExpirationDate, cipher.passport.expirationDate);
+  } else if (type === 9 && cipher.totp) {
+    draft.totpSecret = plainCipherValue(cipher.totp.decSecret, cipher.totp.secret);
+    draft.totpIssuer = plainCipherValue(cipher.totp.decIssuer, cipher.totp.issuer);
+    draft.totpAccountName = plainCipherValue(cipher.totp.decAccountName, cipher.totp.accountName);
   }
 
   return draft;
@@ -1089,6 +1096,7 @@ function getCipherKeyMismatchProbes(cipher: Cipher): string[] {
     cipher.bankAccount?.accountNumber,
     cipher.driversLicense?.licenseNumber,
     cipher.passport?.passportNumber,
+    cipher.totp?.secret,
     ...(cipher.fields || []).flatMap((field) => [field.name, field.value]),
   ];
   const probes: string[] = [];
@@ -1193,6 +1201,9 @@ function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
     [cipher.passport?.issuingAuthority, cipher.passport?.decIssuingAuthority],
     [cipher.passport?.issueDate, cipher.passport?.decIssueDate],
     [cipher.passport?.expirationDate, cipher.passport?.decExpirationDate],
+    [cipher.totp?.secret, cipher.totp?.decSecret],
+    [cipher.totp?.issuer, cipher.totp?.decIssuer],
+    [cipher.totp?.accountName, cipher.totp?.decAccountName],
     ...(cipher.fields || []).flatMap((field) => [
       [field.name, field.decName] as [unknown, unknown],
       [field.value, field.decValue] as [unknown, unknown],
@@ -1300,6 +1311,7 @@ async function buildCipherPayload(
     bankAccount: null,
     driversLicense: null,
     passport: null,
+    totp: null,
     fields: await encryptCustomFields(draft.customFields || [], keys.enc, keys.mac),
     passwordHistory: await encryptPasswordHistory(cipher?.passwordHistory, keys.enc, keys.mac),
   };
@@ -1431,6 +1443,18 @@ async function buildCipherPayload(
         ['issuingAuthority', 'passportIssuingAuthority'],
         ['issueDate', 'passportIssueDate'],
         ['expirationDate', 'passportExpirationDate'],
+      ],
+      draft,
+      keys.enc,
+      keys.mac
+    );
+  } else if (type === 9) {
+    payload.totp = await encryptObjectFields(
+      cipher?.totp,
+      [
+        ['secret', 'totpSecret'],
+        ['issuer', 'totpIssuer'],
+        ['accountName', 'totpAccountName'],
       ],
       draft,
       keys.enc,

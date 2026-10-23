@@ -1048,6 +1048,8 @@ const fi: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "TOTP on käytössä tällä tilillä.",
   "txt_total_items_count": "{count} nimikettä",
   "txt_totp_secret": "TOTP-salaisuus",
+  "txt_totp_issuer": "Myöntäjä",
+  "txt_totp_account": "Tili",
   "txt_scan_totp_qr": "Skannaa TOTP QR-koodi",
   "txt_totp_qr_starting_camera": "Käynnistetään kameraa...",
   "txt_totp_qr_point_camera": "Osoita kameralla TOTP QR-koodia.",

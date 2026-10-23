@@ -1048,6 +1048,8 @@ const es: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "TOTP está activado para esta cuenta.",
   "txt_total_items_count": "{count} elementos",
   "txt_totp_secret": "Secreto TOTP",
+  "txt_totp_issuer": "Emisor",
+  "txt_totp_account": "Cuenta",
   "txt_scan_totp_qr": "Escanear QR TOTP",
   "txt_totp_qr_starting_camera": "Iniciando cámara...",
   "txt_totp_qr_point_camera": "Apunte la cámara a un código QR TOTP.",

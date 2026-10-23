@@ -222,6 +222,16 @@ export interface CipherPassport {
   [key: string]: unknown;
 }
 
+export interface CipherTotp {
+  secret?: string | null;
+  issuer?: string | null;
+  accountName?: string | null;
+  decSecret?: string;
+  decIssuer?: string;
+  decAccountName?: string;
+  [key: string]: unknown;
+}
+
 export interface CipherField {
   type?: number | string | null;
   name?: string | null;
@@ -258,6 +268,7 @@ export interface Cipher {
   bankAccount?: CipherBankAccount | null;
   driversLicense?: CipherDriversLicense | null;
   passport?: CipherPassport | null;
+  totp?: CipherTotp | null;
   secureNote?: { type?: number | null } | null;
   passwordHistory?: CipherPasswordHistoryEntry[] | null;
   fields?: CipherField[] | null;
@@ -399,6 +410,9 @@ export interface VaultDraft {
   passportIssuingAuthority: string;
   passportIssueDate: string;
   passportExpirationDate: string;
+  totpSecret: string;
+  totpIssuer: string;
+  totpAccountName: string;
   customFields: VaultDraftField[];
 }
 

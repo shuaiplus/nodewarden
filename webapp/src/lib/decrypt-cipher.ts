@@ -123,6 +123,15 @@ export async function decryptSingleCipher(
     };
   }
 
+  if (encrypted.totp) {
+    decrypted.totp = {
+      ...encrypted.totp,
+      decSecret: await decryptCipherField(encrypted.totp.secret, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+      decIssuer: await decryptCipherField(encrypted.totp.issuer, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+      decAccountName: await decryptCipherField(encrypted.totp.accountName, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+    };
+  }
+
   if (encrypted.fields) {
     decrypted.fields = await Promise.all(
       encrypted.fields.map(async (field) => ({

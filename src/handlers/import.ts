@@ -20,6 +20,7 @@ interface CiphersImportRequest {
     bankAccount?: any | null;
     driversLicense?: any | null;
     passport?: any | null;
+    totp?: any | null;
     key?: string | null;
     login?: {
       uris?: Array<{ uri: string | null; uriChecksum?: string | null; match?: number | null }> | null;
@@ -192,15 +193,17 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
     const bankAccount = readAliasedImportProp<any | null>(c, ['bankAccount', 'BankAccount']);
     const driversLicense = readAliasedImportProp<any | null>(c, ['driversLicense', 'DriversLicense']);
     const passport = readAliasedImportProp<any | null>(c, ['passport', 'Passport']);
+    const totp = readAliasedImportProp<any | null>(c, ['totp', 'Totp']);
     const fields = readAliasedImportProp<any[] | null>(c, ['fields', 'Fields']);
     const passwordHistory = readAliasedImportProp<any[] | null>(c, ['passwordHistory', 'PasswordHistory']);
     const key = readAliasedImportProp<string | null>(c, ['key', 'Key']);
+    const importedType = Number(c.type) || 1;
 
     const cipher: Cipher = {
       ...c,
       id: generateUUID(),
       userId: userId,
-      type: c.type as CipherType,
+      type: importedType as CipherType,
       folderId: folderId,
       name: c.name ?? 'Untitled',
       notes: c.notes ?? null,
@@ -265,6 +268,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       bankAccount: bankAccount ?? null,
       driversLicense: driversLicense ?? null,
       passport: passport ?? null,
+      totp: importedType === 9 ? (totp ?? null) : null,
       key: key ?? null,
       createdAt: now,
       updatedAt: now,

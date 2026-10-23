@@ -1048,6 +1048,8 @@ const ru: Record<string, string> = {
   "txt_totp_is_enabled_for_this_account": "TOTP включен для этой учетной записи.",
   "txt_total_items_count": "{count} товаров",
   "txt_totp_secret": "Секрет TOTP",
+  "txt_totp_issuer": "Издатель",
+  "txt_totp_account": "Аккаунт",
   "txt_scan_totp_qr": "Сканировать QR TOTP",
   "txt_totp_qr_starting_camera": "Запуск камеры...",
   "txt_totp_qr_point_camera": "Наведите камеру на QR-код TOTP.",

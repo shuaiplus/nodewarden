@@ -511,6 +511,43 @@ export function normalizeTotpInput(raw: string): string {
   return s;
 }
 
+export interface OtpAuthMetadata {
+  issuer: string;
+  accountName: string;
+}
+
+// Extract the human-readable issuer/account from an otpauth URI so scanned QR
+// codes can populate the standalone TOTP metadata fields.
+export function parseOtpAuthMetadata(raw: string): OtpAuthMetadata {
+  const s = normalizeTotpInput(raw);
+  if (!/^otpauth:\/\//i.test(s)) return { issuer: '', accountName: '' };
+
+  let label = '';
+  let issuerParam = '';
+  try {
+    const url = new URL(s);
+    label = url.pathname.replace(/^\/+/, '');
+    try {
+      label = decodeURIComponent(label);
+    } catch {
+      // Keep the raw label when it contains malformed percent escapes.
+    }
+    issuerParam = (url.searchParams.get('issuer') || '').trim();
+  } catch {
+    return { issuer: '', accountName: '' };
+  }
+
+  let issuer = issuerParam;
+  let accountName = label.trim();
+  const separator = accountName.indexOf(':');
+  if (separator >= 0) {
+    const labelIssuer = accountName.slice(0, separator).trim();
+    accountName = accountName.slice(separator + 1).trim();
+    if (!issuer) issuer = labelIssuer;
+  }
+  return { issuer, accountName };
+}
+
 function parseTotpConfig(raw: string): TotpConfig {
   const s = normalizeTotpInput(raw);
   if (!s) return { secret: '', steam: false, ...DEFAULT_TOTP_CONFIG };

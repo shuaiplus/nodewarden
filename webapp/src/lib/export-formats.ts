@@ -291,6 +291,7 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
   out.bankAccount = cloneWithoutDecodedFields(cipher.bankAccount) ?? null;
   out.driversLicense = cloneWithoutDecodedFields(cipher.driversLicense) ?? null;
   out.passport = cloneWithoutDecodedFields(cipher.passport) ?? null;
+  out.totp = cloneWithoutDecodedFields(cipher.totp) ?? null;
 
   return out;
 }
@@ -362,6 +363,9 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
     : null;
   out.passport = cipher.passport
     ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.passport), keyParts.enc, keyParts.mac)
+    : null;
+  out.totp = cipher.totp
+    ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.totp), keyParts.enc, keyParts.mac)
     : null;
   out.secureNote = cipher.secureNote
     ? {
@@ -448,6 +452,7 @@ function sourceTypeLabel(type: number): string {
   if (type === 6) return 'bankAccount';
   if (type === 7) return 'driversLicense';
   if (type === 8) return 'passport';
+  if (type === 9) return 'totp';
   if (type === 2) return 'note';
   return `type ${type}`;
 }
@@ -502,6 +507,7 @@ const BITWARDEN_CSV_OBJECT_FIELDS: Record<string, readonly string[]> = {
   bankAccount: ['bankName', 'nameOnAccount', 'accountType', 'accountNumber', 'routingNumber', 'branchNumber', 'pin', 'swiftCode', 'iban', 'bankContactPhone'],
   driversLicense: ['firstName', 'middleName', 'lastName', 'dateOfBirth', 'licenseNumber', 'issuingCountry', 'issuingState', 'issueDate', 'expirationDate', 'issuingAuthority', 'licenseClass'],
   passport: ['surname', 'givenName', 'dateOfBirth', 'sex', 'birthPlace', 'nationality', 'issuingCountry', 'passportNumber', 'passportType', 'nationalIdentificationNumber', 'issuingAuthority', 'issueDate', 'expirationDate'],
+  totp: ['secret', 'issuer', 'accountName'],
 };
 
 function appendKnownRecordFieldLines(lines: string[], prefix: string, value: unknown): void {
