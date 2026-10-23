@@ -287,6 +287,15 @@ function collectUnresolvedCipherFields(cipher: Cipher): string[] {
 }
 
 async function hasUnresolvedCipherData(cipher: Cipher, session: SessionState): Promise<boolean> {
+  // The editor drops custom fields without a label, so saving would delete a
+  // nameless field that still holds a value. Keep blocking that case.
+  const hasNamelessValuedField = (cipher.fields || []).some((field) =>
+    looksLikeCipherString(String(field.name || '').trim())
+    && !String(field.decName || '').trim()
+    && !!String(field.decValue || '').trim()
+  );
+  if (hasNamelessValuedField) return true;
+
   const candidates = collectUnresolvedCipherFields(cipher);
   if (!candidates.length) return false;
   if (!session.symEncKey || !session.symMacKey) return true;
