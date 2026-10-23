@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { StorageService } from '../src/services/storage';
 import { handleAuthenticatedRoute } from '../src/router-authenticated';
 import { cipherToResponse } from '../src/handlers/ciphers';
-import { bytesToBase64, encryptBw, decryptStr } from '../webapp/src/lib/crypto';
+import { bytesToBase64, encryptBw, decryptStr, calcTotpNow, parseTotpSettings, updateTotpSettings } from '../webapp/src/lib/crypto';
 import { decryptSingleCipher } from '../webapp/src/lib/decrypt-cipher';
 import { updateCipher, buildCipherImportPayload, repairCipherKeyMismatches } from '../webapp/src/lib/api/vault';
 import { importCipherToDraft } from '../webapp/src/lib/app-support';
@@ -21,6 +21,38 @@ const enc = new Uint8Array(32).fill(1);
 const mac = new Uint8Array(32).fill(2);
 const session: any = { symEncKey: bytesToBase64(enc), symMacKey: bytesToBase64(mac) };
 const encrypt = (value: string) => encryptBw(new TextEncoder().encode(value), enc, mac);
+
+test('TOTP settings can select eight-digit SHA-1 and retain the RFC leading-zero rules', async () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  const configured = updateTotpSettings(secret, 'SHA-1', 8);
+  const result = await calcTotpNow(configured, 59_000);
+  assert.equal(result?.code, '94287082');
+  assert.equal(result?.period, 30);
+  assert.equal((await calcTotpNow(configured, 1_111_111_109_000))?.code, '07081804');
+  assert.deepEqual(parseTotpSettings(configured), {
+    algorithm: 'SHA-1', digits: 8, period: 30, steam: false, supported: true,
+  });
+});
+
+test('changing TOTP selectors preserves existing URI metadata and custom digit counts until changed', () => {
+  const original = 'otpauth://totp/BattleNet%3Aplayer?secret=JBSWY3DPEHPK3PXP&issuer=BattleNet&algorithm=SHA256&digits=7&period=60&vendor=keep';
+  assert.equal(parseTotpSettings(original).digits, 7);
+  const updated = updateTotpSettings(original, 'SHA-1', 8);
+  const uri = new URL(updated);
+  assert.equal(uri.searchParams.get('secret'), 'JBSWY3DPEHPK3PXP');
+  assert.equal(uri.searchParams.get('issuer'), 'BattleNet');
+  assert.equal(uri.searchParams.get('algorithm'), 'SHA1');
+  assert.equal(uri.searchParams.get('digits'), '8');
+  assert.equal(uri.searchParams.get('period'), '60');
+  assert.equal(uri.searchParams.get('vendor'), 'keep');
+});
+
+test('updating TOTP settings preserves inputs that cannot be normalized', () => {
+  const unsupported = 'https://example.test/unsupported';
+  assert.equal(updateTotpSettings(unsupported, 'SHA-1', 8), unsupported);
+  const migration = 'otpauth-migration://offline?data=not-valid';
+  assert.equal(updateTotpSettings(migration, 'SHA-1', 8), migration);
+});
 
 async function fixture(ctx: TestContext) {
   // Execute production SQL in a fresh in-memory SQLite database. Only the D1
