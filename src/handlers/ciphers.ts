@@ -312,11 +312,58 @@ function normalizeCipherForStorage(cipher: Cipher): Cipher {
   return syncCipherComputedAliases(cipher);
 }
 
+// Bitwarden's JSON shape is camelCase, but some third-party clients send the
+// PascalCase aliases inside `login` (rbw writes Username/Password/Totp/Uris).
+// Storing those next to the camelCase fields makes the sync payload carry the
+// same logical field twice, and strict clients reject the whole response
+// (duplicate field `Uris`), which locks them out of the vault permanently.
+// Canonicalize to camelCase, preferring the camelCase value when a client sends
+// both, and apply it on the response path too so rows written before this fix
+// stop breaking sync.
+const CIPHER_LOGIN_KEY_ALIASES: Record<string, string> = {
+  Username: 'username',
+  Password: 'password',
+  Totp: 'totp',
+  Uri: 'uri',
+  Uris: 'uris',
+};
+
+const CIPHER_LOGIN_URI_KEY_ALIASES: Record<string, string> = {
+  Uri: 'uri',
+  UriChecksum: 'uriChecksum',
+  Match: 'match',
+};
+
+function canonicalizeAliasedKeys(source: Record<string, any>, aliases: Record<string, string>): Record<string, any> {
+  const next: Record<string, any> = {};
+  for (const [key, value] of Object.entries(source)) {
+    const canonical = aliases[key] ?? key;
+    // A client that sends both spellings keeps its camelCase value.
+    if (canonical !== key && Object.prototype.hasOwnProperty.call(source, canonical)) continue;
+    next[canonical] = value;
+  }
+  return next;
+}
+
+function canonicalizeCipherLoginKeys(login: any): any {
+  if (!login || typeof login !== 'object' || Array.isArray(login)) return login ?? null;
+  const next = canonicalizeAliasedKeys(login, CIPHER_LOGIN_KEY_ALIASES);
+  if (Array.isArray(next.uris)) {
+    next.uris = next.uris.map((entry: any) => (
+      entry && typeof entry === 'object' && !Array.isArray(entry)
+        ? canonicalizeAliasedKeys(entry, CIPHER_LOGIN_URI_KEY_ALIASES)
+        : entry
+    ));
+  }
+  return next;
+}
+
 export function normalizeCipherLoginForStorage(login: any): any {
-  if (!login || typeof login !== 'object') return login ?? null;
+  const canonical = canonicalizeCipherLoginKeys(login);
+  if (!canonical || typeof canonical !== 'object') return canonical ?? null;
   return {
-    ...login,
-    fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
+    ...canonical,
+    fido2Credentials: Array.isArray(canonical.fido2Credentials) ? canonical.fido2Credentials : null,
   };
 }
 
