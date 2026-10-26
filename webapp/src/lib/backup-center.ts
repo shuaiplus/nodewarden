@@ -192,6 +192,7 @@ export function invalidateRemoteBrowserCacheForDestination(
     pathByDestination: Object.fromEntries(Object.entries(pathByDestination).filter(([key]) => key !== destinationId)),
     pageByKey: Object.fromEntries(Object.entries(pageByKey).filter(([key]) => !key.startsWith(`${destinationId}:`))),
     selectedDestinationId: destinationId,
+    refreshedAt: {},
   };
 }
 

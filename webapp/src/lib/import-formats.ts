@@ -57,6 +57,9 @@ const IMPORT_SOURCE_PARSERS: Record<ImportSourceId, (textRaw: string) => Ciphers
   nodewarden_json: () => {
     throw new Error('nodewarden_json is handled by dedicated JSON flow');
   },
+  google_authenticator_migration: () => {
+    throw new Error('google_authenticator_migration is handled by dedicated QR flow');
+  },
   bitwarden_csv: parseBitwardenCsv,
   onepassword_1pux: parseOnePassword1PuxJson,
   onepassword_1pif: parseOnePassword1Pif,
