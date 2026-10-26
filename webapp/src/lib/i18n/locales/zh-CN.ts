@@ -27,6 +27,8 @@ const zhCN: Record<string, string> = {
   "txt_light_theme": "浅色",
   "txt_dark_theme": "深色",
   "txt_theme_saved_locally": "为您的网页密码库选择一个主题。",
+  "txt_hide_totp_by_default": "默认隐藏验证码",
+  "txt_hide_totp_by_default_help": "遮罩 TOTP 验证码，直到您选择显示。",
   "txt_display_language_help": "更改网页密码库的语言。",
   "txt_two_step_login": "两步登录",
   "txt_keys": "密钥",

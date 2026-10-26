@@ -24,6 +24,8 @@ const es: Record<string, string> = {
   "txt_light_theme": "Claro",
   "txt_dark_theme": "Oscuro",
   "txt_theme_saved_locally": "Elige un tema para tu bóveda web.",
+  "txt_hide_totp_by_default": "Ocultar los códigos de verificación de forma predeterminada",
+  "txt_hide_totp_by_default_help": "Oculta los códigos TOTP hasta que decidas mostrarlos.",
   "txt_display_language_help": "Cambia el idioma de la bóveda web.",
   "txt_two_step_login": "Inicio de sesión en dos pasos",
   "txt_keys": "Claves",
