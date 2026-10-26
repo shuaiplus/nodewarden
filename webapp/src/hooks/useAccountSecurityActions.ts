@@ -16,6 +16,8 @@ import {
   getAccountPasskeyAttestationOptions,
   getAccountPasskeyUpdateAssertionOptions,
   getTotpRecoveryCode,
+  getTwoFactorAuthenticator,
+  putTwoFactorAuthenticator,
   getTwoFactorPasskeyChallenge,
   getTwoFactorPasskeySettings as getTwoFactorPasskeySettingsApi,
   getYubiKeyOtpSettings,
@@ -43,7 +45,7 @@ import {
 import { t } from '@/lib/i18n';
 import type { AppConfirmState } from '@/components/AppGlobalOverlays';
 import type { AuthedFetch } from '@/lib/api/shared';
-import type { AccountPasskeyCredential, AuthorizedDevice, Profile, SessionState, TwoFactorPasskeySettings, YubiKeyOtpSettings } from '@/lib/types';
+import type { AccountPasskeyCredential, AuthorizedDevice, Profile, SessionState, TotpSetupRequest, TotpSetupResult, TwoFactorAuthenticatorSettings, TwoFactorPasskeySettings, YubiKeyOtpSettings } from '@/lib/types';
 
 type Notify = (type: 'success' | 'error' | 'warning', text: string) => void;
 
@@ -52,8 +54,6 @@ interface UseAccountSecurityActionsOptions {
   profile: Profile | null;
   session: SessionState | null;
   defaultKdfIterations: number;
-  disableTotpPassword: string;
-  clearDisableTotpDialog: () => void;
   onLogoutNow: () => void;
   onNotify: Notify;
   onProfileUpdated: (profile: Profile) => void;
@@ -68,8 +68,6 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
     profile,
     session,
     defaultKdfIterations,
-    disableTotpPassword,
-    clearDisableTotpDialog,
     onLogoutNow,
     onNotify,
     onProfileUpdated,
@@ -157,52 +155,66 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
         }
       },
 
-      async enableTotp(secret: string, token: string, masterPassword: string) {
-        if (!profile) {
-          const error = new Error(t('txt_profile_unavailable'));
-          onNotify('error', error.message);
-          throw error;
+      /**
+       * Starts (or restarts) the authenticator setup: the server generates the key and returns the
+       * matching verification token. Enabling needs the master password; replacing an existing key
+       * needs the current authenticator code, or the recovery code, which is the step-up check for
+       * rotation. Either way the server only mints the key once its own check passed.
+       *
+       * Failures are thrown and never notified from here: the caller owns the dialog the user is
+       * looking at, so it is the one place that turns an error into a message. Notifying in both
+       * places is what produced two identical toasts for a single rejected code.
+       */
+      async startTotpSetup(request: TotpSetupRequest): Promise<TwoFactorAuthenticatorSettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const currentToken = String(request.currentToken || '').trim();
+        let masterPasswordHash = '';
+        if (!currentToken) {
+          const masterPassword = String(request.masterPassword || '');
+          if (!masterPassword) throw new Error(t('txt_master_password_is_required'));
+          masterPasswordHash = (await deriveLoginHash(profile.email, masterPassword, defaultKdfIterations)).hash;
         }
-        if (!secret.trim() || !token.trim()) {
-          const error = new Error(t('txt_secret_and_code_are_required'));
-          onNotify('error', error.message);
-          throw error;
-        }
-        if (!masterPassword) {
-          const error = new Error(t('txt_master_password_is_required'));
-          onNotify('error', error.message);
-          throw error;
-        }
-        try {
-          const derived = await deriveLoginHash(profile.email, masterPassword, defaultKdfIterations);
-          await setTotp(authedFetch, {
-            enabled: true,
-            secret: secret.trim(),
-            token: token.trim(),
-            masterPasswordHash: derived.hash,
-          });
-          onNotify('success', t('txt_totp_enabled'));
-        } catch (error) {
-          onNotify('error', error instanceof Error ? error.message : t('txt_enable_totp_failed'));
-          throw error;
-        }
+        return await getTwoFactorAuthenticator(authedFetch, {
+          masterPasswordHash,
+          // A recovery code typed into the same field travels as the current second factor.
+          token: currentToken,
+          regenerate: !!currentToken,
+        });
       },
 
-      async disableTotp() {
+      /**
+       * Commits the key the server handed out. Only a valid code generated from that key makes the
+       * server store it, so a cancelled or failed dialog leaves the active key untouched. Returns the
+       * new recovery code when this change consumed the previous one.
+       */
+      async verifyTotpSetup(
+        key: string,
+        token: string,
+        userVerificationToken: string,
+        rotating: boolean
+      ): Promise<TotpSetupResult> {
+        if (!key.trim() || !token.trim() || !userVerificationToken) {
+          throw new Error(t('txt_secret_and_code_are_required'));
+        }
+        const result = await putTwoFactorAuthenticator(authedFetch, {
+          key: key.trim(),
+          token: token.trim(),
+          userVerificationToken,
+        });
+        await refetchTwoFactorStatus();
+        onNotify('success', t(rotating ? 'txt_authenticator_changed' : 'txt_totp_enabled'));
+        return result;
+      },
+
+      async disableTotp(code: string): Promise<void> {
         if (!profile) return;
-        if (!disableTotpPassword) {
-          onNotify('error', t('txt_please_input_master_password'));
-          return;
-        }
-        try {
-          const derived = await deriveLoginHash(profile.email, disableTotpPassword, defaultKdfIterations);
-          await setTotp(authedFetch, { enabled: false, masterPasswordHash: derived.hash });
-          clearDisableTotpDialog();
-          await refetchTwoFactorStatus();
-          onNotify('success', t('txt_totp_disabled'));
-        } catch (error) {
-          onNotify('error', error instanceof Error ? error.message : t('txt_disable_totp_failed'));
-        }
+        const normalized = String(code || '').trim();
+        if (!normalized) throw new Error(t('txt_enter_authenticator_code_to_disable'));
+        // Turning the second factor off requires a current authenticator code (or the recovery code);
+        // it is verified server-side and the master password alone is not accepted.
+        await setTotp(authedFetch, { enabled: false, token: normalized });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_totp_disabled'));
       },
 
       async getYubiKeySettings(masterPassword: string): Promise<YubiKeyOtpSettings> {
@@ -586,9 +598,7 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
     },
     [
       authedFetch,
-      clearDisableTotpDialog,
       defaultKdfIterations,
-      disableTotpPassword,
       onLogoutNow,
       onNotify,
       onProfileUpdated,

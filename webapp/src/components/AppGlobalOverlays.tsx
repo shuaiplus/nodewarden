@@ -35,12 +35,6 @@ interface AppGlobalOverlaysProps {
   onCancelTotp: () => void;
   onUseRecoveryCode: () => void;
   totpSubmitting: boolean;
-  disableTotpOpen: boolean;
-  disableTotpPassword: string;
-  onDisableTotpPasswordChange: (value: string) => void;
-  onConfirmDisableTotp: () => void;
-  onCancelDisableTotp: () => void;
-  disableTotpSubmitting: boolean;
 }
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -188,26 +182,6 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
         <label className="check-line check-line-compact">
           <input type="checkbox" checked={props.rememberDevice} onChange={(e) => props.onRememberDeviceChange((e.currentTarget as HTMLInputElement).checked)} />
           <span>{t('txt_trust_this_device_for_30_days')}</span>
-        </label>
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={props.disableTotpOpen}
-        title={t('txt_disable_totp')}
-        message={t('txt_enter_master_password_to_disable_two_step_verification')}
-        confirmText={t('txt_disable_totp')}
-        hideCancel
-        closeButton
-        danger
-        showIcon={false}
-        confirmDisabled={props.disableTotpSubmitting}
-        cancelDisabled={props.disableTotpSubmitting}
-        onConfirm={props.onConfirmDisableTotp}
-        onCancel={props.onCancelDisableTotp}
-      >
-        <label className="field">
-          <span>{t('txt_master_password')}</span>
-          <input className="input" type="password" autoComplete="current-password" value={props.disableTotpPassword} onInput={(e) => props.onDisableTotpPasswordChange((e.currentTarget as HTMLInputElement).value)} />
         </label>
       </ConfirmDialog>
 

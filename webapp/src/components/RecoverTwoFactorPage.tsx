@@ -1,17 +1,63 @@
 import { useState } from 'preact/hooks';
-import { Eye, EyeOff, Send, X } from 'lucide-preact';
+import { Clipboard, Eye, EyeOff, LogIn, Send, X } from 'lucide-preact';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { t } from '@/lib/i18n';
 
 interface RecoverTwoFactorPageProps {
-  values: { email: string; password: string; recoveryCode: string };
-  onChange: (next: { email: string; password: string; recoveryCode: string }) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
+  values?: { email: string; password: string; recoveryCode: string };
+  onChange?: (next: { email: string; password: string; recoveryCode: string }) => void;
+  onSubmit?: () => void;
+  onCancel?: () => void;
+  // Present once the recovery code was accepted: two-step login is off and no session was created,
+  // so the only sensible follow-up is to sign in again. The form props above are ignored here.
+  recovered?: boolean;
+  newRecoveryCode?: string;
+  onSignIn?: () => void;
 }
 
 export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
   const [showPassword, setShowPassword] = useState(false);
+
+  if (props.recovered) {
+    return (
+      <div className="auth-page">
+        <StandalonePageFrame title={t('txt_two_step_verification_disabled')}>
+          <p className="muted standalone-muted">{t('txt_recovery_code_used_two_step_disabled')}</p>
+
+          {props.newRecoveryCode && (
+            <label className="field">
+              <span>{t('txt_new_recovery_code')}</span>
+              <div className="totp-secret-input-wrap">
+                {/* Read-only on purpose: it comes from the server, it is not editable. */}
+                <input className="input totp-secret-input" value={props.newRecoveryCode} readOnly />
+                <div className="totp-secret-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary small totp-secret-icon-btn"
+                    title={t('txt_copy_code')}
+                    aria-label={t('txt_copy_code')}
+                    onClick={() => {
+                      void copyTextToClipboard(props.newRecoveryCode || '', { successMessage: t('txt_recovery_code_copied') });
+                    }}
+                  >
+                    <Clipboard size={14} className="btn-icon" />
+                  </button>
+                </div>
+              </div>
+            </label>
+          )}
+
+          <div className="field-grid">
+            <button type="button" className="btn btn-primary" onClick={props.onSignIn}>
+              <LogIn size={14} className="btn-icon" />
+              {t('txt_sign_in_again')}
+            </button>
+          </div>
+        </StandalonePageFrame>
+      </div>
+    );
+  }
 
   return (
     <div className="auth-page">
@@ -19,7 +65,7 @@ export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            props.onSubmit();
+            props.onSubmit?.();
           }}
         >
           <p className="muted standalone-muted">{t('txt_use_your_one_time_recovery_code_to_disable_two_step_verification')}</p>
@@ -29,9 +75,9 @@ export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
             <input
               className="input"
               type="email"
-              value={props.values.email}
+              value={props.values?.email ?? ''}
               autoComplete="username"
-              onInput={(e) => props.onChange({ ...props.values, email: (e.currentTarget as HTMLInputElement).value })}
+              onInput={(e) => props.onChange?.({ ...(props.values ?? { email: '', password: '', recoveryCode: '' }), email: (e.currentTarget as HTMLInputElement).value })}
             />
           </label>
 
@@ -41,9 +87,9 @@ export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
               <input
                 className="input"
                 type={showPassword ? 'text' : 'password'}
-                value={props.values.password}
+                value={props.values?.password ?? ''}
                 autoComplete="current-password"
-                onInput={(e) => props.onChange({ ...props.values, password: (e.currentTarget as HTMLInputElement).value })}
+                onInput={(e) => props.onChange?.({ ...(props.values ?? { email: '', password: '', recoveryCode: '' }), password: (e.currentTarget as HTMLInputElement).value })}
               />
               <button type="button" className="eye-btn" onClick={() => setShowPassword((v) => !v)}>
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -55,9 +101,9 @@ export default function RecoverTwoFactorPage(props: RecoverTwoFactorPageProps) {
             <span>{t('txt_recovery_code')}</span>
             <input
               className="input"
-              value={props.values.recoveryCode}
+              value={props.values?.recoveryCode ?? ''}
               autoComplete="one-time-code"
-              onInput={(e) => props.onChange({ ...props.values, recoveryCode: (e.currentTarget as HTMLInputElement).value.toUpperCase() })}
+              onInput={(e) => props.onChange?.({ ...(props.values ?? { email: '', password: '', recoveryCode: '' }), recoveryCode: (e.currentTarget as HTMLInputElement).value.toUpperCase() })}
             />
           </label>
 
