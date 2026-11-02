@@ -353,7 +353,7 @@
 }
 
 .not-found-logo {
-  @apply h-14 w-14 flex-shrink-0 object-contain;
+  @apply h-14 w-14 shrink-0 object-contain;
   filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
 }
 
@@ -465,7 +465,7 @@
 }
 
 .standalone-brand-logo {
-  @apply h-14 w-[70px] flex-shrink-0 object-contain;
+  @apply h-14 w-[70px] shrink-0 object-contain;
   filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
 }
 

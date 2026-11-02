@@ -113,6 +113,21 @@ export async function createUser(db: D1Database, safeBind: SafeBind, user: User)
   await saveUser(db, safeBind, user);
 }
 
+export async function upgradePasswordVerifier(
+  db: D1Database,
+  userId: string,
+  expectedVerifier: string,
+  securityStamp: string,
+  newVerifier: string
+): Promise<boolean> {
+  // Update only the verifier, preserving vault keys, timestamps and sessions.
+  // A concurrent password change, disable or delete must not be overwritten.
+  const result = await db.prepare(
+    "UPDATE users SET master_password_hash = ? WHERE id = ? AND master_password_hash = ? AND security_stamp = ? AND status = 'active'"
+  ).bind(newVerifier, userId, expectedVerifier, securityStamp).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
 export async function createFirstUser(db: D1Database, safeBind: SafeBind, user: User): Promise<boolean> {
   const email = user.email.toLowerCase();
   const stmt = db.prepare(

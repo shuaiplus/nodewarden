@@ -1140,6 +1140,7 @@ const en: Record<string, string> = {
   "txt_remove_device_failed": "Failed to remove device",
   "txt_remove_all_devices_failed": "Failed to remove all devices",
   "txt_update_item_failed": "Update item failed",
+  "txt_item_changed_elsewhere": "This item was changed in another client. Your edits are still in the form. Copy the changes you need, reopen the item, and save again.",
   "txt_update_send_failed": "Update send failed",
   "txt_update_user_status_failed": "Failed to update user status",
   "txt_use_recovery_code": "Use Recovery Code",

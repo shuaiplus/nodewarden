@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'preact/hooks';
+import { cipherFieldMetadata } from '@/lib/cipher-fields';
 import type { ImportAttachmentFile, ImportResultSummary } from '@/components/ImportPage';
 import type { ExportRequest, ZipAttachmentEntry } from '@/lib/export-formats';
 import {
@@ -221,7 +222,9 @@ function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): 
   }
 
   next.fields = draft.customFields.map((field) => ({
+    ...cipherFieldMetadata(field.extra || {}).extra,
     type: field.type,
+    ...(field.type === 3 ? { linkedId: field.linkedId ?? null } : {}),
     name: field.label,
     value: field.value,
     decName: field.label,
@@ -608,6 +611,10 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           onNotify('success', t('txt_item_updated'));
         } catch (error) {
           patchCipherBatch([cipher.id], () => previousCipher, { patchEncrypted: false });
+          if (error instanceof Error && error.message === t('txt_item_changed_elsewhere')) {
+            // Fetch the current item for reopening; the editor keeps the draft.
+            await refetchCiphers().catch(() => {});
+          }
           onNotify('error', error instanceof Error ? error.message : t('txt_update_item_failed'));
           throw error;
         } finally {

@@ -163,6 +163,7 @@ export function translateServerError(message: string | null | undefined, fallbac
 
   const key = {
     'Account is disabled': 'txt_server_error_account_disabled',
+    'The client copy of this cipher is out of date. Resync the client and try again.': 'txt_item_changed_elsewhere',
     'Another backup or restore run is already in progress': 'txt_backup_error_another_backup_or_restore_running',
     'Another backup run is already in progress': 'txt_backup_error_another_backup_running',
     'Backup archive upload failed': 'txt_backup_error_archive_upload_failed',

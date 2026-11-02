@@ -1087,6 +1087,7 @@ const fi: Record<string, string> = {
   "txt_remove_device_failed": "Laitteen poistaminen epäonnistui",
   "txt_remove_all_devices_failed": "Kaikkien laitteiden poistaminen epäonnistui",
   "txt_update_item_failed": "Nimikkeen päivitys epäonnistui",
+  "txt_item_changed_elsewhere": "Kohdetta muutettiin toisessa sovelluksessa. Muokkauksesi ovat yhä lomakkeessa. Kopioi tarvittavat muutokset, avaa kohde uudelleen ja tallenna.",
   "txt_update_send_failed": "Lähetyksen päivitys epäonnistui",
   "txt_update_user_status_failed": "Käyttäjän tilan päivitys epäonnistui",
   "txt_use_recovery_code": "Käytä palautuskoodia",

@@ -1087,6 +1087,7 @@ const fr: Record<string, string> = {
   "txt_remove_device_failed": "Le retrait de l'appareil a échoué",
   "txt_remove_all_devices_failed": "Le retrait de tous les appareils a échoué",
   "txt_update_item_failed": "La mise à jour de l'élément a échoué",
+  "txt_item_changed_elsewhere": "Cet élément a été modifié dans un autre client. Vos modifications restent dans le formulaire. Copiez les changements nécessaires, rouvrez cet élément et enregistrez-le.",
   "txt_update_send_failed": "La mise à jour de l'envoi a échoué",
   "txt_update_user_status_failed": "La mise à jour du statut de l'utilisateur a échoué",
   "txt_use_recovery_code": "Utiliser le code de récupération",
