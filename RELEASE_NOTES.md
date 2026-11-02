@@ -21,6 +21,70 @@ Release note writing rules:
 7. The English and Chinese versions should match in content and ordering, not be two different summaries.
 -->
 
+# v1.8.1 - Expanded Generators, Safer Vault Editing, and Client Compatibility
+
+### Added
+
+1. **More local generation tools.** The generator now creates numeric PINs, memorable usernames, email aliases, and Ed25519 or RSA SSH key pairs alongside passwords and passphrases. Passwords support minimum counts for each character type and an option to avoid ambiguous characters, while passphrases and usernames can use custom word lists. SSH keys are generated on the device and are not retained by NodeWarden, so save the private key before leaving the page. Commit: [df493b4](https://github.com/shuaiplus/nodewarden/commit/df493b46972bf864e9dad11370ed5d48de06af2a).
+
+### Improved
+
+1. **Current Bitwarden client compatibility.** Configuration, prelogin, and account-key responses now include fields expected by Bitwarden 2026.7 clients while retaining older response formats. Supported desktop clients also show the official settings dialog with browser integration controls. Commits: [a012890](https://github.com/shuaiplus/nodewarden/commit/a0128908e18557511590bcb06e13c8799b427343), [6ffdf05](https://github.com/shuaiplus/nodewarden/commit/6ffdf05dc65a0fcd3f60cfe586a04a31e19d6de3).
+
+1. **Stronger account authentication with automatic migration.** New registrations and password changes use randomly salted server-side password verifiers, and existing accounts upgrade after a successful password login and any required two-factor verification. Existing vault keys and sessions are preserved, and failed logins use more consistent responses and verification work to reduce account discovery through errors or timing. Commit: [5f71cb3](https://github.com/shuaiplus/nodewarden/commit/5f71cb388c061a640e5f2e372e79fa6059f0e26b).
+
+1. **Clearer deployment and build guidance.** Builds now declare support for Node.js 22.19+ within the 22.x series or Node.js 24.11+, with `.node-version` selecting 24.18.0; align any Cloudflare dashboard `NODE_VERSION` override with that file when upgrading. The deployment FAQ also explains repository connection problems, persistent registration data, and where to configure runtime secrets. Commits: [02081ea](https://github.com/shuaiplus/nodewarden/commit/02081ea07f07501330ba9cfcf1ff4611466def2e), [99d404f](https://github.com/shuaiplus/nodewarden/commit/99d404f7cbf47fa094ea9ed153c16e8f231ded56).
+
+### Fixed
+
+1. **Vault edits preserve fields and detect conflicting saves.** Web edits now retain linked custom-field metadata and unrecognized encrypted properties in supported item types. Outdated and concurrent saves are rejected instead of overwriting newer changes, and the editor keeps your draft with instructions to reopen the item. Official bulk delete and restore methods are also supported alongside legacy routes, with restore returning the restored items. Commit: [293f5ce](https://github.com/shuaiplus/nodewarden/commit/293f5ce19685855f393226c8dceaadd9af8a8782).
+
+1. **Cleared notes stay cleared.** Full item updates now treat omitted notes and custom fields as cleared values, matching clients that leave these properties out after deletion. Previously saved encrypted notes no longer reappear through fallback merging. Commit: [a72592e](https://github.com/shuaiplus/nodewarden/commit/a72592e76e80f1e31eebde0c0216d2a77004440f).
+
+1. **Safe duplicate selection across large vaults.** Duplicate groups now keep distinct identities even when there are more than 64 groups. Cleanup selection no longer confuses later groups with earlier ones or selects every item in an affected group. Commit: [df6b0b9](https://github.com/shuaiplus/nodewarden/commit/df6b0b97675ce69efba68f7895291ba67436208e).
+
+1. **WebAuthn verification in official clients.** Desktop, browser-extension, and mobile connectors now follow Bitwarden's request and response formats, including mobile callbacks and supported desktop origins. Exact connector URLs are preserved in Worker deployments, avoiding redirects and framing restrictions that could interrupt security-key verification. Commit: [f761fff](https://github.com/shuaiplus/nodewarden/commit/f761fffd58ff7b6fd510ae57a1d409d247728a1b).
+
+1. **Helpful registration errors when browser cryptography is unavailable.** Registration now detects insecure or unsupported browser contexts before creating account keys and shows localized guidance to use HTTPS in a supported browser. This replaces an unreadable cryptography runtime error with an actionable message. Commit: [82d9f61](https://github.com/shuaiplus/nodewarden/commit/82d9f61163f6d29803e3a3264b8f986dfa992ebc).
+
+1. **Visible controls and values in narrow panels.** Remote backup rows now reflow according to the panel's available width, vault toolbars and authorized-device actions wrap, and item-detail values retain usable space. These changes prevent buttons and values from being clipped, while links, backup controls, and TOTP indicators follow the selected theme color more consistently. Commits: [589557a](https://github.com/shuaiplus/nodewarden/commit/589557a75737134574861f568b44703c4881795d), [38b0ff6](https://github.com/shuaiplus/nodewarden/commit/38b0ff6263e54e54e2fcc7f6c7ea3e6f34bb8c08), [ecc0d13](https://github.com/shuaiplus/nodewarden/commit/ecc0d134ac732d29240e6d5ba84e9798be222f17), [f644baa](https://github.com/shuaiplus/nodewarden/commit/f644baaf8d23df2b646d2c1c815bd6d7e1e60e26), [fb627f5](https://github.com/shuaiplus/nodewarden/commit/fb627f59f0ee6cfc396634b3f1674cc09a22e186).
+
+1. **Credentials no longer accepted in sensitive request URLs.** Notification connections now use short-lived, single-use tickets obtained through authenticated negotiation instead of accepting access JWTs from URL query parameters. Admin backup attachment downloads require POST with a JSON body; integrations using the old GET endpoint must switch to POST so master-password verification credentials do not enter URL logs or browser history. Commits: [e63f966](https://github.com/shuaiplus/nodewarden/commit/e63f9663e845817268f842fff6c628ef921652db), [6529523](https://github.com/shuaiplus/nodewarden/commit/652952379b5d1d8350dc17096b3125919add4884).
+
+1. **Updated dependencies and removal of vulnerable build tooling.** Dependency updates include Nano ID 3.3.18, Undici 8.10.2, Sharp 0.35.4, and a PostCSS path-traversal fix. The Web Vault also moves to Tailwind CSS 4, removing the vulnerable `braces` dependency from its previous build chain. Commits: [d43f21e](https://github.com/shuaiplus/nodewarden/commit/d43f21e8e03847df1ce81f2dc9534c23f82f54cb), [293f5ce](https://github.com/shuaiplus/nodewarden/commit/293f5ce19685855f393226c8dceaadd9af8a8782), [588dce6](https://github.com/shuaiplus/nodewarden/commit/588dce6a0a3ec67bd48fbbca7f250e181f4bc45f), [f6403b8](https://github.com/shuaiplus/nodewarden/commit/f6403b8cab98abfb456db66e343039c5a803c01b), [4c241aa](https://github.com/shuaiplus/nodewarden/commit/4c241aa64bff3c2833468f8dd5974cc856089aed).
+
+---
+
+### 新增
+
+1. **更多本地生成工具。** 生成器在密码和口令短语之外，新增数字 PIN、易记用户名、邮箱别名以及 Ed25519 或 RSA SSH 密钥对。密码可设置各类字符的最少数量并排除易混淆字符，口令短语和用户名可使用自定义词表。SSH 密钥在设备本地生成，NodeWarden 不会保留，请在离开页面前保存私钥。提交：[df493b4](https://github.com/shuaiplus/nodewarden/commit/df493b46972bf864e9dad11370ed5d48de06af2a)。
+
+### 改进
+
+1. **兼容新版 Bitwarden 客户端。** 配置、预登录和账户密钥响应补齐了 Bitwarden 2026.7 客户端所需字段，同时保留旧版响应格式。受支持的桌面客户端也会显示包含浏览器集成选项的官方设置对话框。提交：[a012890](https://github.com/shuaiplus/nodewarden/commit/a0128908e18557511590bcb06e13c8799b427343)、[6ffdf05](https://github.com/shuaiplus/nodewarden/commit/6ffdf05dc65a0fcd3f60cfe586a04a31e19d6de3)。
+
+1. **更安全的账户认证与自动迁移。** 新注册和修改密码使用带随机盐的服务端密码校验数据，已有账户在密码登录及所需双因素验证成功后自动升级。升级保留原有保险库密钥和会话，失败登录也采用更一致的响应与验证计算，减少通过错误信息或响应耗时探测账户的机会。提交：[5f71cb3](https://github.com/shuaiplus/nodewarden/commit/5f71cb388c061a640e5f2e372e79fa6059f0e26b)。
+
+1. **更清晰的部署与构建说明。** 构建现已声明支持 Node.js 22.x 系列中的 22.19 及以上版本，或 Node.js 24.11 及以上版本；`.node-version` 指定使用 24.18.0，升级时请同步调整 Cloudflare 控制台中覆盖该文件的 `NODE_VERSION` 设置。部署常见问题也补充了仓库连接异常、注册数据持久化和运行时 Secret 配置位置的说明。提交：[02081ea](https://github.com/shuaiplus/nodewarden/commit/02081ea07f07501330ba9cfcf1ff4611466def2e)、[99d404f](https://github.com/shuaiplus/nodewarden/commit/99d404f7cbf47fa094ea9ed153c16e8f231ded56)。
+
+### 修复
+
+1. **编辑条目保留字段并识别保存冲突。** Web 编辑现在会保留关联自定义字段的元数据，以及受支持条目类型中尚未识别的加密属性。过期或并发保存会被拒绝，避免覆盖其他客户端的新修改；编辑器保留草稿，并提示重新打开条目。同时兼容官方批量删除、恢复方法和旧版路由，恢复操作会返回已恢复的条目。提交：[293f5ce](https://github.com/shuaiplus/nodewarden/commit/293f5ce19685855f393226c8dceaadd9af8a8782)。
+
+1. **已清空的备注不再重新出现。** 完整更新条目时，省略的备注和自定义字段现在会按已清空处理，兼容删除后不再发送这些属性的客户端。旧的加密备注不会再被回退合并逻辑恢复。提交：[a72592e](https://github.com/shuaiplus/nodewarden/commit/a72592e76e80f1e31eebde0c0216d2a77004440f)。
+
+1. **大量重复分组下正确选择待清理条目。** 重复分组超过 64 组时，各组仍会保留独立标识。清理选择不再混淆前后的分组，也不会误选受影响分组中的全部条目。提交：[df6b0b9](https://github.com/shuaiplus/nodewarden/commit/df6b0b97675ce69efba68f7895291ba67436208e)。
+
+1. **官方客户端的 WebAuthn 验证。** 桌面端、浏览器扩展和移动端连接页面现已遵循 Bitwarden 的请求与响应格式，包括移动端回调和受支持的桌面端来源。Worker 部署保留连接页面的精确 URL，避免重定向和嵌入限制中断安全密钥验证。提交：[f761fff](https://github.com/shuaiplus/nodewarden/commit/f761fffd58ff7b6fd510ae57a1d409d247728a1b)。
+
+1. **浏览器加密能力不可用时提供明确注册提示。** 注册现在会在创建账户密钥前检查不安全或不受支持的浏览器环境，并通过本地化提示引导用户使用受支持的浏览器和 HTTPS。原先难以理解的加密运行时错误改为可直接处理的提示。提交：[82d9f61](https://github.com/shuaiplus/nodewarden/commit/82d9f61163f6d29803e3a3264b8f986dfa992ebc)。
+
+1. **窄面板中的按钮和内容保持可见。** 远端备份列表现在按面板可用宽度重新排版，保险库工具栏和已授权设备操作按钮可自动换行，条目详情的值也保留可读空间，避免按钮或内容被裁切。链接、备份控件和 TOTP 指示器也会更一致地使用所选主题颜色。提交：[589557a](https://github.com/shuaiplus/nodewarden/commit/589557a75737134574861f568b44703c4881795d)、[38b0ff6](https://github.com/shuaiplus/nodewarden/commit/38b0ff6263e54e54e2fcc7f6c7ea3e6f34bb8c08)、[ecc0d13](https://github.com/shuaiplus/nodewarden/commit/ecc0d134ac732d29240e6d5ba84e9798be222f17)、[f644baa](https://github.com/shuaiplus/nodewarden/commit/f644baaf8d23df2b646d2c1c815bd6d7e1e60e26)、[fb627f5](https://github.com/shuaiplus/nodewarden/commit/fb627f59f0ee6cfc396634b3f1674cc09a22e186)。
+
+1. **敏感请求不再接受 URL 中的认证凭据。** 通知连接现在使用认证协商后取得的短期一次性票据，不再接受 URL 查询参数中的访问 JWT。管理员备份附件下载仅接受带 JSON 请求体的 POST；使用旧 GET 接口的集成需要改为 POST，避免主密码验证凭据进入 URL 日志或浏览器历史。提交：[e63f966](https://github.com/shuaiplus/nodewarden/commit/e63f9663e845817268f842fff6c628ef921652db)、[6529523](https://github.com/shuaiplus/nodewarden/commit/652952379b5d1d8350dc17096b3125919add4884)。
+
+1. **更新依赖并移除存在漏洞的构建工具依赖。** 依赖更新包括 Nano ID 3.3.18、Undici 8.10.2、Sharp 0.35.4，以及 PostCSS 路径穿越问题的修复。Web Vault 同时迁移至 Tailwind CSS 4，移除了旧构建链中存在漏洞的 `braces` 依赖。提交：[d43f21e](https://github.com/shuaiplus/nodewarden/commit/d43f21e8e03847df1ce81f2dc9534c23f82f54cb)、[293f5ce](https://github.com/shuaiplus/nodewarden/commit/293f5ce19685855f393226c8dceaadd9af8a8782)、[588dce6](https://github.com/shuaiplus/nodewarden/commit/588dce6a0a3ec67bd48fbbca7f250e181f4bc45f)、[f6403b8](https://github.com/shuaiplus/nodewarden/commit/f6403b8cab98abfb456db66e343039c5a803c01b)、[4c241aa](https://github.com/shuaiplus/nodewarden/commit/4c241aa64bff3c2833468f8dd5974cc856089aed)。
+
 # v1.8.0 - Deployment Control, Session Reliability, and Compatibility Fixes
 
 ### Added

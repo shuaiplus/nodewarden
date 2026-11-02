@@ -31,7 +31,12 @@
 }
 
 .skeleton-content {
-  @apply min-w-0 flex-1 space-y-2;
+  @apply min-w-0 flex-1;
+}
+
+.skeleton-content > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
 }
 
 .skeleton-line {
@@ -63,13 +68,19 @@
 }
 
 .skeleton-page {
-  @apply h-full space-y-4 p-4;
+  @apply h-full p-4;
+}
+
+.skeleton-page > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1rem;
+  margin-bottom: 0;
 }
 
 .skeleton-header {
   @apply mb-6;
 }
 
-.skeleton-body {
-  @apply space-y-3;
+.skeleton-body > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
 }

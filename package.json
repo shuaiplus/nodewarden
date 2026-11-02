@@ -1,11 +1,14 @@
 {
   "name": "nodewarden",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Minimal Bitwarden-compatible server running on Cloudflare Workers",
   "author": "shuaiplus",
   "license": "LGPL-3.0",
   "main": "src/index.ts",
   "type": "module",
+  "engines": {
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
+  },
   "scripts": {
     "dev": "wrangler dev -c wrangler.toml",
     "dev:kv": "wrangler dev -c wrangler.kv.toml",
@@ -16,7 +19,9 @@
     "i18n": "node scripts/i18n-validate.cjs",
     "i18n:validate": "node scripts/i18n-validate.cjs",
     "test:config-compatibility": "tsx --test scripts/config-compatibility.test.ts",
+    "test:vault-compatibility": "tsx --tsconfig webapp/tsconfig.json --import ./scripts/offline-workers-loader.mjs --test scripts/vault-compatibility.test.ts",
     "test:web-crypto": "tsx --test scripts/web-crypto-availability.test.ts",
+    "test:notifications-security": "tsx --test scripts/notifications-security.test.ts",
     "test:webauthn-mobile": "node --test scripts/webauthn-mobile-connector.test.mjs",
     "test:webauthn-connector": "node --test scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
     "test:webauthn-connectors": "node --test scripts/webauthn-mobile-connector.test.mjs scripts/webauthn-connector.test.mjs && tsx --test scripts/webauthn-connector-headers.test.ts",
@@ -48,35 +53,37 @@
     }
   },
   "overrides": {
-    "undici": ">=7.28.0",
+    "nanoid": "3.3.18",
+    "undici": "8.10.2",
     "@babel/core": ">=7.29.6",
     "esbuild": ">=0.28.1",
     "ws": "8.21.0",
-    "sharp": "0.35.0"
+    "sharp": "0.35.5",
+    "browserslist": "4.28.7",
+    "baseline-browser-mapping": "2.11.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260630.1",
-    "@preact/preset-vite": "^2.10.5",
-    "@types/node": "^26.0.1",
-    "autoprefixer": "^10.5.2",
-    "opencc-js": "^1.3.2",
-    "postcss": "^8.5.23",
-    "tailwindcss": "^3.4.19",
-    "tsx": "^4.22.4",
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@preact/preset-vite": "^2.10.6",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.4",
+    "opencc-js": "^1.4.2",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vite": "^8.1.3",
-    "wrangler": "^4.105.0"
+    "vite": "^8.3.3",
+    "wrangler": "^4.146.0"
   },
   "dependencies": {
-    "@noble/hashes": "^2.2.0",
+    "@noble/hashes": "^2.4.0",
     "@simplewebauthn/server": "^13.3.2",
-    "@tanstack/react-query": "^5.101.2",
-    "@zip.js/zip.js": "^2.8.26",
+    "@tanstack/react-query": "^5.104.0",
+    "@zip.js/zip.js": "^2.22.0",
     "fflate": "^0.8.3",
     "jsqr": "1.4.0",
-    "lucide-preact": "^1.22.0",
+    "lucide-preact": "^1.49.0",
     "preact": "^10.29.3",
     "qrcode-generator": "^2.0.4",
-    "wouter": "^3.10.0"
+    "wouter": "^3.13.0"
   }
 }

@@ -1090,6 +1090,7 @@ const zhCN: Record<string, string> = {
   "txt_remove_device_failed": "移除设备失败",
   "txt_remove_all_devices_failed": "移除所有设备失败",
   "txt_update_item_failed": "更新项目失败",
+  "txt_item_changed_elsewhere": "条目已在其他客户端修改。你的编辑内容仍保留在表单中，请复制需要的修改，重新打开条目后再保存。",
   "txt_update_send_failed": "更新 Send 失败",
   "txt_update_user_status_failed": "更新用户状态失败",
   "txt_use_recovery_code": "使用恢复代码",

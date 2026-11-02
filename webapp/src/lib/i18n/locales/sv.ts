@@ -1087,6 +1087,7 @@ const sv: Record<string, string> = {
   "txt_remove_device_failed": "Misslyckades med att ta bort enhet",
   "txt_remove_all_devices_failed": "Misslyckades med att ta bort alla enheter",
   "txt_update_item_failed": "Misslyckades med att uppdatera objekt",
+  "txt_item_changed_elsewhere": "Objektet ändrades i en annan klient. Dina ändringar finns kvar i formuläret. Kopiera de ändringar du behöver, öppna objektet igen och spara.",
   "txt_update_send_failed": "Misslyckades med att uppdatera sändning",
   "txt_update_user_status_failed": "Misslyckades med att uppdatera användarstatus",
   "txt_use_recovery_code": "Använd återställningskod",

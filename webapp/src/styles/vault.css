@@ -1,6 +1,10 @@
 .vault-grid {
   @apply grid h-full min-h-0 gap-3 p-0.5;
-  grid-template-columns: 270px minmax(400px, 36%) minmax(400px, 1fr);
+  /* The list and detail panes already scroll internally (overflow: auto), which
+     zeroes their automatic minimum size. Keeping the track minimums at 0 lets the
+     grid fit the content area at any width instead of overflowing the page; wide
+     viewports are unaffected because 36%/1fr were never binding there. */
+  grid-template-columns: 270px minmax(0, 36%) minmax(0, 1fr);
 }
 
 .sidebar,
@@ -47,11 +51,11 @@
 }
 
 .folder-add-btn:hover {
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .search-input {
-  @apply h-12 w-full rounded-xl border px-3.5 py-2.5 text-base text-ink outline-none transition;
+  @apply h-12 w-full rounded-xl border px-3.5 py-2.5 text-base text-ink outline-hidden transition;
   background: var(--panel);
   border-color: rgba(74, 103, 150, 0.34);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
@@ -161,7 +165,7 @@
 }
 
 .folder-sort-btn:hover {
-  color: #1d4ed8;
+  color: var(--primary-hover);
   background: #dbeafe;
   transform: scale(1.06);
 }
@@ -230,7 +234,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .list-head {
-  @apply mb-1.5 flex items-center gap-2;
+  @apply mb-1.5 flex flex-wrap items-center gap-2;
   min-height: 34px;
 }
 
@@ -412,7 +416,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .desktop-create-trigger {
-  @apply h-[34px] w-[34px] min-w-[34px] gap-0 rounded-[10px] p-0 text-[0];
+  @apply h-[34px] w-[34px] min-w-[34px] gap-0 rounded-[10px] p-0 text-[0px];
 }
 
 .desktop-create-trigger .btn-icon {
@@ -582,7 +586,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .card-brand-icon {
-  @apply inline-grid h-6 w-9 shrink-0 place-items-center rounded border text-[7px] font-black uppercase leading-none;
+  @apply inline-grid h-6 w-9 shrink-0 place-items-center rounded-sm border text-[7px] font-black uppercase leading-none;
   letter-spacing: 0;
   color: #1e3a8a;
   background: linear-gradient(180deg, #ffffff 0%, #f4f7fb 100%);
@@ -860,7 +864,9 @@ select.input.duplicate-mode-toolbar-select {
 
 .kv-row {
   @apply grid items-center gap-2.5 py-2.5;
-  grid-template-columns: minmax(0px, 80px) minmax(0, 1fr) auto;
+  /* Floor the value column so the auto-sized actions column wraps its
+     buttons instead of collapsing the value to 0 width. */
+  grid-template-columns: minmax(0px, 80px) minmax(min(35%, 140px), 1fr) auto;
   border-bottom: 1px solid rgba(154, 172, 205, 0.22);
 }
 
@@ -962,7 +968,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .totp-ring-progress {
-  stroke: #2563eb;
+  stroke: var(--primary);
   stroke-linecap: round;
   transition: stroke-dashoffset 260ms linear, stroke 200ms ease;
 }

@@ -1087,6 +1087,7 @@ const de: Record<string, string> = {
   "txt_remove_device_failed": "Fehler beim Entfernen des Geräts",
   "txt_remove_all_devices_failed": "Fehler beim Entfernen aller Geräte",
   "txt_update_item_failed": "Fehler beim Aktualisieren des Eintrags",
+  "txt_item_changed_elsewhere": "Dieser Eintrag wurde in einem anderen Client geändert. Deine Änderungen stehen noch im Formular. Kopiere sie, öffne den Eintrag erneut und speichere ihn.",
   "txt_update_send_failed": "Fehler beim Aktualisieren der Sendung",
   "txt_update_user_status_failed": "Fehler beim Aktualisieren des Benutzerstatus",
   "txt_use_recovery_code": "Wiederherstellungscode verwenden",

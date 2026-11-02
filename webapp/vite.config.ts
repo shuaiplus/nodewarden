@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import preact from '@preact/preset-vite';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, type Plugin } from 'vite';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
@@ -263,7 +264,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     root: rootDir,
-    plugins: [preact(), searchIndexPolicyPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
+    plugins: [preact(), tailwindcss(), searchIndexPolicyPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
     define: {
       __NODEWARDEN_DEMO__: JSON.stringify(isDemo),
     },

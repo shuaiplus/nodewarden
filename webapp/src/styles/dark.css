@@ -220,7 +220,7 @@
 }
 
 :root[data-theme='dark'] .card-brand-icon {
-  color: #bfdbfe;
+  color: var(--primary-strong);
   background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
   border-color: color-mix(in srgb, var(--primary) 30%, var(--line));
 }

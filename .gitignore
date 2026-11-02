@@ -44,6 +44,7 @@ tmp/
 .tmp-bitwarden-clients/
 
 nodewarden-wiki/
+nodewarden.wiki/
 wiki/
 AGENTS.md
 settings.json
@@ -57,6 +58,7 @@ NodeWarden-compat/
 
 .reasonix/
 .upstream/
+bitwarden-upstream/
 
 # Compatibility analysis documents
 BITWARDEN_COMPATIBILITY_ANALYSIS.md

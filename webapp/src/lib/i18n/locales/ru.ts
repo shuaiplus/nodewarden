@@ -1087,6 +1087,7 @@ const ru: Record<string, string> = {
   "txt_remove_device_failed": "Не удалось удалить устройство.",
   "txt_remove_all_devices_failed": "Не удалось удалить все устройства.",
   "txt_update_item_failed": "Обновить элемент не удалось",
+  "txt_item_changed_elsewhere": "Элемент изменён в другом клиенте. Ваши правки остались в форме. Скопируйте нужные изменения, откройте элемент заново и сохраните его.",
   "txt_update_send_failed": "Send обновления не удалась",
   "txt_update_user_status_failed": "Не удалось обновить статус пользователя",
   "txt_use_recovery_code": "Использовать код восстановления",

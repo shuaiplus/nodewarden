@@ -353,7 +353,7 @@
 }
 
 .not-found-logo {
-  @apply h-14 w-14 flex-shrink-0 object-contain;
+  @apply h-14 w-14 shrink-0 object-contain;
   filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
 }
 
@@ -369,7 +369,7 @@
 .not-found-code {
   @apply rounded-full px-3 py-1 text-sm font-extrabold;
   background: #eef4ff;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .not-found-copy {
@@ -465,7 +465,7 @@
 }
 
 .standalone-brand-logo {
-  @apply h-14 w-[70px] flex-shrink-0 object-contain;
+  @apply h-14 w-[70px] shrink-0 object-contain;
   filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
 }
 
@@ -574,7 +574,7 @@
 
 .jwt-inline-link {
   @apply font-bold no-underline;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .jwt-inline-link:hover {
@@ -613,7 +613,7 @@
 
 .standalone-footer a {
   @apply font-bold no-underline;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .standalone-footer a:hover {
@@ -622,5 +622,5 @@
 
 .standalone-version {
   @apply font-bold;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
