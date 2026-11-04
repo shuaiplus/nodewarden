@@ -4,7 +4,7 @@ type SafeBind = (stmt: D1PreparedStatement, ...values: any[]) => D1PreparedState
 const USER_SELECT_COLUMNS =
   'id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, ' +
   'kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, ' +
-  'totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, api_key, created_at, updated_at';
+  'totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, api_key, user_key_id, created_at, updated_at';
 
 function mapUserRow(row: any): User {
   return {
@@ -33,6 +33,7 @@ function mapUserRow(row: any): User {
     yubikeyKey5: row.yubikey_key5 ?? null,
     yubikeyNfc: !!row.yubikey_nfc,
     apiKey: row.api_key ?? null,
+    userKeyId: row.user_key_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -125,6 +126,14 @@ export async function upgradePasswordVerifier(
   const result = await db.prepare(
     "UPDATE users SET master_password_hash = ? WHERE id = ? AND master_password_hash = ? AND security_stamp = ? AND status = 'active'"
   ).bind(newVerifier, userId, expectedVerifier, securityStamp).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function setUserKeyId(db: D1Database, userId: string, userKeyId: string): Promise<boolean> {
+  // Write-once like the Bitwarden server. saveUser() never touches this column.
+  const result = await db.prepare(
+    'UPDATE users SET user_key_id = ? WHERE id = ? AND user_key_id IS NULL'
+  ).bind(userKeyId, userId).run();
   return (result.meta.changes ?? 0) > 0;
 }
 

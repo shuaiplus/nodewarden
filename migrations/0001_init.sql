@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS users (
   totp_secret TEXT,
   totp_recovery_code TEXT,
   api_key TEXT,
+  user_key_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
