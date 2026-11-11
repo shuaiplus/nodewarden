@@ -162,6 +162,12 @@ async function loginRateLimitKey(clientIdentifier: string, grantType: string, su
   return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
 }
 
+// Per-account lockout key: independent of the client IP so rotating source IPs
+// cannot evade the login lockout. Hashed so raw email addresses never enter D1.
+async function loginEmailLockoutKey(email: string): Promise<string> {
+  return sha256Hex(String(email || '').trim().toLowerCase() || 'unknown');
+}
+
 function buildRefreshCookie(request: Request, refreshToken: string, maxAgeSeconds: number): string {
   const isHttps = new URL(request.url).protocol === 'https:';
   const parts = [
@@ -299,12 +305,17 @@ async function twoFactorRequiredResponse(
 async function recordFailedLoginAndBuildResponse(
   rateLimit: RateLimitService,
   loginIdentifier: string,
-  message: string
+  message: string,
+  emailLockoutKey?: string
 ): Promise<Response> {
-  const result = await rateLimit.recordFailedLogin(loginIdentifier);
-  if (result.locked) {
+  const [result, emailResult] = await Promise.all([
+    rateLimit.recordFailedLogin(loginIdentifier),
+    emailLockoutKey ? rateLimit.recordFailedLoginByEmail(emailLockoutKey) : Promise.resolve({ locked: false, retryAfterSeconds: undefined }),
+  ]);
+  if (result.locked || emailResult.locked) {
+    const retryAfterSeconds = Math.max(result.retryAfterSeconds ?? 0, emailResult.retryAfterSeconds ?? 0);
     return identityErrorResponse(
-      `Too many failed login attempts. Account locked for ${Math.ceil(result.retryAfterSeconds! / 60)} minutes.`,
+      `Too many failed login attempts. Account locked for ${Math.ceil(retryAfterSeconds / 60)} minutes.`,
       'TooManyRequests',
       429
     );
@@ -314,12 +325,17 @@ async function recordFailedLoginAndBuildResponse(
 
 async function recordFailedTwoFactorAndBuildResponse(
   rateLimit: RateLimitService,
-  loginIdentifier: string
+  loginIdentifier: string,
+  emailLockoutKey?: string
 ): Promise<Response> {
-  const failed = await rateLimit.recordFailedLogin(loginIdentifier);
-  if (failed.locked) {
+  const [failed, emailFailed] = await Promise.all([
+    rateLimit.recordFailedLogin(loginIdentifier),
+    emailLockoutKey ? rateLimit.recordFailedLoginByEmail(emailLockoutKey) : Promise.resolve({ locked: false, retryAfterSeconds: undefined }),
+  ]);
+  if (failed.locked || emailFailed.locked) {
+    const retryAfterSeconds = Math.max(failed.retryAfterSeconds ?? 0, emailFailed.retryAfterSeconds ?? 0);
     return identityErrorResponse(
-      `Too many failed login attempts. Account locked for ${Math.ceil(failed.retryAfterSeconds! / 60)} minutes.`,
+      `Too many failed login attempts. Account locked for ${Math.ceil(retryAfterSeconds / 60)} minutes.`,
       'TooManyRequests',
       429
     );
@@ -379,12 +395,18 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       return identityErrorResponse('Email and password are required', 'invalid_request', 400);
     }
     const loginIdentifier = await loginRateLimitKey(clientIdentifier!, grantType, email);
+    const emailLockoutKey = await loginEmailLockoutKey(email);
 
-    // Check login lockout before user lookup to reduce user-enumeration signal
-    const loginCheck = await rateLimit.checkLoginAttempt(loginIdentifier);
-    if (!loginCheck.allowed) {
+    // Check login lockout before user lookup to reduce user-enumeration signal.
+    // The email-keyed counter applies regardless of client IP (see ratelimit.ts).
+    const [loginCheck, emailCheck] = await Promise.all([
+      rateLimit.checkLoginAttempt(loginIdentifier),
+      rateLimit.checkLoginAttemptByEmail(emailLockoutKey),
+    ]);
+    const blockedCheck = [loginCheck, emailCheck].find((check) => !check.allowed);
+    if (blockedCheck) {
       return identityErrorResponse(
-        `Too many failed login attempts. Try again in ${Math.ceil(loginCheck.retryAfterSeconds! / 60)} minutes.`,
+        `Too many failed login attempts. Try again in ${Math.ceil(blockedCheck.retryAfterSeconds! / 60)} minutes.`,
         'TooManyRequests',
         429
       );
@@ -440,7 +462,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
       return recordFailedLoginAndBuildResponse(
         rateLimit,
         loginIdentifier,
-        'Username or password is incorrect. Try again'
+        'Username or password is incorrect. Try again',
+        emailLockoutKey
       );
     }
 
@@ -478,48 +501,48 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_AUTHENTICATOR)) {
         if (!effectiveTotpSecret) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         const matchedCounter = await findMatchingTotpCounter(effectiveTotpSecret, normalizedTwoFactorToken);
         if (matchedCounter == null) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         const consumed = await storage.consumeTotpLoginCounter(user.id, matchedCounter);
         if (!consumed) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_YUBIKEY)) {
         const publicId = yubiKeyPublicIdFromOtp(normalizedTwoFactorToken);
         if (!publicId || !effectiveYubiKeyPublicIds.includes(publicId)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         let credentials = await getYubicoCredentials(env.DB);
         let initializedWithCurrentOtp = false;
         if (!credentials) {
           const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken);
           if (!initialized) {
-            return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+            return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
           }
           credentials = initialized.credentials;
           initializedWithCurrentOtp = initialized.created;
         }
         if (!initializedWithCurrentOtp && !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {
         if (!effectiveWebAuthnCredentials.length) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         let deviceResponse: unknown;
         try {
           deviceResponse = JSON.parse(normalizedTwoFactorToken);
         } catch {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         try {
           await assertTwoFactorPasskeyCredential(request, env, storage, user, deviceResponse);
         } catch {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
       } else if (
         normalizedTwoFactorProvider === TWO_FACTOR_PROVIDER_RECOVERY_CODE_RESPONSE ||
@@ -527,7 +550,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_RECOVERY_CODE_ANDROID_REQUEST)
       ) {
         if (!recoveryCodeEquals(normalizedTwoFactorToken, user.totpRecoveryCode)) {
-          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
         }
         user.totpSecret = null;
         user.yubikeyKey1 = null;
@@ -548,7 +571,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         rememberRequested = false;
       } else {
         // Unsupported provider for this server profile behaves as an invalid 2FA attempt.
-        return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+        return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier, emailLockoutKey);
       }
 
       // Upstream behavior: do not issue a new remember token when auth itself used remember provider.
@@ -574,7 +597,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     }
 
     // Successful login - clear failed attempts
-    await rateLimit.clearLoginAttempts(loginIdentifier);
+    await Promise.all([
+      rateLimit.clearLoginAttempts(loginIdentifier),
+      rateLimit.clearLoginAttemptsByEmail(emailLockoutKey),
+    ]);
     if (validatedAuthRequestId) {
       await storage.markAuthRequestAuthenticated(validatedAuthRequestId);
     }
