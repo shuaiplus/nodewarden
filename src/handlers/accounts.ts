@@ -1509,13 +1509,17 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
 // after login and fail the login when this endpoint is missing. The id is
 // client-reported metadata; it cannot decrypt anything.
 export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
-  let body: { userKeyId?: unknown; UserKeyId?: unknown };
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
-  const userKeyId = body.userKeyId ?? body.UserKeyId;
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return errorResponse('Request body must be a JSON object', 400);
+  }
+  const payload = body as Record<string, unknown>;
+  const userKeyId = payload.userKeyId ?? payload.UserKeyId;
   if (typeof userKeyId !== 'string' || !/^[0-9a-f]{32}$/.test(userKeyId)) {
     return errorResponse('userKeyId must be a 32-character lowercase hex string', 400);
   }
@@ -1524,7 +1528,14 @@ export async function handleSetUserKeyId(request: Request, env: Env, userId: str
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
   if (user.userKeyId === userKeyId) return new Response(null, { status: 200 });
-  if (user.userKeyId || !(await storage.setUserKeyId(userId, userKeyId))) {
+  if (user.userKeyId) {
+    return errorResponse('User key id is already set.', 400);
+  }
+  if (!(await storage.setUserKeyId(userId, userKeyId))) {
+    // Another client may have recorded the same id after our initial read.
+    const currentUser = await storage.getUserById(userId);
+    if (!currentUser) return errorResponse('User not found', 404);
+    if (currentUser.userKeyId === userKeyId) return new Response(null, { status: 200 });
     return errorResponse('User key id is already set.', 400);
   }
 
