@@ -82,7 +82,7 @@
     "fflate": "^0.8.3",
     "jsqr": "1.4.0",
     "lucide-preact": "^1.49.0",
-    "preact": "^10.29.3",
+    "preact": "^11.0.1",
     "qrcode-generator": "^2.0.4",
     "wouter": "^3.13.0"
   }
