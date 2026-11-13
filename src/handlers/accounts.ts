@@ -1504,6 +1504,35 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
   return jsonResponse(timestamp);
 }
 
+// POST /api/accounts/key-management/user-key-id
+// Bitwarden clients (bw CLI >= 2026.9) record the id of the current user key once
+// after login and fail the login when this endpoint is missing. The id is
+// client-reported metadata; it cannot decrypt anything.
+export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
+  let body: { userKeyId?: unknown; UserKeyId?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const userKeyId = body.userKeyId ?? body.UserKeyId;
+  if (typeof userKeyId !== 'string' || !/^[0-9a-f]{32}$/.test(userKeyId)) {
+    return errorResponse('userKeyId must be a 32-character lowercase hex string', 400);
+  }
+
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  if (user.userKeyId === userKeyId) return new Response(null, { status: 200 });
+  if (user.userKeyId || !(await storage.setUserKeyId(userId, userKeyId))) {
+    return errorResponse('User key id is already set.', 400);
+  }
+
+  // /api/sync is cached per revision date; bump it so the next sync carries the id.
+  await storage.updateRevisionDate(userId);
+  return new Response(null, { status: 200 });
+}
+
 // POST /api/accounts/verify-password
 export async function handleVerifyPassword(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
