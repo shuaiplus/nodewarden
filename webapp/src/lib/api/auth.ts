@@ -84,17 +84,30 @@ function guessDeviceName(): string {
 }
 
 function getRememberTwoFactorToken(): string | null {
-  const token = (localStorage.getItem(TOTP_REMEMBER_TOKEN_KEY) || '').trim();
-  return token || null;
+  const token = (sessionStorage.getItem(TOTP_REMEMBER_TOKEN_KEY) || '').trim();
+  if (token) return token;
+  // One-time migration: older versions stored the remember token in
+  // localStorage. Adopt it into sessionStorage and scrub the persistent copy
+  // so the 2FA bypass secret does not survive browser restarts on disk.
+  const legacy = (localStorage.getItem(TOTP_REMEMBER_TOKEN_KEY) || '').trim();
+  if (!legacy) return null;
+  try {
+    sessionStorage.setItem(TOTP_REMEMBER_TOKEN_KEY, legacy);
+  } finally {
+    localStorage.removeItem(TOTP_REMEMBER_TOKEN_KEY);
+  }
+  return legacy;
 }
 
 function saveRememberTwoFactorToken(token: string | undefined): void {
   const normalized = String(token || '').trim();
   if (!normalized) return;
-  localStorage.setItem(TOTP_REMEMBER_TOKEN_KEY, normalized);
+  sessionStorage.setItem(TOTP_REMEMBER_TOKEN_KEY, normalized);
 }
 
 function clearRememberTwoFactorToken(): void {
+  sessionStorage.removeItem(TOTP_REMEMBER_TOKEN_KEY);
+  // Also scrub copies written by older versions into localStorage.
   localStorage.removeItem(TOTP_REMEMBER_TOKEN_KEY);
 }
 

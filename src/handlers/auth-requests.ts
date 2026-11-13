@@ -197,7 +197,14 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
   }
 
   const user = await storage.getUser(email);
-  if (!user || user.status !== 'active') {
+  // Only devices that have logged in before may create auth requests. Without
+  // this check anyone knowing an email can trigger push-notification phishing:
+  // the victim approves a fake login request and the attacker polls the public
+  // response endpoint with their own access code to receive the unlock key.
+  const knownDevice = user && user.status === 'active'
+    ? await storage.getDevice(user.id, deviceInfo.deviceIdentifier)
+    : null;
+  if (!user || user.status !== 'active' || !knownDevice) {
     return errorResponse('User or known device not found.', 400);
   }
 

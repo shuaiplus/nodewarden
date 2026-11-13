@@ -20,6 +20,9 @@ import {
 //   shadow-table count validation, insert column lists, and frontend import
 //   count types together.
 // - Do not import users.api_key, even if an older backup contains it.
+// - Newer backups no longer contain users.totp_secret / users.totp_recovery_code
+//   (never exported since the plaintext-archive hardening); missing values
+//   restore as NULL, which disables TOTP for the restored user.
 // - Do not import, clear, or replace runtime authentication state such as
 //   devices, sessions, auth requests, or remembered 2FA device tokens.
 type SqlRow = Record<string, string | number | null>;

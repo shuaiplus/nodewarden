@@ -13,8 +13,9 @@ const CONFIG = {
 
 export class RateLimitService {
   private static loginIpTableReady = false;
+  private static loginEmailTableReady = false;
   private static strictBudgetTableReady = false;
-  private static lastLoginIpCleanupAt = 0;
+  private static lastLoginTableCleanupAt: Record<string, number> = {};
   private static lastStrictBudgetCleanupAt = 0;
 
   private static readonly PERIODIC_CLEANUP_PROBABILITY = LIMITS.rateLimit.cleanupProbability;
@@ -30,19 +31,19 @@ export class RateLimitService {
     return Math.random() < RateLimitService.PERIODIC_CLEANUP_PROBABILITY;
   }
 
-  private async maybeCleanupLoginAttemptsIp(nowMs: number): Promise<void> {
-    if (!this.shouldRunCleanup(RateLimitService.lastLoginIpCleanupAt, RateLimitService.LOGIN_IP_CLEANUP_INTERVAL_MS)) {
+  private async maybeCleanupLoginTable(tableName: string, nowMs: number): Promise<void> {
+    if (!this.shouldRunCleanup(RateLimitService.lastLoginTableCleanupAt[tableName] ?? 0, RateLimitService.LOGIN_IP_CLEANUP_INTERVAL_MS)) {
       return;
     }
 
     const cutoff = nowMs - RateLimitService.LOGIN_IP_RETENTION_MS;
     await this.db
       .prepare(
-        'DELETE FROM login_attempts_ip WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)'
+        `DELETE FROM ${tableName} WHERE updated_at < ? AND (locked_until IS NULL OR locked_until < ?)`
       )
       .bind(cutoff, nowMs)
       .run();
-    RateLimitService.lastLoginIpCleanupAt = nowMs;
+    RateLimitService.lastLoginTableCleanupAt[tableName] = nowMs;
   }
 
   private async ensureLoginIpTable(): Promise<void> {
@@ -60,6 +61,153 @@ export class RateLimitService {
       .run();
 
     RateLimitService.loginIpTableReady = true;
+  }
+
+  private async ensureLoginEmailTable(): Promise<void> {
+    if (RateLimitService.loginEmailTableReady) return;
+
+    await this.db
+      .prepare(
+        'CREATE TABLE IF NOT EXISTS login_attempts_email (' +
+        'email_hash TEXT PRIMARY KEY, ' +
+        'attempts INTEGER NOT NULL, ' +
+        'locked_until INTEGER, ' +
+        'updated_at INTEGER NOT NULL' +
+        ')'
+      )
+      .run();
+
+    RateLimitService.loginEmailTableReady = true;
+  }
+
+  // Shared lockout core for the IP-keyed and email-keyed login counters.
+  // Both tables use the same schema and lockout semantics; only the key column
+  // differs (ip vs email_hash).
+  private async checkLoginAttemptIn(
+    tableName: 'login_attempts_ip' | 'login_attempts_email',
+    keyColumn: 'ip' | 'email_hash',
+    key: string
+  ): Promise<{
+    allowed: boolean;
+    remainingAttempts: number;
+    retryAfterSeconds?: number;
+  }> {
+    const normalizedKey = key.trim() || 'unknown';
+    const now = Date.now();
+    await this.maybeCleanupLoginTable(tableName, now);
+
+    const row = await this.db
+      .prepare(`SELECT attempts, locked_until FROM ${tableName} WHERE ${keyColumn} = ?`)
+      .bind(normalizedKey)
+      .first<{ attempts: number; locked_until: number | null }>();
+
+    if (!row) {
+      return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
+    }
+
+    if (row.locked_until && row.locked_until > now) {
+      return {
+        allowed: false,
+        remainingAttempts: 0,
+        retryAfterSeconds: Math.ceil((row.locked_until - now) / 1000),
+      };
+    }
+
+    if (row.locked_until && row.locked_until <= now) {
+      await this.db.prepare(`DELETE FROM ${tableName} WHERE ${keyColumn} = ?`).bind(normalizedKey).run();
+      return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
+    }
+
+    const remainingAttempts = Math.max(0, CONFIG.LOGIN_MAX_ATTEMPTS - (row.attempts || 0));
+    return { allowed: true, remainingAttempts };
+  }
+
+  private async recordFailedLoginIn(
+    tableName: 'login_attempts_ip' | 'login_attempts_email',
+    keyColumn: 'ip' | 'email_hash',
+    key: string
+  ): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
+    const normalizedKey = key.trim() || 'unknown';
+    const now = Date.now();
+    await this.maybeCleanupLoginTable(tableName, now);
+
+    // D1 in Workers forbids raw BEGIN/COMMIT statements.
+    // Use a single atomic UPSERT to increment attempts.
+    // This is concurrency-safe because the row is keyed by the lockout key.
+    await this.db
+      .prepare(
+        `INSERT INTO ${tableName}(${keyColumn}, attempts, locked_until, updated_at) VALUES(?, 1, NULL, ?) ` +
+        `ON CONFLICT(${keyColumn}) DO UPDATE SET attempts = attempts + 1, updated_at = excluded.updated_at`
+      )
+      .bind(normalizedKey, now)
+      .run();
+
+    const row = await this.db
+      .prepare(`SELECT attempts FROM ${tableName} WHERE ${keyColumn} = ?`)
+      .bind(normalizedKey)
+      .first<{ attempts: number }>();
+
+    const attempts = row?.attempts || 1;
+    if (attempts >= CONFIG.LOGIN_MAX_ATTEMPTS) {
+      const lockedUntil = now + CONFIG.LOGIN_LOCKOUT_MINUTES * 60 * 1000;
+      await this.db
+        .prepare(`UPDATE ${tableName} SET locked_until = ?, updated_at = ? WHERE ${keyColumn} = ?`)
+        .bind(lockedUntil, now, normalizedKey)
+        .run();
+      return { locked: true, retryAfterSeconds: CONFIG.LOGIN_LOCKOUT_MINUTES * 60 };
+    }
+
+    return { locked: false };
+  }
+
+  private async clearLoginAttemptsIn(
+    tableName: 'login_attempts_ip' | 'login_attempts_email',
+    keyColumn: 'ip' | 'email_hash',
+    key: string
+  ): Promise<void> {
+    const normalizedKey = key.trim() || 'unknown';
+    await this.db.prepare(`DELETE FROM ${tableName} WHERE ${keyColumn} = ?`).bind(normalizedKey).run();
+  }
+
+  async checkLoginAttempt(key: string): Promise<{
+    allowed: boolean;
+    remainingAttempts: number;
+    retryAfterSeconds?: number;
+  }> {
+    await this.ensureLoginIpTable();
+    return this.checkLoginAttemptIn('login_attempts_ip', 'ip', key);
+  }
+
+  async recordFailedLogin(key: string): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
+    await this.ensureLoginIpTable();
+    return this.recordFailedLoginIn('login_attempts_ip', 'ip', key);
+  }
+
+  async clearLoginAttempts(key: string): Promise<void> {
+    await this.ensureLoginIpTable();
+    await this.clearLoginAttemptsIn('login_attempts_ip', 'ip', key);
+  }
+
+  // Per-account lockout counter keyed by email hash only (no client IP).
+  // Complements the IP-keyed counter so rotating source IPs cannot evade the
+  // login lockout. Checked before user lookup to avoid user-enumeration signal.
+  async checkLoginAttemptByEmail(emailHash: string): Promise<{
+    allowed: boolean;
+    remainingAttempts: number;
+    retryAfterSeconds?: number;
+  }> {
+    await this.ensureLoginEmailTable();
+    return this.checkLoginAttemptIn('login_attempts_email', 'email_hash', emailHash);
+  }
+
+  async recordFailedLoginByEmail(emailHash: string): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
+    await this.ensureLoginEmailTable();
+    return this.recordFailedLoginIn('login_attempts_email', 'email_hash', emailHash);
+  }
+
+  async clearLoginAttemptsByEmail(emailHash: string): Promise<void> {
+    await this.ensureLoginEmailTable();
+    await this.clearLoginAttemptsIn('login_attempts_email', 'email_hash', emailHash);
   }
 
   private async ensureStrictBudgetTable(): Promise<void> {
@@ -89,85 +237,6 @@ export class RateLimitService {
 
     await this.db.prepare('DELETE FROM rate_limit_buckets WHERE expires_at < ?').bind(nowMs).run();
     RateLimitService.lastStrictBudgetCleanupAt = nowMs;
-  }
-
-  async checkLoginAttempt(ip: string): Promise<{
-    allowed: boolean;
-    remainingAttempts: number;
-    retryAfterSeconds?: number;
-  }> {
-    await this.ensureLoginIpTable();
-
-    const key = ip.trim() || 'unknown';
-    const now = Date.now();
-    await this.maybeCleanupLoginAttemptsIp(now);
-
-    const row = await this.db
-      .prepare('SELECT attempts, locked_until FROM login_attempts_ip WHERE ip = ?')
-      .bind(key)
-      .first<{ attempts: number; locked_until: number | null }>();
-
-    if (!row) {
-      return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
-    }
-
-    if (row.locked_until && row.locked_until > now) {
-      return {
-        allowed: false,
-        remainingAttempts: 0,
-        retryAfterSeconds: Math.ceil((row.locked_until - now) / 1000),
-      };
-    }
-
-    if (row.locked_until && row.locked_until <= now) {
-      await this.db.prepare('DELETE FROM login_attempts_ip WHERE ip = ?').bind(key).run();
-      return { allowed: true, remainingAttempts: CONFIG.LOGIN_MAX_ATTEMPTS };
-    }
-
-    const remainingAttempts = Math.max(0, CONFIG.LOGIN_MAX_ATTEMPTS - (row.attempts || 0));
-    return { allowed: true, remainingAttempts };
-  }
-
-  async recordFailedLogin(ip: string): Promise<{ locked: boolean; retryAfterSeconds?: number }> {
-    await this.ensureLoginIpTable();
-
-    const key = ip.trim() || 'unknown';
-    const now = Date.now();
-    await this.maybeCleanupLoginAttemptsIp(now);
-
-    // D1 in Workers forbids raw BEGIN/COMMIT statements.
-    // Use a single atomic UPSERT to increment attempts.
-    // This is concurrency-safe because the row is keyed by IP.
-    await this.db
-      .prepare(
-        'INSERT INTO login_attempts_ip(ip, attempts, locked_until, updated_at) VALUES(?, 1, NULL, ?) ' +
-        'ON CONFLICT(ip) DO UPDATE SET attempts = attempts + 1, updated_at = excluded.updated_at'
-      )
-      .bind(key, now)
-      .run();
-
-    const row = await this.db
-      .prepare('SELECT attempts FROM login_attempts_ip WHERE ip = ?')
-      .bind(key)
-      .first<{ attempts: number }>();
-
-    const attempts = row?.attempts || 1;
-    if (attempts >= CONFIG.LOGIN_MAX_ATTEMPTS) {
-      const lockedUntil = now + CONFIG.LOGIN_LOCKOUT_MINUTES * 60 * 1000;
-      await this.db
-        .prepare('UPDATE login_attempts_ip SET locked_until = ?, updated_at = ? WHERE ip = ?')
-        .bind(lockedUntil, now, key)
-        .run();
-      return { locked: true, retryAfterSeconds: CONFIG.LOGIN_LOCKOUT_MINUTES * 60 };
-    }
-
-    return { locked: false };
-  }
-
-  async clearLoginAttempts(ip: string): Promise<void> {
-    await this.ensureLoginIpTable();
-    const key = ip.trim() || 'unknown';
-    await this.db.prepare('DELETE FROM login_attempts_ip WHERE ip = ?').bind(key).run();
   }
 
   // Cache API-backed fixed-window rate limiter.
