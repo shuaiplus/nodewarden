@@ -1454,7 +1454,9 @@ const ru: Record<string, string> = {
   "txt_auth_request_update_failed": "Не удалось обновить запрос входа с устройства",
   "txt_auth_request_approved": "Вход с устройства подтвержден",
   "txt_auth_request_denied": "Вход с устройства отклонен",
-  "txt_auth_request_missing_public_key": "В запросе входа с устройства отсутствует открытый ключ"
+  "txt_auth_request_missing_public_key": "В запросе входа с устройства отсутствует открытый ключ",
+  "txt_create_subfolder": "Создать подпапку",
+  "txt_nested_folder_help": "Используйте / для вложенных папок, например Работа/Почта. Сначала создайте родительскую папку. Переименование папки не переименовывает её подпапки.",
 };
 
 Object.assign(ru, {

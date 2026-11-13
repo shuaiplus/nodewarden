@@ -1454,7 +1454,9 @@ const fr: Record<string, string> = {
   "txt_auth_request_approved": "Connexion de l'appareil approuvée",
   "txt_auth_request_denied": "Connexion de l'appareil refusée",
   "txt_auth_request_missing_public_key": "Il manque une clé publique à la demande de connexion de l'appareil",
-  "txt_ip_address": "Adresse IP"
+  "txt_ip_address": "Adresse IP",
+  "txt_create_subfolder": "Créer un sous-dossier",
+  "txt_nested_folder_help": "Utilisez / pour imbriquer des dossiers, par exemple Travail/Messagerie. Créez d’abord le dossier parent. Renommer un dossier ne renomme pas ses sous-dossiers.",
 };
 
 Object.assign(fr, {

@@ -196,6 +196,7 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         <label className="field">
           <span>{t('txt_folder_name')}</span>
           <input className="input" value={props.newFolderName} onInput={(e) => props.onNewFolderNameChange((e.currentTarget as HTMLInputElement).value)} />
+          <span className="field-help">{t('txt_nested_folder_help')}</span>
         </label>
       </ConfirmDialog>
 
@@ -213,6 +214,7 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         <label className="field">
           <span>{t('txt_folder_name')}</span>
           <input className="input" value={props.renameFolderName} onInput={(e) => props.onRenameFolderNameChange((e.currentTarget as HTMLInputElement).value)} />
+          <span className="field-help">{t('txt_nested_folder_help')}</span>
         </label>
       </ConfirmDialog>
 

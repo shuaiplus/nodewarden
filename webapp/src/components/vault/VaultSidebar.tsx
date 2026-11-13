@@ -1,10 +1,12 @@
-import { useMemo } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import type { RefObject } from 'preact';
 import {
   Archive,
   ArrowUpDown,
   BookUser,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   CreditCard,
   Folder as FolderIcon,
@@ -26,6 +28,7 @@ import {
 import { Link } from 'wouter';
 import type { Folder } from '@/lib/types';
 import { t } from '@/lib/i18n';
+import { buildFolderTree, flattenFolderTree } from '@/lib/folder-tree';
 import { getFolderSortOptions, type SidebarFilter, type VaultSortMode } from '@/components/vault/vault-page-helpers';
 
 interface VaultSidebarProps {
@@ -40,7 +43,7 @@ interface VaultSidebarProps {
   onCloseMobileSidebar: () => void;
   onChangeFilter: (filter: SidebarFilter) => void;
   onOpenDeleteAllFolders: () => void;
-  onOpenCreateFolder: () => void;
+  onOpenCreateFolder: (parent?: Folder) => void;
   onOpenRenameFolder: (folder: Folder) => void;
   onOpenDeleteFolder: (folder: Folder) => void;
   onToggleFolderSortMenu: () => void;
@@ -48,6 +51,7 @@ interface VaultSidebarProps {
 }
 
 export default function VaultSidebar(props: VaultSidebarProps) {
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const folderSortOptions = getFolderSortOptions();
   const nameCollator = useMemo(
     () => new Intl.Collator(undefined, { sensitivity: 'base', numeric: true }),
@@ -85,6 +89,39 @@ export default function VaultSidebar(props: VaultSidebarProps) {
     });
     return sorted;
   }, [props.folders, props.folderSortMode, nameCollator]);
+
+  const folderTree = useMemo(() => buildFolderTree(sortedFolders), [sortedFolders]);
+  const folderRows = useMemo(() => flattenFolderTree(folderTree, collapsedIds), [folderTree, collapsedIds]);
+  const selectedFolderId = props.sidebarFilter.kind === 'folder' ? props.sidebarFilter.folderId : null;
+  useEffect(() => {
+    // Reveal a selection made elsewhere (for example in the mobile filter).
+    const allRows = flattenFolderTree(folderTree, new Set());
+    const selectedIndex = allRows.findIndex((row) => row.folder.id === selectedFolderId);
+    const ancestors = new Set<string>();
+    if (selectedIndex >= 0) {
+      let depth = allRows[selectedIndex].depth;
+      for (let i = selectedIndex - 1; i >= 0 && depth > 0; i--) {
+        if (allRows[i].depth < depth) {
+          ancestors.add(allRows[i].folder.id);
+          depth = allRows[i].depth;
+        }
+      }
+    }
+    const existingIds = new Set(allRows.map((row) => row.folder.id));
+    setCollapsedIds((current) => {
+      const next = new Set([...current].filter((id) => existingIds.has(id) && !ancestors.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [folderTree, selectedFolderId]);
+
+  function toggleFolder(id: string): void {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <aside className={`sidebar ${props.isMobileLayout ? 'mobile-sidebar-sheet' : ''} ${props.isMobileLayout && props.mobileSidebarOpen ? 'open' : ''}`}>
@@ -185,7 +222,7 @@ export default function VaultSidebar(props: VaultSidebarProps) {
             >
               <X size={14} />
             </button>
-            <button type="button" className="folder-add-btn" onClick={props.onOpenCreateFolder}>
+            <button type="button" className="folder-add-btn" title={t('txt_create_folder')} aria-label={t('txt_create_folder')} disabled={props.busy} onClick={() => props.onOpenCreateFolder()}>
               <FolderPlus size={14} />
             </button>
           </div>
@@ -193,8 +230,20 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'folder' && props.sidebarFilter.folderId === null ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'folder', folderId: null })}>
           <FolderX size={14} className="tree-icon" /> <span className="tree-label">{t('txt_no_folder')}</span>
         </button>
-        {sortedFolders.map((folder) => (
-          <div key={folder.id} className="folder-row">
+        {folderRows.map(({ folder, label, children, depth }) => (
+          <div key={folder.id} className="folder-row" style={{ paddingInlineStart: `${Math.min(depth, 8) * 12}px` }}>
+            {children.length > 0 ? (
+              <button
+                type="button"
+                className="folder-toggle-btn"
+                title={t(collapsedIds.has(folder.id) ? 'txt_expand' : 'txt_collapse')}
+                aria-label={`${t(collapsedIds.has(folder.id) ? 'txt_expand' : 'txt_collapse')} ${folder.decName || folder.name || folder.id}`}
+                aria-expanded={!collapsedIds.has(folder.id)}
+                onClick={() => toggleFolder(folder.id)}
+              >
+                {collapsedIds.has(folder.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              </button>
+            ) : <span className="folder-toggle-spacer" />}
             <button
               type="button"
               className={`tree-btn ${props.sidebarFilter.kind === 'folder' && props.sidebarFilter.folderId === folder.id ? 'active' : ''}`}
@@ -202,8 +251,26 @@ export default function VaultSidebar(props: VaultSidebarProps) {
             >
               <FolderIcon size={14} className="tree-icon" />
               <span className="tree-label" title={folder.decName || folder.name || folder.id}>
-                {folder.decName || folder.name || folder.id}
+                {label}
               </span>
+            </button>
+            <button
+              type="button"
+              className="folder-delete-btn folder-edit-btn"
+              title={t('txt_create_subfolder')}
+              aria-label={`${t('txt_create_subfolder')} ${folder.decName || folder.name || folder.id}`}
+              disabled={props.busy}
+              onClick={() => {
+                setCollapsedIds((current) => {
+                  if (!current.has(folder.id)) return current;
+                  const next = new Set(current);
+                  next.delete(folder.id);
+                  return next;
+                });
+                props.onOpenCreateFolder(folder);
+              }}
+            >
+              <FolderPlus size={12} />
             </button>
             <button
               type="button"

@@ -1454,7 +1454,9 @@ const de: Record<string, string> = {
   "txt_auth_request_approved": "Geräteanmeldung genehmigt",
   "txt_auth_request_denied": "Geräteanmeldung abgelehnt",
   "txt_auth_request_missing_public_key": "Geräteanmeldungsanfrage fehlt ein öffentlicher Schlüssel",
-  "txt_ip_address": "IP-Adresse"
+  "txt_ip_address": "IP-Adresse",
+  "txt_create_subfolder": "Unterordner erstellen",
+  "txt_nested_folder_help": "Mit / Ordner verschachteln, z. B. Arbeit/E-Mail. Erstellen Sie zuerst den übergeordneten Ordner. Das Umbenennen eines Ordners benennt seine Unterordner nicht um.",
 };
 
 Object.assign(de, {
