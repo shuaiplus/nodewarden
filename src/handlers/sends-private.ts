@@ -750,6 +750,7 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
 
   send.authType = SendAuthType.None;
   send.emails = null;
+  await setSendPassword(send, null);
   send.updatedAt = new Date().toISOString();
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
