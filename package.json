@@ -76,7 +76,7 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
-    "@simplewebauthn/server": "^13.3.2",
+    "@simplewebauthn/server": "^14.0.3",
     "@tanstack/react-query": "^5.104.0",
     "@zip.js/zip.js": "^2.22.0",
     "fflate": "^0.8.3",
