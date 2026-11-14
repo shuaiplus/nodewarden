@@ -1102,14 +1102,17 @@ function getCipherKeyMismatchProbes(cipher: Cipher): string[] {
   return probes;
 }
 
-function isResolvedEncryptedField(raw: unknown, decrypted: unknown): boolean {
+export function isResolvedEncryptedField(raw: unknown, decrypted: unknown): boolean {
   const encrypted = String(raw || '').trim();
   if (!looksLikeCipherString(encrypted)) return true;
+  if (decrypted === null || decrypted === undefined) return false;
   const plain = typeof decrypted === 'string' ? decrypted.trim() : '';
-  return !!plain && !looksLikeCipherString(plain);
+  return !looksLikeCipherString(plain);
 }
 
-function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
+export function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
+  if (cipher.unresolved) return true;
+  if (looksLikeCipherString(cipher.name || '') && !String(cipher.decName || '').trim()) return true;
   const fido2EncryptedFields = (cipher.login?.fido2Credentials || []).flatMap((credential) => [
     credential?.credentialId,
     credential?.keyType,

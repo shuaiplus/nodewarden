@@ -234,14 +234,17 @@ function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): 
   return next;
 }
 
-function isEncryptedFieldUnresolved(raw: unknown, decrypted: unknown): boolean {
+export function isEncryptedFieldUnresolved(raw: unknown, decrypted: unknown): boolean {
   const encrypted = String(raw || '').trim();
   if (!looksLikeCipherString(encrypted)) return false;
-  const plain = String(decrypted || '').trim();
-  return !plain || looksLikeCipherString(plain);
+  if (decrypted === null || decrypted === undefined) return true;
+  const plain = String(decrypted).trim();
+  return looksLikeCipherString(plain);
 }
 
-function hasUnresolvedCipherData(cipher: Cipher): boolean {
+export function hasUnresolvedCipherData(cipher: Cipher): boolean {
+  if (cipher.unresolved) return true;
+  if (looksLikeCipherString(cipher.name || '') && !String(cipher.decName || '').trim()) return true;
   const checks: Array<[unknown, unknown]> = [
     [cipher.name, cipher.decName],
     [cipher.notes, cipher.decNotes],
@@ -569,7 +572,9 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           throw error;
         }
         if (hasUnresolvedCipherData(cipher)) {
-          throw new Error(t('txt_decrypt_failed_2'));
+          const message = t('txt_decrypt_failed_2');
+          onNotify('error', message);
+          throw new Error(message);
         }
         const addFiles = Array.isArray(options?.addFiles) ? options.addFiles : [];
         const removeAttachmentIds = Array.isArray(options?.removeAttachmentIds) ? options.removeAttachmentIds : [];
