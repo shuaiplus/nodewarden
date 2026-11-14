@@ -11,7 +11,7 @@ const { execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CONFIG = path.resolve(__dirname, '..', 'wrangler.kv.toml');
+const CONFIG = path.resolve(__dirname, '..', 'wrangler.toml');
 const BINDING = 'ATTACHMENTS_KV';
 
 const wrangler = (args) =>
