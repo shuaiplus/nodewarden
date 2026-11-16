@@ -1140,6 +1140,7 @@ const en: Record<string, string> = {
   "txt_remove_device_failed": "Failed to remove device",
   "txt_remove_all_devices_failed": "Failed to remove all devices",
   "txt_update_item_failed": "Update item failed",
+  "txt_item_changed_elsewhere": "This item was changed in another client. Your edits are still in the form. Copy the changes you need, reopen the item, and save again.",
   "txt_update_send_failed": "Update send failed",
   "txt_update_user_status_failed": "Failed to update user status",
   "txt_use_recovery_code": "Use Recovery Code",
@@ -1507,6 +1508,11 @@ const en: Record<string, string> = {
   "txt_auth_request_denied": "Device login denied",
   "txt_auth_request_missing_public_key": "Device login request is missing a public key",
   "txt_ip_address": "IP address",
+  "txt_create_subfolder": "Create subfolder",
+  "txt_nested_folder_help": "Use / to nest folders, e.g. Work/Email. Create the parent folder first. Renaming a folder does not rename its subfolders.",
+};
+
+Object.assign(en, {
   "nav_password_security": "Password Security",
   "txt_password_security": "Password Security Check",
   "txt_password_security_privacy": "Passwords are checked locally in your browser. Only an anonymous hash prefix is sent to the breach database.",
@@ -1538,9 +1544,7 @@ const en: Record<string, string> = {
   "txt_open_vault": "Open vault",
   "txt_check_password_breach": "Check breach",
   "txt_password_not_found_in_breaches": "Not found in the breach database",
-  "txt_password_security_check_failed": "The breach check could not be completed.",
-  "txt_creating": "Creating…",
-  "txt_sending": "Sending…"
-};
+  "txt_password_security_check_failed": "The breach check could not be completed."
+});
 
 export default en;

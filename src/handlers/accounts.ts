@@ -1525,22 +1525,42 @@ export async function handleGetRevisionDate(request: Request, env: Env, userId: 
 }
 
 // POST /api/accounts/key-management/user-key-id
-// Bitwarden client key-management backfill: the client reports the id of its
-// current user key. The id is client-computed hex; the server only records it.
-// Newer official clients treat a missing endpoint as a login failure.
+// Bitwarden clients (bw CLI >= 2026.9) record the id of the current user key once
+// after login and fail the login when this endpoint is missing. The id is
+// client-reported metadata; it cannot decrypt anything.
 export async function handleSetUserKeyId(request: Request, env: Env, userId: string): Promise<Response> {
-  const storage = new StorageService(env.DB);
-  let body: { userKeyId?: unknown };
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return errorResponse('Invalid JSON', 400);
   }
-  const userKeyId = String(body?.userKeyId ?? '').trim();
-  if (!userKeyId || !/^[0-9a-f]+$/i.test(userKeyId)) {
-    return errorResponse('userKeyId must be a non-empty hex string', 400);
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return errorResponse('Request body must be a JSON object', 400);
   }
-  await storage.updateUserKeyId(userId, userKeyId.toLowerCase());
+  const payload = body as Record<string, unknown>;
+  const userKeyId = payload.userKeyId ?? payload.UserKeyId;
+  if (typeof userKeyId !== 'string' || !/^[0-9a-f]{32}$/.test(userKeyId)) {
+    return errorResponse('userKeyId must be a 32-character lowercase hex string', 400);
+  }
+
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  if (user.userKeyId === userKeyId) return new Response(null, { status: 200 });
+  if (user.userKeyId) {
+    return errorResponse('User key id is already set.', 400);
+  }
+  if (!(await storage.setUserKeyId(userId, userKeyId))) {
+    // Another client may have recorded the same id after our initial read.
+    const currentUser = await storage.getUserById(userId);
+    if (!currentUser) return errorResponse('User not found', 404);
+    if (currentUser.userKeyId === userKeyId) return new Response(null, { status: 200 });
+    return errorResponse('User key id is already set.', 400);
+  }
+
+  // /api/sync is cached per revision date; bump it so the next sync carries the id.
+  await storage.updateRevisionDate(userId);
   return new Response(null, { status: 200 });
 }
 

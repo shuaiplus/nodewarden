@@ -18,6 +18,7 @@ import {
   getUserById as findStoredUserById,
   getUserCount as countStoredUsers,
   saveUser as saveStoredUser,
+  setUserKeyId as setStoredUserKeyId,
   upgradePasswordVerifier as upgradeStoredPasswordVerifier,
 } from './storage-user-repo';
 import {
@@ -58,11 +59,12 @@ import {
   getAllCiphersIncludingOrgs as listStoredCiphersIncludingOrgs,
   getCipher as findStoredCipher,
   getCipherForUser as findStoredCipherForUser,
-  getAccessibleCipher as findStoredAccessibleCipher,
+  getAccessibleOrgCipher as findStoredAccessibleOrgCipher,
   listAccessibleCiphersByIds as listStoredAccessibleCiphersByIds,
   getCiphersByIds as listStoredCiphersByIds,
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
+  updateCipherIfUnchanged as updateStoredCipherIfUnchanged,
   deleteCipher as deleteStoredCipher,
   archiveCiphersByIds as archiveStoredCiphersByIds,
   deleteCiphersByIds as deleteStoredCiphersByIds,
@@ -219,7 +221,10 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-09-20-org-status-marker';
+// Merged bump: upstream's user-key-id migration plus the org tables from this
+// branch. Every install (upstream or org-branch) sees a changed value and reruns
+// the idempotent ensureStorageSchema().
+const STORAGE_SCHEMA_VERSION = '2026-11-04-user-key-id-org-status';
 const REQUIRED_SCHEMA_TABLES = [
   'webauthn_credentials',
   'webauthn_challenges',
@@ -383,6 +388,10 @@ export class StorageService {
 
   async upgradePasswordVerifier(userId: string, expectedVerifier: string, securityStamp: string, newVerifier: string): Promise<boolean> {
     return upgradeStoredPasswordVerifier(this.db, userId, expectedVerifier, securityStamp, newVerifier);
+  }
+
+  async setUserKeyId(userId: string, userKeyId: string): Promise<boolean> {
+    return setStoredUserKeyId(this.db, userId, userKeyId);
   }
 
   async createFirstUser(user: User): Promise<boolean> {
@@ -565,6 +574,10 @@ export class StorageService {
 
   async saveCipher(cipher: Cipher): Promise<void> {
     await saveStoredCipher(this.db, this.safeBind.bind(this), cipher);
+  }
+
+  async updateCipherIfUnchanged(cipher: Cipher, expectedUpdatedAt: string): Promise<boolean> {
+    return updateStoredCipherIfUnchanged(this.db, this.safeBind.bind(this), cipher, expectedUpdatedAt);
   }
 
   async deleteCipher(id: string, userId: string): Promise<void> {
@@ -783,7 +796,12 @@ export class StorageService {
   // --- Organization-aware cipher access ---
 
   async getAccessibleCipher(id: string, userId: string): Promise<{ cipher: Cipher; access: CipherAccessInfo | null } | null> {
-    return findStoredAccessibleCipher(this.db, id, userId);
+    // Personal-first through this.getCipherForUser so the load seam stays
+    // single-source (and mockable in tests); org ciphers fall through to the
+    // access-resolved lookup.
+    const personal = await this.getCipherForUser(id, userId);
+    if (personal) return { cipher: personal, access: null };
+    return findStoredAccessibleOrgCipher(this.db, id, userId);
   }
 
   async listAccessibleCiphersByIds(userId: string, ids: string[]): Promise<Array<{ cipher: Cipher; access: CipherAccessInfo | null }>> {

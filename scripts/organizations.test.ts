@@ -309,7 +309,7 @@ test('backup includes all five org tables', () => {
 test('schema version is pinned for the org feature', () => {
   const storage = read('src/services/storage.ts');
   assert.ok(
-    storage.includes("const STORAGE_SCHEMA_VERSION = '2026-09-20-org-status-marker';"),
+    storage.includes("const STORAGE_SCHEMA_VERSION = '2026-11-04-user-key-id-org-status';"),
     'schema version matches the shipped migrations'
   );
 });

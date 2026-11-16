@@ -802,13 +802,23 @@
 }
 
 .yubikey-manage-dialog-body {
-  @apply mt-3 space-y-4;
+  @apply mt-3;
+}
+
+.yubikey-manage-dialog-body > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1rem;
+  margin-bottom: 0;
 }
 
 .settings-plain-steps {
-  @apply m-0 space-y-1 border-b pb-3 pl-5;
+  @apply m-0 border-b pb-3 pl-5;
   border-color: var(--line);
   color: var(--text);
+}
+
+.settings-plain-steps > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.25rem;
+  margin-bottom: 0;
 }
 
 .yubikey-input-row {
@@ -825,8 +835,9 @@
   @apply h-9 w-9 p-0;
 }
 
-.settings-checkbox-block {
-  @apply space-y-2;
+.settings-checkbox-block > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
 }
 
 .checkbox-inline {

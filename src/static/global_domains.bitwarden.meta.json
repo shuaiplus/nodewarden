@@ -1,9 +1,9 @@
 {
   "source": "https://github.com/bitwarden/server",
   "ref": "main",
-  "generatedAt": "2026-05-05T00:00:00.000Z",
-  "rulesCount": 91,
-  "domainsCount": 436,
+  "generatedAt": "2026-10-05T11:35:36.755Z",
+  "rulesCount": 22,
+  "domainsCount": 186,
   "sourceFiles": [
     "src/Core/Enums/GlobalEquivalentDomainsType.cs",
     "src/Core/Utilities/StaticStore.cs"

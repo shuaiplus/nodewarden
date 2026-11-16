@@ -132,7 +132,7 @@
   }
 
   .topbar-actions > .network-status-badge {
-    @apply inline-flex h-9 w-9 min-w-9 justify-center gap-0 rounded-xl p-0 text-[0];
+    @apply inline-flex h-9 w-9 min-w-9 justify-center gap-0 rounded-xl p-0 text-[0px];
     background: color-mix(in srgb, var(--panel) 88%, transparent);
     border-color: var(--line);
     box-shadow: none;
@@ -144,7 +144,7 @@
 
   .mobile-sidebar-toggle,
   .mobile-lock-btn {
-    @apply inline-flex h-9 w-9 min-w-9 justify-center gap-0 rounded-xl p-0 text-[0];
+    @apply inline-flex h-9 w-9 min-w-9 justify-center gap-0 rounded-xl p-0 text-[0px];
     background: color-mix(in srgb, var(--panel) 88%, transparent);
     border-color: var(--line);
     box-shadow: none;
@@ -451,7 +451,7 @@
   }
 
   .mobile-fab-trigger {
-    @apply h-9 w-9 gap-0 rounded-full p-0 text-[0];
+    @apply h-9 w-9 gap-0 rounded-full p-0 text-[0px];
     box-shadow: 0 14px 30px rgba(37, 99, 235, 0.28);
     transition: transform 180ms var(--ease-spring), box-shadow var(--dur-fast) var(--ease-out-soft);
   }

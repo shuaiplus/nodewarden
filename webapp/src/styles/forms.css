@@ -19,7 +19,7 @@
 }
 
 .input {
-  @apply h-12 w-full rounded-xl border px-3.5 py-2.5 outline-none;
+  @apply h-12 w-full rounded-xl border px-3.5 py-2.5 outline-hidden;
   background: var(--panel);
   border-color: rgba(74, 103, 150, 0.34);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);

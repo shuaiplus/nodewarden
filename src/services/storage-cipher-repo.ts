@@ -60,6 +60,8 @@ const CIPHER_SCALAR_DATA_KEYS = new Set([
   'updatedAt',
   'updated_at',
   'revisionDate',
+  'lastKnownRevisionDate',
+  'LastKnownRevisionDate',
   'archivedAt',
   'archived_at',
   'archivedDate',
@@ -170,6 +172,32 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     cipher.archivedAt ?? null,
     cipher.deletedAt
   ).run();
+}
+
+// A single conditional UPDATE prevents a competing save or deletion between
+// the handler's read and write from being overwritten (or resurrected).
+// Org-aware: shared ciphers store a NULL user id, so the match is either the
+// personal owner or the organization that owns the row — never a bare id
+// match, and never the acting user for someone else's personal cipher.
+export async function updateCipherIfUnchanged(
+  db: D1Database,
+  safeBind: SafeBind,
+  cipher: Cipher,
+  expectedUpdatedAt: string
+): Promise<boolean> {
+  // Org cipher rows never persist a personal folder id (the per-user filing
+  // lives in cipher_user_folders); the update must uphold the saveCipher guard.
+  const folderId = cipher.organizationId ? null : normalizeOptionalId(cipher.folderId);
+  const result = await safeBind(
+    db.prepare(
+      'UPDATE ciphers SET type=?, folder_id=?, name=?, notes=?, favorite=?, data=?, reprompt=?, key=?, updated_at=?, archived_at=?, deleted_at=? ' +
+      'WHERE id=? AND updated_at=? AND (user_id=? OR (user_id IS NULL AND organization_id=?))'
+    ),
+    Number(cipher.type) || 1, folderId, cipher.name, cipher.notes, cipher.favorite ? 1 : 0,
+    buildCipherData(cipher, folderId), cipher.reprompt ?? 0, cipher.key, cipher.updatedAt,
+    cipher.archivedAt ?? null, cipher.deletedAt, cipher.id, expectedUpdatedAt, cipher.userId ?? null, cipher.organizationId ?? null
+  ).run();
+  return result.meta.changes === 1;
 }
 
 function sanitizeIds(ids: string[]): string[] {
@@ -432,10 +460,9 @@ export interface AccessibleCipher {
 }
 
 // Load one cipher for a user: personal ownership or confirmed org membership.
-export async function getAccessibleCipher(db: D1Database, id: string, userId: string): Promise<AccessibleCipher | null> {
-  const personal = await getCipherForUser(db, id, userId);
-  if (personal) return { cipher: personal, access: null };
-
+// Org-cipher lookup only: the personal lookup runs first in StorageService
+// (via its mockable getCipherForUser), then falls through here for shared rows.
+export async function getAccessibleOrgCipher(db: D1Database, id: string, userId: string): Promise<AccessibleCipher | null> {
   const row = await db
     .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE id = ? AND organization_id IS NOT NULL`)
     .bind(id)
@@ -547,7 +574,11 @@ export async function listAccessibleCiphersByIds(
   const chunkSize = sqlChunkSize(1);
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
-    const results = await Promise.all(chunk.map((id) => getAccessibleCipher(db, id, userId)));
+    const results = await Promise.all(chunk.map(async (id) => {
+      const personal = await getCipherForUser(db, id, userId);
+      if (personal) return { cipher: personal, access: null } as AccessibleCipher;
+      return getAccessibleOrgCipher(db, id, userId);
+    }));
     for (const result of results) {
       if (result) out.push(result);
     }

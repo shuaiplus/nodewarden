@@ -20,6 +20,7 @@ import {
 // - Runtime authentication state (devices, sessions, auth requests, remembered
 //   2FA devices, and one-time tokens) must never enter an instance backup.
 // - users.api_key is intentionally not exported.
+// - users.user_key_id is not exported; clients backfill it again after a restore.
 // - backup.settings.v1 is exported as portable-only; the current server runtime
 //   envelope must not leave the instance.
 type SqlRow = Record<string, string | number | null>;
