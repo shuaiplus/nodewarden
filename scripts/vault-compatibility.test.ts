@@ -28,13 +28,30 @@ async function fixture(ctx: TestContext) {
   const sqlite = new DatabaseSync(':memory:');
   ctx.after(async () => { await new Promise((resolve) => setImmediate(resolve)); sqlite.close(); });
   sqlite.exec(`
-    CREATE TABLE ciphers(id TEXT PRIMARY KEY, user_id TEXT, type INTEGER,
-      folder_id TEXT, name TEXT, notes TEXT, favorite INTEGER, data TEXT,
-      reprompt INTEGER, key TEXT, created_at TEXT, updated_at TEXT,
+    CREATE TABLE ciphers(id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT,
+      type INTEGER, folder_id TEXT, name TEXT, notes TEXT, favorite INTEGER,
+      data TEXT, reprompt INTEGER, key TEXT, created_at TEXT, updated_at TEXT,
       archived_at TEXT, deleted_at TEXT);
     CREATE TABLE attachments(id TEXT PRIMARY KEY, cipher_id TEXT,
       file_name TEXT, size INTEGER, size_name TEXT, key TEXT);
     CREATE TABLE devices(user_id TEXT, push_token TEXT);
+    -- Org tables exist on this branch's schema; the vault handlers under test
+    -- read and prune them, so the fixture mirrors their production shape
+    -- (without FK wiring, matching the minimal style above).
+    CREATE TABLE organizations(id TEXT PRIMARY KEY, name TEXT, private_key TEXT,
+      public_key TEXT, billing_email TEXT, creation_date TEXT, revision_date TEXT);
+    CREATE TABLE organization_users(id TEXT PRIMARY KEY, organization_id TEXT,
+      user_id TEXT, email TEXT, key TEXT, status INTEGER, type INTEGER,
+      access_all INTEGER, creation_date TEXT, revision_date TEXT);
+    CREATE TABLE collections(id TEXT PRIMARY KEY, organization_id TEXT, name TEXT,
+      external_id TEXT, creation_date TEXT, revision_date TEXT);
+    CREATE TABLE collection_users(collection_id TEXT, organization_user_id TEXT,
+      read_only INTEGER, hide_passwords INTEGER,
+      PRIMARY KEY (collection_id, organization_user_id));
+    CREATE TABLE cipher_collections(cipher_id TEXT, collection_id TEXT,
+      PRIMARY KEY (cipher_id, collection_id));
+    CREATE TABLE cipher_user_folders(cipher_id TEXT, user_id TEXT, folder_id TEXT,
+      created_at TEXT, updated_at TEXT, PRIMARY KEY (cipher_id, user_id));
   `);
   const db: any = {
     prepare(sql: string) {

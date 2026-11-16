@@ -4,8 +4,11 @@ const vm = require('vm');
 
 // CONTRACT:
 // This list is the script-side locale source of truth. Keep it in sync with
-// webapp/src/lib/i18n.ts whenever adding/removing a locale.
+// webapp/src/lib/i18n.ts whenever adding/removing a locale. Each locale has a
+// base bundle (locales/) and an organizations-feature bundle (org/) that the
+// webapp merges at runtime; validators check the merged key set.
 const localeDir = path.join(__dirname, '..', 'webapp', 'src', 'lib', 'i18n', 'locales');
+const orgLocaleDir = path.join(__dirname, '..', 'webapp', 'src', 'lib', 'i18n', 'org');
 
 const localeFiles = [
   ['en', 'en.ts', 'en', 'English'],
@@ -20,8 +23,22 @@ const localeFiles = [
   ['sv', 'sv.ts', 'sv', 'Swedish'],
 ];
 
-function readLocale(fileName, variableName) {
-  let code = fs.readFileSync(path.join(localeDir, fileName), 'utf8');
+// Same order as localeFiles; variable names match the org bundle files.
+const orgLocaleFiles = [
+  ['en', 'en.ts', 'orgEn'],
+  ['zh-CN', 'zh-CN.ts', 'orgZhCN'],
+  ['zh-TW', 'zh-TW.ts', 'orgZhTW'],
+  ['ru', 'ru.ts', 'orgRu'],
+  ['es', 'es.ts', 'orgEs'],
+  ['fi', 'fi.ts', 'orgFi'],
+  ['de', 'de.ts', 'orgDe'],
+  ['fr', 'fr.ts', 'orgFr'],
+  ['it', 'it.ts', 'orgIt'],
+  ['sv', 'sv.ts', 'orgSv'],
+];
+
+function readTable(dir, fileName, variableName) {
+  let code = fs.readFileSync(path.join(dir, fileName), 'utf8');
   code = code
     .replace(/const (\w+): Record<string, string> =/g, 'const $1 =')
     .replace(/export default \w+;\s*$/m, '');
@@ -30,6 +47,21 @@ function readLocale(fileName, variableName) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: fileName });
   return sandbox.result;
+}
+
+function readLocale(fileName, variableName) {
+  return readTable(localeDir, fileName, variableName);
+}
+
+function readOrgLocale(fileName, variableName) {
+  return readTable(orgLocaleDir, fileName, variableName);
+}
+
+// The effective key set the webapp serves for a locale index into localeFiles.
+function readMergedLocale(index) {
+  const [, fileName, variableName] = localeFiles[index];
+  const [, orgFileName, orgVariableName] = orgLocaleFiles[index];
+  return { ...readLocale(fileName, variableName), ...readOrgLocale(orgFileName, orgVariableName) };
 }
 
 function writeLocale(fileName, variableName, table, header) {
@@ -43,7 +75,11 @@ function writeLocale(fileName, variableName, table, header) {
 
 module.exports = {
   localeFiles,
+  orgLocaleFiles,
   localeDir,
+  orgLocaleDir,
   readLocale,
+  readOrgLocale,
+  readMergedLocale,
   writeLocale,
 };

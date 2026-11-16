@@ -1,17 +1,32 @@
 import { base64ToBytes, decryptBw, decryptStr } from './crypto';
 import { deriveSendKeyParts, looksLikeCipherString } from './app-support';
-import type { Cipher, Folder, Send } from './types';
+import type { Cipher, Folder, Send, VaultCollection } from './types';
+
+// Per-organization decryption keys: base64 enc/mac halves of the organization
+// symmetric key, resolved on the main thread via org-crypto before decryption.
+export interface OrgKeyMaterial {
+  encB64: string;
+  macB64: string;
+}
+
+export type OrgKeyMap = Record<string, OrgKeyMaterial>;
 
 export interface DecryptVaultCoreArgs {
   folders: Folder[];
   ciphers: Cipher[];
+  /** Organization collections to decrypt alongside the vault (encrypted names). */
+  collections?: VaultCollection[];
   symEncKeyB64: string;
   symMacKeyB64: string;
+  /** Organization keys by organizationId; required to decrypt org ciphers. */
+  orgKeys?: OrgKeyMap | null;
 }
 
 export interface DecryptVaultCoreResult {
   folders: Folder[];
   ciphers: Cipher[];
+  /** Organization collections with decrypted names. */
+  collections: VaultCollection[];
 }
 
 export interface DecryptSendsArgs {
@@ -120,6 +135,16 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
   const userEnc = base64ToBytes(args.symEncKeyB64);
   const userMac = base64ToBytes(args.symMacKeyB64);
 
+  const orgKeyBytes = new Map<string, { enc: Uint8Array; mac: Uint8Array }>();
+  if (args.orgKeys) {
+    for (const [organizationId, material] of Object.entries(args.orgKeys)) {
+      orgKeyBytes.set(organizationId, {
+        enc: base64ToBytes(material.encB64),
+        mac: base64ToBytes(material.macB64),
+      });
+    }
+  }
+
   const folders = await Promise.all(
     args.folders.map(async (folder) => ({
       ...folder,
@@ -129,19 +154,26 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
 
   const ciphers = await Promise.all(
     args.ciphers.map(async (cipher) => {
+      // Organization ciphers are encrypted with the organization key (or a
+      // per-cipher key wrapped by it); fall back to the user key otherwise.
       let itemEnc = userEnc;
       let itemMac = userMac;
       let usesItemKey = false;
+      const orgKey = cipher.organizationId ? orgKeyBytes.get(cipher.organizationId) : null;
+      if (orgKey) {
+        itemEnc = orgKey.enc;
+        itemMac = orgKey.mac;
+      }
       if (cipher.key) {
         try {
-          const itemKey = await decryptBw(cipher.key, userEnc, userMac);
+          const itemKey = await decryptBw(cipher.key, itemEnc, itemMac);
           if (itemKey.length >= 64) {
             itemEnc = itemKey.slice(0, 32);
             itemMac = itemKey.slice(32, 64);
             usesItemKey = true;
           }
         } catch {
-          // Keep user key fallback.
+          // Keep base key fallback.
         }
       }
 
@@ -294,7 +326,18 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
     })
   );
 
-  return { folders, ciphers };
+  const collections = await Promise.all(
+    (args.collections || []).map(async (collection) => {
+      const orgKey = orgKeyBytes.get(collection.organizationId);
+      let decName = '';
+      if (collection.name && orgKey) {
+        decName = await decryptField(collection.name, orgKey.enc, orgKey.mac);
+      }
+      return { ...collection, name: collection.name, decName };
+    })
+  );
+
+  return { folders, ciphers, collections };
 }
 
 export async function decryptSends(args: DecryptSendsArgs): Promise<Send[]> {

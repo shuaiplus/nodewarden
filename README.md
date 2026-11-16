@@ -50,8 +50,62 @@
 | **Multi-user** | ✅ | ✅ | Invite-code registration |
 | Domain rules | ✅ | ✅ | Equivalent domains, global exclusions |
 | Fill-assist | ✅ | ✅ | `POST /fill-assist`|
-| Organizations / collections / roles | ✅ | ❌ | Not implemented |
+| Organizations / collections / roles | ✅ | ✅ | **Org key sharing, collections, member management** |
 | SSO / SCIM / directory | ✅ | ❌ | Not implemented |
+
+---
+
+## Organizations & collections
+
+NodeWarden supports Bitwarden-compatible organization sharing: create an organization, invite members, share ciphers into collections, and manage per-member access — all end-to-end encrypted with organization keys distributed via RSA-OAEP (matching official client expectations).
+
+### Key management
+
+- Each organization has a 64-byte symmetric key and its own RSA keypair
+- The org key is distributed to each member encrypted with that member's public key (confirmed status only)
+- Org ciphers and collection names are encrypted with the org key; the server never decrypts them
+- **OAEP hash**: SHA-1, matching official Bitwarden clients (the "Rsa2048_OaepSha256_B64" type name is a known Bitwarden quirk — their clients use SHA-1)
+
+### Member lifecycle
+
+1. Owner invites by email (no email is sent — invitations appear in the invitee's webapp)
+2. Invitee registers (if unregistered) or sees the pending invitation; accepts
+3. Owner confirms — the org key is wrapped to the member's public key
+4. Member syncs and can decrypt shared org ciphers
+
+### Registration gate
+
+By default, only the server admin can mint registration invite codes. Org owners can still invite unregistered emails (pending invitations are created), but the invited person needs an admin-provided registration code. Admins can opt in to self-service registration:
+
+```bash
+# Check state
+curl -H "Authorization: Bearer <token>" https://your-instance/api/admin/settings/org-self-service-registration
+
+# Enable (requires master password)
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"enabled": true, "masterPasswordHash": "<hash>"}' \
+  https://your-instance/api/admin/settings/org-self-service-registration
+```
+
+When enabled, org-minted codes are bound to the invited email only. Any registered user can create an organization; instance population stays bounded by the registration gate above.
+
+### Collection permissions
+
+Per-member, per-collection access with `readOnly` and `hidePasswords` flags. `hidePasswords` is enforced server-side: every password-bearing field (login password, TOTP, card security code, identity SSN / license / passport numbers, SSH private keys, bank PIN and account numbers, hidden custom fields, and the password history) is stripped from the response before it leaves the server — confirmed members hold the org key, so stripping the ciphertext is the only real enforcement.
+
+### Filing shared items
+
+Shared items are filed into each member's **own personal folders**: the cipher carries a standard `folderId` resolved per requesting user through a server-side map (`cipher_user_folders`), so the item shows up under your existing folder structure in every client. Folder names are encrypted with each user's own key, so a filing cannot cross members — each member organizes shared items independently. Sharing a personal item into an org keeps its current folder assignment automatically.
+
+### Upgrading existing installs
+
+On the first request after deploying this feature, the schema self-upgrades: new tables are created, the `ciphers` table is rebuilt (in one atomic batch) with a nullable `user_id` column for shared items, and organization membership statuses are shifted onto Bitwarden's wire enum (a guarded one-shot migration). Installs that never use organizations only pay the table rebuild; org data is absent and nothing else changes. The full D1 schema initializes lazily — no manual SQL upload is required.
+
+### Tested clients for organizations
+
+- ✅ Browser extension (Chrome)
+- ✅ Web vault (NodeWarden webapp)
+- Desktop and mobile: not separately tested; org data rides the standard `/api/sync` shape, so they are expected to work
 
 ---
 
