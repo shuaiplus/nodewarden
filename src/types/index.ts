@@ -13,6 +13,8 @@ export interface Env {
   // Optional fallback for attachment/send file storage (no credit card required).
   ATTACHMENTS_KV?: KVNamespace;
   JWT_SECRET: string;
+  // Shared secret authorizing internal BackupTransferRunner calls. Falls back to JWT_SECRET when unset.
+  INTERNAL_ACCESS_TOKEN?: string;
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;

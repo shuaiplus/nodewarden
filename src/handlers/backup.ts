@@ -36,8 +36,6 @@ import {
   type RemoteBackupTransferSession,
   type RemoteBackupFile,
   createRemoteBackupTransferSession,
-  deleteRemoteBackupFile,
-  downloadRemoteBackupFile,
   ensureRemoteRestoreCandidate,
   listRemoteBackupEntries,
   pruneRemoteBackupArchives,
@@ -51,6 +49,20 @@ import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from '../du
 import { getMultipartRequestMaxBytes } from '../utils/direct-upload';
 import { verifyPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { unzipSync } from 'fflate';
+
+export const INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER = 'X-Internal-Token';
+
+function internalTransferFetch(
+  env: Env,
+  objectName: string,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  const stub = env.BACKUP_TRANSFER_RUNNER.get(env.BACKUP_TRANSFER_RUNNER.idFromName(objectName));
+  const headers = new Headers(init.headers);
+  headers.set(INTERNAL_BACKUP_TRANSFER_TOKEN_HEADER, env.INTERNAL_ACCESS_TOKEN || env.JWT_SECRET);
+  return stub.fetch('https://backup-transfer' + path, { ...init, headers });
+}
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -254,9 +266,7 @@ async function uploadRemoteAttachmentChunk(
   attachments: Array<{ blobName: string }>
 ): Promise<void> {
   if (!attachments.length) return;
-  const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-sync');
-  const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/upload-attachment-chunk', {
+  const response = await internalTransferFetch(env, 'remote-attachment-sync', '/internal/upload-attachment-chunk', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -541,7 +551,7 @@ async function runConfiguredBackupInDurableObject(
 ): Promise<DurableBackupRunResponse | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/run-configured-backup', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/run-configured-backup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -571,7 +581,7 @@ async function runConfiguredBackupInDurableObject(
 async function runScheduledBackupsInDurableObject(env: Env): Promise<void> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/run-scheduled-backups', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/run-scheduled-backups', {
     method: 'POST',
   });
   if (response.status === 409) {
@@ -596,7 +606,7 @@ async function downloadRemoteAttachmentViaDurableObject(
 ): Promise<Uint8Array | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-restore');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/download-remote-attachment', {
+  const response = await internalTransferFetch(env, 'remote-attachment-restore', '/internal/download-remote-attachment', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -626,7 +636,7 @@ async function downloadRemoteAttachmentBatchViaDurableObject(
 
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('remote-attachment-restore');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/download-remote-attachment-batch', {
+  const response = await internalTransferFetch(env, 'remote-attachment-restore', '/internal/download-remote-attachment-batch', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -793,7 +803,7 @@ async function restoreRemoteBackupInDurableObject(
 ): Promise<BackupImportExecutionResult['result'] | null> {
   const id = env.BACKUP_TRANSFER_RUNNER.idFromName('configured-backup-runner');
   const stub = env.BACKUP_TRANSFER_RUNNER.get(id);
-  const response = await stub.fetch('https://backup-transfer/internal/restore-remote-backup', {
+  const response = await internalTransferFetch(env, 'configured-backup-runner', '/internal/restore-remote-backup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -1006,6 +1016,119 @@ export async function handleRunAdminConfiguredBackup(request: Request, env: Env,
   }
 }
 
+async function listRemoteBackupEntriesViaRunner(
+  env: Env,
+  destination: Parameters<typeof listRemoteBackupEntries>[0],
+  path: string
+): Promise<Awaited<ReturnType<typeof listRemoteBackupEntries>>> {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/list-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup listing failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+  return await response.json<Awaited<ReturnType<typeof listRemoteBackupEntries>>>();
+}
+
+interface RemoteBackupDownloadHandle {
+  response: Response;
+  provider: BackupDestinationRecord['type'];
+  remotePath: string;
+  fileName: string;
+  contentType: string;
+}
+
+function decodeRemoteBackupFileName(value: string | null): string {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // A malformed header must not turn a successful download into a 409.
+    return value;
+  }
+}
+
+// Keeps the DO response streaming so the download handler can pipe the body
+// straight to the client. Buffering here would put the whole archive in Worker
+// memory on top of the DO's own copy.
+async function openRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<RemoteBackupDownloadHandle> {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/download-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup download failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+  return {
+    response,
+    provider: destination.type,
+    remotePath: path,
+    fileName:
+      decodeRemoteBackupFileName(response.headers.get('X-Backup-File-Name')) ||
+      path.split('/').pop() ||
+      'backup.zip',
+    contentType: response.headers.get('Content-Type') || 'application/zip',
+  };
+}
+
+async function downloadRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<RemoteBackupFile> {
+  const handle = await openRemoteBackupViaRunner(env, destination, path);
+  return {
+    provider: handle.provider,
+    remotePath: handle.remotePath,
+    fileName: handle.fileName,
+    contentType: handle.contentType,
+    bytes: new Uint8Array(await handle.response.arrayBuffer()),
+  };
+}
+
+async function deleteRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<void> {
+  const response = await internalTransferFetch(env, 'remote-browser', '/internal/delete-remote-backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ destination, path }),
+  });
+  if (!response.ok) {
+    let message = `Remote backup delete failed: ${response.status}`;
+    try {
+      const body = await response.json<{ error?: string }>();
+      if (body?.error) message = body.error;
+    } catch {
+      // keep the status-based message
+    }
+    throw new Error(message);
+  }
+}
+
 export async function handleListAdminRemoteBackups(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
@@ -1014,7 +1137,7 @@ export async function handleListAdminRemoteBackups(request: Request, env: Env, a
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const url = new URL(request.url);
     const destination = requireBackupDestination(settings, url.searchParams.get('destinationId') || null);
-    const listing = await listRemoteBackupEntries(destination, url.searchParams.get('path') || '');
+    const listing = await listRemoteBackupEntriesViaRunner(env, destination, url.searchParams.get('path') || '');
     return jsonResponse({
       object: 'backup-remote-browser',
       destinationId: destination.id,
@@ -1044,16 +1167,16 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    const remoteFile = await downloadRemoteBackupFile(destination, path);
-    return new Response(remoteFile.bytes, {
-      status: 200,
-      headers: {
-        'Content-Type': remoteFile.contentType || 'application/zip',
-        'Content-Disposition': contentDispositionBackup(remoteFile.fileName),
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
+    const remoteFile = await openRemoteBackupViaRunner(env, destination, path);
+    const headers = new Headers({
+      'Content-Type': remoteFile.contentType || 'application/zip',
+      'Content-Disposition': contentDispositionBackup(remoteFile.fileName),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
     });
+    const contentLength = remoteFile.response.headers.get('Content-Length');
+    if (contentLength) headers.set('Content-Length', contentLength);
+    return new Response(remoteFile.response.body, { status: 200, headers });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Remote backup download failed', 409);
   }
@@ -1077,7 +1200,7 @@ export async function handleInspectAdminRemoteBackup(request: Request, env: Env,
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    const remoteFile = await downloadRemoteBackupFile(destination, path);
+    const remoteFile = await downloadRemoteBackupViaRunner(env, destination, path);
     const integrity = await inspectBackupArchiveFileNameChecksum(remoteFile.bytes, remoteFile.fileName || path);
     return jsonResponse({
       object: 'backup-remote-integrity',
@@ -1109,7 +1232,7 @@ export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, 
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    await deleteRemoteBackupFile(destination, path);
+    await deleteRemoteBackupViaRunner(env, destination, path);
     await writeAuditLog(storage, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
       ...getBackupDestinationSummary(destination),
       remotePath: path,
