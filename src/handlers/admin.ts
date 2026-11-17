@@ -4,6 +4,7 @@ import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from '../services/blob-store';
 import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
+import { notifyUserLogout } from '../durable/notifications-hub';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -374,6 +375,8 @@ export async function handleAdminSetUserStatus(
   await storage.saveUser(target);
   if (nextStatus === 'banned') {
     await storage.deleteRefreshTokensByUserId(target.id);
+    await storage.deleteTrustedTwoFactorTokensByUserId(target.id);
+    notifyUserLogout(env, target.id);
   }
   AuthService.invalidateUserCache(target.id);
   await writeAuditLog(storage, actorUser.id, 'admin.user.status', 'user', target.id, {
@@ -436,8 +439,10 @@ export async function handleAdminDeleteUser(
   }
 
   await storage.deleteRefreshTokensByUserId(target.id);
+  await storage.deleteTrustedTwoFactorTokensByUserId(target.id);
   await storage.deleteUserById(target.id);
   AuthService.invalidateUserCache(target.id);
+  notifyUserLogout(env, target.id);
   await writeAuditLog(storage, actorUser.id, 'admin.user.delete', 'user', target.id, {
     targetEmail: target.email,
   }, request);

@@ -17,6 +17,7 @@ import {
   initializeYubicoCredentialsOnce,
   replaceYubicoCredentials,
 } from '../services/yubico-config';
+import { notifyUserLogout } from '../durable/notifications-hub';
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
 const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
@@ -480,6 +481,16 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
   }
 
   const user = await storage.getUser(email);
+  const showPasswordHint = ['1', 'true', 'yes', 'on'].includes(
+    String(env.SHOW_PASSWORD_HINT ?? '').trim().toLowerCase()
+  );
+  if (!showPasswordHint) {
+    return jsonResponse({
+      object: 'passwordHint',
+      hasHint: false,
+      masterPasswordHint: null,
+    });
+  }
   const hint = user?.status === 'active' ? normalizeMasterPasswordHint(user.masterPasswordHint) : null;
   return jsonResponse({
     object: 'passwordHint',
@@ -775,7 +786,9 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
+  await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  notifyUserLogout(env, user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
     action: 'user.password.change',
@@ -1072,7 +1085,7 @@ export async function handlePutTwoFactorYubiKey(request: Request, env: Env, user
       continue;
     }
     if (!credentials) {
-      const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, trimmed);
+      const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, trimmed, env);
       if (!initialized) return errorResponse('Unable to initialize Yubico validation credentials.', 400);
       credentials = initialized.credentials;
       if (initialized.created) apiKeyBootstrapOtpIndex = publicIds.length;
@@ -1174,13 +1187,13 @@ export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, en
 
   let credentials;
   if (user.role === 'admin') {
-    credentials = await requestYubicoApiCredentials(user.email, otp);
+    credentials = await requestYubicoApiCredentials(user.email, otp, env);
     if (!credentials?.clientId || !credentials.secretKey) {
       return errorResponse('Unable to initialize Yubico validation credentials.', 400);
     }
     await replaceYubicoCredentials(env.DB, credentials);
   } else {
-    const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, otp);
+    const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, otp, env);
     if (!initialized?.created) {
       return errorResponse(
         initialized?.credentials
@@ -1249,6 +1262,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
+  await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
@@ -1344,6 +1358,7 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     user.updatedAt = new Date().toISOString();
     await storage.saveUser(user);
     await storage.deleteRefreshTokensByUserId(user.id);
+    await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
     AuthService.invalidateUserCache(user.id);
     await writeAuditEvent(storage, {
       actorUserId: user.id,
@@ -1473,7 +1488,9 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
+  await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
+  notifyUserLogout(env, user.id);
   await rateLimit.clearLoginAttempts(recoverLimitKey);
   await safeWriteAuditEvent(env, {
     actorUserId: user.id,

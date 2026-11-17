@@ -175,36 +175,43 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     const { payload, user: currentUser } = verified;
 
     const actingDeviceId = String(payload.did || '').trim();
+    const nextHeaders = new Headers(request.headers);
+    nextHeaders.delete('X-NodeWarden-Acting-Device-Id');
+    nextHeaders.delete('X-NodeWarden-Auth-Method');
     if (actingDeviceId) {
-      const nextHeaders = new Headers(request.headers);
       nextHeaders.set('X-NodeWarden-Acting-Device-Id', actingDeviceId);
-      request = new Request(request, { headers: nextHeaders });
     }
+    if (payload.akfp) {
+      nextHeaders.set('X-NodeWarden-Auth-Method', 'api_key');
+    }
+    request = new Request(request, { headers: nextHeaders });
 
     const userId = payload.sub;
     if (currentUser.status !== 'active') {
       return errorResponse('Account is disabled', 403);
     }
 
-    if (!isImportBypassRequest(request, path, method)) {
-      const rateLimit = new RateLimitService(env.DB);
-      const rateLimitCheck = await rateLimit.consumeBudget(`${userId}:api`, LIMITS.rateLimit.apiRequestsPerMinute);
-      if (!rateLimitCheck.allowed) {
-        return new Response(
-          JSON.stringify({
-            error: 'Too many requests',
-            error_description: `Rate limit exceeded. Try again in ${rateLimitCheck.retryAfterSeconds} seconds.`,
-          }),
-          {
-            status: 429,
-            headers: {
-              'Content-Type': 'application/json',
-              'Retry-After': String(rateLimitCheck.retryAfterSeconds || 60),
-              'X-RateLimit-Remaining': '0',
-            },
-          }
-        );
-      }
+    const rateLimit = new RateLimitService(env.DB);
+    const isImportRequest = isImportBypassRequest(request, path, method);
+    const rateLimitCheck = await rateLimit.consumeBudget(
+      isImportRequest ? `${userId}:import` : `${userId}:api`,
+      isImportRequest ? LIMITS.rateLimit.apiRequestsPerMinute * 5 : LIMITS.rateLimit.apiRequestsPerMinute
+    );
+    if (!rateLimitCheck.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: 'Too many requests',
+          error_description: `Rate limit exceeded. Try again in ${rateLimitCheck.retryAfterSeconds} seconds.`,
+        }),
+        {
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': String(rateLimitCheck.retryAfterSeconds || 60),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
     }
 
     const authenticatedResponse = await handleAuthenticatedRoute(request, env, userId, currentUser, path, method);

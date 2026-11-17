@@ -27,6 +27,7 @@ import { createPasskeyUserVerificationToken } from '../utils/user-verification-t
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
 import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
 import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
+import { notifyUserLogout } from '../durable/notifications-hub';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -411,6 +412,8 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         !authRequest.authenticationDate &&
         !isAuthRequestExpired(authRequest) &&
         !!authRequest.key &&
+        !!deviceInfo.deviceIdentifier &&
+        authRequest.requestDeviceIdentifier === deviceInfo.deviceIdentifier &&
         constantTimeEquals(authRequest.accessCode, passwordHash)
       );
       if (valid) {
@@ -496,7 +499,7 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         let credentials = await getYubicoCredentials(env.DB);
         let initializedWithCurrentOtp = false;
         if (!credentials) {
-          const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken);
+          const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken, env);
           if (!initialized) {
             return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
           }
@@ -544,7 +547,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         user.updatedAt = new Date().toISOString();
         await storage.saveUser(user);
         await storage.deleteRefreshTokensByUserId(user.id);
+        await storage.deleteTrustedTwoFactorTokensByUserId(user.id);
         AuthService.invalidateUserCache(user.id);
+        notifyUserLogout(env, user.id);
         rememberRequested = false;
       } else {
         // Unsupported provider for this server profile behaves as an invalid 2FA attempt.
@@ -817,8 +822,10 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     // Successful login - clear failed attempts
     await rateLimit.clearLoginAttempts(loginIdentifier);
 
-    const accessToken = await auth.generateAccessToken(user, deviceSession);
-    const refreshToken = await auth.generateRefreshToken(user, deviceSession, resolveRefreshClientType(request, body));
+    const apiKeyFingerprint = await AuthService.computeApiKeyFingerprint(user.apiKey);
+    const accessToken = await auth.generateAccessToken(user, deviceSession, { apiKeyFingerprint });
+    const baseClientType = resolveRefreshClientType(request, body);
+    const refreshToken = await auth.generateRefreshToken(user, deviceSession, `${baseClientType}:akfp:${apiKeyFingerprint}`);
     const accountKeys = buildAccountKeys(user);
     const userDecryptionOptions = buildUserDecryptionOptions(user);
     await safeWriteAuditEvent(env, {

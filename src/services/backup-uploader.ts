@@ -249,6 +249,7 @@ async function ensureWebDavDirectory(baseUrl: string, directoryPath: string, aut
     const url = buildWebDavUrl(baseUrl, current);
     const response = await fetch(url, {
       method: 'MKCOL',
+      redirect: 'error',
       headers: {
         Authorization: authHeader,
       },
@@ -272,6 +273,7 @@ async function ensureWebDavDirectoryCached(
     const url = buildWebDavUrl(baseUrl, current);
     const response = await fetch(url, {
       method: 'MKCOL',
+      redirect: 'error',
       headers: {
         Authorization: authHeader,
       },
@@ -305,6 +307,7 @@ async function putToWebDav(
 
   const response = await fetch(buildWebDavUrl(config.baseUrl, remoteFilePath), {
     method: 'PUT',
+    redirect: 'error',
     headers: {
       Authorization: authHeader,
       'Content-Type': options.contentType || 'application/octet-stream',
@@ -342,6 +345,7 @@ async function listWebDavEntries(config: WebDavBackupDestination, relativePath: 
   const authHeader = toBasicAuthHeader(config.username, config.password);
   const response = await fetch(buildWebDavUrl(config.baseUrl, targetFullPath), {
     method: 'PROPFIND',
+    redirect: 'error',
     headers: {
       Authorization: authHeader,
       Depth: '1',
@@ -410,6 +414,7 @@ async function downloadFromWebDav(config: WebDavBackupDestination, relativePath:
   const remotePath = webDavFullPath(config, normalized);
   const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
     method: 'GET',
+    redirect: 'error',
     headers: {
       Authorization: authHeader,
     },
@@ -431,6 +436,7 @@ async function deleteFromWebDav(config: WebDavBackupDestination, relativePath: s
   const remotePath = webDavFullPath(config, relativePath);
   const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
     method: 'DELETE',
+    redirect: 'error',
     headers: {
       Authorization: authHeader,
     },
@@ -449,6 +455,7 @@ async function statWebDavFile(config: WebDavBackupDestination, relativePath: str
   const remotePath = webDavFullPath(config, relativePath);
   const response = await fetch(buildWebDavUrl(config.baseUrl, remotePath), {
     method: 'HEAD',
+    redirect: 'error',
     headers: {
       Authorization: authHeader,
     },
@@ -521,6 +528,7 @@ async function signedS3Request(
 
   return fetch(url, {
     method,
+    redirect: 'error',
     headers: {
       Authorization: authorization,
       'X-Amz-Content-Sha256': headers['x-amz-content-sha256'],

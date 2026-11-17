@@ -1,5 +1,4 @@
 import { decryptStr, decryptBw } from './crypto';
-import { looksLikeCipherString } from './app-support';
 import type { Cipher } from './types';
 
 async function decryptCipherField(
@@ -20,10 +19,10 @@ async function decryptCipherField(
     try {
       return await decryptStr(value, userEnc, userMac);
     } catch {
-      // Preserve the old raw fallback for fields that are genuinely unreadable.
+      // Reject unauthenticated or unreadable field values.
     }
   }
-  return looksLikeCipherString(value) ? '' : value;
+  return '';
 }
 
 export async function decryptSingleCipher(

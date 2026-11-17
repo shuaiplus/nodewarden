@@ -34,8 +34,9 @@ import {
 import { clearAuditLogs, getAuditLogSettings, listAdminInvites, listAdminUsers, listAuditLogs, saveAuditLogSettings, type AuditLogFilters } from '@/lib/api/admin';
 import { getDomainRules, saveDomainRules } from '@/lib/api/domains';
 import { getSendById, getSends } from '@/lib/api/send';
-import { getCipherById, getFolderById, repairCipherKeyMismatches, repairCipherUriChecksums } from '@/lib/api/vault';
-import { getCachedVaultCoreSnapshot, invalidateVaultCoreSyncSnapshot, loadVaultCoreSyncSnapshot, saveVaultCoreSyncSnapshot } from '@/lib/api/vault-sync';
+import { getCipherById, getFolderById } from '@/lib/api/vault';
+import { clearAllVaultCoreSyncSnapshots, getCachedVaultCoreSnapshot, loadVaultCoreSyncSnapshot, saveVaultCoreSyncSnapshot } from '@/lib/api/vault-sync';
+import { clearPersistedRemoteBrowserStates } from '@/lib/backup-center';
 import { silentlyRepairBackupSettingsIfNeeded } from '@/lib/backup-settings-repair';
 import {
   parseSignalRTextFrames,
@@ -69,6 +70,7 @@ import { APP_NOTIFY_EVENT, type AppNotifyDetail } from '@/lib/app-notify';
 import { dispatchBackupProgress, type BackupProgressDetail } from '@/lib/backup-restore-progress';
 import { clearOfflineUnlockRecord } from '@/lib/offline-auth';
 import { clearPasswordSecurityCache } from '@/lib/password-security-cache';
+import { clearWebsiteIconCache } from '@/lib/website-icon-cache';
 import { decryptSends, decryptVaultCore } from '@/lib/vault-decrypt';
 import { decryptSendsInWorker, decryptVaultCoreInWorker } from '@/lib/vault-worker';
 import {
@@ -281,7 +283,6 @@ export default function App() {
     masterPasswordHash?: string | null;
     userVerificationToken?: string | null;
   } | null>(null);
-  const uriChecksumRepairAttemptRef = useRef<string>('');
   const pendingVaultCoreQueryRefreshRef = useRef<Promise<{ data?: VaultCoreSnapshot } | unknown> | null>(null);
   const pendingVaultCoreRefreshRef = useRef<Promise<unknown> | null>(null);
   const notificationRefreshTimerRef = useRef<number | null>(null);
@@ -934,12 +935,22 @@ export default function App() {
   function logoutNow() {
     if (!IS_DEMO_MODE) {
       void revokeCurrentSession(sessionRef.current);
+      void clearAllVaultCoreSyncSnapshots();
     }
     setConfirm(null);
     setSession(null);
+    setCachedVaultCore(null);
+    setDecryptedFolders([]);
+    setDecryptedCiphers([]);
+    setDecryptedSends([]);
+    setVaultInitialDecryptDone(false);
+    setSendsDecryptDone(false);
+    queryClient.clear();
     clearProfileSnapshot();
     clearOfflineUnlockRecord();
     clearPasswordSecurityCache();
+    clearPersistedRemoteBrowserStates();
+    clearWebsiteIconCache();
     setProfile(null);
     setUnlockPreparing(false);
     setPendingTotp(null);
@@ -1319,7 +1330,6 @@ export default function App() {
     if (session?.accessToken) return;
     repairAttemptRef.current = '';
     loginScopedBackupRepairAuthRef.current = null;
-    uriChecksumRepairAttemptRef.current = '';
   }, [session?.accessToken]);
 
   useEffect(() => {
@@ -1360,27 +1370,6 @@ export default function App() {
         setDecryptedFolders(result.folders);
         setDecryptedCiphers(result.ciphers);
         setVaultInitialDecryptDone(true);
-        if (!session.accessToken) return;
-        const repairKey = `${session.accessToken}:${encryptedCiphers.map((cipher) => `${cipher.id}:${cipher.revisionDate || ''}`).join(',')}`;
-        if (uriChecksumRepairAttemptRef.current !== repairKey) {
-          uriChecksumRepairAttemptRef.current = repairKey;
-          void repairCipherKeyMismatches(authedFetch, session, result.ciphers)
-            .then(async (keyMismatchCount) => {
-              if (keyMismatchCount > 0) {
-                await invalidateVaultCoreSyncSnapshot(vaultCacheKey);
-                void refetchVaultCoreData();
-                return;
-              }
-              const uriChecksumCount = await repairCipherUriChecksums(authedFetch, session, result.ciphers);
-              if (uriChecksumCount > 0) {
-                await invalidateVaultCoreSyncSnapshot(vaultCacheKey);
-                void refetchVaultCoreData();
-              }
-            })
-            .catch(() => {
-              // Best-effort compatibility repair must not interrupt normal vault loading.
-            });
-        }
       } catch (error) {
         if (!active) return;
         const message = error instanceof Error ? error.message : t('txt_decrypt_failed_2');

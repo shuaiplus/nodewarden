@@ -157,3 +157,17 @@ export function beginWebsiteIconLoad(host: string, src: string): boolean {
 
   return true;
 }
+
+export function clearWebsiteIconCache(): void {
+  for (const record of iconRecords.values()) {
+    clearLoadTimer(record);
+    record.loadToken += 1;
+    if (record.loader) {
+      record.loader.onload = null;
+      record.loader.onerror = null;
+      record.loader = null;
+    }
+    record.imageUrl = null;
+  }
+  iconRecords.clear();
+}

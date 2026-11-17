@@ -50,8 +50,13 @@ export interface WebBootstrapResponse {
   websiteIconsEnabled: boolean;
 }
 
+function isTruthyEnvFlag(value: unknown): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
 function isWebsiteIconProxyEnabled(env: Env): boolean {
-  return true;
+  return !isTruthyEnvFlag(env.DISABLE_ICON_PROXY);
 }
 
 function isSameOriginWriteRequest(request: Request): boolean {
@@ -96,6 +101,26 @@ function handleMissingWebsiteIcon(): Response {
   });
 }
 
+const RESERVED_ICON_HOST_SUFFIXES = [
+  '.local',
+  '.localhost',
+  '.internal',
+  '.intranet',
+  '.lan',
+  '.home',
+  '.corp',
+  '.arpa',
+  '.onion',
+];
+
+function isPublicRegistrableIconHost(host: string): boolean {
+  if (!host || !host.includes('.')) return false;
+  if (host === 'localhost' || host.includes(':') || host.startsWith('[') || host.endsWith(']')) return false;
+  if (/^\d+(?:\.\d+)*$/.test(host)) return false;
+  if (RESERVED_ICON_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))) return false;
+  return true;
+}
+
 function normalizeIconHost(rawHost: string): string | null {
   let decoded: string;
   try {
@@ -106,7 +131,8 @@ function normalizeIconHost(rawHost: string): string | null {
   if (!decoded || decoded.includes('/') || decoded.includes('\\')) return null;
   try {
     const parsed = new URL(`https://${decoded}`);
-    return parsed.hostname === decoded ? decoded : null;
+    if (parsed.hostname !== decoded) return null;
+    return isPublicRegistrableIconHost(decoded) ? decoded : null;
   } catch {
     return null;
   }
@@ -221,10 +247,6 @@ async function handleWebsiteIcon(env: Env, host: string, fallbackMode: 'default'
   const requestHeaders = { 'User-Agent': 'NodeWarden/1.0' };
   const upstreamSources: IconSource[] = [
     {
-      url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
-      headers: requestHeaders,
-    },
-    {
       url: `https://icons.bitwarden.net/${encodedHost}/icon.png`,
       rejectImage: {
         byteLength: BITWARDEN_DEFAULT_GLOBE_ICON_BYTES,
@@ -233,6 +255,12 @@ async function handleWebsiteIcon(env: Env, host: string, fallbackMode: 'default'
       headers: requestHeaders,
     },
   ];
+  if (isTruthyEnvFlag(env.ENABLE_THIRD_PARTY_ICON_FALLBACK)) {
+    upstreamSources.push({
+      url: `https://favicon.im/zh/${encodedHost}?larger=true&throw-error-on-404=true`,
+      headers: requestHeaders,
+    });
+  }
 
   for (const source of upstreamSources) {
     try {

@@ -954,10 +954,7 @@ async function repairCipherLoginUris(
       clearUri = (await decryptStr(rawUri, enc, mac)).trim();
       rawUriUsesCurrentKey = !!clearUri;
     } catch {
-      const fallbackUri = String(entry.decUri || '').trim();
-      if (fallbackUri && !looksLikeCipherString(fallbackUri)) {
-        clearUri = fallbackUri;
-      }
+      clearUri = '';
     }
 
     if (!clearUri) {

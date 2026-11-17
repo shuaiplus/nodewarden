@@ -5,9 +5,13 @@ import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import {
   type BackupManifestAttachmentBlob,
   type BackupPayload,
+  PUSH_INSTALLATION_ID_CONFIG_KEY,
+  PUSH_INSTALLATION_KEY_CONFIG_KEY,
+  decryptBackupSecretRows,
   isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   validateBackupPayloadContents,
+  verifyBackupPayloadIntegrity,
 } from './backup-archive';
 
 // CONTRACT:
@@ -275,9 +279,14 @@ async function prepareImportedConfigRows(
   configRows: SqlRow[],
   userRows: SqlRow[]
 ): Promise<SqlRow[]> {
-  let nextConfigRows = cloneRows(configRows || []).filter(
-    (row) => String(row.key || '').trim() !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY
-  );
+  let nextConfigRows = cloneRows(configRows || []).filter((row) => {
+    const key = String(row.key || '').trim();
+    return (
+      key !== YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY &&
+      key !== PUSH_INSTALLATION_ID_CONFIG_KEY &&
+      key !== PUSH_INSTALLATION_KEY_CONFIG_KEY
+    );
+  });
   const rawBackupSettings = nextConfigRows.find((row) => String(row.key || '').trim() === BACKUP_SETTINGS_CONFIG_KEY);
   const normalizedBackupSettings = await normalizeImportedBackupSettingsValue(
     typeof rawBackupSettings?.value === 'string' ? rawBackupSettings.value : null,
@@ -298,9 +307,13 @@ async function prepareImportedConfigRows(
 }
 
 async function importPreparedBackupRows(db: D1Database, payload: BackupPayload['db'], env: Env): Promise<BackupPayload['db']> {
+  const decryptedSecrets = await decryptBackupSecretRows(env, {
+    config: payload.config || [],
+    users: payload.users || [],
+  });
   const preparedDb: BackupPayload['db'] = {
-    config: await prepareImportedConfigRows(env, payload.config || [], payload.users || []),
-    users: cloneRows(payload.users || []).map((row) => ({
+    config: await prepareImportedConfigRows(env, decryptedSecrets.config, decryptedSecrets.users),
+    users: cloneRows(decryptedSecrets.users).map((row) => ({
       ...row,
       verify_devices: row.verify_devices ?? 0,
       yubikey_nfc: row.yubikey_nfc ?? 0,
@@ -700,6 +713,7 @@ export async function importBackupArchiveBytes(
   fileName: string = 'nodewarden_backup.zip'
 ): Promise<BackupImportExecutionResult> {
   const parsed = parseBackupArchive(archiveBytes);
+  await verifyBackupPayloadIntegrity(parsed.payload, parsed.files);
   validateBackupPayloadContents(parsed.payload, parsed.files);
   const prepared = prepareImportPayloadForTarget(env, parsed.payload, parsed.files);
 
@@ -841,6 +855,7 @@ export async function importRemoteBackupArchiveBytes(
   fileName: string = 'nodewarden_backup.zip'
 ): Promise<BackupImportExecutionResult> {
   const parsed = parseBackupArchive(archiveBytes, { allowExternalAttachmentBlobs: true });
+  await verifyBackupPayloadIntegrity(parsed.payload, parsed.files);
   const preparedRemote = await prepareRemoteAttachmentPayload(env, parsed.payload, parsed.files, source);
   validateBackupPayloadContents(preparedRemote.payload, parsed.files, { allowExternalAttachmentBlobs: true });
 

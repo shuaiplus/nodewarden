@@ -7,6 +7,7 @@ import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { notifyAuthRequestResponse, notifyUserAuthRequest } from '../durable/notifications-hub';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { LIMITS } from '../config/limits';
+import { constantTimeEquals } from '../utils/api-key';
 
 const AUTH_REQUEST_TYPE_AUTHENTICATE_AND_UNLOCK = 0;
 const AUTH_REQUEST_TYPE_UNLOCK = 1;
@@ -30,11 +31,17 @@ function isSerializedEncString(value: unknown): value is string {
 }
 
 function getClientIp(request: Request): string | null {
-  return (
-    request.headers.get('CF-Connecting-IP') ||
-    request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
-    null
-  );
+  const cfIp = request.headers.get('CF-Connecting-IP')?.trim();
+  if (cfIp) return cfIp;
+  try {
+    const hostname = new URL(request.url).hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]') {
+      return request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || '127.0.0.1';
+    }
+  } catch {
+    // ignore malformed URL
+  }
+  return null;
 }
 
 function getCountryName(request: Request): string | null {
@@ -197,7 +204,11 @@ export async function handleCreateAuthRequest(request: Request, env: Env): Promi
   }
 
   const user = await storage.getUser(email);
-  if (!user || user.status !== 'active') {
+  const knownDevice = await storage.isKnownDevice(
+    user?.id ?? '00000000-0000-0000-0000-000000000000',
+    deviceInfo.deviceIdentifier
+  );
+  if (!user || user.status !== 'active' || !knownDevice) {
     return errorResponse('User or known device not found.', 400);
   }
 
@@ -305,7 +316,7 @@ export async function handleGetAuthRequestResponse(request: Request, env: Env, i
   const url = new URL(request.url);
   const accessCode = normalizeText(url.searchParams.get('code'), 25);
   const authRequest = await storage.getAuthRequestById(id);
-  if (!authRequest || authRequest.accessCode !== accessCode || isAuthRequestExpired(authRequest)) {
+  if (!authRequest || !accessCode || !constantTimeEquals(authRequest.accessCode, accessCode) || isAuthRequestExpired(authRequest)) {
     return errorResponse('Not found', 404);
   }
   return jsonResponse(toAuthRequestResponse(request, authRequest));

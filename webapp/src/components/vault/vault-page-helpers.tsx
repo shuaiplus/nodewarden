@@ -745,5 +745,5 @@ export function openUri(raw: string): void {
   const value = raw.trim();
   if (!value) return;
   const url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-  window.open(url, '_blank', 'noopener');
+  window.open(url, '_blank', 'noopener,noreferrer');
 }

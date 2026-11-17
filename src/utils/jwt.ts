@@ -38,6 +38,15 @@ function getHmacKey(secret: string): Promise<CryptoKey> {
   return cached;
 }
 
+function verifyHs256Header(headerB64: string): boolean {
+  try {
+    const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64))) as { alg?: unknown };
+    return header?.alg === 'HS256';
+  } catch {
+    return false;
+  }
+}
+
 // Create JWT
 export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' | 'premium' | 'email_verified' | 'amr'>, secret: string, expiresIn: number = LIMITS.auth.accessTokenTtlSeconds): Promise<string> {
   const header = { alg: 'HS256', typ: 'JWT' };
@@ -45,6 +54,7 @@ export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' 
   
   const fullPayload: JWTPayload = {
     ...payload,
+    typ: 'access',
     email_verified: true,  // required by mobile client
     amr: ['Application'],  // authentication methods reference - required by mobile client
     iat: now,
@@ -74,6 +84,7 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
     
     const key = await getHmacKey(secret);
@@ -84,7 +95,12 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
-    const payload: JWTPayload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as JWTPayload & { typ?: unknown };
+    if (payload.typ !== undefined && payload.typ !== 'access') return null;
+    if (typeof payload.sub !== 'string' || !payload.sub || typeof payload.sstamp !== 'string' || !payload.sstamp) {
+      return null;
+    }
+    if (typeof payload.exp !== 'number') return null;
     
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
@@ -105,6 +121,7 @@ export function createRefreshToken(): string {
 
 // File download token payload
 export interface FileDownloadClaims {
+  typ?: 'file_download';
   cipherId: string;
   attachmentId: string;
   jti: string;
@@ -112,6 +129,7 @@ export interface FileDownloadClaims {
 }
 
 export interface AttachmentUploadClaims {
+  typ?: 'attachment_upload';
   userId: string;
   cipherId: string;
   attachmentId: string;
@@ -128,6 +146,7 @@ export async function createFileDownloadToken(
   const now = Math.floor(Date.now() / 1000);
   
   const payload: FileDownloadClaims = {
+    typ: 'file_download',
     cipherId,
     attachmentId,
     jti: createRefreshToken(),
@@ -158,6 +177,7 @@ export async function verifyFileDownloadToken(
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
     
     const key = await getHmacKey(secret);
@@ -168,7 +188,19 @@ export async function verifyFileDownloadToken(
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
-    const payload: FileDownloadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as FileDownloadClaims & { typ?: unknown };
+    if (payload.typ !== 'file_download') return null;
+    if (
+      typeof payload.cipherId !== 'string' ||
+      !payload.cipherId ||
+      typeof payload.attachmentId !== 'string' ||
+      !payload.attachmentId ||
+      typeof payload.jti !== 'string' ||
+      !payload.jti ||
+      typeof payload.exp !== 'number'
+    ) {
+      return null;
+    }
     
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
@@ -189,6 +221,7 @@ export async function createAttachmentUploadToken(
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const payload: AttachmentUploadClaims = {
+    typ: 'attachment_upload',
     userId,
     cipherId,
     attachmentId,
@@ -216,6 +249,7 @@ export async function verifyAttachmentUploadToken(
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
 
     const key = await getHmacKey(secret);
@@ -225,10 +259,21 @@ export async function verifyAttachmentUploadToken(
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
-    const payload: AttachmentUploadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as AttachmentUploadClaims & { typ?: unknown };
+    if (payload.typ !== 'attachment_upload') return null;
+    if (typeof payload.exp !== 'number') return null;
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
-    if (!payload.userId || !payload.cipherId || !payload.attachmentId) return null;
+    if (
+      typeof payload.userId !== 'string' ||
+      !payload.userId ||
+      typeof payload.cipherId !== 'string' ||
+      !payload.cipherId ||
+      typeof payload.attachmentId !== 'string' ||
+      !payload.attachmentId
+    ) {
+      return null;
+    }
     return payload;
   } catch {
     return null;
@@ -236,6 +281,7 @@ export async function verifyAttachmentUploadToken(
 }
 
 export interface SendFileDownloadClaims {
+  typ?: 'send_file_download';
   sendId: string;
   fileId: string;
   jti: string;
@@ -243,6 +289,7 @@ export interface SendFileDownloadClaims {
 }
 
 export interface SendFileUploadClaims {
+  typ?: 'send_file_upload';
   userId: string;
   sendId: string;
   fileId: string;
@@ -257,6 +304,7 @@ export async function createSendFileDownloadToken(
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const payload: SendFileDownloadClaims = {
+    typ: 'send_file_download',
     sendId,
     fileId,
     jti: createRefreshToken(),
@@ -284,6 +332,7 @@ export async function verifySendFileDownloadToken(
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
 
     const key = await getHmacKey(secret);
@@ -293,10 +342,13 @@ export async function verifySendFileDownloadToken(
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
-    const payload: SendFileDownloadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as SendFileDownloadClaims & { typ?: unknown };
+    if (payload.typ !== 'send_file_download') return null;
     if (
       typeof payload.sendId !== 'string' ||
+      !payload.sendId ||
       typeof payload.fileId !== 'string' ||
+      !payload.fileId ||
       typeof payload.jti !== 'string' ||
       !payload.jti ||
       typeof payload.exp !== 'number'
@@ -321,6 +373,7 @@ export async function createSendFileUploadToken(
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const payload: SendFileUploadClaims = {
+    typ: 'send_file_upload',
     userId,
     sendId,
     fileId,
@@ -348,6 +401,7 @@ export async function verifySendFileUploadToken(
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
 
     const key = await getHmacKey(secret);
@@ -357,10 +411,21 @@ export async function verifySendFileUploadToken(
     const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
     if (!valid) return null;
 
-    const payload: SendFileUploadClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64))) as SendFileUploadClaims & { typ?: unknown };
+    if (payload.typ !== 'send_file_upload') return null;
+    if (typeof payload.exp !== 'number') return null;
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
-    if (!payload.userId || !payload.sendId || !payload.fileId) return null;
+    if (
+      typeof payload.userId !== 'string' ||
+      !payload.userId ||
+      typeof payload.sendId !== 'string' ||
+      !payload.sendId ||
+      typeof payload.fileId !== 'string' ||
+      !payload.fileId
+    ) {
+      return null;
+    }
     return payload;
   } catch {
     return null;
@@ -401,6 +466,7 @@ export async function verifySendAccessToken(token: string, secret: string): Prom
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
+    if (!verifyHs256Header(headerB64)) return null;
     const encoder = new TextEncoder();
 
     const key = await getHmacKey(secret);
@@ -411,10 +477,11 @@ export async function verifySendAccessToken(token: string, secret: string): Prom
     if (!valid) return null;
 
     const payload: SendAccessTokenClaims = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadB64)));
+    if (typeof payload.exp !== 'number') return null;
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return null;
     if (payload.typ !== 'send_access') return null;
-    if (!payload.sub) return null;
+    if (typeof payload.sub !== 'string' || !payload.sub) return null;
     return payload;
   } catch {
     return null;

@@ -191,6 +191,11 @@ function mobilePayloadFromSignalR(updateType: number, userId: string, revisionDa
   };
 }
 
+function isPushRelayDisabled(env: Partial<Env> | undefined): boolean {
+  const normalized = String(env?.DISABLE_PUSH_RELAY ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
 export async function registerMobilePushDevice(
   env: Env,
   input: {
@@ -201,6 +206,7 @@ export async function registerMobilePushDevice(
     pushToken: string;
   }
 ): Promise<boolean> {
+  if (isPushRelayDisabled(env)) return false;
   const credentials = await ensurePushInstallationCredentials(env.DB);
   if (!credentials) return false;
 
@@ -215,6 +221,7 @@ export async function registerMobilePushDevice(
 }
 
 export async function unregisterMobilePushDevice(env: Env, pushUuid: string | null | undefined): Promise<boolean> {
+  if (isPushRelayDisabled(env)) return false;
   const normalized = String(pushUuid || '').trim();
   if (!normalized) return false;
   return postToPushRelay(env, '/push/delete', { id: normalized });
@@ -230,6 +237,7 @@ export async function notifyMobilePush(
     payload: Record<string, unknown> | null | undefined;
   }
 ): Promise<void> {
+  if (isPushRelayDisabled(env)) return;
   const hasPushDevice = await env.DB
     .prepare('SELECT 1 FROM devices WHERE user_id = ? AND push_token IS NOT NULL AND push_token <> ? LIMIT 1')
     .bind(input.userId, '')

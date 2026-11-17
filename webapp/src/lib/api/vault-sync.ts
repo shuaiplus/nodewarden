@@ -1,6 +1,12 @@
 import type { Cipher, Folder, Send } from '../types';
 import { getVaultRevisionDate } from './auth';
-import { clearCachedVaultCoreSnapshot, loadCachedVaultCoreSnapshot, saveCachedVaultCoreSnapshot, type VaultCoreSnapshot } from '../vault-cache';
+import {
+  clearAllCachedVaultCoreSnapshots,
+  clearCachedVaultCoreSnapshot,
+  loadCachedVaultCoreSnapshot,
+  saveCachedVaultCoreSnapshot,
+  type VaultCoreSnapshot,
+} from '../vault-cache';
 import { parseJson, type AuthedFetch } from './shared';
 
 interface VaultSyncResponse {
@@ -49,6 +55,12 @@ export async function invalidateVaultCoreSyncSnapshot(cacheKey: string): Promise
   pendingVaultCoreRequests.delete(normalizedKey);
   memoryVaultCoreCache.delete(normalizedKey);
   await clearCachedVaultCoreSnapshot(normalizedKey);
+}
+
+export async function clearAllVaultCoreSyncSnapshots(): Promise<void> {
+  pendingVaultCoreRequests.clear();
+  memoryVaultCoreCache.clear();
+  await clearAllCachedVaultCoreSnapshots();
 }
 
 export async function saveVaultCoreSyncSnapshot(
