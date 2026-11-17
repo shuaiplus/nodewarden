@@ -24,6 +24,8 @@ const fr: Record<string, string> = {
   "txt_light_theme": "Clair",
   "txt_dark_theme": "Sombre",
   "txt_theme_saved_locally": "Choisissez un thème pour votre coffre-fort Web.",
+  "txt_hide_totp_by_default": "Masquer les codes de vérification par défaut",
+  "txt_hide_totp_by_default_help": "Masque les codes TOTP jusqu'à ce que vous choisissiez de les afficher.",
   "txt_display_language_help": "Modifier la langue du coffre-fort Web.",
   "txt_two_step_login": "Connexion en deux étapes",
   "txt_keys": "Clés",

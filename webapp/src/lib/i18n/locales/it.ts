@@ -24,6 +24,8 @@ const it: Record<string, string> = {
   "txt_light_theme": "Chiaro",
   "txt_dark_theme": "Scuro",
   "txt_theme_saved_locally": "Scegli un tema per la tua cassaforte web.",
+  "txt_hide_totp_by_default": "Nascondi i codici di verifica per impostazione predefinita",
+  "txt_hide_totp_by_default_help": "Nascondi i codici TOTP finché non scegli di mostrarli.",
   "txt_display_language_help": "Cambia la lingua della cassaforte web.",
   "txt_two_step_login": "Accesso in due passaggi",
   "txt_keys": "Chiavi",

@@ -77,6 +77,8 @@ const en: Record<string, string> = {
   "txt_light_theme": "Light",
   "txt_dark_theme": "Dark",
   "txt_theme_saved_locally": "Choose a theme for your web vault.",
+  "txt_hide_totp_by_default": "Hide verification codes by default",
+  "txt_hide_totp_by_default_help": "Mask TOTP codes until you choose to reveal them.",
   "txt_display_language_help": "Change the web vault language.",
   "txt_two_step_login": "Two-step login",
   "txt_keys": "Keys",
