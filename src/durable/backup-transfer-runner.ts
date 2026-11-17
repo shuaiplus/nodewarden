@@ -472,6 +472,7 @@ export class BackupTransferRunner {
           status: 200,
           headers: {
             'Content-Type': file.contentType || 'application/zip',
+            'Content-Length': String(file.bytes.byteLength),
             'X-Backup-File-Name': encodeURIComponent(file.fileName || ''),
             'Cache-Control': 'no-store',
           },

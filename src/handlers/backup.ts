@@ -1039,11 +1039,32 @@ async function listRemoteBackupEntriesViaRunner(
   return await response.json<Awaited<ReturnType<typeof listRemoteBackupEntries>>>();
 }
 
-async function downloadRemoteBackupViaRunner(
+interface RemoteBackupDownloadHandle {
+  response: Response;
+  provider: BackupDestinationRecord['type'];
+  remotePath: string;
+  fileName: string;
+  contentType: string;
+}
+
+function decodeRemoteBackupFileName(value: string | null): string {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // A malformed header must not turn a successful download into a 409.
+    return value;
+  }
+}
+
+// Keeps the DO response streaming so the download handler can pipe the body
+// straight to the client. Buffering here would put the whole archive in Worker
+// memory on top of the DO's own copy.
+async function openRemoteBackupViaRunner(
   env: Env,
   destination: BackupDestinationRecord,
   path: string
-): Promise<RemoteBackupFile> {
+): Promise<RemoteBackupDownloadHandle> {
   const response = await internalTransferFetch(env, 'remote-browser', '/internal/download-remote-backup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -1060,11 +1081,29 @@ async function downloadRemoteBackupViaRunner(
     throw new Error(message);
   }
   return {
+    response,
     provider: destination.type,
     remotePath: path,
-    fileName: decodeURIComponent(response.headers.get('X-Backup-File-Name') || '') || path.split('/').pop() || 'backup.zip',
+    fileName:
+      decodeRemoteBackupFileName(response.headers.get('X-Backup-File-Name')) ||
+      path.split('/').pop() ||
+      'backup.zip',
     contentType: response.headers.get('Content-Type') || 'application/zip',
-    bytes: new Uint8Array(await response.arrayBuffer()),
+  };
+}
+
+async function downloadRemoteBackupViaRunner(
+  env: Env,
+  destination: BackupDestinationRecord,
+  path: string
+): Promise<RemoteBackupFile> {
+  const handle = await openRemoteBackupViaRunner(env, destination, path);
+  return {
+    provider: handle.provider,
+    remotePath: handle.remotePath,
+    fileName: handle.fileName,
+    contentType: handle.contentType,
+    bytes: new Uint8Array(await handle.response.arrayBuffer()),
   };
 }
 
@@ -1128,16 +1167,16 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
     const settings = await loadBackupSettings(storage, env, 'UTC');
     const path = ensureRemoteRestoreCandidate(String(body.path || ''));
     const destination = requireBackupDestination(settings, body.destinationId || null);
-    const remoteFile = await downloadRemoteBackupViaRunner(env, destination, path);
-    return new Response(remoteFile.bytes, {
-      status: 200,
-      headers: {
-        'Content-Type': remoteFile.contentType || 'application/zip',
-        'Content-Disposition': contentDispositionBackup(remoteFile.fileName),
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
+    const remoteFile = await openRemoteBackupViaRunner(env, destination, path);
+    const headers = new Headers({
+      'Content-Type': remoteFile.contentType || 'application/zip',
+      'Content-Disposition': contentDispositionBackup(remoteFile.fileName),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
     });
+    const contentLength = remoteFile.response.headers.get('Content-Length');
+    if (contentLength) headers.set('Content-Length', contentLength);
+    return new Response(remoteFile.response.body, { status: 200, headers });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Remote backup download failed', 409);
   }
