@@ -2,6 +2,7 @@ import { deriveLoginHashLocally, unlockVaultKey } from '@/lib/api/auth';
 import type { Profile, SessionState, TokenSuccess } from '@/lib/types';
 
 const OFFLINE_UNLOCK_KEY = 'nodewarden.web.offline-unlock.v1';
+const OFFLINE_UNLOCK_PERSIST_OPT_IN_KEY = 'nodewarden.web.offline-unlock.persist';
 
 interface OfflineUnlockRecord {
   version: 1;
@@ -58,9 +59,31 @@ function parseRecord(raw: string | null): OfflineUnlockRecord | null {
   }
 }
 
+function isPersistentOfflineUnlockEnabled(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(OFFLINE_UNLOCK_PERSIST_OPT_IN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function readRecord(): OfflineUnlockRecord | null {
-  if (typeof localStorage === 'undefined') return null;
-  return parseRecord(localStorage.getItem(OFFLINE_UNLOCK_KEY));
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const sessionRaw = sessionStorage.getItem(OFFLINE_UNLOCK_KEY);
+      if (sessionRaw) return parseRecord(sessionRaw);
+    }
+  } catch {
+    // Ignore sessionStorage read errors.
+  }
+  if (isPersistentOfflineUnlockEnabled()) {
+    try {
+      return parseRecord(localStorage.getItem(OFFLINE_UNLOCK_KEY));
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function hasOfflineUnlockRecord(email?: string | null): boolean {
@@ -92,7 +115,6 @@ export function saveOfflineUnlockRecord(args: {
   profileKey: string;
   kdfIterations: number;
 }): void {
-  if (typeof localStorage === 'undefined') return;
   const email = normalizeEmail(args.email || args.profile.email);
   const profileKey = String(args.profileKey || '').trim();
   const kdfIterations = Number(args.kdfIterations || 0);
@@ -105,14 +127,41 @@ export function saveOfflineUnlockRecord(args: {
     kdfIterations,
     savedAt: Date.now(),
   };
-  localStorage.setItem(OFFLINE_UNLOCK_KEY, JSON.stringify(record));
+  const serialized = JSON.stringify(record);
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(OFFLINE_UNLOCK_KEY, serialized);
+    }
+  } catch {
+    // Ignore sessionStorage write errors.
+  }
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (isPersistentOfflineUnlockEnabled()) {
+        localStorage.setItem(OFFLINE_UNLOCK_KEY, serialized);
+      } else {
+        localStorage.removeItem(OFFLINE_UNLOCK_KEY);
+      }
+    }
+  } catch {
+    // Ignore localStorage cleanup errors.
+  }
 }
 
 export function clearOfflineUnlockRecord(): void {
   try {
-    localStorage.removeItem(OFFLINE_UNLOCK_KEY);
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(OFFLINE_UNLOCK_KEY);
+    }
   } catch {
-    // Ignore storage failures during logout cleanup.
+    // Ignore sessionStorage failures during logout cleanup.
+  }
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(OFFLINE_UNLOCK_KEY);
+    }
+  } catch {
+    // Ignore localStorage failures during logout cleanup.
   }
 }
 

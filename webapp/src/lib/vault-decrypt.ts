@@ -1,5 +1,5 @@
 import { base64ToBytes, decryptBw, decryptStr } from './crypto';
-import { deriveSendKeyParts, looksLikeCipherString } from './app-support';
+import { deriveSendKeyParts } from './app-support';
 import type { Cipher, Folder, Send } from './types';
 
 export interface DecryptVaultCoreArgs {
@@ -38,7 +38,7 @@ async function decryptField(
   try {
     return await decryptStr(value, enc, mac);
   } catch {
-    return looksLikeCipherString(value) ? '' : value;
+    return '';
   }
 }
 
@@ -60,10 +60,10 @@ async function decryptCipherField(
     try {
       return await decryptStr(value, userEnc, userMac);
     } catch {
-      // Preserve the old raw fallback for fields that are genuinely unreadable.
+      // Reject unauthenticated or unreadable field values.
     }
   }
-  return looksLikeCipherString(value) ? '' : value;
+  return '';
 }
 
 async function decryptCipherObjectFields<T extends Record<string, unknown>>(
@@ -110,10 +110,10 @@ async function decryptFieldWithSource(
     try {
       return { text: await decryptStr(raw, userEnc, userMac), source: 'user' };
     } catch {
-      // Keep plain fallback.
+      // Reject unauthenticated fallback.
     }
   }
-  return { text: looksLikeCipherString(raw) ? '' : raw, source: 'plain' };
+  return { text: '', source: 'plain' };
 }
 
 export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<DecryptVaultCoreResult> {

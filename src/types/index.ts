@@ -18,6 +18,12 @@ export interface Env {
   WEBAUTHN_ALLOWED_ORIGINS?: string;
   YUBICO_VALIDATION_URLS?: string;
   'globalSettings__yubico__validationUrls'?: string;
+  SHOW_PASSWORD_HINT?: string;
+  DISABLE_ICON_PROXY?: string;
+  ENABLE_THIRD_PARTY_ICON_FALLBACK?: string;
+  DISABLE_PUSH_RELAY?: string;
+  DISABLE_YUBICO_AUTO_BOOTSTRAP?: string;
+  BACKUP_ENCRYPTION_KEY?: string;
 }
 
 export type UserRole = 'admin' | 'user';
@@ -473,6 +479,7 @@ export interface SendResponse {
 
 // JWT Payload
 export interface JWTPayload {
+  typ?: 'access';
   sub: string;      // user id
   email: string;
   name: string | null;
@@ -481,6 +488,7 @@ export interface JWTPayload {
   sstamp: string;   // security stamp - invalidates token when user changes password
   did?: string;     // device identifier - invalidates per-device sessions
   dstamp?: string;  // device session stamp
+  akfp?: string;    // API key fingerprint - invalidates client_credentials tokens on rotate-api-key
   iat: number;
   exp: number;
   iss: string;

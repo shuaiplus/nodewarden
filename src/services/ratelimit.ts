@@ -417,25 +417,23 @@ function isLocalRequest(request: Request): boolean {
 }
 
 export function getClientIdentifier(request: Request): string | null {
-  // Strict fallback order:
-  // 1) CF-Connecting-IP
-  // 2) X-Real-IP
-  // 3) first item of X-Forwarded-For
-  // If none are present/valid, treat client IP as unavailable.
-  const candidates: Array<string | null> = [
-    request.headers.get('CF-Connecting-IP'),
-    request.headers.get('X-Real-IP'),
-    request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || null,
-  ];
-
-  for (const raw of candidates) {
-    if (!raw) continue;
-    const normalized = normalizeClientIpForRateLimit(raw);
+  const cfIp = request.headers.get('CF-Connecting-IP');
+  if (cfIp) {
+    const normalized = normalizeClientIpForRateLimit(cfIp);
     if (normalized) return normalized;
   }
 
-  // Local dev (wrangler dev / localhost): allow a deterministic loopback identifier.
+  // Local dev (wrangler dev / localhost): allow local proxy headers or deterministic loopback identifier.
   if (isLocalRequest(request)) {
+    const localCandidates: Array<string | null> = [
+      request.headers.get('X-Real-IP'),
+      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || null,
+    ];
+    for (const raw of localCandidates) {
+      if (!raw) continue;
+      const normalized = normalizeClientIpForRateLimit(raw);
+      if (normalized) return normalized;
+    }
     return 'ip4:127.0.0.1';
   }
 

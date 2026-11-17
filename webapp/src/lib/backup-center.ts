@@ -181,6 +181,29 @@ export function persistRemoteBrowserState(userId: string | null | undefined, sta
   }
 }
 
+export function clearPersistedRemoteBrowserStates(): void {
+  for (const candidate of [
+    typeof window !== 'undefined' ? window.localStorage : null,
+    typeof window !== 'undefined' ? window.sessionStorage : null,
+  ]) {
+    try {
+      if (!candidate) continue;
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < candidate.length; i += 1) {
+        const key = candidate.key(i);
+        if (key === REMOTE_BROWSER_STORAGE_KEY || key?.startsWith(`${REMOTE_BROWSER_STORAGE_KEY}:`)) {
+          keysToRemove.push(key);
+        }
+      }
+      for (const key of keysToRemove) {
+        candidate.removeItem(key);
+      }
+    } catch {
+      // Ignore storage cleanup failures during logout.
+    }
+  }
+}
+
 export function invalidateRemoteBrowserCacheForDestination(
   destinationId: string,
   cache: Record<string, RemoteBackupBrowserResponse>,

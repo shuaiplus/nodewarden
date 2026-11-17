@@ -2,7 +2,10 @@ import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
-import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
+import {
+  YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY,
+  YUBICO_SECRET_KEY_CONFIG_KEY,
+} from './yubico-config';
 import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
 import {
   getAttachmentObjectKey,
@@ -27,7 +30,10 @@ type SqlRow = Record<string, string | number | null>;
 
 const BACKUP_FORMAT_VERSION = 1;
 const BACKUP_RUNNER_LOCK_CONFIG_KEY = 'backup.runner.lock.v1';
-const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
+export const PUSH_INSTALLATION_ID_CONFIG_KEY = 'push.installation.id';
+export const PUSH_INSTALLATION_KEY_CONFIG_KEY = 'push.installation.key';
+const BACKUP_FILE_HASH_PREFIX_LENGTH = 12;
+const BACKUP_SECRET_ENVELOPE_PREFIX = '$nw-bkp-sec-v1$';
 // Worker-side backup export must stay well below Cloudflare CPU limits.
 // Prefer store-only ZIP entries over heavier compression to keep exports reliable.
 const BACKUP_TEXT_COMPRESSION_LEVEL = 0;
@@ -43,6 +49,7 @@ export interface BackupManifest {
   exportedAt: string;
   appVersion: string;
   storageKind: 'r2' | 'kv' | null;
+  dbSha256?: string;
   tableCounts: Record<string, number>;
   includes: {
     attachments: boolean;
@@ -110,26 +117,222 @@ async function queryRows(db: D1Database, sql: string, ...values: unknown[]): Pro
   return (result.results || []).map((row) => ({ ...row }));
 }
 
-function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
-  const sanitized: SqlRow[] = [];
-  for (const row of rows) {
-    const key = String(row.key || '').trim();
-    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) continue;
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
-    if (key === BACKUP_SETTINGS_CONFIG_KEY) {
-      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
-      if (portableOnly) sanitized.push({ ...row, value: portableOnly });
+function base64ToBytes(input: string): Uint8Array {
+  const binary = atob(input);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+function resolveBackupSecretMaterial(env: Partial<Env> | undefined): string {
+  return String(env?.BACKUP_ENCRYPTION_KEY || env?.JWT_SECRET || '').trim();
+}
+
+async function deriveBackupSecretKey(secret: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    'HKDF',
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: encoder.encode('nodewarden-backup-secret-salt-v1'),
+      info: encoder.encode('nodewarden-backup-secret-aes256gcm-v1'),
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptBackupFieldValue(key: CryptoKey, aadContext: string, plaintext: string): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoder = new TextEncoder();
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+      additionalData: encoder.encode(aadContext),
+    },
+    key,
+    encoder.encode(plaintext)
+  );
+  return `${BACKUP_SECRET_ENVELOPE_PREFIX}${bytesToBase64(iv)}$${bytesToBase64(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptBackupFieldValue(
+  key: CryptoKey | null,
+  aadContext: string,
+  storedValue: string | number | null | undefined
+): Promise<string | null> {
+  if (storedValue == null) return null;
+  const raw = String(storedValue);
+  if (!raw.startsWith(BACKUP_SECRET_ENVELOPE_PREFIX)) {
+    return raw;
+  }
+  if (!key) {
+    // Graceful cross-instance restore when neither BACKUP_ENCRYPTION_KEY nor matching JWT_SECRET is present.
+    return null;
+  }
+  const rest = raw.slice(BACKUP_SECRET_ENVELOPE_PREFIX.length);
+  const sep = rest.indexOf('$');
+  if (sep <= 0 || sep === rest.length - 1) return null;
+  try {
+    const iv = base64ToBytes(rest.slice(0, sep));
+    const ct = base64ToBytes(rest.slice(sep + 1));
+    if (iv.byteLength !== 12 || ct.byteLength < 16) return null;
+    const decrypted = await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv,
+        additionalData: new TextEncoder().encode(aadContext),
+      },
+      key,
+      ct
+    );
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    return null;
+  }
+}
+
+export async function decryptBackupSecretRows(
+  env: Partial<Env> | undefined,
+  rows: { config: SqlRow[]; users: SqlRow[] }
+): Promise<{ config: SqlRow[]; users: SqlRow[] }> {
+  const secret = resolveBackupSecretMaterial(env);
+  const key = secret ? await deriveBackupSecretKey(secret) : null;
+  const nextConfig: SqlRow[] = [];
+  for (const row of rows.config || []) {
+    const rowKey = String(row.key || '').trim();
+    if (rowKey === YUBICO_SECRET_KEY_CONFIG_KEY && typeof row.value === 'string') {
+      const decrypted = await decryptBackupFieldValue(key, `config:value:${rowKey}`, row.value);
+      if (decrypted) {
+        nextConfig.push({ ...row, value: decrypted });
+      }
+      continue;
+    }
+    nextConfig.push({ ...row });
+  }
+
+  const nextUsers: SqlRow[] = [];
+  for (const row of rows.users || []) {
+    const userId = String(row.id || '').trim();
+    const totpSecret = typeof row.totp_secret === 'string'
+      ? await decryptBackupFieldValue(key, `users:totp_secret:${userId}`, row.totp_secret)
+      : row.totp_secret ?? null;
+    const totpRecoveryCode = typeof row.totp_recovery_code === 'string'
+      ? await decryptBackupFieldValue(key, `users:totp_recovery_code:${userId}`, row.totp_recovery_code)
+      : row.totp_recovery_code ?? null;
+    const masterPasswordHint = typeof row.master_password_hint === 'string'
+      ? await decryptBackupFieldValue(key, `users:master_password_hint:${userId}`, row.master_password_hint)
+      : row.master_password_hint ?? null;
+    nextUsers.push({
+      ...row,
+      totp_secret: totpSecret,
+      totp_recovery_code: totpRecoveryCode,
+      master_password_hint: masterPasswordHint,
+    });
+  }
+
+  return { config: nextConfig, users: nextUsers };
+}
+
+async function sanitizeAndEncryptRowsForExport(
+  env: Partial<Env> | undefined,
+  configRows: SqlRow[],
+  userRows: SqlRow[]
+): Promise<{ configRows: SqlRow[]; userRows: SqlRow[] }> {
+  const secret = resolveBackupSecretMaterial(env);
+  const key = secret ? await deriveBackupSecretKey(secret) : null;
+
+  const sanitizedConfig: SqlRow[] = [];
+  for (const row of configRows) {
+    const rowKey = String(row.key || '').trim();
+    if (
+      !rowKey ||
+      rowKey === BACKUP_RUNNER_LOCK_CONFIG_KEY ||
+      rowKey === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY ||
+      rowKey === PUSH_INSTALLATION_ID_CONFIG_KEY ||
+      rowKey === PUSH_INSTALLATION_KEY_CONFIG_KEY
+    ) {
       continue;
     }
 
-    sanitized.push({ ...row });
+    if (rowKey === BACKUP_SETTINGS_CONFIG_KEY) {
+      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
+      if (portableOnly) sanitizedConfig.push({ ...row, value: portableOnly });
+      continue;
+    }
+
+    if (rowKey === YUBICO_SECRET_KEY_CONFIG_KEY && key && typeof row.value === 'string' && row.value) {
+      sanitizedConfig.push({
+        ...row,
+        value: await encryptBackupFieldValue(key, `config:value:${rowKey}`, row.value),
+      });
+      continue;
+    }
+
+    sanitizedConfig.push({ ...row });
   }
-  return sanitized;
+
+  if (!key) {
+    return {
+      configRows: sanitizedConfig,
+      userRows: userRows.map((row) => ({ ...row })),
+    };
+  }
+
+  const encryptedUsers: SqlRow[] = [];
+  for (const row of userRows) {
+    const userId = String(row.id || '').trim();
+    const nextRow: SqlRow = { ...row };
+    if (typeof row.totp_secret === 'string' && row.totp_secret) {
+      nextRow.totp_secret = await encryptBackupFieldValue(key, `users:totp_secret:${userId}`, row.totp_secret);
+    }
+    if (typeof row.totp_recovery_code === 'string' && row.totp_recovery_code) {
+      nextRow.totp_recovery_code = await encryptBackupFieldValue(key, `users:totp_recovery_code:${userId}`, row.totp_recovery_code);
+    }
+    if (typeof row.master_password_hint === 'string' && row.master_password_hint) {
+      nextRow.master_password_hint = await encryptBackupFieldValue(key, `users:master_password_hint:${userId}`, row.master_password_hint);
+    }
+    encryptedUsers.push(nextRow);
+  }
+
+  return { configRows: sanitizedConfig, userRows: encryptedUsers };
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function verifyBackupPayloadIntegrity(
+  payload: BackupPayload,
+  files: Record<string, Uint8Array>
+): Promise<void> {
+  const expectedDbHash = String(payload.manifest?.dbSha256 || '').trim().toLowerCase();
+  if (!expectedDbHash) return;
+  const dbBytes = files['db.json'];
+  if (!dbBytes) {
+    throw new Error('Backup archive is missing db.json');
+  }
+  const actualDbHash = await sha256Hex(dbBytes);
+  if (actualDbHash !== expectedDbHash) {
+    throw new Error('Backup archive db.json integrity check failed');
+  }
 }
 
 function getDateParts(date: Date, timeZone: string): string {
@@ -160,7 +363,7 @@ function buildBackupFileNameInTimeZone(
 
 export function extractBackupFileChecksumPrefix(fileName: string): string | null {
   const normalized = String(fileName || '').trim();
-  const match = normalized.match(/_([0-9a-f]{5})\.zip$/i);
+  const match = normalized.match(/_([0-9a-f]{12}|[0-9a-f]{5})\.zip$/i);
   return match ? match[1].toLowerCase() : null;
 }
 
@@ -170,7 +373,8 @@ export async function inspectBackupArchiveFileNameChecksum(
 ): Promise<BackupFileIntegrityCheckResult> {
   const expectedPrefix = extractBackupFileChecksumPrefix(fileName);
   const actualHash = await sha256Hex(bytes);
-  const actualPrefix = actualHash.slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
+  const compareLength = expectedPrefix ? expectedPrefix.length : BACKUP_FILE_HASH_PREFIX_LENGTH;
+  const actualPrefix = actualHash.slice(0, compareLength);
   return {
     hasChecksumPrefix: !!expectedPrefix,
     expectedPrefix,
@@ -501,7 +705,11 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
   ]);
-  const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
+  const { configRows: exportedConfigRows, userRows: exportedUserRows } = await sanitizeAndEncryptRowsForExport(
+    env,
+    configRows,
+    userRows
+  );
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
   const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
     const cipherId = String(row.cipher_id || '').trim();
@@ -514,14 +722,27 @@ export async function buildBackupArchive(
     };
   });
 
+  const dbBytes = encoder.encode(JSON.stringify({
+    config: exportedConfigRows,
+    users: exportedUserRows,
+    domain_settings: domainSettingsRows,
+    user_revisions: revisionRows,
+    folders: folderRows,
+    ciphers: cipherRows,
+    attachments: exportedAttachmentRows,
+    webauthn_credentials: accountPasskeyRows,
+  }, null, BACKUP_JSON_INDENT));
+  const dbSha256 = await sha256Hex(dbBytes);
+
   const manifestBase = {
     formatVersion: BACKUP_FORMAT_VERSION,
     exportedAt: date.toISOString(),
     appVersion: APP_VERSION,
     storageKind: getBlobStorageKind(env),
+    dbSha256,
     tableCounts: {
       config: exportedConfigRows.length,
-      users: userRows.length,
+      users: exportedUserRows.length,
       domain_settings: domainSettingsRows.length,
       user_revisions: revisionRows.length,
       folders: folderRows.length,
@@ -542,16 +763,7 @@ export async function buildBackupArchive(
 
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
-    'db.json': encoder.encode(JSON.stringify({
-      config: exportedConfigRows,
-      users: userRows,
-      domain_settings: domainSettingsRows,
-      user_revisions: revisionRows,
-      folders: folderRows,
-      ciphers: cipherRows,
-      attachments: exportedAttachmentRows,
-      webauthn_credentials: accountPasskeyRows,
-    }, null, BACKUP_JSON_INDENT)),
+    'db.json': dbBytes,
   };
 
   await options.progress?.({

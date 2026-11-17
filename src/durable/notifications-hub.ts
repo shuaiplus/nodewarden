@@ -443,12 +443,28 @@ export class NotificationsHub extends DurableObject<Env> {
 
     for (const ws of sockets) {
       const attachment = ws.deserializeAttachment() as WsAttachment | null;
-      if (!attachment?.handshakeComplete) continue;
+      if (!attachment?.handshakeComplete) {
+        if (updateType === SIGNALR_UPDATE_TYPE_LOG_OUT) {
+          try {
+            ws.close(1008, 'Session logged out');
+          } catch {
+            // ignore close races
+          }
+        }
+        continue;
+      }
       try {
         if (attachment.protocol === 'json') {
           ws.send(buildSignalRJsonInvocation(updateType, payload, contextId));
         } else {
           ws.send(buildSignalRMessagePackInvocation(updateType, payload, contextId));
+        }
+        if (updateType === SIGNALR_UPDATE_TYPE_LOG_OUT) {
+          try {
+            ws.close(1008, 'Session logged out');
+          } catch {
+            // ignore close races
+          }
         }
       } catch {
         try {
@@ -823,6 +839,7 @@ async function notifyUserUpdate(
   targetDeviceIdentifier: string | null,
   payloadOverride?: Record<string, unknown> | null
 ): Promise<void> {
+  if (!env?.NOTIFICATIONS_HUB) return;
   try {
     const id = env.NOTIFICATIONS_HUB.idFromName(userId);
     const stub = env.NOTIFICATIONS_HUB.get(id);

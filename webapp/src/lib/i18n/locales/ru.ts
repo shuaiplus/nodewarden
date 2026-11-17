@@ -142,7 +142,7 @@ const ru: Record<string, string> = {
   "txt_backup_recommend_koofr_dav_self": "Куфр",
   "txt_backup_recommend_pcloud_summary": "Нужен только адрес электронной почты. До 10 ГБ бесплатно со стандартным доступом WebDAV.",
   "txt_backup_recommend_pcloud_step_1": "Зарегистрируйте учетную запись pCloud, используя только свой адрес электронной почты.",
-  "txt_backup_recommend_pcloud_step_2": "Используйте https://webdav.ploud.com/ в качестве URL-адреса сервера WebDAV.",
+  "txt_backup_recommend_pcloud_step_2": "Используйте https://webdav.pcloud.com/ в качестве URL-адреса сервера WebDAV.",
   "txt_backup_recommend_pcloud_step_3": "Используйте свой регистрационный адрес электронной почты в качестве имени пользователя WebDAV и пароль своей учетной записи в качестве пароля WebDAV.",
   "txt_backup_recommend_backblaze_summary": "S3-совместимое объектное хранилище с бесплатными 10 ГБ и без кредитной карты.",
   "txt_backup_recommend_backblaze_step_1": "Зарегистрируйте учетную запись Backblaze или войдите в нее.",

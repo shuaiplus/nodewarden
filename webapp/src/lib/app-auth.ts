@@ -1,5 +1,6 @@
 import {
   createAuthedFetch,
+  deriveLoginHash,
   deriveLoginHashLocally,
   getAccountPasskeyAssertionOptions,
   getProfile,
@@ -546,7 +547,9 @@ export async function performPasswordLogin(
   fallbackIterations: number
 ): Promise<PasswordLoginResult> {
   const normalizedEmail = email.trim().toLowerCase();
-  const derived = await deriveLoginHashLocally(normalizedEmail, password, fallbackIterations);
+  const derived = await deriveLoginHash(normalizedEmail, password, fallbackIterations).catch(() =>
+    deriveLoginHashLocally(normalizedEmail, password, fallbackIterations)
+  );
   const token = await loginWithPassword(normalizedEmail, derived.hash, { useRememberToken: true });
 
   if ('access_token' in token && token.access_token) {
@@ -666,7 +669,9 @@ export async function performRecoverTwoFactorLogin(
   fallbackIterations: number
 ): Promise<RecoverTwoFactorResult> {
   const normalizedEmail = email.trim().toLowerCase();
-  const derived = await deriveLoginHashLocally(normalizedEmail, password, fallbackIterations);
+  const derived = await deriveLoginHash(normalizedEmail, password, fallbackIterations).catch(() =>
+    deriveLoginHashLocally(normalizedEmail, password, fallbackIterations)
+  );
   const recovered = await recoverTwoFactor(normalizedEmail, derived.hash, recoveryCode.trim());
   const token = await loginWithPassword(normalizedEmail, derived.hash, { useRememberToken: false });
 

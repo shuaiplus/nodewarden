@@ -31,6 +31,7 @@ export type RefreshAccessTokenFailureReason =
   | 'user_missing'
   | 'user_inactive'
   | 'security_stamp_mismatch'
+  | 'api_key_rotated'
   | 'device_missing'
   | 'device_session_mismatch';
 
@@ -50,6 +51,17 @@ export class AuthService {
 
   constructor(private env: Env) {
     this.storage = new StorageService(env.DB);
+  }
+
+  static async computeApiKeyFingerprint(apiKey: string): Promise<string> {
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(`nw-api-key-fp:${apiKey}`)
+    );
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+      .slice(0, 24);
   }
 
   static invalidateUserCache(userId: string): void {
@@ -165,7 +177,12 @@ export class AuthService {
   }
 
   // Generate access token
-  async generateAccessToken(user: User, device?: { identifier: string; sessionStamp: string } | null): Promise<string> {
+  async generateAccessToken(
+    user: User,
+    device?: { identifier: string; sessionStamp: string } | null,
+    options?: { apiKeyFingerprint?: string | null }
+  ): Promise<string> {
+    const akfp = options?.apiKeyFingerprint ? String(options.apiKeyFingerprint).trim() : '';
     return createJWT(
       {
         sub: user.id,
@@ -173,6 +190,7 @@ export class AuthService {
         name: user.name,
         sstamp: user.securityStamp,
         ...(device?.identifier ? { did: device.identifier, dstamp: device.sessionStamp } : {}),
+        ...(akfp ? { akfp } : {}),
       },
       this.env.JWT_SECRET
     );
@@ -221,6 +239,19 @@ export class AuthService {
       return null;
     }
 
+    if (payload.akfp !== undefined) {
+      if (typeof payload.akfp !== 'string' || !payload.akfp) return null;
+      let currentFp = user.apiKey ? await AuthService.computeApiKeyFingerprint(user.apiKey) : '';
+      if (!currentFp || currentFp !== payload.akfp) {
+        user = await this.getFreshUser(payload.sub);
+        if (!user || user.status !== 'active' || payload.sstamp !== user.securityStamp || !user.apiKey) {
+          return null;
+        }
+        currentFp = await AuthService.computeApiKeyFingerprint(user.apiKey);
+        if (currentFp !== payload.akfp) return null;
+      }
+    }
+
     if (payload.did) {
       let device = await this.getCachedDevice(user.id, payload.did);
       if (!device || !payload.dstamp || payload.dstamp !== device.sessionStamp) {
@@ -262,6 +293,20 @@ export class AuthService {
       await this.storage.bindRefreshTokenSecurityStamp(refreshToken, user.securityStamp);
     }
 
+    let apiKeyFingerprint: string | null = null;
+    const rawClientType = String(record.clientType || '').trim();
+    const clientTypeParts = rawClientType.split(':');
+    const akfpIndex = clientTypeParts.indexOf('akfp');
+    if (akfpIndex >= 0) {
+      const boundFp = clientTypeParts[akfpIndex + 1] || '';
+      const currentFp = user.apiKey ? await AuthService.computeApiKeyFingerprint(user.apiKey) : '';
+      if (!boundFp || !currentFp || boundFp !== currentFp) {
+        await this.storage.deleteRefreshToken(refreshToken);
+        return { ok: false, reason: 'api_key_rotated', userId: user.id, deviceIdentifier: record.deviceIdentifier };
+      }
+      apiKeyFingerprint = currentFp;
+    }
+
     let device: { identifier: string; sessionStamp: string } | null = null;
     if (record.deviceIdentifier) {
       const boundDevice = await this.storage.getDevice(user.id, record.deviceIdentifier);
@@ -288,7 +333,7 @@ export class AuthService {
     if (!extended) {
       return { ok: false, reason: 'token_not_found_or_expired', userId: user.id, deviceIdentifier: record.deviceIdentifier };
     }
-    const accessToken = await this.generateAccessToken(user, device);
+    const accessToken = await this.generateAccessToken(user, device, { apiKeyFingerprint });
     return { ok: true, accessToken, user, device, expiresAt };
   }
 

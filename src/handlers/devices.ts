@@ -373,7 +373,9 @@ export async function handleTrustDevicePermanently(
   userId: string,
   deviceIdentifier: string
 ): Promise<Response> {
-  void request;
+  if (request.headers.get('X-NodeWarden-Auth-Method') === 'api_key') {
+    return errorResponse('API key sessions cannot permanently trust devices for two-factor authentication.', 403);
+  }
   const normalized = String(deviceIdentifier || '').trim();
   if (!normalized) return errorResponse('Invalid device identifier', 400);
 

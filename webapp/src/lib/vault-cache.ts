@@ -129,3 +129,11 @@ export async function clearCachedVaultCoreSnapshot(cacheKey: string): Promise<vo
     request.onerror = () => resolve();
   }));
 }
+
+export async function clearAllCachedVaultCoreSnapshots(): Promise<void> {
+  await withStore('readwrite', (store) => new Promise<void>((resolve) => {
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => resolve();
+  }));
+}

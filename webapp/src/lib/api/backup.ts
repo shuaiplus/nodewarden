@@ -156,10 +156,10 @@ interface BackupExportManifest {
   attachmentBlobs?: BackupExportManifestAttachmentBlob[];
 }
 
-const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
+const BACKUP_FILE_HASH_PREFIX_LENGTH = 12;
 
 function extractBackupTimestampFromFileName(fileName: string): string | null {
-  const match = String(fileName || '').match(/nodewarden_backup_(\d{8})_(\d{6})(?:_[0-9a-f]{5})?\.zip$/i);
+  const match = String(fileName || '').match(/nodewarden_backup_(\d{8})_(\d{6})(?:_(?:[0-9a-f]{12}|[0-9a-f]{5}))?\.zip$/i);
   if (!match) return null;
   return `${match[1]}_${match[2]}`;
 }
@@ -169,10 +169,10 @@ function buildBackupFileName(timestamp: string, checksumPrefix: string): string 
 }
 
 async function applyBackupFileIntegrityName(fileName: string, bytes: Uint8Array): Promise<string> {
-  const integrity = await verifyBackupFileIntegrity(bytes, fileName);
+  const actualPrefix = (await sha256Hex(bytes)).slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
   const timestamp = extractBackupTimestampFromFileName(fileName);
   if (!timestamp) return fileName;
-  return buildBackupFileName(timestamp, integrity.actualPrefix);
+  return buildBackupFileName(timestamp, actualPrefix);
 }
 
 export async function exportAdminBackup(
@@ -382,7 +382,7 @@ export async function downloadRemoteBackup(
 
 export function extractBackupFileChecksumPrefix(fileName: string): string | null {
   const normalized = String(fileName || '').trim();
-  const match = normalized.match(/_([0-9a-f]{5})\.zip$/i);
+  const match = normalized.match(/_([0-9a-f]{12}|[0-9a-f]{5})\.zip$/i);
   return match ? match[1].toLowerCase() : null;
 }
 
@@ -394,7 +394,8 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 export async function verifyBackupFileIntegrity(bytes: Uint8Array, fileName: string): Promise<BackupFileIntegrityCheckResult> {
   const expectedPrefix = extractBackupFileChecksumPrefix(fileName);
   const actualHash = await sha256Hex(bytes);
-  const actualPrefix = actualHash.slice(0, BACKUP_FILE_HASH_PREFIX_LENGTH);
+  const compareLength = expectedPrefix ? expectedPrefix.length : BACKUP_FILE_HASH_PREFIX_LENGTH;
+  const actualPrefix = actualHash.slice(0, compareLength);
   return {
     hasChecksumPrefix: !!expectedPrefix,
     expectedPrefix,

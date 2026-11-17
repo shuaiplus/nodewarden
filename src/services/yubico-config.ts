@@ -1,3 +1,4 @@
+import type { Env } from '../types';
 import {
   requestYubicoApiCredentials,
   type YubicoApiCredentials,
@@ -66,10 +67,16 @@ async function releaseBootstrapClaim(db: D1Database, claim: string): Promise<voi
 export async function initializeYubicoCredentialsOnce(
   db: D1Database,
   email: string,
-  otp: string
+  otp: string,
+  env?: Partial<Env>
 ): Promise<YubicoCredentialInitializationResult | null> {
   const existing = await getYubicoCredentials(db);
   if (existing) return { credentials: existing, created: false };
+
+  const rawFlag = String(env?.DISABLE_YUBICO_AUTO_BOOTSTRAP ?? '').trim().toLowerCase();
+  if (rawFlag === '1' || rawFlag === 'true' || rawFlag === 'yes' || rawFlag === 'on') {
+    return null;
+  }
 
   const claim = await acquireBootstrapClaim(db);
   if (!claim) {
@@ -81,7 +88,7 @@ export async function initializeYubicoCredentialsOnce(
     const rechecked = await getYubicoCredentials(db);
     if (rechecked) return { credentials: rechecked, created: false };
 
-    const issued = await requestYubicoApiCredentials(email, otp);
+    const issued = await requestYubicoApiCredentials(email, otp, env);
     if (!issued?.clientId || !issued.secretKey) return null;
 
     const configuredDuringRequest = await getYubicoCredentials(db);

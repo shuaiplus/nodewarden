@@ -112,18 +112,36 @@ function validationUrls(env: Env): string[] {
   return configured.length > 0 ? configured : [YUBICO_DEFAULT_VALIDATION_URL];
 }
 
-export async function requestYubicoApiCredentials(email: string, otpInput: string): Promise<YubicoApiCredentials | null> {
+function randomYubicoRegistrationEmail(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  const suffix = Array.from(bytes, (byte) => (byte % 36).toString(36)).join('');
+  return `noreply+${suffix}@nodewarden.app`;
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+export async function requestYubicoApiCredentials(
+  _email: string,
+  otpInput: string,
+  env?: Partial<Env>
+): Promise<YubicoApiCredentials | null> {
+  if (isTruthyFlag(env?.DISABLE_YUBICO_AUTO_BOOTSTRAP)) return null;
   const otp = normalizeYubiKeyOtp(otpInput);
   if (!isYubiKeyOtp(otp)) return null;
 
   const body = new URLSearchParams();
-  body.set('email', String(email || '').trim().toLowerCase());
+  // Never transmit the user's real email address to third-party Yubico key-provisioning endpoints.
+  body.set('email', randomYubicoRegistrationEmail());
   body.set('otp', otp);
   body.set('terms_conditions', 'consented');
 
   const response = await fetch(YUBICO_GET_API_KEY_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    redirect: 'error',
     body,
   });
   if (!response.ok) return null;

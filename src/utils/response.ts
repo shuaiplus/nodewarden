@@ -104,9 +104,13 @@ export function applyCors(
     headers.set(k, v);
   }
   // Security headers applied to every response.
+  const requestUrl = new URL(request.url);
   headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  const isWebAuthnFrameConnector = new URL(request.url).pathname === '/webauthn-connector.html';
+  headers.set('Referrer-Policy', 'same-origin');
+  if (requestUrl.protocol === 'https:') {
+    headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+  }
+  const isWebAuthnFrameConnector = requestUrl.pathname === '/webauthn-connector.html';
   if (isWebAuthnFrameConnector) {
     // Official desktop and browser clients render this exact endpoint inside a
     // 40px cross-origin iframe. The connector validates its parent before any

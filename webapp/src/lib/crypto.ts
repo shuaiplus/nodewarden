@@ -219,32 +219,39 @@ export async function encryptBw(data: Uint8Array, encKey: Uint8Array, macKey: Ui
   return `2.${bytesToBase64(iv)}|${bytesToBase64(cipher)}|${bytesToBase64(mac)}`;
 }
 
-function parseCipherString(s: string): { type: number; iv: Uint8Array; ct: Uint8Array; mac: Uint8Array | null } {
+function parseCipherString(s: string): { type: 2; iv: Uint8Array; ct: Uint8Array; mac: Uint8Array } {
   if (!s || typeof s !== 'string') throw new Error('invalid encrypted string');
   const p = s.indexOf('.');
   if (p <= 0) throw new Error('invalid encrypted string');
   const type = Number(s.slice(0, p));
   const body = s.slice(p + 1);
   const parts = body.split('|');
-  if (type === 2 && parts.length === 3) {
-    return { type: 2, iv: base64ToBytes(parts[0]), ct: base64ToBytes(parts[1]), mac: base64ToBytes(parts[2]) };
+  if (type === 2 && parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+    const iv = base64ToBytes(parts[0]);
+    const ct = base64ToBytes(parts[1]);
+    const mac = base64ToBytes(parts[2]);
+    if (iv.byteLength !== 16 || ct.byteLength === 0 || ct.byteLength % 16 !== 0 || mac.byteLength !== 32) {
+      throw new Error('invalid encrypted string');
+    }
+    return { type: 2, iv, ct, mac };
   }
-  if ((type === 0 || type === 1 || type === 4) && parts.length >= 2) {
-    return { type, iv: base64ToBytes(parts[0]), ct: base64ToBytes(parts[1]), mac: null };
-  }
-  throw new Error('unsupported enc type');
+  throw new Error('unsupported or unauthenticated enc type');
 }
 
-export async function decryptBw(cipherString: string, encKey: Uint8Array, macKey?: Uint8Array): Promise<Uint8Array> {
-  const parsed = parseCipherString(cipherString);
-  if (parsed.type === 2 && macKey && parsed.mac) {
-    const expected = await hmacSha256(macKey, concatBytes(parsed.iv, parsed.ct));
-    if (!constantTimeEqual(expected, parsed.mac)) throw new Error('MAC mismatch');
+export async function decryptBw(cipherString: string, encKey: Uint8Array, macKey: Uint8Array): Promise<Uint8Array> {
+  if (!(encKey instanceof Uint8Array) || encKey.byteLength !== 32) {
+    throw new Error('Invalid symmetric encryption key');
   }
+  if (!(macKey instanceof Uint8Array) || macKey.byteLength !== 32) {
+    throw new Error('Invalid symmetric MAC key');
+  }
+  const parsed = parseCipherString(cipherString);
+  const expected = await hmacSha256(macKey, concatBytes(parsed.iv, parsed.ct));
+  if (!constantTimeEqual(expected, parsed.mac)) throw new Error('MAC mismatch');
   return decryptAesCbc(parsed.ct, encKey, parsed.iv);
 }
 
-export async function decryptStr(cipherString: string | null | undefined, encKey: Uint8Array, macKey?: Uint8Array): Promise<string> {
+export async function decryptStr(cipherString: string | null | undefined, encKey: Uint8Array, macKey: Uint8Array): Promise<string> {
   if (!cipherString || typeof cipherString !== 'string') return '';
   const plain = await decryptBw(cipherString, encKey, macKey);
   return new TextDecoder().decode(plain);

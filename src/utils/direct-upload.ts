@@ -48,6 +48,31 @@ function parseContentLength(request: Request): number | null {
   return Math.floor(value);
 }
 
+function createBoundedByteStream(
+  source: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  expectedExactBytes: number | null,
+  tooLargeMessage: string
+): ReadableStream<Uint8Array> {
+  let seen = 0;
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      seen += chunk.byteLength;
+      if (seen > maxBytes || (expectedExactBytes !== null && seen > expectedExactBytes)) {
+        controller.error(new Error(tooLargeMessage));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+    flush(controller) {
+      if (expectedExactBytes !== null && seen !== expectedExactBytes) {
+        controller.error(new Error('File size does not match.'));
+      }
+    },
+  });
+  return source.pipeThrough(transform);
+}
+
 export async function parseDirectUploadPayload(
   request: Request,
   options: ParseDirectUploadOptions
@@ -107,7 +132,7 @@ export async function parseDirectUploadPayload(
   }
 
   return {
-    body: request.body,
+    body: createBoundedByteStream(request.body, maxFileSize, uploadSize, tooLargeMessage),
     contentType: contentType || 'application/octet-stream',
     size: uploadSize,
   };

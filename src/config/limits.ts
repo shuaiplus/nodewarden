@@ -1,4 +1,4 @@
-﻿export const LIMITS = {
+export const LIMITS = {
   auth: {
     // Access token lifetime in seconds.
     // 访问令牌有效期（秒）。
@@ -168,7 +168,7 @@
 } as const;
 
 export function getRefreshTokenSlidingTtlMs(clientType?: string | null): number {
-  const normalized = String(clientType || '').trim().toLowerCase();
+  const normalized = String(clientType || '').trim().toLowerCase().split(':')[0];
   if (normalized === 'web') return LIMITS.auth.refreshTokenWebSlidingTtlMs;
   if (normalized === 'mobile') return LIMITS.auth.refreshTokenMobileSlidingTtlMs;
   return LIMITS.auth.refreshTokenDefaultSlidingTtlMs;

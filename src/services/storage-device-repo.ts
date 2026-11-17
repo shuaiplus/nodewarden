@@ -168,7 +168,7 @@ export async function clearDeviceKeys(
 
 export async function isKnownDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<boolean> {
   const row = await db
-    .prepare('SELECT 1 FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1')
+    .prepare('SELECT 1 FROM devices WHERE user_id = ? AND device_identifier = ? AND COALESCE(banned, 0) = 0 LIMIT 1')
     .bind(userId, deviceIdentifier)
     .first<{ '1': number }>();
   return !!row;

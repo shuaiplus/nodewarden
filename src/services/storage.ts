@@ -1,6 +1,5 @@
 import { User, Cipher, Folder, Attachment, Device, Invite, AuditLog, Send, TrustedDeviceTokenSummary, RefreshTokenRecord, CustomEquivalentDomain, AccountPasskeyChallenge, AccountPasskeyChallengeScope, AccountPasskeyCredential, AuthRequestRecord } from '../types';
 import { LIMITS } from '../config/limits';
-import { ensurePushInstallationCredentials } from './push-relay';
 import { ensureStorageSchema } from './storage-schema';
 import {
   getConfigValue as getStoredConfigValue,
@@ -267,7 +266,6 @@ export class StorageService {
       await ensureStorageSchema(this.db);
       await saveConfigValue(this.db, STORAGE_SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION);
     }
-    await ensurePushInstallationCredentials(this.db);
 
     StorageService.schemaVerified = true;
   }

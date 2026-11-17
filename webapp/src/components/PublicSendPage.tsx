@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { Clipboard, Download, Eye, Lock } from 'lucide-preact';
 import { accessPublicSend, accessPublicSendFile, decryptPublicSend, decryptPublicSendFileBytes } from '@/lib/api/send';
 import { copyTextToClipboard } from '@/lib/clipboard';
-import { toBufferSource } from '@/lib/crypto';
 import { downloadBytesAsFile, readResponseBytesWithProgress } from '@/lib/download';
 import NotFoundPage from '@/components/NotFoundPage';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
@@ -182,20 +181,12 @@ export default function PublicSendPage(props: PublicSendPageProps) {
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(t('txt_download_failed'));
       const encryptedBytes = await readResponseBytesWithProgress(resp, (progress) => setDownloadPercent(progress.percent));
-      let blob: Blob;
-      if (props.keyPart) {
-        try {
-          const decryptedBytes = await decryptPublicSendFileBytes(encryptedBytes, props.keyPart);
-          blob = new Blob([toBufferSource(decryptedBytes)], { type: 'application/octet-stream' });
-        } catch {
-          // Legacy compatibility: early web-created file sends uploaded plaintext bytes.
-          blob = new Blob([toBufferSource(encryptedBytes)], { type: 'application/octet-stream' });
-        }
-      } else {
-        blob = new Blob([toBufferSource(encryptedBytes)], { type: 'application/octet-stream' });
+      if (!props.keyPart) {
+        throw new Error(t('txt_decrypt_failed_2'));
       }
+      const decryptedBytes = await decryptPublicSendFileBytes(encryptedBytes, props.keyPart);
       downloadBytesAsFile(
-        new Uint8Array(await blob.arrayBuffer()),
+        decryptedBytes,
         sendData.decFileName || sendData.file?.fileName || t('txt_send_file'),
         'application/octet-stream'
       );
