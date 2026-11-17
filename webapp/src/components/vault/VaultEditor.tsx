@@ -2,9 +2,9 @@ import type { RefObject } from 'preact';
 import { createPortal } from 'preact/compat';
 import { ArrowDown, ArrowUp, CheckCheck, Download, Paperclip, Plus, QrCode, RefreshCw, Star, StarOff, Trash2, Upload, X } from 'lucide-preact';
 import jsQR from 'jsqr';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useDialogLifecycle } from '@/components/ConfirmDialog';
-import { normalizeTotpInput } from '@/lib/crypto';
+import { normalizeTotpInput, parseTotpSettings, updateTotpSettings } from '@/lib/crypto';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import { cardBrand } from '@/lib/import-format-shared';
@@ -135,6 +135,7 @@ function WebsiteRow(props: WebsiteRowProps) {
 export default function VaultEditor(props: VaultEditorProps) {
   const createTypeOptions = getCreateTypeOptions();
   const normalizedDraftCardBrand = normalizeCardBrand(props.draft.cardBrand);
+  const totpSettings = useMemo(() => parseTotpSettings(props.draft.loginTotp), [props.draft.loginTotp]);
   const cardBrandOptions = normalizedDraftCardBrand && !CARD_BRAND_OPTIONS.includes(normalizedDraftCardBrand as any)
     ? [...CARD_BRAND_OPTIONS, normalizedDraftCardBrand]
     : CARD_BRAND_OPTIONS;
@@ -424,6 +425,42 @@ export default function VaultEditor(props: VaultEditorProps) {
               </button>
             </div>
           </label>
+          {totpSettings.supported && !totpSettings.steam && (
+            <div className="field-grid">
+              <label className="field">
+                <span>{t('txt_totp_algorithm')}</span>
+                <select
+                  className="input"
+                  value={totpSettings.algorithm}
+                  disabled={props.busy}
+                  onInput={(e) => props.onUpdateDraft({
+                    loginTotp: updateTotpSettings(props.draft.loginTotp, (e.currentTarget as HTMLSelectElement).value as typeof totpSettings.algorithm, totpSettings.digits),
+                  })}
+                >
+                  <option value="SHA-1">SHA-1</option>
+                  <option value="SHA-256">SHA-256</option>
+                  <option value="SHA-512">SHA-512</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>{t('txt_totp_digits')}</span>
+                <select
+                  className="input"
+                  value={String(totpSettings.digits)}
+                  disabled={props.busy}
+                  onInput={(e) => props.onUpdateDraft({
+                    loginTotp: updateTotpSettings(props.draft.loginTotp, totpSettings.algorithm, Number((e.currentTarget as HTMLSelectElement).value)),
+                  })}
+                >
+                  {!([6, 8] as number[]).includes(totpSettings.digits) && (
+                    <option value={String(totpSettings.digits)} disabled>{totpSettings.digits}</option>
+                  )}
+                  <option value="6">6</option>
+                  <option value="8">8</option>
+                </select>
+              </label>
+            </div>
+          )}
           <div className="section-head">
             <h4>{t('txt_websites')}</h4>
             <button type="button" className="btn btn-secondary small" onClick={addLoginUri}>
