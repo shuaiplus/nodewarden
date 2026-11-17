@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import LoadingState from '@/components/LoadingState';
 import VaultDialogs from '@/components/vault/VaultDialogs';
 import VaultDetailView from '@/components/vault/VaultDetailView';
@@ -313,6 +313,7 @@ export default function VaultPage(props: VaultPageProps) {
       const username = String(cipher.login?.decUsername || '');
       const uri = firstCipherUri(cipher);
       const typedText = [
+        cipher.login?.decPassword,
         cipher.bankAccount?.decBankName,
         cipher.bankAccount?.decNameOnAccount,
         cipher.bankAccount?.decAccountNumber,
