@@ -320,10 +320,13 @@ export interface VaultDraftField {
   type: CustomFieldType;
   label: string;
   value: string;
+  linkedId?: number | null;
+  extra?: Record<string, unknown>;
 }
 
 export interface VaultDraft {
   id?: string;
+  revisionDate?: string;
   type: number;
   favorite: boolean;
   name: string;

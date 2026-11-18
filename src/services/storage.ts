@@ -17,6 +17,8 @@ import {
   getUserById as findStoredUserById,
   getUserCount as countStoredUsers,
   saveUser as saveStoredUser,
+  setUserKeyId as setStoredUserKeyId,
+  upgradePasswordVerifier as upgradeStoredPasswordVerifier,
 } from './storage-user-repo';
 import {
   type AuditLogListOptions,
@@ -58,6 +60,7 @@ import {
   getCiphersByIds as listStoredCiphersByIds,
   getCiphersPage as listStoredCiphersPage,
   saveCipher as saveStoredCipher,
+  updateCipherIfUnchanged as updateStoredCipherIfUnchanged,
   deleteCipher as deleteStoredCipher,
 } from './storage-cipher-repo';
 import {
@@ -164,7 +167,7 @@ const STORAGE_SCHEMA_VERSION_KEY = 'schema.version';
 // Bump this whenever src/services/storage-schema.ts or migrations/0001_init.sql
 // changes. Existing D1 installs only rerun ensureStorageSchema() when this value
 // differs from config.schema.version.
-const STORAGE_SCHEMA_VERSION = '2026-07-13-refresh-session-reuse';
+const STORAGE_SCHEMA_VERSION = '2026-11-04-user-key-id';
 const REQUIRED_SCHEMA_TABLES = ['webauthn_credentials', 'webauthn_challenges', 'auth_requests', 'totp_login_replays'] as const;
 
 // D1-backed storage.
@@ -311,6 +314,14 @@ export class StorageService {
 
   async createUser(user: User): Promise<void> {
     await createStoredUser(this.db, this.safeBind.bind(this), user);
+  }
+
+  async upgradePasswordVerifier(userId: string, expectedVerifier: string, securityStamp: string, newVerifier: string): Promise<boolean> {
+    return upgradeStoredPasswordVerifier(this.db, userId, expectedVerifier, securityStamp, newVerifier);
+  }
+
+  async setUserKeyId(userId: string, userKeyId: string): Promise<boolean> {
+    return setStoredUserKeyId(this.db, userId, userKeyId);
   }
 
   async createFirstUser(user: User): Promise<boolean> {
@@ -489,6 +500,10 @@ export class StorageService {
 
   async saveCipher(cipher: Cipher): Promise<void> {
     await saveStoredCipher(this.db, this.safeBind.bind(this), cipher);
+  }
+
+  async updateCipherIfUnchanged(cipher: Cipher, expectedUpdatedAt: string): Promise<boolean> {
+    return updateStoredCipherIfUnchanged(this.db, this.safeBind.bind(this), cipher, expectedUpdatedAt);
   }
 
   async deleteCipher(id: string, userId: string): Promise<void> {

@@ -1,4 +1,5 @@
 import { hkdf } from '@/lib/crypto';
+import { cipherFieldMetadata } from './cipher-fields';
 import { t } from '@/lib/i18n';
 import type { VaultDraft } from '@/lib/types';
 import type { ImportResultSummary } from '@/components/ImportPage';
@@ -206,6 +207,8 @@ export function importCipherToDraft(cipher: Record<string, unknown>, folderId: s
       const fieldType = parsedType === 1 || parsedType === 2 || parsedType === 3 ? (parsedType as 1 | 2 | 3) : 0;
       return {
         type: fieldType,
+        // Plaintext import cannot safely pass through unknown encrypted values.
+        ...cipherFieldMetadata({ linkedId: field.linkedId }),
         label,
         value: asText(field.value),
       };

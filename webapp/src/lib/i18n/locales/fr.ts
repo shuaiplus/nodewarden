@@ -1087,6 +1087,7 @@ const fr: Record<string, string> = {
   "txt_remove_device_failed": "Le retrait de l'appareil a échoué",
   "txt_remove_all_devices_failed": "Le retrait de tous les appareils a échoué",
   "txt_update_item_failed": "La mise à jour de l'élément a échoué",
+  "txt_item_changed_elsewhere": "Cet élément a été modifié dans un autre client. Vos modifications restent dans le formulaire. Copiez les changements nécessaires, rouvrez cet élément et enregistrez-le.",
   "txt_update_send_failed": "La mise à jour de l'envoi a échoué",
   "txt_update_user_status_failed": "La mise à jour du statut de l'utilisateur a échoué",
   "txt_use_recovery_code": "Utiliser le code de récupération",
@@ -1453,7 +1454,9 @@ const fr: Record<string, string> = {
   "txt_auth_request_approved": "Connexion de l'appareil approuvée",
   "txt_auth_request_denied": "Connexion de l'appareil refusée",
   "txt_auth_request_missing_public_key": "Il manque une clé publique à la demande de connexion de l'appareil",
-  "txt_ip_address": "Adresse IP"
+  "txt_ip_address": "Adresse IP",
+  "txt_create_subfolder": "Créer un sous-dossier",
+  "txt_nested_folder_help": "Utilisez / pour imbriquer des dossiers, par exemple Travail/Messagerie. Créez d’abord le dossier parent. Renommer un dossier ne renomme pas ses sous-dossiers.",
 };
 
 Object.assign(fr, {

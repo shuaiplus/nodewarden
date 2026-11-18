@@ -1087,6 +1087,7 @@ const it: Record<string, string> = {
   "txt_remove_device_failed": "Impossibile rimuovere il dispositivo",
   "txt_remove_all_devices_failed": "Impossibile rimuovere tutti i dispositivi",
   "txt_update_item_failed": "Aggiornamento elemento fallito",
+  "txt_item_changed_elsewhere": "Questo elemento è stato modificato in un altro client. Le tue modifiche sono ancora nel modulo. Copia quelle necessarie, riapri questo elemento e salva.",
   "txt_update_send_failed": "Aggiornamento invio fallito",
   "txt_update_user_status_failed": "Aggiornamento stato utente fallito",
   "txt_use_recovery_code": "Usa Codice di Recupero",
@@ -1453,7 +1454,9 @@ const it: Record<string, string> = {
   "txt_auth_request_approved": "Accesso dispositivo approvato",
   "txt_auth_request_denied": "Accesso dispositivo negato",
   "txt_auth_request_missing_public_key": "Manca una chiave pubblica nella richiesta di accesso del dispositivo",
-  "txt_ip_address": "Indirizzo IP"
+  "txt_ip_address": "Indirizzo IP",
+  "txt_create_subfolder": "Crea sottocartella",
+  "txt_nested_folder_help": "Usa / per annidare le cartelle, ad esempio Lavoro/Posta. Crea prima la cartella principale. Rinominare una cartella non rinomina le sue sottocartelle.",
 };
 
 Object.assign(it, {

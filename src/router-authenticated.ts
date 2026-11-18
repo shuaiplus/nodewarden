@@ -6,6 +6,7 @@ import {
   handleGetKeys,
   handleSetKeys,
   handleGetRevisionDate,
+  handleSetUserKeyId,
   handleVerifyPassword,
   handleChangePassword,
   handleSetVerifyDevices,
@@ -241,6 +242,10 @@ export async function handleAuthenticatedRoute(
     return handleGetRevisionDate(request, env, userId);
   }
 
+  if (path === '/api/accounts/key-management/user-key-id' && method === 'POST') {
+    return handleSetUserKeyId(request, env, userId);
+  }
+
   if (path === '/api/accounts/verify-password' && method === 'POST') {
     return handleVerifyPassword(request, env, userId);
   }
@@ -290,6 +295,7 @@ export async function handleAuthenticatedRoute(
   if (path === '/api/ciphers' || path === '/api/ciphers/create') {
     if (method === 'GET') return handleGetCiphers(request, env, userId);
     if (method === 'POST') return handleCreateCipher(request, env, userId);
+    if (path === '/api/ciphers' && method === 'DELETE') return handleBulkPermanentDeleteCiphers(request, env, userId);
     return null;
   }
 
@@ -297,7 +303,7 @@ export async function handleAuthenticatedRoute(
     return handleCiphersImport(request, env, userId);
   }
 
-  if (path === '/api/ciphers/delete' && method === 'POST') {
+  if (path === '/api/ciphers/delete' && (method === 'PUT' || method === 'POST')) {
     return handleBulkDeleteCiphers(request, env, userId);
   }
 
@@ -305,7 +311,7 @@ export async function handleAuthenticatedRoute(
     return handleBulkPermanentDeleteCiphers(request, env, userId);
   }
 
-  if (path === '/api/ciphers/restore' && method === 'POST') {
+  if (path === '/api/ciphers/restore' && (method === 'PUT' || method === 'POST')) {
     return handleBulkRestoreCiphers(request, env, userId);
   }
 
@@ -333,7 +339,7 @@ export async function handleAuthenticatedRoute(
     }
 
     if (subPath === '/delete' && method === 'PUT') return handleDeleteCipher(request, env, userId, cipherId);
-    if (subPath === '/delete' && method === 'DELETE') return handlePermanentDeleteCipher(request, env, userId, cipherId);
+    if (subPath === '/delete' && (method === 'DELETE' || method === 'POST')) return handlePermanentDeleteCipher(request, env, userId, cipherId);
     if (subPath === '/restore' && method === 'PUT') return handleRestoreCipher(request, env, userId, cipherId);
     if (subPath === '/archive' && (method === 'PUT' || method === 'POST')) return handleArchiveCipher(request, env, userId, cipherId);
     if (subPath === '/unarchive' && (method === 'PUT' || method === 'POST')) return handleUnarchiveCipher(request, env, userId, cipherId);

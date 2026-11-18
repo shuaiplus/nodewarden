@@ -1087,6 +1087,7 @@ const de: Record<string, string> = {
   "txt_remove_device_failed": "Fehler beim Entfernen des Geräts",
   "txt_remove_all_devices_failed": "Fehler beim Entfernen aller Geräte",
   "txt_update_item_failed": "Fehler beim Aktualisieren des Eintrags",
+  "txt_item_changed_elsewhere": "Dieser Eintrag wurde in einem anderen Client geändert. Deine Änderungen stehen noch im Formular. Kopiere sie, öffne den Eintrag erneut und speichere ihn.",
   "txt_update_send_failed": "Fehler beim Aktualisieren der Sendung",
   "txt_update_user_status_failed": "Fehler beim Aktualisieren des Benutzerstatus",
   "txt_use_recovery_code": "Wiederherstellungscode verwenden",
@@ -1453,7 +1454,9 @@ const de: Record<string, string> = {
   "txt_auth_request_approved": "Geräteanmeldung genehmigt",
   "txt_auth_request_denied": "Geräteanmeldung abgelehnt",
   "txt_auth_request_missing_public_key": "Geräteanmeldungsanfrage fehlt ein öffentlicher Schlüssel",
-  "txt_ip_address": "IP-Adresse"
+  "txt_ip_address": "IP-Adresse",
+  "txt_create_subfolder": "Unterordner erstellen",
+  "txt_nested_folder_help": "Mit / Ordner verschachteln, z. B. Arbeit/E-Mail. Erstellen Sie zuerst den übergeordneten Ordner. Das Umbenennen eines Ordners benennt seine Unterordner nicht um.",
 };
 
 Object.assign(de, {

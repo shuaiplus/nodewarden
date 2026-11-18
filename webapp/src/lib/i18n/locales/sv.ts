@@ -1087,6 +1087,7 @@ const sv: Record<string, string> = {
   "txt_remove_device_failed": "Misslyckades med att ta bort enhet",
   "txt_remove_all_devices_failed": "Misslyckades med att ta bort alla enheter",
   "txt_update_item_failed": "Misslyckades med att uppdatera objekt",
+  "txt_item_changed_elsewhere": "Objektet ändrades i en annan klient. Dina ändringar finns kvar i formuläret. Kopiera de ändringar du behöver, öppna objektet igen och spara.",
   "txt_update_send_failed": "Misslyckades med att uppdatera sändning",
   "txt_update_user_status_failed": "Misslyckades med att uppdatera användarstatus",
   "txt_use_recovery_code": "Använd återställningskod",
@@ -1453,7 +1454,9 @@ const sv: Record<string, string> = {
   "txt_auth_request_approved": "Enhetsinloggning godkänd",
   "txt_auth_request_denied": "Enhetsinloggning nekad",
   "txt_auth_request_missing_public_key": "Inloggningsförfrågan för enhet saknar en offentlig nyckel",
-  "txt_ip_address": "IP-adress"
+  "txt_ip_address": "IP-adress",
+  "txt_create_subfolder": "Skapa undermapp",
+  "txt_nested_folder_help": "Använd / för att skapa nästlade mappar, t.ex. Arbete/E-post. Skapa först den överordnade mappen. Att byta namn på en mapp ändrar inte namnen på dess undermappar.",
 };
 
 Object.assign(sv, {

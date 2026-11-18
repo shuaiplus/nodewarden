@@ -98,6 +98,14 @@ Password hints are reminders, not recovery secrets. They must never contain the
 master password, recovery codes, API keys, or anything that directly unlocks the
 vault.
 
+### Web Vault Styles
+
+The web vault uses Tailwind CSS 4 through `@tailwindcss/vite`. Theme aliases,
+dark-mode variants, and source paths are defined in `webapp/src/tailwind.css`,
+which also imports `styles.css` so component `@apply` rules share the same theme.
+Keep runtime light/dark design tokens in `webapp/src/styles/tokens.css`.
+Tailwind 4's browser baseline is Safari 16.4+, Chrome 111+, and Firefox 128+.
+
 ### i18n
 
 Locale files are complete standalone bundles. When adding or changing user-facing
@@ -110,6 +118,15 @@ For new locales, update:
 - `scripts/i18n-utils.cjs`
 
 ## Recommended Checks
+
+Use the Node.js version in `.node-version` for local and Cloudflare builds.
+Cloudflare Pages and Workers Builds read this file automatically. If a project
+sets `NODE_VERSION` in its dashboard, keep it aligned with this file.
+
+When regenerating the lockfile, use a directory without `node_modules` and
+verify `npm ci` with npm 10.9.2, the version used by Cloudflare's build image.
+Include optional dependencies so the lockfile also covers native and WASM
+dependencies on other platforms.
 
 For most backend or shared changes:
 

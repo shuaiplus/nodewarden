@@ -1087,6 +1087,7 @@ const fi: Record<string, string> = {
   "txt_remove_device_failed": "Laitteen poistaminen epäonnistui",
   "txt_remove_all_devices_failed": "Kaikkien laitteiden poistaminen epäonnistui",
   "txt_update_item_failed": "Nimikkeen päivitys epäonnistui",
+  "txt_item_changed_elsewhere": "Kohdetta muutettiin toisessa sovelluksessa. Muokkauksesi ovat yhä lomakkeessa. Kopioi tarvittavat muutokset, avaa kohde uudelleen ja tallenna.",
   "txt_update_send_failed": "Lähetyksen päivitys epäonnistui",
   "txt_update_user_status_failed": "Käyttäjän tilan päivitys epäonnistui",
   "txt_use_recovery_code": "Käytä palautuskoodia",
@@ -1453,7 +1454,9 @@ const fi: Record<string, string> = {
   "txt_auth_request_approved": "Laitteen kirjautuminen hyväksytty",
   "txt_auth_request_denied": "Laitteen kirjautuminen hylätty",
   "txt_auth_request_missing_public_key": "Laitekirjautumispyynnöstä puuttuu julkinen avain",
-  "txt_ip_address": "IP-osoite"
+  "txt_ip_address": "IP-osoite",
+  "txt_create_subfolder": "Luo alikansio",
+  "txt_nested_folder_help": "Luo sisäkkäisiä kansioita merkillä /, esim. Työ/Sähköposti. Luo ensin yläkansio. Kansion nimeäminen uudelleen ei nimeä sen alikansioita uudelleen.",
 };
 
 Object.assign(fi, {
