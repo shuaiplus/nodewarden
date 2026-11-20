@@ -341,3 +341,48 @@ test('automatic item-key repair preserves linked metadata and the intentional re
   assert.equal(await decryptStr(saved.fields![0].name!, itemEnc, itemMac), 'Linked username');
   assert.equal('lastKnownRevisionDate' in saved, false);
 });
+
+test('passkeys with blank optional metadata are written and returned with encrypted key material', async (ctx) => {
+  const f = await fixture(ctx);
+  const path = `/api/ciphers/${id}`;
+  const credential = {
+    credentialId: await encrypt('test-id'),
+    keyType: await encrypt('public-key'),
+    keyAlgorithm: await encrypt('ECDSA'),
+    keyCurve: await encrypt('P-256'),
+    keyValue: await encrypt('test-key'),
+    rpId: await encrypt('example.test'),
+    counter: await encrypt('0'),
+    discoverable: await encrypt('true'),
+    rpName: '',
+    userName: null,
+    userHandle: await encrypt('test-user'),
+    creationDate: revision,
+  };
+  const response = await f.route(path, 'PUT', {
+    lastKnownRevisionDate: revision,
+    login: { ...f.base.login, fido2Credentials: [credential] },
+  });
+  assert.equal(response.status, 200);
+  const expected = [{ ...credential, rpName: null }];
+  assert.deepEqual((await response.json() as any).login.fido2Credentials, expected);
+  assert.deepEqual((await f.storage.getCipherForUser(id, owner))?.login?.fido2Credentials, expected);
+  const fetched: any = await (await f.route(path, 'GET')).json();
+  assert.deepEqual(fetched.login.fido2Credentials, expected);
+
+  const invalidFields = [
+    ['keyValue', 'plaintext-key'],
+    ['keyValue', ''],
+    ['discoverable', true],
+    ['rpName', 'plaintext-rp'],
+  ] as const;
+  for (const [key, value] of invalidFields) {
+    const invalid = await f.route(path, 'PUT', {
+      lastKnownRevisionDate: fetched.revisionDate,
+      login: { ...f.base.login, fido2Credentials: [{ ...credential, [key]: value }] },
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json() as any).error, `FIDO2 credential ${key} must be an encrypted string.`);
+  }
+  assert.deepEqual((await f.storage.getCipherForUser(id, owner))?.login?.fido2Credentials, expected);
+});
