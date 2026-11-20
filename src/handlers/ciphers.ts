@@ -28,6 +28,7 @@ import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { readNullableFullUpdateField } from './cipher-full-update';
+import { isStaleCipherUpdate } from './cipher-revision';
 
 // CONTRACT:
 // Cipher JSON is the highest-risk Bitwarden compatibility surface. Preserve
@@ -162,19 +163,6 @@ function normalizeCipherTimestamp(value: unknown): string | null {
 function readCipherArchivedAt(source: any, fallback: string | null = null): string | null {
   const archived = getAliasedProp(source, ['archivedAt', 'ArchivedAt', 'archivedDate', 'ArchivedDate']);
   return archived.present ? normalizeCipherTimestamp(archived.value) : fallback;
-}
-
-function readCipherRevisionDate(source: any): string | null {
-  const revision = getAliasedProp(source, ['lastKnownRevisionDate', 'LastKnownRevisionDate']);
-  return revision.present ? normalizeCipherTimestamp(revision.value) : null;
-}
-
-function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: string | null): boolean {
-  if (!clientRevisionDate) return false;
-  const existingTs = Date.parse(existingUpdatedAt);
-  const clientTs = Date.parse(clientRevisionDate);
-  if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
-  return existingTs > clientTs;
 }
 
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
@@ -1044,7 +1032,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
   const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
-  const incomingRevisionDate = readCipherRevisionDate(cipherData);
+  const incomingRevisionDate = readCipherProp(cipherData, ['lastKnownRevisionDate', 'LastKnownRevisionDate']).value;
   const preserveRevisionDate =
     shouldPreserveRepairableCipherUris(request)
     && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);

@@ -154,6 +154,29 @@ test('stale updates less than a second apart cannot bypass checks with attachmen
   assert.equal(f.notifications.length, 0);
 });
 
+test('Bitwarden SDK can edit notes using a second-precision revision from the same second', async (ctx) => {
+  const f = await fixture(ctx);
+  const path = `/api/ciphers/${id}`;
+  const updatedAt = '2026-10-04T00:00:00.999Z';
+  await f.storage.saveCipher({ ...f.base, updatedAt });
+  const current: any = await (await f.route(path, 'GET')).json();
+  const lastKnownRevisionDate = current.revisionDate.replace(/\.\d+Z$/, 'Z');
+  const notes = await encrypt('Notes edited in the browser extension');
+  const response = await f.route(path, 'PUT', { notes, lastKnownRevisionDate });
+  assert.equal(response.status, 200);
+  assert.equal((await f.storage.getCipherForUser(id, owner))?.notes, notes);
+});
+
+test('a second-precision revision from an earlier second still conflicts', async (ctx) => {
+  const f = await fixture(ctx);
+  await f.storage.saveCipher({ ...f.base, updatedAt: '2026-10-04T00:00:01.000Z' });
+  const response = await f.route(`/api/ciphers/${id}`, 'PUT', {
+    notes: await encrypt('Stale notes'), lastKnownRevisionDate: '2026-10-04T00:00:00Z',
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await f.storage.getCipherForUser(id, owner))?.notes, f.base.notes);
+});
+
 test('a write conflict detected after reading leaves attachment metadata untouched', async (ctx) => {
   const f = await fixture(ctx);
   await f.storage.saveAttachment(f.attachment);
