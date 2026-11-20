@@ -28,6 +28,14 @@ import { parsePagination, encodeContinuationToken } from '../utils/pagination';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { readNullableFullUpdateField } from './cipher-full-update';
+import { isStaleCipherUpdate } from './cipher-revision';
+import {
+  isValidEncString,
+  normalizeFido2CredentialsForCompatibility,
+  normalizeFido2CredentialsForStorage,
+  optionalEncString,
+  validateFido2EncryptedFields,
+} from './cipher-encrypted-fields';
 
 // CONTRACT:
 // Cipher JSON is the highest-risk Bitwarden compatibility surface. Preserve
@@ -164,19 +172,6 @@ function readCipherArchivedAt(source: any, fallback: string | null = null): stri
   return archived.present ? normalizeCipherTimestamp(archived.value) : fallback;
 }
 
-function readCipherRevisionDate(source: any): string | null {
-  const revision = getAliasedProp(source, ['lastKnownRevisionDate', 'LastKnownRevisionDate']);
-  return revision.present ? normalizeCipherTimestamp(revision.value) : null;
-}
-
-function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: string | null): boolean {
-  if (!clientRevisionDate) return false;
-  const existingTs = Date.parse(existingUpdatedAt);
-  const clientTs = Date.parse(clientRevisionDate);
-  if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
-  return existingTs > clientTs;
-}
-
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
   cipher.archivedDate = cipher.archivedAt ?? null;
   cipher.deletedDate = cipher.deletedAt ?? null;
@@ -202,30 +197,6 @@ async function writeCipherAudit(
       ...auditRequestMetadata(request),
     },
   });
-}
-
-function isValidEncString(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  const trimmed = value.trim();
-  const dot = trimmed.indexOf('.');
-  if (dot <= 0) return false;
-  const type = Number(trimmed.slice(0, dot));
-  if (!Number.isInteger(type) || type < 0) return false;
-  const parts = trimmed.slice(dot + 1).split('|');
-  if (parts.some((part) => part.length === 0)) return false;
-
-  // Bitwarden's legacy symmetric EncString variants require IV + data,
-  // while the authenticated AES-CBC-HMAC variant requires IV + data + MAC.
-  if (type === 0 || type === 1 || type === 4) return parts.length >= 2;
-  if (type === 2) return parts.length === 3;
-
-  // Keep newer one-part formats, such as COSE Encrypt0, future-compatible.
-  return parts.length >= 1;
-}
-
-function optionalEncString(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  return isValidEncString(value) ? value.trim() : null;
 }
 
 function optionalEncStringWithin(value: unknown, maxLength: number): string | null {
@@ -316,7 +287,7 @@ export function normalizeCipherLoginForStorage(login: any): any {
   if (!login || typeof login !== 'object') return login ?? null;
   return {
     ...login,
-    fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
+    fido2Credentials: normalizeFido2CredentialsForStorage(login.fido2Credentials),
   };
 }
 
@@ -402,16 +373,8 @@ export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): s
       }
     }
 
-    // Validate FIDO2 credentials — all encrypted-string fields, both required and optional, must be valid.
-    if (Array.isArray(login.fido2Credentials)) {
-      const fido2EncryptedKeys = ['credentialId', 'keyType', 'keyAlgorithm', 'keyCurve', 'keyValue', 'rpId', 'counter', 'discoverable', 'userHandle', 'userName', 'rpName', 'userDisplayName'];
-      for (const cred of login.fido2Credentials) {
-        if (!cred || typeof cred !== 'object') continue;
-        for (const key of fido2EncryptedKeys) {
-          if (cred[key] != null && !isValidEncString(cred[key])) return `FIDO2 credential ${key} must be an encrypted string.`;
-        }
-      }
-    }
+    const fido2Error = validateFido2EncryptedFields(login.fido2Credentials);
+    if (fido2Error) return fido2Error;
   }
 
   // Validate SSH key fields — all three must be encrypted strings.
@@ -446,44 +409,6 @@ export function validateCipherEncryptedFieldsForCompatibility(cipher: Cipher): s
   }
 
   return null;
-}
-
-function normalizeFido2CredentialsForCompatibility(credentials: any): any[] | null {
-  if (!Array.isArray(credentials) || credentials.length === 0) return null;
-  const requiredEncryptedKeys = [
-    'credentialId',
-    'keyType',
-    'keyAlgorithm',
-    'keyCurve',
-    'keyValue',
-    'rpId',
-    'counter',
-    'discoverable',
-  ];
-  const optionalEncryptedKeys = ['userHandle', 'userName', 'rpName', 'userDisplayName'];
-  const out: any[] = [];
-
-  for (const credential of credentials) {
-    if (!credential || typeof credential !== 'object') continue;
-    const next: Record<string, any> = { ...credential };
-    let valid = true;
-    for (const key of requiredEncryptedKeys) {
-      if (!isValidEncString(next[key])) {
-        valid = false;
-        break;
-      }
-      next[key] = String(next[key]).trim();
-    }
-    if (!valid) continue;
-    for (const key of optionalEncryptedKeys) {
-      if (Object.prototype.hasOwnProperty.call(next, key)) {
-        next[key] = optionalEncString(next[key]);
-      }
-    }
-    out.push(next);
-  }
-
-  return out.length ? out : null;
 }
 
 // Android 2026.2.0 requires sshKey.keyFingerprint in sync payloads.
@@ -1044,7 +969,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   const incomingDriversLicense = readCipherProp<CipherDriversLicense | null>(cipherData, ['driversLicense', 'DriversLicense']);
   const incomingPassport = readCipherProp<CipherPassport | null>(cipherData, ['passport', 'Passport']);
   const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
-  const incomingRevisionDate = readCipherRevisionDate(cipherData);
+  const incomingRevisionDate = readCipherProp(cipherData, ['lastKnownRevisionDate', 'LastKnownRevisionDate']).value;
   const preserveRevisionDate =
     shouldPreserveRepairableCipherUris(request)
     && (body.preserveRevisionDate === true || cipherData.preserveRevisionDate === true);
