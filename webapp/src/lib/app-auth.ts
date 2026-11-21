@@ -180,7 +180,6 @@ export type PasskeyLoginResult =
   | { kind: 'error'; message: string };
 
 export interface RecoverTwoFactorResult {
-  login: CompletedLogin | null;
   newRecoveryCode: string | null;
 }
 
@@ -659,6 +658,10 @@ export async function performTotpLogin(
   throw new Error(translateServerError(tokenError.error_description || tokenError.error, fallback));
 }
 
+// Recovering with the recovery code never creates a session: it spends the code and turns two-step
+// login off, then the user signs in again from scratch. Deliberately not auto-logging in — the
+// recovery code is a last resort, and a fresh sign-in re-establishes a session on the account now
+// that its second factor is gone.
 export async function performRecoverTwoFactorLogin(
   email: string,
   password: string,
@@ -668,19 +671,7 @@ export async function performRecoverTwoFactorLogin(
   const normalizedEmail = email.trim().toLowerCase();
   const derived = await deriveLoginHashLocally(normalizedEmail, password, fallbackIterations);
   const recovered = await recoverTwoFactor(normalizedEmail, derived.hash, recoveryCode.trim());
-  const token = await loginWithPassword(normalizedEmail, derived.hash, { useRememberToken: false });
-
-  if ('access_token' in token && token.access_token) {
-    return {
-      login: await completeLogin(token, normalizedEmail, derived.masterKey, derived.kdfIterations, derived.hash),
-      newRecoveryCode: recovered.newRecoveryCode || null,
-    };
-  }
-
-  return {
-    login: null,
-    newRecoveryCode: recovered.newRecoveryCode || null,
-  };
+  return { newRecoveryCode: recovered.newRecoveryCode || null };
 }
 
 export async function performRegistration(args: {

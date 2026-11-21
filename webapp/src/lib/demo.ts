@@ -1425,8 +1425,17 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     },
     onChangePassword: readonly,
     onSavePasswordHint: readonly,
-    onEnableTotp: readonly,
-    onOpenDisableTotp: readonlyVoid,
+    onStartTotpSetup: async (request) => {
+      await readonly();
+      // The demo account always has an authenticator enabled, so this only ever runs the rotation
+      // branch and reports the key as “not stored yet”.
+      return { enabled: true, key: 'JBSWY3DPEHPK3PXP', rotating: !!request.currentToken, userVerificationToken: 'DEMO-READ-ONLY' };
+    },
+    onVerifyTotpSetup: async () => {
+      await readonly();
+      return { recoveryCode: '', recoveryCodeConsumed: false };
+    },
+    onDisableTotp: readonly,
     onGetTwoFactorPasskeySettings: async () => ({ enabled: false, keys: [] }),
     onCreateTwoFactorPasskey: async () => {
       await readonly();

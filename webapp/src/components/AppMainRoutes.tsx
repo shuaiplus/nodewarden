@@ -8,7 +8,7 @@ import type { AdminBackupImportResponse, AdminBackupRunResponse, AdminBackupSett
 import type { AuditLogFilters } from '@/lib/api/admin';
 import type { CiphersImportPayload } from '@/lib/api/vault';
 import { t } from '@/lib/i18n';
-import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, TwoFactorPasskeySettings, VaultDraft, YubiKeyOtpSettings } from '@/lib/types';
+import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, TotpSetupRequest, TotpSetupResult, TwoFactorAuthenticatorSettings, TwoFactorPasskeySettings, VaultDraft, YubiKeyOtpSettings } from '@/lib/types';
 import type { ExportRequest } from '@/lib/export-formats';
 
 const VaultPage = lazy(() => import('@/components/VaultPage'));
@@ -114,8 +114,9 @@ export interface AppMainRoutesProps {
   sendUploadPercent: number | null;
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
-  onEnableTotp: (secret: string, token: string, masterPassword: string) => Promise<void>;
-  onOpenDisableTotp: () => void;
+  onStartTotpSetup: (request: TotpSetupRequest) => Promise<TwoFactorAuthenticatorSettings>;
+  onVerifyTotpSetup: (key: string, token: string, userVerificationToken: string, rotating: boolean) => Promise<TotpSetupResult>;
+  onDisableTotp: (code: string) => Promise<void>;
   onGetYubiKeySettings: (masterPassword: string) => Promise<YubiKeyOtpSettings>;
   onSaveYubiKeySettings: (keys: string[], nfc: boolean, masterPassword: string) => Promise<YubiKeyOtpSettings>;
   onSaveYubiKeyApiCredentials: (clientId: string, secretKey: string, masterPassword: string) => Promise<YubiKeyOtpSettings>;
@@ -311,8 +312,9 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                 onVerifyMasterPassword={props.onVerifyMasterPassword}
                 onChangePassword={props.onChangePassword}
                 onSavePasswordHint={props.onSavePasswordHint}
-                onEnableTotp={props.onEnableTotp}
-                onOpenDisableTotp={props.onOpenDisableTotp}
+                onStartTotpSetup={props.onStartTotpSetup}
+                onVerifyTotpSetup={props.onVerifyTotpSetup}
+                onDisableTotp={props.onDisableTotp}
                 onGetYubiKeySettings={props.onGetYubiKeySettings}
                 onSaveYubiKeySettings={props.onSaveYubiKeySettings}
                 onSaveYubiKeyApiCredentials={props.onSaveYubiKeyApiCredentials}
