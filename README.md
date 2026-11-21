@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Bitwarden-compatible server running on Cloudflare Workers
+  运行在 Cloudflare Workers 上的 Bitwarden 兼容服务端
 </p>
 
 <p align="center">
@@ -14,110 +14,108 @@
 </p>
 
 <p align="center">
-  <a href="https://t.me/NodeWarden_News">Telegram Channel</a> |
-  <a href="https://t.me/NodeWarden_Official">Telegram Group</a>
+  <a href="https://t.me/NodeWarden_News">Telegram 频道</a> |
+  <a href="https://t.me/NodeWarden_Official">Telegram 群组</a>
 </p>
 
 <p align="center">
-  <a href="./README_ZH.md">中文</a> |
-  <a href="./CONTRIBUTING.md">Contributing</a> |
-  <a href="https://nodewarden.app">Official wiki</a>
+  <a href="./README.md">English</a> |
+  <a href="./CONTRIBUTING.md">贡献指南</a> |
+  <a href="https://nodewarden.app">官方wiki</a>
 </p>
 
-> **Disclaimer**  
-> This project is for learning and discussion purposes only. Please back up your vault regularly.  
-> This project is not affiliated with Bitwarden. Please do not report NodeWarden issues to the official Bitwarden team.
+> **免责声明**  
+> 本项目仅供学习与交流使用，请定期备份你的密码库。  
+> 本项目与 Bitwarden 官方无关，请不要向 Bitwarden 官方反馈 NodeWarden 的问题。
 
 ---
 
-## Feature comparison with the official Bitwarden server
+## 与 Bitwarden 官方服务端能力对比
 
-| Feature | Bitwarden Free | NodeWarden | Notes |
+| 能力 | Bitwarden免费版 | NodeWarden | 说明 |
 |---|---|---|---|
-| Web vault | ✅ | ✅ | **Original Web Vault UI** |
-| TOTP | ❌ | ✅ | Includes `steam://` support |
-| **PWA / offline** | ❌ | ✅ | **Installable, offline** |
-| **Passkey login** | ✅ | ✅ | **passwordless auth** |
-| API keys | ✅ | ✅ | CLI keys; create and rotate |
-| Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey |
-| 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
-| Real-time push sync | ✅ | ✅ | All device sync |
-| Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
-| Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
-| **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
-| Device management | ✅ | ✅ | **Remove devices; trust controls** |
-| Login requests | ✅ | ✅ | **Cross-device login approval/unlock** |
-| **Multi-user** | ✅ | ✅ | Invite-code registration |
-| Domain rules | ✅ | ✅ | Equivalent domains, global exclusions |
-| Fill-assist | ✅ | ✅ | `POST /fill-assist`|
-| Organizations / collections / roles | ✅ | ❌ | Not implemented |
-| SSO / SCIM / directory | ✅ | ❌ | Not implemented |
+| 网页密码库 | ✅ | ✅ | **原创Web Vault界面** |
+| TOTP | ❌ | ✅ | 包括 `steam://` 支持 |
+| **PWA / 离线使用** | ❌ | ✅ | **可安装、离线使用、App快捷方式** |
+| **Passkey 登录** | ✅ | ✅ | **支持WebAuthn/FIDO2无密码登录** |
+| API 密钥 | ✅ | ✅ | 供bitwarden cli使用，支持获取和轮换 |
+| 登录 2FA | ✅ | ✅ | 支持 TOTP、YubiKey、Passkey |
+| 2FA 恢复码 | ✅ | ✅ | 一次性恢复码用于禁用 2FA |
+| 实时推送同步 | ✅ | ✅ | 网页端、浏览器扩展、电脑端和手机端实时同步 |
+| 附件 / Send| ✅ | ✅ | Cloudflare R2 或 KV |
+| 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
+| **云端备份中心** | ❌ | ✅ | **支持 WebDAV / S3 定时增量备份** |
+| 设备管理 | ✅ | ✅ | **删除设备、撤销信任、永久信任** |
+| 登录请求 | ✅ | ✅ | **多端免密登录审批、跨设备解锁请求** |
+| **多用户使用** | ✅ | ✅ | 支持邀请码注册 |
+| 域名规则 | ✅ | ✅ | 自定义等效域名、全局域名排除 |
+| Fill-assist | ✅ | ✅ | `POST /fill-assist` 辅助客户端自动填充；不能绕过保险库解锁 |
+| 组织 / 集合 / 成员权限 | ✅ | ❌ | 未实现 |
+| SSO / SCIM / 企业目录 | ✅ | ❌ | 未实现 |
 
 ---
 
-## Tested clients
+## 已测试客户端
 
-- ✅ Windows desktop
-- ✅ Mobile app
-- ✅ Browser extension
-- ✅ Linux desktop
-- ⚠️ macOS desktop not fully verified yet
+- ✅ Windows 桌面端
+- ✅ 手机 App
+- ✅ 浏览器扩展
+- ✅ Linux 桌面端
+- ⚠️ macOS 桌面端尚未完整验证
 
 ---
 
-## Visual quick deploy
+## 可视化快速部署
 
-1. Fork the NodeWarden repository to your GitHub account
-2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
-3. Choose **Continue with GitHub** and select your fork
-4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
-   - For KV mode, change the deploy command to `npm run deploy:kv`
-5. After deployment finishes, open the generated Workers URL
+1. Fork NodeWarden 仓库到自己的 GitHub 账号
+2. 进入 [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
+3. 选择 Continue with GitHub 并选择你的仓库
+4. 构建命令填 `npm run build`，部署命令填 `npm run deploy`
+- 如果你打算用 KV 模式，把部署命令改成 `npm run deploy:kv`
+5. 等部署完成后，打开生成的 Workers 域名
 
-- The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
+- Workers 默认域名在部分网络环境不可直连。如需自定义域名，到 [Workers 设置](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings)里添加。
 
-- If the site reports a missing `JWT_SECRET`, add it as a **Secret** in Workers settings. In production use a random string of at least 32 characters; do not use temporary or example values.
+- 页面提示缺少 `JWT_SECRET` 时，到 Workers 设置里添加 Secret。正式环境至少使用 32 个字符以上的随机字符串，不要使用临时值或示例值。
 
-- To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
+- 如需隐藏 Web Vault，在 Workers 的“设置 → 变量和机密”中添加文本变量 `HIDE_WEB_VAULT`，值设为 `1`。启用后，服务器上的前端页面和静态资源统一返回 `404 Not Found`，Bitwarden 客户端所需的登录、同步、附件、图标、通知等服务端接口仍可使用；已经安装或缓存的 PWA 可以继续使用本地前端。删除该变量（或将值改为非 `1`）即可恢复服务器上的 Web Vault。
 
-- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
+- 这套流程里，用户实际做的是把代码交给 Cloudflare 构建并部署。代码里的 `wrangler.toml` 或 `wrangler.kv.toml` 决定绑定名，Worker 第一次处理请求时会自动初始化 D1 schema，不需要用户上传 SQL。
 
 
 > [!TIP] 
-> Default R2 vs optional KV:
->   | Storage | Card required | Max single attachment / Send file | Free tier |
+> 默认R2与可选KV的区别：
+>   | 储存 | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
 >   |---|---|---|---|
->   | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
->   | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
+>   | R2 | 需要 | 100 MB（软限制可更改） | 10 GB |
+>   | KV | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
 
 
-## FAQ
+## 常见问题：
+- **Fork 完仓库后，在 Cloudflare 连接 GitHub 账户时看不到自己的仓库，或者选择仓库后返回 404？**  
+  这通常与 GitHub Fork 仓库的识别或 Cloudflare 对仓库的授权/同步有关。如果 Fork 后仓库名称、描述等信息与上游项目高度一致，可能更容易触发相关限制或异常。建议在 Fork 时就将仓库名称修改为与上游不同的名称，并同时修改仓库描述，例如改为 `2233warden`。如果已经完成 Fork，也可以直接在 GitHub 仓库设置中修改名称和描述，然后重新尝试在 Cloudflare 中连接。
 
-- **After forking the repository, why can't I see my repository when connecting GitHub to Cloudflare, or why do I get a 404 after selecting it?**  
-  This is usually related to how the GitHub fork is identified or how Cloudflare handles repository authorization and synchronization. If the fork keeps a repository name, description, or other information that is very similar to the upstream project, it may be more likely to trigger related restrictions or issues. It is recommended to rename the repository to something different from the upstream project when creating the fork, and change the repository description as well. For example, you can rename it to `2233warden`. If you have already created the fork, you can rename the repository and update its description in the GitHub repository settings, then try connecting it to Cloudflare again.
+- **我删掉部署后重新部署，为什么注册又开始要求邀请码了？**  
+  因为删除 Worker 或重新部署并不会自动删除已经创建的持久化数据。D1 数据库和 KV 命名空间中的用户、邀请码及相关配置仍然存在，因此重新部署后仍会读取原来的数据，并继续要求邀请码。  
+  如果希望完全重新开始，需要同时删除对应的 **D1 数据库和 KV 命名空间**。
 
-- **I deleted my deployment and redeployed it. Why does registration require an invite code again?**  
-  Deleting the Worker or redeploying it does not automatically delete the persistent data that was already created. The users, invite codes, and related configuration stored in the D1 database and KV namespace are still there, so the newly deployed Worker continues to read the existing data and enforce the invite-code requirement.  
-  If you want to start completely from scratch, you need to delete the corresponding **D1 database and KV namespace** as well.
+- **我配置了 `JWT_SECRET`，为什么页面仍然提示缺少？**  
+  请将 `JWT_SECRET` 配置在 Cloudflare Workers 的 **Settings → Variables and Secrets** 中，并确保它属于 **Runtime variables and secrets**，而不是 **Build variables**。  
+  Build 阶段的变量只在项目构建过程中可用，Worker 实际运行时无法通过运行时环境读取，因此即使构建能够正常完成，页面仍可能提示 `JWT_SECRET` 缺失。
 
-- **I configured `JWT_SECRET`, but the page still says it is missing. Why?**  
-  Make sure `JWT_SECRET` is configured under **Workers → Settings → Variables and Secrets**, specifically as a **Runtime variable or Secret**, rather than under **Build variables**.  
-  Build-time variables are only available during the build process. They are not available to the Worker at runtime, so the build may succeed while the application still reports that `JWT_SECRET` is missing.
-
-- **Why does `JWT_SECRET` seem to disappear after an upgrade or redeployment?**  
-  It is recommended to store `JWT_SECRET` as a **Secret** rather than as a plain-text variable. `JWT_SECRET` is a sensitive runtime credential and should not be committed to the repository.  
-  If your deployment process recreates or overwrites the Worker variable configuration, ordinary variables may be affected. Secrets are more appropriate for sensitive configuration that needs to remain available across multiple deployments. If the application still reports that `JWT_SECRET` is missing after a redeployment, check **Variables and Secrets** for the current Worker and make sure the Secret is still configured.
+- **为什么升级或重新部署后，`JWT_SECRET` 好像消失了？**  
+  建议将 `JWT_SECRET` 配置为 **Secret**，而不是普通的明文变量。`JWT_SECRET` 属于敏感的运行时凭据，也不应该出现在代码仓库中。  
+  如果部署流程会重新生成或覆盖 Worker 的变量配置，普通变量可能受到影响；使用 Secret 更适合保存这类需要在多次部署之间持续存在的敏感配置。重新部署后如果仍提示缺失，请检查当前 Worker 的 **Variables and Secrets** 中是否仍存在该 Secret。
 
 ---
 
-## How to update
-
-- Manual: open your fork on GitHub; when the sync banner appears, click **Sync fork** → **Update branch**
-
+## 更新方法：
+- 手动：打开你 Fork 的 GitHub 仓库，看到顶部同步提示后，点击 `Sync fork` ➜ `Update branch`
 
 
 
-## CLI deploy
+
+## CLI 部署
 
 ```powershell
 git clone https://github.com/shuaiplus/NodeWarden.git
@@ -126,13 +124,13 @@ cd NodeWarden
 npm install
 npx wrangler login
 
-# Default: R2 mode
+# 默认：R2 模式
 npm run deploy
 
-# Optional: KV mode
+# 可选：KV 模式
 npm run deploy:kv
 
-# Local development
+# 本地开发
 npm run dev
 npm run dev:kv
 ```
@@ -140,21 +138,21 @@ npm run dev:kv
 ---
 
 
-## License
+## 开源协议
 
 LGPL-3.0 License
 
 ---
 
-## Credits
+## 致谢
 
-- [Bitwarden](https://bitwarden.com/) - Original design and clients
-- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - Server implementation reference
-- [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless platform
+- [Bitwarden](https://bitwarden.com/) - 原始设计与客户端
+- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - 服务端实现参考
+- [Cloudflare Workers](https://workers.cloudflare.com/) - 无服务器平台
 
 ---
 
-## Contributors
+## 贡献者
 
 <a href="https://github.com/shuaiplus/nodewarden/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=shuaiplus/nodewarden" alt="NodeWarden contributors" />

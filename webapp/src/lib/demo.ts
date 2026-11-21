@@ -20,6 +20,7 @@ import type {
   VaultDraft,
 } from '@/lib/types';
 import { t } from '@/lib/i18n';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { dispatchBackupProgress } from '@/lib/backup-restore-progress';
 
 type Notify = (type: 'success' | 'error' | 'warning', text: string) => void;
@@ -1401,16 +1402,16 @@ export function createDemoMainRoutesProps(base: AppMainRoutesProps, notify: Noti
     onCreateSend: async (draft, autoCopyLink) => {
       const created = sendFromDraft(draft);
       state.setSends((prev) => [created, ...prev]);
-      if (autoCopyLink && created.shareUrl && typeof navigator !== 'undefined') {
-        void navigator.clipboard?.writeText(new URL(created.shareUrl, window.location.origin).toString()).catch(() => undefined);
+      if (autoCopyLink && created.shareUrl) {
+        void copyTextToClipboard(new URL(created.shareUrl, window.location.origin).toString(), { notify: false });
       }
       notify('success', t('txt_send_created'));
     },
     onUpdateSend: async (send, draft, autoCopyLink) => {
       const updated = sendFromDraft(draft, send);
       state.setSends((prev) => prev.map((item) => (item.id === send.id ? updated : item)));
-      if (autoCopyLink && updated.shareUrl && typeof navigator !== 'undefined') {
-        void navigator.clipboard?.writeText(new URL(updated.shareUrl, window.location.origin).toString()).catch(() => undefined);
+      if (autoCopyLink && updated.shareUrl) {
+        void copyTextToClipboard(new URL(updated.shareUrl, window.location.origin).toString(), { notify: false });
       }
       notify('success', t('txt_send_updated'));
     },

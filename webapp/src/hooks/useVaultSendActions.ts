@@ -23,6 +23,7 @@ import {
   looksLikeCipherString,
   summarizeImportResult,
 } from '@/lib/app-support';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { buildSendShareKey, bulkDeleteSends, createSend, deleteSend, updateSend } from '@/lib/api/send';
 import {
   archiveCipher,
@@ -971,7 +972,7 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           if (autoCopyLink && created.key && session.symEncKey && session.symMacKey) {
             const keyPart = await buildSendShareKey(created.key, session.symEncKey, session.symMacKey);
             const shareUrl = buildPublicSendUrl(window.location.origin, created.accessId, keyPart);
-            await navigator.clipboard.writeText(shareUrl);
+            await copyTextToClipboard(shareUrl);
           }
           onNotify('success', t('txt_send_created'));
         } catch (error) {
@@ -998,7 +999,7 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           if (autoCopyLink && updated.key && session.symEncKey && session.symMacKey) {
             const keyPart = await buildSendShareKey(updated.key, session.symEncKey, session.symMacKey);
             const shareUrl = buildPublicSendUrl(window.location.origin, updated.accessId, keyPart);
-            await navigator.clipboard.writeText(shareUrl);
+            await copyTextToClipboard(shareUrl);
           }
           onNotify('success', t('txt_send_updated'));
         } catch (error) {
