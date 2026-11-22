@@ -5,6 +5,7 @@ export const IMPORT_SOURCES = [
   { id: 'bitwarden_csv', label: 'Bitwarden (csv)' },
   { id: 'bitwarden_zip', label: 'Bitwarden (zip)' },
   { id: 'nodewarden_json', label: 'NodeWarden (json)' },
+  { id: 'google_authenticator_migration', label: 'Google Authenticator (migration QR)' },
   { id: 'onepassword_1pux', label: '1Password (1pux/json)' },
   { id: 'onepassword_1pif', label: '1Password (1pif)' },
   { id: 'onepassword_mac_csv', label: '1Password 6 and 7 Mac (csv)' },
@@ -54,6 +55,7 @@ export const IMPORT_SOURCES = [
 export type ImportSourceId = (typeof IMPORT_SOURCES)[number]['id'];
 
 export function getFileAcceptBySource(source: ImportSourceId): string {
+  if (source === 'google_authenticator_migration') return 'image/*';
   if (source === 'bitwarden_zip') return '.zip,application/zip,application/x-zip-compressed';
   if (
     source === 'bitwarden_json' ||

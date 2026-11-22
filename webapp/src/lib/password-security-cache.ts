@@ -23,7 +23,7 @@ function createState(fingerprint: string): InternalPasswordSecurityState {
   return { fingerprint, report: null, scannedAt: null, scanning: false, progress: { checked: 0, total: 0 }, scanError: false, controller: null };
 }
 
-function ensurePasswordSecurityState(fingerprint: string): InternalPasswordSecurityState {
+function getInternalPasswordSecurityState(fingerprint: string): InternalPasswordSecurityState {
   if (state?.fingerprint !== fingerprint) {
     state?.controller?.abort();
     state = createState(fingerprint);
@@ -32,7 +32,7 @@ function ensurePasswordSecurityState(fingerprint: string): InternalPasswordSecur
 }
 
 export function getPasswordSecurityState(fingerprint: string): PasswordSecurityState {
-  return ensurePasswordSecurityState(fingerprint);
+  return getInternalPasswordSecurityState(fingerprint);
 }
 
 export function readPasswordSecurityState(fingerprint: string): PasswordSecurityState | null {
@@ -45,7 +45,7 @@ export function subscribePasswordSecurityState(listener: () => void): () => void
 }
 
 export function startPasswordSecurityScan(fingerprint: string, ciphers: Cipher[]): void {
-  const current = ensurePasswordSecurityState(fingerprint);
+  const current = getInternalPasswordSecurityState(fingerprint);
   current.controller?.abort();
   const controller = new AbortController();
   const total = ciphers.filter((cipher) => Number(cipher.type) === 1 && !cipher.deletedDate && !(cipher as { deletedAt?: string | null }).deletedAt && !!cipher.login?.decPassword).length;
