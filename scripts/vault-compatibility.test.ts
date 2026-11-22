@@ -318,3 +318,46 @@ test('automatic item-key repair preserves linked metadata and the intentional re
   assert.equal(await decryptStr(saved.fields![0].name!, itemEnc, itemMac), 'Linked username');
   assert.equal('lastKnownRevisionDate' in saved, false);
 });
+
+test('PascalCase login keys are canonicalized instead of duplicated, keeping camelCase values', async (ctx) => {
+  const f = await fixture(ctx);
+  const pascalUser = await encrypt('pascal user');
+  const camelUser = await encrypt('camel user');
+  const uri = await encrypt('https://github.com');
+  // A third-party client (rbw) writes PascalCase aliases inside login.
+  await f.storage.saveCipher({
+    ...f.base,
+    login: {
+      Username: pascalUser,
+      Password: await encrypt('pascal pass'),
+      Totp: null,
+      Uris: [{ Uri: uri, Match: null }],
+    },
+  });
+
+  // Rows written before the fix must still produce a client-safe payload, or a
+  // strict client cannot sync at all and keeps failing on every later attempt.
+  const existing: any = await (await f.route(`/api/ciphers/${id}`, 'GET')).json();
+  assert.deepEqual(Object.keys(existing.login).filter((key) => /^[A-Z]/.test(key)), []);
+  assert.equal(existing.login.username, pascalUser);
+  assert.equal(existing.login.uris[0].uri, uri);
+
+  // A client sending both spellings keeps its camelCase value.
+  const update = await f.route(`/api/ciphers/${id}`, 'PUT', {
+    name: await encrypt('Canonicalized'),
+    lastKnownRevisionDate: revision,
+    login: {
+      Username: pascalUser,
+      username: camelUser,
+      Password: await encrypt('pass'),
+      Totp: null,
+      Uris: [{ Uri: uri, Match: null }],
+      uris: [{ uri, match: 0 }],
+    },
+  });
+  assert.equal(update.status, 200);
+  const stored = await f.storage.getCipherForUser(id, owner);
+  assert.deepEqual(Object.keys(stored?.login ?? {}).filter((key) => /^[A-Z]/.test(key)), []);
+  assert.equal(stored?.login?.username, camelUser);
+  assert.deepEqual(stored?.login?.uris, [{ uri, match: 0 }]);
+});
