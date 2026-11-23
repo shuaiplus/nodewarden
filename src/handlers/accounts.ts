@@ -494,7 +494,8 @@ export async function handleGetProfile(request: Request, env: Env, userId: strin
   const storage = new StorageService(env.DB);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
-  return jsonResponse(buildProfileResponse(user, env));
+  const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey }));
 }
 
 // PUT /api/accounts/profile
@@ -533,7 +534,8 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
     },
   });
 
-  return jsonResponse(buildProfileResponse(user, env));
+  const hasTwoFactorPasskey = await storage.countAccountPasskeyCredentialsByUserId(user.id, 'twoFactor') > 0;
+  return jsonResponse(buildProfileResponse(user, env, { hasTwoFactorPasskey }));
 }
 
 // PUT/POST /api/accounts/verify-devices

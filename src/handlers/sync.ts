@@ -59,18 +59,22 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     return errorResponse('User not found', 404);
   }
 
-  const [revisionDate, accountPasskeys] = await Promise.all([
+  const [revisionDate, accountPasskeys, twoFactorPasskeys] = await Promise.all([
     storage.getRevisionDate(userId),
     storage.getAccountPasskeyCredentialsByUserId(userId),
+    storage.getAccountPasskeyCredentialsByUserId(userId, 'twoFactor'),
   ]);
-  const accountPasskeyCacheTag = accountPasskeys
-    .map((credential) => [
+  const accountPasskeyCacheTag = [
+    ...accountPasskeys.map((credential) => [
       credential.id,
       credential.updatedAt,
       credential.supportsPrf ? '1' : '0',
       credential.encryptedUserKey && credential.encryptedPublicKey && credential.encryptedPrivateKey ? '1' : '0',
-    ].join(':'))
-    .join(',');
+    ].join(':')),
+    // The profile reports twoFactorEnabled, so the cached response must change
+    // when a two-factor passkey is added or removed.
+    ...twoFactorPasskeys.map((credential) => ['2fa', credential.id, credential.updatedAt].join(':')),
+  ].join(',');
   const cacheRequest = buildSyncCacheRequest(request, userId, revisionDate, accountPasskeyCacheTag, excludeDomains, excludeSends, preserveRepairableUris);
   const cachedResponse = await readSyncCache(cacheRequest);
   if (cachedResponse) {
@@ -90,7 +94,9 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
   const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOptions[0] || null);
   const validFolderIds = new Set(folders.map((folder) => folder.id));
 
-  const profile: ProfileResponse = buildProfileResponse(user, env);
+  const profile: ProfileResponse = buildProfileResponse(user, env, {
+    hasTwoFactorPasskey: twoFactorPasskeys.length > 0,
+  });
 
   const cipherResponses: CipherResponse[] = [];
   for (const cipher of ciphers) {
