@@ -60,7 +60,7 @@
     "esbuild": ">=0.28.1",
     "ws": "8.21.0",
     "sharp": "0.35.5",
-    "browserslist": "4.28.7",
+    "browserslist": "4.28.9",
     "baseline-browser-mapping": "2.11.0"
   },
   "devDependencies": {
