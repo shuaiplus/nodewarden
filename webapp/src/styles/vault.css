@@ -126,11 +126,26 @@
 }
 
 .folder-row {
-  @apply flex items-center gap-1.5;
+  @apply flex min-w-0 items-center gap-0.5;
 }
 
 .folder-row .tree-btn {
-  @apply mb-0;
+  @apply mb-0 flex-1 px-1;
+}
+
+.folder-toggle-btn,
+.folder-toggle-spacer {
+  @apply inline-flex h-6 w-4 shrink-0 items-center justify-center;
+}
+
+.folder-toggle-btn {
+  @apply cursor-pointer rounded border-0 bg-transparent p-0;
+  color: var(--muted-strong);
+}
+
+.folder-toggle-btn:hover {
+  background: rgba(37, 99, 235, 0.09);
+  color: var(--primary-strong);
 }
 
 .folder-delete-btn {

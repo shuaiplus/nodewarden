@@ -21,6 +21,54 @@ Release note writing rules:
 7. The English and Chinese versions should match in content and ordering, not be two different summaries.
 -->
 
+# v1.8.2 - Nested Folders and Bitwarden 2026.11 Compatibility Fixes
+
+### Added
+
+1. **Nested folders in the Web Vault.** Create a top-level folder or add a subfolder directly from the sidebar. The expandable tree uses Bitwarden's slash-separated folder names, so existing nested folders appear in the hierarchy automatically. Commit: [29c2de8](https://github.com/shuaiplus/nodewarden/commit/29c2de852411f3aa66de0c8a2ea16e7f87fa932c).
+
+1. **Native passkeys for Bitwarden Desktop on Windows.** NodeWarden enables the Windows native passkey integration for supported Bitwarden Desktop clients. Commit: [104c02c](https://github.com/shuaiplus/nodewarden/commit/104c02c0c010d63f85eda599bc15b5cab08ad2d1).
+
+### Improved
+
+1. **Updated equivalent domains and Traditional Chinese wording.** The default equivalent-domain list now follows the latest snapshot included from Bitwarden, and the Traditional Chinese interface uses more familiar terminology for users in Taiwan. Commits: [7a5c365](https://github.com/shuaiplus/nodewarden/commit/7a5c365dae7ffe3a80b1b6975508d0033aab9d3f), [a8d0e70](https://github.com/shuaiplus/nodewarden/commit/a8d0e70263b2eeca3fb9de7639353bbb94748468).
+
+1. **Patched build tooling and dependencies.** Builds now use Node.js 24.22.1 by default, and dependency updates include Undici 8.12.2 and source-map-js 1.2.2. If your deployment overrides `NODE_VERSION`, align it with `.node-version` before building. Commits: [fbc0e65](https://github.com/shuaiplus/nodewarden/commit/fbc0e65df8f405c3120887569e939d615ab68229), [36ffe0a](https://github.com/shuaiplus/nodewarden/commit/36ffe0a2cb1afbe50a1ac1e071ad902ec2039f29), [cb87109](https://github.com/shuaiplus/nodewarden/commit/cb871095c1e348b8f784492cf0e479d124142f8b), [470232d](https://github.com/shuaiplus/nodewarden/commit/470232d140ccc9323bd0984cf865cf4aca5ef0dc).
+
+### Fixed
+
+1. **Saving edits in Bitwarden Browser 2026.11.** Adding notes and saving other changes to existing items now works when the extension sends a revision timestamp rounded down to a whole second. Requests carrying a more precise timestamp keep the original conflict check. Commit: [d8f9ee1](https://github.com/shuaiplus/nodewarden/commit/d8f9ee192fce1c512a879da525f18976f7bfdbc9).
+
+1. **Attachment deletion no longer reports a false failure.** The delete response now uses the format expected by the new Bitwarden SDK, so the extension can update the item after the server removes the attachment. Commit: [a09b8c5](https://github.com/shuaiplus/nodewarden/commit/a09b8c5272fbace16e2c9d9d1cfcd8373e4452fc).
+
+1. **Moving an item to No Folder now persists.** Full item updates clear the folder when Bitwarden omits the folder field. Partial updates, such as changing an item's favorite status, still preserve its folder when that field is absent. Commit: [b362a5d](https://github.com/shuaiplus/nodewarden/commit/b362a5d1448c204108fdbbfe984b5d9fc21c18ba).
+
+1. **Sign-in compatibility with Bitwarden CLI 2026.9 and later.** NodeWarden now accepts and syncs the user key ID that newer clients submit after sign-in. Existing accounts can record that ID automatically, including when two clients sign in around the same time. Commits: [a1c6542](https://github.com/shuaiplus/nodewarden/commit/a1c6542b483447233506d097da20fb1d983c59e9), [5d73c47](https://github.com/shuaiplus/nodewarden/commit/5d73c476a58c839500d39b549bfcb0486b00d009).
+
+---
+
+### 新增
+
+1. **Web 保险库支持嵌套文件夹。** 可以在侧栏直接新建顶层文件夹或子文件夹。可展开的文件夹树沿用 Bitwarden 以斜杠分隔层级的命名方式，已有的多级文件夹会自动按层级显示。提交：[29c2de8](https://github.com/shuaiplus/nodewarden/commit/29c2de852411f3aa66de0c8a2ea16e7f87fa932c)。
+
+1. **支持 Bitwarden 桌面端的 Windows 原生通行密钥。** NodeWarden 为受支持的 Bitwarden 桌面客户端启用了 Windows 原生通行密钥集成。提交：[104c02c](https://github.com/shuaiplus/nodewarden/commit/104c02c0c010d63f85eda599bc15b5cab08ad2d1)。
+
+### 改进
+
+1. **更新等效域名和繁体中文用语。** 默认等效域名列表同步了本版本纳入的 Bitwarden 数据，繁体中文界面改用台湾用户更熟悉的用语。提交：[7a5c365](https://github.com/shuaiplus/nodewarden/commit/7a5c365dae7ffe3a80b1b6975508d0033aab9d3f)、[a8d0e70](https://github.com/shuaiplus/nodewarden/commit/a8d0e70263b2eeca3fb9de7639353bbb94748468)。
+
+1. **更新构建工具和依赖。** 默认构建版本升级至 Node.js 24.22.1，依赖更新包括 Undici 8.12.2 和 source-map-js 1.2.2。如果部署时覆盖了 `NODE_VERSION`，请在构建前将其与 `.node-version` 对齐。提交：[fbc0e65](https://github.com/shuaiplus/nodewarden/commit/fbc0e65df8f405c3120887569e939d615ab68229)、[36ffe0a](https://github.com/shuaiplus/nodewarden/commit/36ffe0a2cb1afbe50a1ac1e071ad902ec2039f29)、[cb87109](https://github.com/shuaiplus/nodewarden/commit/cb871095c1e348b8f784492cf0e479d124142f8b)、[470232d](https://github.com/shuaiplus/nodewarden/commit/470232d140ccc9323bd0984cf865cf4aca5ef0dc)。
+
+### 修复
+
+1. **Bitwarden 浏览器扩展 2026.11 可以正常保存编辑。** 扩展将条目版本时间截到整秒时，给已有条目添加备注或修改其他字段可以正常保存。携带更高精度时间戳的请求继续使用原有的冲突检查。提交：[d8f9ee1](https://github.com/shuaiplus/nodewarden/commit/d8f9ee192fce1c512a879da525f18976f7bfdbc9)。
+
+1. **删除附件成功后扩展正确显示结果。** 删除响应改为新版 Bitwarden SDK 能正确读取的格式，服务端删除附件后，扩展可以正常更新条目。提交：[a09b8c5](https://github.com/shuaiplus/nodewarden/commit/a09b8c5272fbace16e2c9d9d1cfcd8373e4452fc)。
+
+1. **条目移到「无文件夹」后正确保存。** Bitwarden 在完整更新中省略文件夹字段时，服务端会清空原文件夹。只改收藏等部分更新省略该字段时，仍会保留条目的原文件夹。提交：[b362a5d](https://github.com/shuaiplus/nodewarden/commit/b362a5d1448c204108fdbbfe984b5d9fc21c18ba)。
+
+1. **兼容 Bitwarden CLI 2026.9 及以上版本登录。** NodeWarden 现在可以接收并同步新版客户端在登录后提交的用户密钥 ID。已有账户可自动记录该 ID，也支持多个客户端近乎同时登录。提交：[a1c6542](https://github.com/shuaiplus/nodewarden/commit/a1c6542b483447233506d097da20fb1d983c59e9)、[5d73c47](https://github.com/shuaiplus/nodewarden/commit/5d73c476a58c839500d39b549bfcb0486b00d009)。
+
 # v1.8.1 - Expanded Generators, Safer Vault Editing, and Client Compatibility
 
 ### Added

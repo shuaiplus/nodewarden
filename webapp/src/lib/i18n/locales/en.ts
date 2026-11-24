@@ -1507,7 +1507,9 @@ const en: Record<string, string> = {
   "txt_auth_request_approved": "Device login approved",
   "txt_auth_request_denied": "Device login denied",
   "txt_auth_request_missing_public_key": "Device login request is missing a public key",
-  "txt_ip_address": "IP address"
+  "txt_ip_address": "IP address",
+  "txt_create_subfolder": "Create subfolder",
+  "txt_nested_folder_help": "Use / to nest folders, e.g. Work/Email. Create the parent folder first. Renaming a folder does not rename its subfolders.",
 };
 
 Object.assign(en, {

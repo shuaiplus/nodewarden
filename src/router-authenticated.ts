@@ -6,6 +6,7 @@ import {
   handleGetKeys,
   handleSetKeys,
   handleGetRevisionDate,
+  handleSetUserKeyId,
   handleVerifyPassword,
   handleChangePassword,
   handleSetVerifyDevices,
@@ -239,6 +240,10 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/accounts/revision-date' && method === 'GET') {
     return handleGetRevisionDate(request, env, userId);
+  }
+
+  if (path === '/api/accounts/key-management/user-key-id' && method === 'POST') {
+    return handleSetUserKeyId(request, env, userId);
   }
 
   if (path === '/api/accounts/verify-password' && method === 'POST') {

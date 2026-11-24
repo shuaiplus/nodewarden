@@ -652,14 +652,12 @@ function draftFromDecryptedCipher(cipher: Cipher): VaultDraft {
     customFields: [],
   };
 
-  draft.customFields = (cipher.fields || [])
-    .map((field) => ({
-      ...cipherFieldMetadata(field),
-      type: parseFieldType(field.type ?? 0),
-      label: plainCipherValue(field.decName, field.name).trim(),
-      value: plainCipherValue(field.decValue, field.value),
-    }))
-    .filter((field) => field.label);
+  draft.customFields = (cipher.fields || []).map((field) => ({
+    ...cipherFieldMetadata(field),
+    type: parseFieldType(field.type ?? 0),
+    label: plainCipherValue(field.decName, field.name).trim(),
+    value: plainCipherValue(field.decValue, field.value),
+  }));
 
   if (type === 1 && cipher.login) {
     draft.loginUsername = plainCipherValue(cipher.login.decUsername, cipher.login.username);
@@ -798,6 +796,11 @@ async function buildUpdatedPasswordHistory(
   return nextEntries.slice(0, 5);
 }
 
+function hasUnlabelledFieldData(field: VaultDraftField): boolean {
+  return !String(field.label || '').trim()
+    && (!!field.value || field.linkedId != null || Object.keys(field.extra || {}).length > 0);
+}
+
 async function encryptCustomFields(
   fields: VaultDraftField[],
   enc: Uint8Array,
@@ -806,6 +809,7 @@ async function encryptCustomFields(
   const out: Array<Record<string, unknown>> = [];
   for (const field of fields || []) {
     const label = String(field.label || '').trim();
+    if (hasUnlabelledFieldData(field)) throw new Error(t('txt_field_label_is_required'));
     if (!label) continue;
     out.push({
       ...cipherFieldMetadata(field.extra || {}).extra,
@@ -1105,26 +1109,12 @@ function getCipherKeyMismatchProbes(cipher: Cipher): string[] {
 function isResolvedEncryptedField(raw: unknown, decrypted: unknown): boolean {
   const encrypted = String(raw || '').trim();
   if (!looksLikeCipherString(encrypted)) return true;
-  const plain = typeof decrypted === 'string' ? decrypted.trim() : '';
-  return !!plain && !looksLikeCipherString(plain);
+  return typeof decrypted === 'string' && !looksLikeCipherString(decrypted);
 }
 
-function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
-  const fido2EncryptedFields = (cipher.login?.fido2Credentials || []).flatMap((credential) => [
-    credential?.credentialId,
-    credential?.keyType,
-    credential?.keyAlgorithm,
-    credential?.keyCurve,
-    credential?.keyValue,
-    credential?.rpId,
-    credential?.rpName,
-    credential?.userHandle,
-    credential?.userName,
-    credential?.userDisplayName,
-    credential?.counter,
-    credential?.discoverable,
-  ]);
-
+export function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
+  if (cipher.unresolved) return true;
+  if (looksLikeCipherString(cipher.name || '') && !String(cipher.decName || '').trim()) return true;
   const checks: Array<[unknown, unknown]> = [
     [cipher.name, cipher.decName],
     [cipher.notes, cipher.decNotes],
@@ -1198,10 +1188,27 @@ function hasUnresolvedEncryptedFields(cipher: Cipher): boolean {
       [field.value, field.decValue] as [unknown, unknown],
     ]),
     ...(cipher.passwordHistory || []).map((entry) => [entry.password, entry.decPassword] as [unknown, unknown]),
-    ...fido2EncryptedFields.map((value) => [value, undefined] as [unknown, unknown]),
   ];
 
   return checks.some(([raw, decrypted]) => !isResolvedEncryptedField(raw, decrypted));
+}
+
+function hasEncryptedPasskeyFields(cipher: Cipher): boolean {
+  const fido2EncryptedFields = (cipher.login?.fido2Credentials || []).flatMap((credential) => [
+    credential?.credentialId,
+    credential?.keyType,
+    credential?.keyAlgorithm,
+    credential?.keyCurve,
+    credential?.keyValue,
+    credential?.rpId,
+    credential?.rpName,
+    credential?.userHandle,
+    credential?.userName,
+    credential?.userDisplayName,
+    credential?.counter,
+    credential?.discoverable,
+  ]);
+  return fido2EncryptedFields.some((value) => looksLikeCipherString(String(value ?? '')));
 }
 
 async function hasItemKeyFieldMismatch(
@@ -1257,13 +1264,16 @@ export async function repairCipherKeyMismatches(
 
   for (const cipher of ciphers) {
     if (!cipher?.id || !looksLikeCipherString(cipher.key)) continue;
+    if (hasUnresolvedEncryptedFields(cipher) || hasEncryptedPasskeyFields(cipher)) continue;
     if (!(await hasItemKeyFieldMismatch(cipher, userEnc, userMac))) continue;
-    if (hasUnresolvedEncryptedFields(cipher)) continue;
+    const draft = draftFromDecryptedCipher(cipher);
+    // Leave nameless fields with data for the user to label in the editor.
+    if (draft.customFields.some(hasUnlabelledFieldData)) continue;
     await updateCipher(
       authedFetch,
       session,
       cipher,
-      draftFromDecryptedCipher(cipher),
+      draft,
       { preserveRevisionDate: true },
       { webRepair: true }
     );

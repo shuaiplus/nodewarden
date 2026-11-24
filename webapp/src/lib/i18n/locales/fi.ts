@@ -1454,7 +1454,9 @@ const fi: Record<string, string> = {
   "txt_auth_request_approved": "Laitteen kirjautuminen hyväksytty",
   "txt_auth_request_denied": "Laitteen kirjautuminen hylätty",
   "txt_auth_request_missing_public_key": "Laitekirjautumispyynnöstä puuttuu julkinen avain",
-  "txt_ip_address": "IP-osoite"
+  "txt_ip_address": "IP-osoite",
+  "txt_create_subfolder": "Luo alikansio",
+  "txt_nested_folder_help": "Luo sisäkkäisiä kansioita merkillä /, esim. Työ/Sähköposti. Luo ensin yläkansio. Kansion nimeäminen uudelleen ei nimeä sen alikansioita uudelleen.",
 };
 
 Object.assign(fi, {

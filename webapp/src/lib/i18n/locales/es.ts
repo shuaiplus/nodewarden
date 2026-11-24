@@ -1454,7 +1454,9 @@ const es: Record<string, string> = {
   "txt_auth_request_update_failed": "No se pudo actualizar la solicitud de inicio de sesión con dispositivo",
   "txt_auth_request_approved": "Inicio de sesión con dispositivo aprobado",
   "txt_auth_request_denied": "Inicio de sesión con dispositivo denegado",
-  "txt_auth_request_missing_public_key": "La solicitud de inicio de sesión con dispositivo no incluye una clave pública"
+  "txt_auth_request_missing_public_key": "La solicitud de inicio de sesión con dispositivo no incluye una clave pública",
+  "txt_create_subfolder": "Crear subcarpeta",
+  "txt_nested_folder_help": "Use / para anidar carpetas, p. ej. Trabajo/Correo. Cree primero la carpeta principal. Cambiar el nombre de una carpeta no cambia el de sus subcarpetas.",
 };
 
 Object.assign(es, {

@@ -1539,7 +1539,9 @@ const zhTW: Record<string, string> = {
   "txt_open_vault": "開啟密碼庫",
   "txt_check_password_breach": "檢查外洩",
   "txt_password_not_found_in_breaches": "未在外洩密碼庫中發現",
-  "txt_password_security_check_failed": "無法完成外洩檢查。"
+  "txt_password_security_check_failed": "無法完成外洩檢查。",
+  "txt_create_subfolder": "建立子資料夾",
+  "txt_nested_folder_help": "使用 / 建立多層目錄，例如 工作/郵件。請先建立父資料夾。重新命名資料夾不會同時重新命名其子資料夾。",
 };
 
 export default zhTW;

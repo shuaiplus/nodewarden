@@ -1454,7 +1454,9 @@ const it: Record<string, string> = {
   "txt_auth_request_approved": "Accesso dispositivo approvato",
   "txt_auth_request_denied": "Accesso dispositivo negato",
   "txt_auth_request_missing_public_key": "Manca una chiave pubblica nella richiesta di accesso del dispositivo",
-  "txt_ip_address": "Indirizzo IP"
+  "txt_ip_address": "Indirizzo IP",
+  "txt_create_subfolder": "Crea sottocartella",
+  "txt_nested_folder_help": "Usa / per annidare le cartelle, ad esempio Lavoro/Posta. Crea prima la cartella principale. Rinominare una cartella non rinomina le sue sottocartelle.",
 };
 
 Object.assign(it, {
