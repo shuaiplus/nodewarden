@@ -25,6 +25,8 @@ const ru: Record<string, string> = {
   "txt_light_theme": "Светлая",
   "txt_dark_theme": "Темная",
   "txt_theme_saved_locally": "Выберите тему для веб-хранилища.",
+  "txt_hide_totp_by_default": "Скрывать коды подтверждения по умолчанию",
+  "txt_hide_totp_by_default_help": "Маскировать коды TOTP, пока вы их не отобразите.",
   "txt_display_language_help": "Изменить язык веб-хранилища.",
   "txt_two_step_login": "Двухэтапный вход",
   "txt_keys": "Ключи",

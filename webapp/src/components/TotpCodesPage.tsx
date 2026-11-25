@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Clipboard, Globe } from 'lucide-preact';
+import { Clipboard, Eye, EyeOff, Globe } from 'lucide-preact';
 import { copyTextToClipboard as copyTextWithFeedback } from '@/lib/clipboard';
 import { calcTotpNow, type TotpCodeResult } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
 import type { Cipher } from '@/lib/types';
 import LoadingState from '@/components/LoadingState';
 import WebsiteIcon from '@/components/vault/WebsiteIcon';
-import { formatTotp, isCipherVisibleInNormalVault } from '@/components/vault/vault-page-helpers';
+import { formatTotp, isCipherVisibleInNormalVault, maskSecret } from '@/components/vault/vault-page-helpers';
 
 interface TotpCodesPageProps {
   ciphers: Cipher[];
   loading: boolean;
   onNotify: (type: 'success' | 'error', text: string) => void;
+  hideTotpByDefault: boolean;
 }
 
 const TOTP_RING_RADIUS = 14;
@@ -26,6 +27,9 @@ interface TotpRowProps {
   cipher: Cipher;
   live: TotpCodeResult | null;
   onCopy: (value: string) => void;
+  hideTotpByDefault: boolean;
+  revealed: boolean;
+  onToggleReveal: () => void;
 }
 
 function TotpRow(props: TotpRowProps) {
@@ -33,6 +37,7 @@ function TotpRow(props: TotpRowProps) {
   const username = props.cipher.login?.decUsername || '';
   const period = Math.max(1, props.live?.period || 30);
   const progress = props.live ? Math.max(0, Math.min(period, props.live.remain)) / period : 0;
+  const hidden = props.hideTotpByDefault && !props.revealed;
 
   return (
     <div className="totp-code-row">
@@ -46,7 +51,7 @@ function TotpRow(props: TotpRowProps) {
         </div>
       </div>
       <div className="totp-code-main">
-        <strong>{props.live ? formatTotp(props.live.code) : t('txt_text_3')}</strong>
+        <strong>{props.live ? (hidden ? maskSecret(props.live.code) : formatTotp(props.live.code)) : t('txt_text_3')}</strong>
         <div
           className="totp-timer"
           title={t('txt_refresh_in_seconds_s', { seconds: props.live ? props.live.remain : 0 })}
@@ -73,6 +78,17 @@ function TotpRow(props: TotpRowProps) {
         <button type="button" className="btn btn-secondary small totp-copy-btn" onClick={() => props.onCopy(props.live?.code || '')} aria-label={t('txt_copy')}>
           <Clipboard size={14} className="btn-icon" />
         </button>
+        {props.hideTotpByDefault && (
+          <button
+            type="button"
+            className="btn btn-secondary small totp-copy-btn"
+            onClick={props.onToggleReveal}
+            aria-label={hidden ? t('txt_reveal') : t('txt_hide')}
+            title={hidden ? t('txt_reveal') : t('txt_hide')}
+          >
+            {hidden ? <Eye size={14} className="btn-icon" /> : <EyeOff size={14} className="btn-icon" />}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -81,7 +97,17 @@ function TotpRow(props: TotpRowProps) {
 export default function TotpCodesPage(props: TotpCodesPageProps) {
   const [totpCodes, setTotpCodes] = useState<Record<string, TotpCodeResult | null>>({});
   const [columnCount, setColumnCount] = useState(1);
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  function toggleReveal(cipherId: string) {
+    setRevealedIds((current) => {
+      const next = new Set(current);
+      if (next.has(cipherId)) next.delete(cipherId);
+      else next.add(cipherId);
+      return next;
+    });
+  }
 
   async function copyToClipboard(value: string): Promise<void> {
     await copyTextWithFeedback(value, { successMessage: t('txt_code_copied') });
@@ -209,6 +235,9 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
               cipher={cipher}
               live={totpCodes[cipher.id] || null}
               onCopy={(value) => void copyToClipboard(value)}
+              hideTotpByDefault={props.hideTotpByDefault}
+              revealed={revealedIds.has(cipher.id)}
+              onToggleReveal={() => toggleReveal(cipher.id)}
             />
           ))}
         </div>
