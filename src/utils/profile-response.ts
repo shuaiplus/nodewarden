@@ -2,9 +2,12 @@ import type { Env, ProfileResponse, User } from '../types';
 import { buildAccountKeys } from './user-decryption';
 import { isYubiKeyEnabled } from './yubico-otp';
 
-export function buildProfileResponse(user: User, env?: Env): ProfileResponse {
+export function buildProfileResponse(
+  user: User,
+  env?: Env,
+  organizations: any[] = []
+): ProfileResponse {
   void env;
-  const organizations: any[] = [];
   const accountKeys = buildAccountKeys(user);
 
   return {
@@ -21,6 +24,9 @@ export function buildProfileResponse(user: User, env?: Env): ProfileResponse {
     yubikeyEnabled: isYubiKeyEnabled(user),
     key: user.key,
     privateKey: user.privateKey,
+    // Plaintext account public key (base64 SPKI). Clients need it to wrap
+    // organization keys for this user (org creation / member confirmation).
+    publicKey: user.publicKey ?? null,
     accountKeys,
     securityStamp: user.securityStamp || user.id,
     organizations,

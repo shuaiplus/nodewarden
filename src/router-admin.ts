@@ -1,10 +1,12 @@
 import type { Env, User } from './types';
 import {
+  handleAdminGetOrgSelfServiceRegistration,
   handleAdminListUsers,
   handleAdminCreateInvite,
   handleAdminListInvites,
   handleAdminDeleteAllInvites,
   handleAdminDeleteInvite,
+  handleAdminSetOrgSelfServiceRegistration,
   handleAdminSetUserStatus,
   handleAdminDeleteUser,
   handleAdminListAuditLogs,
@@ -21,6 +23,7 @@ function isKnownAdminPath(path: string): boolean {
     path === '/api/admin/logs' ||
     path === '/api/admin/logs/settings' ||
     path === '/api/admin/invites' ||
+    path === '/api/admin/settings/org-self-service-registration' ||
     path.startsWith('/api/admin/backup') ||
     /^\/api\/admin\/invites\/[^/]+$/i.test(path) ||
     /^\/api\/admin\/users\/[a-f0-9-]+(?:\/status)?$/i.test(path)
@@ -55,6 +58,12 @@ export async function handleAdminRoute(
 
   if (path === '/api/admin/logs' && method === 'DELETE') {
     return handleAdminClearAuditLogs(request, env, actorUser);
+  }
+
+  if (path === '/api/admin/settings/org-self-service-registration') {
+    if (method === 'GET') return handleAdminGetOrgSelfServiceRegistration(request, env, actorUser);
+    if (method === 'POST') return handleAdminSetOrgSelfServiceRegistration(request, env, actorUser);
+    return errorResponse('Method not allowed', 405);
   }
 
   if (path === '/api/admin/logs/settings') {
