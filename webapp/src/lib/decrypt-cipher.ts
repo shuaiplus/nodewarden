@@ -1,6 +1,7 @@
-import { decryptBw, decryptStr } from './crypto';
+import { base64ToBytes, decryptBw, decryptStr } from './crypto';
 import { looksLikeCipherString } from './app-support';
 import type { Cipher } from './types';
+import type { OrgKeyMap } from './vault-decrypt';
 
 async function decryptCipherField(
   value: string | null | undefined,
@@ -62,13 +63,28 @@ export async function decryptSingleCipher(
   cipher: Cipher,
   userEnc: Uint8Array,
   userMac: Uint8Array,
+  orgKeys?: OrgKeyMap | null,
 ): Promise<Cipher> {
-  let itemEnc = userEnc;
-  let itemMac = userMac;
+  // Organization ciphers decrypt with the org key (or a per-cipher key
+  // wrapped by it) instead of the user key.
+  let baseEnc = userEnc;
+  let baseMac = userMac;
+  const orgKey = orgKeys && cipher.organizationId ? orgKeys[cipher.organizationId] : null;
+  if (orgKey) {
+    try {
+      baseEnc = base64ToBytes(orgKey.encB64);
+      baseMac = base64ToBytes(orgKey.macB64);
+    } catch {
+      // fall back to user key
+    }
+  }
+
+  let itemEnc = baseEnc;
+  let itemMac = baseMac;
   let usesItemKey = false;
   if (cipher.key) {
     try {
-      const itemKey = await decryptBw(cipher.key, userEnc, userMac);
+      const itemKey = await decryptBw(cipher.key, baseEnc, baseMac);
       if (itemKey.length >= 64) {
         itemEnc = itemKey.slice(0, 32);
         itemMac = itemKey.slice(32, 64);
@@ -83,9 +99,9 @@ export async function decryptSingleCipher(
   let hasDecryptionFailure = false;
   const onDecryptError = () => { hasDecryptionFailure = true; };
   const decField = (val: string | null | undefined) =>
-    decryptCipherField(val, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey, onDecryptError);
+    decryptCipherField(val, itemEnc, itemMac, baseEnc, baseMac, canFallbackToUserKey, onDecryptError);
   const decObjFields = <T extends Record<string, unknown>>(src: T | null | undefined, flds: readonly string[]) =>
-    decryptCipherObjectFields(src, flds, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey, onDecryptError);
+    decryptCipherObjectFields(src, flds, itemEnc, itemMac, baseEnc, baseMac, canFallbackToUserKey, onDecryptError);
 
   const nextCipher: Cipher = {
     ...cipher,
@@ -199,7 +215,7 @@ export async function decryptSingleCipher(
   if (Array.isArray(cipher.attachments)) {
     nextCipher.attachments = await Promise.all(cipher.attachments.map(async (attachment) => ({
       ...attachment,
-      decFileName: await decryptCipherField(attachment.fileName, itemEnc, itemMac, userEnc, userMac, canFallbackToUserKey),
+      decFileName: await decryptCipherField(attachment.fileName, itemEnc, itemMac, baseEnc, baseMac, canFallbackToUserKey),
     })));
   }
 
