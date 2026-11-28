@@ -1,18 +1,33 @@
 import { base64ToBytes, decryptBw, decryptStr } from './crypto';
 import { deriveSendKeyParts, looksLikeCipherString } from './app-support';
-import type { Cipher, Folder, Send } from './types';
+import type { Cipher, Folder, Send, VaultCollection } from './types';
 import { decryptSingleCipher } from './decrypt-cipher';
+
+// Per-organization decryption keys: base64 enc/mac halves of the organization
+// symmetric key, resolved on the main thread via org-crypto before decryption.
+export interface OrgKeyMaterial {
+  encB64: string;
+  macB64: string;
+}
+
+export type OrgKeyMap = Record<string, OrgKeyMaterial>;
 
 export interface DecryptVaultCoreArgs {
   folders: Folder[];
   ciphers: Cipher[];
+  /** Organization collections to decrypt alongside the vault (encrypted names). */
+  collections?: VaultCollection[];
   symEncKeyB64: string;
   symMacKeyB64: string;
+  /** Organization keys by organizationId; required to decrypt org ciphers. */
+  orgKeys?: OrgKeyMap | null;
 }
 
 export interface DecryptVaultCoreResult {
   folders: Folder[];
   ciphers: Cipher[];
+  /** Organization collections with decrypted names. */
+  collections: VaultCollection[];
 }
 
 export interface DecryptSendsArgs {
@@ -39,6 +54,18 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
   const userEnc = base64ToBytes(args.symEncKeyB64);
   const userMac = base64ToBytes(args.symMacKeyB64);
 
+  // Pre-decoded org keys: collections decrypt with the raw bytes, ciphers go
+  // through decryptSingleCipher with the base64 map.
+  const orgKeyBytes = new Map<string, { enc: Uint8Array; mac: Uint8Array }>();
+  if (args.orgKeys) {
+    for (const [organizationId, material] of Object.entries(args.orgKeys)) {
+      orgKeyBytes.set(organizationId, {
+        enc: base64ToBytes(material.encB64),
+        mac: base64ToBytes(material.macB64),
+      });
+    }
+  }
+
   const folders = await Promise.all(
     args.folders.map(async (folder) => ({
       ...folder,
@@ -46,9 +73,24 @@ export async function decryptVaultCore(args: DecryptVaultCoreArgs): Promise<Decr
     }))
   );
 
-  const ciphers = await Promise.all(args.ciphers.map((cipher) => decryptSingleCipher(cipher, userEnc, userMac)));
+  // Org-aware through decryptSingleCipher: personal ciphers use the user key,
+  // org ciphers the organization key (or a per-cipher key wrapped by it).
+  const ciphers = await Promise.all(
+    args.ciphers.map((cipher) => decryptSingleCipher(cipher, userEnc, userMac, args.orgKeys))
+  );
 
-  return { folders, ciphers };
+  const collections = await Promise.all(
+    (args.collections || []).map(async (collection) => {
+      const orgKey = orgKeyBytes.get(collection.organizationId);
+      let decName = '';
+      if (collection.name && orgKey) {
+        decName = await decryptField(collection.name, orgKey.enc, orgKey.mac);
+      }
+      return { ...collection, name: collection.name, decName };
+    })
+  );
+
+  return { folders, ciphers, collections };
 }
 
 export async function decryptSends(args: DecryptSendsArgs): Promise<Send[]> {

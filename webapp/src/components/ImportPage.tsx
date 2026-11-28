@@ -22,8 +22,9 @@ import {
   normalizeBitwardenImport,
 } from '@/lib/import-formats-bitwarden';
 import { base64ToBytes, decryptStr, hkdfExpand, pbkdf2 } from '@/lib/crypto';
+import type { OrgKeyMap } from '@/lib/vault-decrypt';
+import type { Folder, VaultCollection } from '@/lib/types';
 import { t } from '@/lib/i18n';
-import type { Folder } from '@/lib/types';
 
 configureZipJs({ useWebWorkers: false });
 
@@ -37,7 +38,11 @@ export interface ImportAttachmentFile {
 interface ImportPageProps {
   onImport: (
     payload: CiphersImportPayload,
-    options: { folderMode: 'original' | 'none' | 'target'; targetFolderId: string | null },
+    options: {
+      folderMode: 'original' | 'none' | 'target';
+      targetFolderId: string | null;
+      organization?: { organizationId: string; collectionIds: string[] } | null;
+    },
     attachments?: ImportAttachmentFile[]
   ) => Promise<ImportResultSummary>;
   onImportEncryptedRaw: (
@@ -48,6 +53,12 @@ interface ImportPageProps {
   accountKeys?: { encB64: string; macB64: string } | null;
   onNotify: (type: 'success' | 'error', text: string) => void;
   folders: Folder[];
+  /** Organization collections (decrypted names) for org-import mapping. */
+  collections?: VaultCollection[];
+  /** Confirmed organizations (decrypted names). */
+  organizations?: Array<{ id: string; name: string; keyAvailable: boolean }>;
+  /** Organization decryption keys by organizationId. */
+  orgKeys?: OrgKeyMap | null;
   onExport: (request: ExportRequest) => Promise<void>;
 }
 
@@ -420,9 +431,12 @@ function parseNodeWardenAttachmentArray(raw: unknown): ImportAttachmentFile[] {
   return out;
 }
 
-export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys, onNotify, folders, onExport }: ImportPageProps) {
+export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys, onNotify, folders, collections, organizations, orgKeys, onExport }: ImportPageProps) {
   const [source, setSource] = useState<ImportSourceId>('bitwarden_json');
   const [file, setFile] = useState<File | null>(null);
+  const [orgItemCount, setOrgItemCount] = useState(0);
+  const [orgTargetOrgId, setOrgTargetOrgId] = useState('');
+  const [orgTargetCollectionId, setOrgTargetCollectionId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
@@ -435,6 +449,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
   const [folderMode, setFolderMode] = useState<'original' | 'none' | 'target'>('original');
   const [targetFolderId, setTargetFolderId] = useState('');
   const [exportFormat, setExportFormat] = useState<ExportFormatId>('bitwarden_json');
+  const [exportOrgId, setExportOrgId] = useState('');
   const [encryptedJsonMode, setEncryptedJsonMode] = useState<EncryptedJsonMode>('account');
   const [exportPassword, setExportPassword] = useState('');
   const [zipPassword, setZipPassword] = useState('');
@@ -447,6 +462,42 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
   const commonSourceSet = new Set<ImportSourceId>(COMMON_IMPORT_SOURCE_IDS);
   const commonSources = IMPORT_SOURCES.filter((item) => commonSourceSet.has(item.id as ImportSourceId));
   const otherSources = IMPORT_SOURCES.filter((item) => !commonSourceSet.has(item.id as ImportSourceId));
+
+  // Organization items in a Bitwarden export carry the SOURCE server's org
+  // GUIDs, which do not match any nodewarden organization. The user maps them
+  // to a nodewarden organization + collection at import time; the webapp then
+  // re-encrypts those items with the nodewarden org key.
+  function buildOrganizationImportOption(): { organizationId: string; collectionIds: string[] } | null {
+    if (!orgTargetOrgId || !orgTargetCollectionId) return null;
+    if (!orgKeys?.[orgTargetOrgId]) return null;
+    return { organizationId: orgTargetOrgId, collectionIds: [orgTargetCollectionId] };
+  }
+
+  async function rescanFileForOrganizationItems(next: File | null) {
+    setOrgItemCount(0);
+    setOrgTargetOrgId('');
+    setOrgTargetCollectionId('');
+    if (!next) return;
+    if (source !== 'bitwarden_json' && source !== 'nodewarden_json') return;
+    try {
+      const text = await next.text();
+      const parsed = JSON.parse(text) as { items?: Array<Record<string, unknown>> };
+      const items = Array.isArray(parsed?.items) ? parsed.items : [];
+      const orgCount = items.filter((item) => {
+        const orgId = String(item?.organizationId || '').trim();
+        const orgName = String(item?.organization || '').trim();
+        return !!orgId || !!orgName;
+      }).length;
+      setOrgItemCount(orgCount);
+    } catch {
+      // Pre-scan is best-effort; the real parse reports errors at submit time.
+    }
+  }
+
+  const importableOrganizations = (organizations || []).filter((org) => org.keyAvailable);
+  const importableCollections = (collections || []).filter(
+    (collection) => collection.organizationId === orgTargetOrgId
+  );
 
   async function runBitwardenJsonImport(parsed: unknown, attachments: ImportAttachmentFile[] = []): Promise<ImportResultSummary> {
     if (isRecord(parsed) && parsed.encrypted === true) {
@@ -477,6 +528,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
       {
         folderMode,
         targetFolderId: folderMode === 'target' ? targetFolderId || null : null,
+        organization: buildOrganizationImportOption(),
       },
       attachments
     );
@@ -542,6 +594,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
           const summary = await runBitwardenJsonImport(parsed, bundle.attachments);
           setImportSummary(summary);
           setFile(null);
+          setOrgItemCount(0);
           return;
         } catch (error) {
           if (error instanceof ZipNeedsPasswordError) {
@@ -589,6 +642,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         setImportSummary(summary);
       }
       setFile(null);
+      setOrgItemCount(0);
     } catch (error) {
       const message = error instanceof Error ? error.message : t('txt_import_failed');
       onNotify('error', message);
@@ -605,6 +659,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
       const summary = await processPasswordProtectedImport(pendingPasswordImport);
       setImportSummary(summary);
       setFile(null);
+      setOrgItemCount(0);
       setImportPassword('');
       setPendingPasswordImport(null);
       setPasswordDialogOpen(false);
@@ -640,6 +695,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         const summary = await runBitwardenJsonImport(parsed, bundle.attachments);
         setImportSummary(summary);
         setFile(null);
+        setOrgItemCount(0);
       }
       setZipPasswordDialogOpen(false);
       setPendingZipFile(null);
@@ -662,6 +718,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
     exportFormat === 'nodewarden_encrypted_json';
   const exportNeedsFilePassword = exportNeedsMode && encryptedJsonMode === 'password';
   const exportIsZip = exportFormat === 'bitwarden_json_zip' || exportFormat === 'bitwarden_encrypted_json_zip';
+  const exportNeedsOrg = exportFormat === 'bitwarden_org_json';
 
   async function runExportWithMasterPassword(masterPassword: string) {
     const filePassword = exportPassword.trim();
@@ -679,6 +736,7 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         filePassword,
         zipPassword: exportIsZip ? zipPass : '',
         masterPassword,
+        organizationId: exportNeedsOrg ? exportOrgId : null,
       });
       onNotify('success', t('txt_export_completed'));
     } catch (error) {
@@ -745,9 +803,51 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
               onChange={(e) => {
                 const next = (e.currentTarget as HTMLInputElement).files?.[0] || null;
                 setFile(next);
+                void rescanFileForOrganizationItems(next);
               }}
             />
           </label>
+
+          {orgItemCount > 0 && (
+            <label className="field field-span-2">
+              <span>{t('txt_import_org_items_hint', { count: String(orgItemCount) })}</span>
+              {importableOrganizations.length > 0 ? (
+                <div className="org-import-selects">
+                  <select
+                    className="input"
+                    value={orgTargetOrgId}
+                    onChange={(e) => {
+                      setOrgTargetOrgId((e.currentTarget as HTMLSelectElement).value);
+                      setOrgTargetCollectionId('');
+                    }}
+                  >
+                    <option value="">{t('txt_import_org_as_personal')}</option>
+                    {importableOrganizations.map((org) => (
+                      <option key={org.id} value={org.id}>
+                        {org.name || org.id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
+                  {orgTargetOrgId && (
+                    <select
+                      className="input"
+                      value={orgTargetCollectionId}
+                      onChange={(e) => setOrgTargetCollectionId((e.currentTarget as HTMLSelectElement).value)}
+                    >
+                      <option value="">{t('txt_import_org_select_collection')}</option>
+                      {importableCollections.map((collection) => (
+                        <option key={collection.id} value={collection.id}>
+                          {collection.decName || collection.id.slice(0, 8)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ) : (
+                <p className="muted">{t('txt_import_org_no_orgs')}</p>
+              )}
+            </label>
+          )}
 
           <label className="field field-span-2">
             <span>{t('txt_folder_handling')}</span>
@@ -814,6 +914,24 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
             </select>
           </label>
 
+          {exportNeedsOrg && (
+            <label className="field field-span-2">
+              <span>{t('txt_export_org_select')}</span>
+              <select
+                className="input"
+                value={exportOrgId}
+                onChange={(e) => setExportOrgId((e.currentTarget as HTMLSelectElement).value)}
+              >
+                <option value="">{t('txt_org_share_select_org')}</option>
+                {importableOrganizations.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name || org.id.slice(0, 8)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {exportNeedsMode && (
             <label className="field field-span-2">
               <span>{t('txt_encrypted_mode')}</span>
@@ -854,7 +972,12 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
         </div>
 
         <div className="actions">
-          <button type="button" className="btn btn-primary" disabled={isExporting} onClick={() => void handleExport()}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={isExporting || (exportNeedsOrg && !exportOrgId)}
+            onClick={() => void handleExport()}
+          >
             <Download size={15} className="btn-icon" />
             {isExporting ? t('txt_loading') : t('txt_export')}
           </button>

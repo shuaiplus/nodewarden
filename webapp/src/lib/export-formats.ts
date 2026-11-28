@@ -3,7 +3,8 @@ import { strToU8, zipSync } from 'fflate';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter, configure as configureZipJs } from '@zip.js/zip.js';
 import type { PreloginKdfConfig } from './api/auth';
 import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, hkdfExpand, pbkdf2 } from './crypto';
-import type { Cipher, Folder } from './types';
+import type { Cipher, Folder, VaultCollection } from './types';
+import type { OrgKeyMap } from './vault-decrypt';
 
 configureZipJs({ useWebWorkers: false });
 
@@ -11,6 +12,7 @@ export const EXPORT_FORMATS = [
   { id: 'bitwarden_json', label: 'Bitwarden (vault as json)' },
   { id: 'bitwarden_csv', label: 'Bitwarden (vault as csv)' },
   { id: 'bitwarden_encrypted_json', label: 'Bitwarden (encrypted vault as json)' },
+  { id: 'bitwarden_org_json', label: 'Bitwarden (organization as json)' },
   { id: 'bitwarden_json_zip', label: 'Bitwarden (vault + attachments as zip)' },
   { id: 'bitwarden_encrypted_json_zip', label: 'Bitwarden (encrypted vault + attachments as zip)' },
   { id: 'nodewarden_json', label: 'NodeWarden (vault + attachments as json)' },
@@ -26,6 +28,8 @@ export interface ExportRequest {
   filePassword?: string;
   zipPassword?: string;
   masterPassword?: string;
+  /** Target organization for bitwarden_org_json exports. */
+  organizationId?: string | null;
 }
 
 export interface ExportDownloadPayload {
@@ -52,6 +56,8 @@ interface BuildPlainJsonArgs {
   ciphers: Cipher[];
   userEncB64: string;
   userMacB64: string;
+  /** Organization decryption keys by organizationId; required to export org items. */
+  orgKeys?: OrgKeyMap | null;
 }
 
 interface BuildEncryptedJsonArgs {
@@ -138,18 +144,32 @@ function randomGuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-async function getCipherKeyParts(cipher: Cipher, userEnc: Uint8Array, userMac: Uint8Array): Promise<{ enc: Uint8Array; mac: Uint8Array }> {
+async function getCipherKeyParts(
+  cipher: Cipher,
+  userEnc: Uint8Array,
+  userMac: Uint8Array,
+  orgKeys?: OrgKeyMap | null
+): Promise<{ enc: Uint8Array; mac: Uint8Array }> {
+  // Organization ciphers decrypt with the organization key (or a per-cipher
+  // key wrapped by it) instead of the user key.
+  let baseEnc = userEnc;
+  let baseMac = userMac;
+  const orgKey = orgKeys && cipher.organizationId ? orgKeys[cipher.organizationId] : null;
+  if (orgKey) {
+    baseEnc = base64ToBytes(orgKey.encB64);
+    baseMac = base64ToBytes(orgKey.macB64);
+  }
   if (cipher.key && typeof cipher.key === 'string') {
     try {
-      const raw = await decryptBw(cipher.key, userEnc, userMac);
+      const raw = await decryptBw(cipher.key, baseEnc, baseMac);
       if (raw.length >= 64) {
         return { enc: raw.slice(0, 32), mac: raw.slice(32, 64) };
       }
     } catch {
-      // Fallback to user key.
+      // Fallback to base key.
     }
   }
-  return { enc: userEnc, mac: userMac };
+  return { enc: baseEnc, mac: baseMac };
 }
 
 async function decryptMaybe(value: unknown, enc: Uint8Array, mac: Uint8Array): Promise<string | null> {
@@ -192,6 +212,10 @@ function mapCipherCommonMetadata(cipher: Cipher): Record<string, unknown> {
     revisionDate: normalizeString(cipher.revisionDate),
     collectionIds: null,
   };
+  if (cipher.organizationId) {
+    // Stamp the org GUID so imports can detect and re-map organization items.
+    out.organizationId = cipher.organizationId;
+  }
   if ((out.creationDate as string | null) === null) delete out.creationDate;
   if ((out.revisionDate as string | null) === null) delete out.revisionDate;
   if ((out.folderId as string | null) === null) delete out.folderId;
@@ -295,8 +319,13 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
   return out;
 }
 
-async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint8Array): Promise<Record<string, unknown>> {
-  const keyParts = await getCipherKeyParts(cipher, userEnc, userMac);
+async function mapCipherPlain(
+  cipher: Cipher,
+  userEnc: Uint8Array,
+  userMac: Uint8Array,
+  orgKeys?: OrgKeyMap | null
+): Promise<Record<string, unknown>> {
+  const keyParts = await getCipherKeyParts(cipher, userEnc, userMac, orgKeys);
   const out = mapCipherCommonMetadata(cipher);
 
   out.name = await decryptMaybe(cipher.name ?? null, keyParts.enc, keyParts.mac);
@@ -398,6 +427,17 @@ function filterExportableCiphers(ciphers: Cipher[]): Cipher[] {
   return ciphers.filter((cipher) => !cipher.deletedDate && !(cipher as { organizationId?: unknown }).organizationId);
 }
 
+// Plain exports include organization items when the org key is available;
+// org items whose key is missing (e.g. not yet resynced) are skipped rather
+// than exported as garbage.
+function filterExportablePlainCiphers(ciphers: Cipher[], orgKeys: OrgKeyMap | null | undefined): Cipher[] {
+  return ciphers.filter((cipher) => {
+    if (cipher.deletedDate) return false;
+    if (!cipher.organizationId) return true;
+    return !!orgKeys?.[cipher.organizationId];
+  });
+}
+
 export async function buildPlainBitwardenJsonDocument(args: BuildPlainJsonArgs): Promise<Record<string, unknown>> {
   const userEnc = base64ToBytes(args.userEncB64);
   const userMac = base64ToBytes(args.userMacB64);
@@ -409,7 +449,9 @@ export async function buildPlainBitwardenJsonDocument(args: BuildPlainJsonArgs):
     }))
   );
 
-  const items = await Promise.all(filterExportableCiphers(args.ciphers).map((cipher) => mapCipherPlain(cipher, userEnc, userMac)));
+  const items = await Promise.all(
+    filterExportablePlainCiphers(args.ciphers, args.orgKeys).map((cipher) => mapCipherPlain(cipher, userEnc, userMac, args.orgKeys))
+  );
 
   return {
     encrypted: false,
@@ -421,6 +463,79 @@ export async function buildPlainBitwardenJsonDocument(args: BuildPlainJsonArgs):
 export async function buildPlainBitwardenJsonString(args: BuildPlainJsonArgs): Promise<string> {
   const doc = await buildPlainBitwardenJsonDocument(args);
   return JSON.stringify(doc, null, 2);
+}
+
+interface BuildOrgJsonArgs {
+  organizationId: string;
+  /** Decrypted collections across all orgs; filtered to the target org inside. */
+  collections: VaultCollection[];
+  /** Raw (encrypted) ciphers as served by sync. */
+  ciphers: Cipher[];
+  userEncB64: string;
+  userMacB64: string;
+  orgKeys?: OrgKeyMap | null;
+}
+
+export interface BuildOrgJsonResult {
+  json: string;
+  /** Items dropped because the exporter could not see any of their collections. */
+  skippedUnassignedItems: number;
+}
+
+// Bitwarden organization export shape (see bitwarden.com/help/export-organization-items):
+// { encrypted: false, collections: [...], items: [...] } — no folders array;
+// items carry organizationId + collectionIds and Bitwarden's org import maps
+// them into the target organization's collections. Items without any known
+// collection are skipped because Bitwarden rejects org imports containing
+// unassigned items ("File contains unassigned items").
+export async function buildBitwardenOrgJson(args: BuildOrgJsonArgs): Promise<BuildOrgJsonResult> {
+  const organizationId = String(args.organizationId || '').trim();
+  if (!organizationId) throw new Error('Organization is required for organization exports');
+  const orgKeyMaterial = args.orgKeys?.[organizationId];
+  if (!orgKeyMaterial) throw new Error('The organization key is unavailable; resync your vault and try again.');
+  const userEnc = base64ToBytes(args.userEncB64);
+  const userMac = base64ToBytes(args.userMacB64);
+  const orgEnc = base64ToBytes(orgKeyMaterial.encB64);
+  const orgMac = base64ToBytes(orgKeyMaterial.macB64);
+
+  const collections = [];
+  const collectionIds = new Set<string>();
+  for (const collection of args.collections) {
+    if (String(collection.organizationId || '') !== organizationId) continue;
+    const name = collection.decName || (await decryptMaybe(collection.name ?? null, orgEnc, orgMac)) || '';
+    if (!name) continue;
+    collectionIds.add(collection.id);
+    collections.push({
+      id: collection.id,
+      organizationId,
+      name,
+      externalId: collection.externalId ?? null,
+    });
+  }
+
+  const orgCiphers = args.ciphers.filter(
+    (cipher) => !cipher.deletedDate && String(cipher.organizationId || '') === organizationId
+  );
+  const items = [];
+  let skippedUnassignedItems = 0;
+  for (const cipher of orgCiphers) {
+    const collectionIdList = Array.isArray(cipher.collectionIds)
+      ? cipher.collectionIds.map((id) => String(id || '').trim()).filter((id) => collectionIds.has(id))
+      : [];
+    if (!collectionIdList.length) {
+      skippedUnassignedItems++;
+      continue;
+    }
+    const item = await mapCipherPlain(cipher, userEnc, userMac, args.orgKeys);
+    item.collectionIds = collectionIdList;
+    items.push(trimNullKeys(item));
+  }
+
+  // Bitwarden organization exports have no folders array (folderId may still
+  // ride along on items; org imports ignore it and NodeWarden org imports use
+  // it for the acting user's per-user filing).
+  const doc = { encrypted: false, collections, items };
+  return { json: JSON.stringify(doc, null, 2), skippedUnassignedItems };
 }
 
 const BITWARDEN_CSV_HEADERS = [
@@ -763,10 +878,12 @@ export function buildExportFileName(format: ExportFormatId, zipEncrypted = false
     format === 'bitwarden_csv' ||
     format === 'bitwarden_json' ||
     format === 'bitwarden_encrypted_json' ||
+    format === 'bitwarden_org_json' ||
     format === 'nodewarden_json' ||
     format === 'nodewarden_encrypted_json'
   ) {
     if (format === 'bitwarden_csv') return `bitwarden_export_${stamp}.csv`;
+    if (format === 'bitwarden_org_json') return `bitwarden_org_export_${stamp}.json`;
     if (format.startsWith('nodewarden_')) return `nodewarden_export_${stamp}.json`;
     return `bitwarden_export_${stamp}.json`;
   }
